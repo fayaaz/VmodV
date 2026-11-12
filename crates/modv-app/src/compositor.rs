@@ -2863,14 +2863,22 @@ impl Compositor {
         module_name: &str,
         width: u32,
         height: u32,
+        with_output: bool,
     ) -> Result<Vec<u8>, PreviewError> {
         let frame = self.preview_frame.clone();
         let device = self.device.clone();
         let queue = self.queue.clone();
+        // Hover previews (`withOutput`) composite the module over the frame
+        // that is currently presented, like adding it to the live mix. With no
+        // main texture yet (startup, reset) the preview falls back to the
+        // isolated thumbnail.
+        let base = with_output
+            .then(|| self.main.as_ref().map(|main| main.view.clone()))
+            .flatten();
         let previews = self
             .previews
             .get_or_insert_with(|| ModulePreviews::new(&device, &queue));
-        previews.render(registry, module_name, width, height, &frame)
+        previews.render(registry, module_name, width, height, &frame, base.as_ref())
     }
 
     /// Render one Scene hover preview from an **isolated** copy of the Scene
@@ -4400,7 +4408,7 @@ mod tests {
                 ..frame_info()
             };
             pixels = compositor
-                .render_module_preview(registry, name, width, height)
+                .render_module_preview(registry, name, width, height, false)
                 .unwrap_or_else(|error| panic!("{name} preview renders: {error}"));
             assert_eq!(pixels.len(), (width * height * 4) as usize);
         }
@@ -4418,7 +4426,7 @@ mod tests {
         // Point10 Invert inverts the test card instead of an empty input, so a
         // tile shows the effect rather than opaque white/black.
         let pixels = compositor
-            .render_module_preview(&registry, "Point10 Invert", 48, 32)
+            .render_module_preview(&registry, "Point10 Invert", 48, 32, false)
             .expect("shader preview renders");
         assert_eq!(pixels.len(), (48 * 32 * 4) as usize);
         let first = &pixels[0..3];
@@ -4439,7 +4447,7 @@ mod tests {
         // An unregistered module is reported as `module_not_found`, not a
         // generic render failure (the renderer backs off on that code).
         assert!(matches!(
-            compositor.render_module_preview(&registry, "definitely not registered", 16, 16),
+            compositor.render_module_preview(&registry, "definitely not registered", 16, 16, false),
             Err(PreviewError::ModuleNotFound(_))
         ));
     }
@@ -4462,6 +4470,58 @@ mod tests {
         // another one.
         let previews = compositor.previews.as_ref().expect("previews exist");
         assert_eq!(previews.cached_slots(), 1);
+    }
+
+    #[test]
+    fn module_preview_composites_over_the_live_output() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let registry = ModuleRegistry::builtin();
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(64, 64);
+
+        // Paint a solid "live output" and make it the compositor's main
+        // texture. Gallery hover previews must show the new module over this,
+        // not on black.
+        let main = create_output_texture(&engine.device, "test-live-output", 64, 64);
+        let row = [0_u8, 200, 40, 255].repeat(64);
+        let data = row.repeat(64);
+        engine.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &main.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(64 * 4),
+                rows_per_image: Some(64),
+            },
+            wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+        );
+        compositor.main = Some(main);
+
+        let pixels = compositor
+            .render_module_preview(&registry, "Ball", 32, 32, true)
+            .expect("Ball preview renders over the live output");
+        assert_eq!(pixels.len(), (32 * 32 * 4) as usize);
+
+        let background = [0_u8, 200, 40, 255];
+        let corner = &pixels[0..4];
+        assert_eq!(corner, background, "the live output is not behind the preview");
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .any(|pixel| pixel[0..4] != background),
+            "Ball drew nothing over the live output"
+        );
     }
 
     #[test]
@@ -4501,7 +4561,7 @@ mod tests {
 
         let mut compositor = Compositor::new(&engine.device, &engine.queue);
         let pixels = compositor
-            .render_module_preview(&registry, "Color Invert", 32, 32)
+            .render_module_preview(&registry, "Color Invert", 32, 32, false)
             .expect("ISF preview renders");
         assert_eq!(pixels.len(), (32 * 32 * 4) as usize);
         // Filters sample the test card, so the thumbnail is non-uniform and
@@ -4527,13 +4587,13 @@ mod tests {
 
         // Zero collapses to the smallest legal target.
         let tiny = compositor
-            .render_module_preview(&registry, "Point10 Invert", 0, 0)
+            .render_module_preview(&registry, "Point10 Invert", 0, 0, false)
             .expect("clamped preview renders");
         assert_eq!(tiny.len(), 4, "0×0 clamps to 1×1");
 
         // 513 is clamped to the 512 cap on each edge (1 MiB of RGBA8).
         let big = compositor
-            .render_module_preview(&registry, "Point10 Invert", 513, 513)
+            .render_module_preview(&registry, "Point10 Invert", 513, 513, false)
             .expect("oversized preview renders");
         assert_eq!(big.len(), (512 * 512 * 4) as usize);
     }
@@ -4547,7 +4607,7 @@ mod tests {
         let mut compositor = Compositor::new(&engine.device, &engine.queue);
 
         compositor
-            .render_module_preview(&registry, "Ball", 16, 16)
+            .render_module_preview(&registry, "Ball", 16, 16, false)
             .expect("preview renders");
         let previews = compositor.previews.as_ref().expect("previews exist");
         assert_eq!(previews.cached_slots(), 1);

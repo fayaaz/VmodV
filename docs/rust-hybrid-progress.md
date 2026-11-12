@@ -318,6 +318,14 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   sampled triplanar in the surface shader; the base tint is now the sRGB →
   linear conversion of the JS `0x3a4358` (using the raw bytes made the metal
   ~5x too bright).
+- **Gallery hover previews are lazy and composited over the live output.**
+  Engine-mode tiles are blank until the pointer enters (no idle/visibility
+  polling), then request ~10 fps of `preview/module` with `withOutput: true`.
+  The engine scales the current main frame into the preview's base, seeds
+  shader/ISF image inputs with it and blends the module layer over it, so a
+  filter previews on what is actually playing and a generator appears on top.
+  Leaving the tile stops the requests and clears its canvas. Isolated previews
+  remain the default for other callers (`withOutput` false).
 - **Per-output monitor audio inputs (Firefox-style).** The Audio Input picker
   now lists "Monitor of …" for every PipeWire output device (`pw-dump` sink
   discovery in `src/main/audio-monitors.js`), plus the browser's microphones.

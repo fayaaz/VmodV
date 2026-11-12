@@ -66,7 +66,6 @@ use std::collections::HashMap;
 use serde_json::{Map, Value, json};
 
 use modv_engine::engine_state::ModuleInstance;
-use modv_render::frame_graph::{Executor, FrameGraph, PassNode, TextureId, TextureSurfaces};
 use modv_render::wgpu;
 use modv_renderers::isf::{CompiledIsf, IsfFrameUniforms, IsfRuntime};
 use modv_renderers::point10::audio_bridge::{AudioBridge, ResponsivenessLevers};
@@ -337,6 +336,11 @@ struct PreviewSlot {
     state: PreviewState,
     /// The transparent `width × height` target the finished layer lands in.
     target: OutputTexture,
+    /// The current live output, scaled to the slot size (the hover preview's
+    /// background). Cleared when there is no live frame.
+    base: OutputTexture,
+    /// The module's own layer, composited over `base` into `target`.
+    scratch: OutputTexture,
     /// Frames drawn through this slot (the per-module frame counter).
     frames: u64,
 }
@@ -421,10 +425,12 @@ pub struct ModulePreviews {
     /// Repeat/Linear sampler, matching the live group sampler
     /// (`renderers/shader/index.js:271-280`).
     sampler: wgpu::Sampler,
-    /// Frame-graph executor for the (rare) module → target composites.
-    executor: Executor,
-    /// Textures registered for those composites; emptied after each one.
-    surfaces: TextureSurfaces,
+    /// Scaled copy of the live output into a slot's `base` texture.
+    scale_pipeline: wgpu::RenderPipeline,
+    scale_layout: wgpu::BindGroupLayout,
+    /// Draws a slot's module layer over its `base` into `target`.
+    overlay_pipeline: wgpu::RenderPipeline,
+    overlay_layout: wgpu::BindGroupLayout,
     /// Cache, most recently used first.
     slots: Vec<PreviewSlot>,
     /// Static thumbnails for the volumetric Point10 scenes, keyed by
@@ -452,7 +458,8 @@ impl ModulePreviews {
             anisotropy_clamp: 1,
             border_color: None,
         });
-        let executor = Executor::new(device, queue);
+        let (scale_pipeline, scale_layout) = create_scale_pipeline(device);
+        let (overlay_pipeline, overlay_layout) = create_overlay_pipeline(device);
 
         Self {
             device: device.clone(),
@@ -460,8 +467,10 @@ impl ModulePreviews {
             shader,
             isf_runtime,
             sampler,
-            executor,
-            surfaces: TextureSurfaces::new(),
+            scale_pipeline,
+            scale_layout,
+            overlay_pipeline,
+            overlay_layout,
             slots: Vec::new(),
             volumetric_frames: HashMap::new(),
         }
@@ -500,6 +509,7 @@ impl ModulePreviews {
         width: u32,
         height: u32,
         frame: &FrameInfo,
+        base: Option<&wgpu::TextureView>,
     ) -> Result<Vec<u8>, PreviewError> {
         let width = clamp_preview_dimension(width);
         let height = clamp_preview_dimension(height);
@@ -529,7 +539,7 @@ impl ModulePreviews {
             None => self.create_slot(registry, module_name, width, height)?,
         };
 
-        self.draw_slot(registry, index, frame)?;
+        self.draw_slot(registry, index, frame, base)?;
 
         let slot = &self.slots[index];
         read_back_texture(
@@ -561,7 +571,9 @@ impl ModulePreviews {
         }
 
         let index = self.create_slot(registry, module_name, width, height)?;
-        self.draw_slot(registry, index, frame)?;
+        // The volumetric thumbnail is a cached static poster, so it stays
+        // isolated from the moving live output.
+        self.draw_slot(registry, index, frame, None)?;
         let pixels = read_back_texture(
             &self.device,
             &self.queue,
@@ -614,12 +626,26 @@ impl ModulePreviews {
             width,
             height,
         );
-        clear_texture(
+        let base = create_output_texture(
             &self.device,
-            &self.queue,
-            &target.texture,
-            "preview-target-clear",
+            &format!("modv-preview-base-{module_name}"),
+            width,
+            height,
         );
+        let scratch = create_output_texture(
+            &self.device,
+            &format!("modv-preview-scratch-{module_name}"),
+            width,
+            height,
+        );
+        for texture in [&target, &base, &scratch] {
+            clear_texture(
+                &self.device,
+                &self.queue,
+                &texture.texture,
+                "preview-target-clear",
+            );
+        }
 
         let state = match kind {
             ModuleKind::Shader => {
@@ -741,6 +767,8 @@ impl ModulePreviews {
                 module,
                 state,
                 target,
+                base,
+                scratch,
                 frames: 0,
             },
         );
@@ -753,6 +781,7 @@ impl ModulePreviews {
         registry: &ModuleRegistry,
         index: usize,
         frame: &FrameInfo,
+        base: Option<&wgpu::TextureView>,
     ) -> Result<(), PreviewError> {
         let Self {
             device,
@@ -760,8 +789,10 @@ impl ModulePreviews {
             shader,
             isf_runtime,
             sampler,
-            executor,
-            surfaces,
+            scale_pipeline,
+            scale_layout,
+            overlay_pipeline,
+            overlay_layout,
             slots,
             ..
         } = self;
@@ -773,6 +804,8 @@ impl ModulePreviews {
             height,
             state,
             target,
+            base: slot_base,
+            scratch: slot_scratch,
             frames,
             ..
         } = slot;
@@ -783,7 +816,37 @@ impl ModulePreviews {
         let props = &module.props;
         let module_name = module.module_name.as_str();
 
-        match state {
+        // Scale the current live output into this slot's base, then seed the
+        // target with it. The module layer is drawn into `scratch` and blended
+        // over the base at the end, so a hover preview shows the new module on
+        // top of what is already playing.
+        if let Some(base_view) = base {
+            run_scale(
+                device,
+                queue,
+                scale_pipeline,
+                scale_layout,
+                sampler,
+                base_view,
+                &slot_base.view,
+            );
+            run_scale(
+                device,
+                queue,
+                scale_pipeline,
+                scale_layout,
+                sampler,
+                &slot_base.view,
+                &target.view,
+            );
+        } else {
+            clear_texture(device, queue, &slot_base.texture, "preview-base-clear");
+            clear_texture(device, queue, &target.texture, "preview-target-clear");
+        }
+
+        // The module layer's texture; every arm writes into `scratch` (or its
+        // own canvas) and it is composited over the base after the match.
+        let module_texture: wgpu::Texture = match state {
             PreviewState::Shader { pipeline, input } => {
                 let definition = registry.shader_module(module_name).ok_or_else(|| {
                     PreviewError::Render(format!(
@@ -791,6 +854,21 @@ impl ModulePreviews {
                     ))
                 })?;
                 let params = encode_props(definition, props);
+                if let Some(base_view) = base {
+                    // A filter previews over the live frame instead of the
+                    // synthetic test card. Generators ignore the input.
+                    run_scale(
+                        device,
+                        queue,
+                        scale_pipeline,
+                        scale_layout,
+                        sampler,
+                        base_view,
+                        &input.view,
+                    );
+                } else {
+                    write_preview_pattern(device, queue, &input.texture, width, height);
+                }
                 shader
                     .render(
                         *pipeline,
@@ -807,9 +885,10 @@ impl ModulePreviews {
                         [width as f32, height as f32, 1.0],
                         1.0,
                         &params,
-                        &target.view,
+                        &slot_scratch.view,
                     )
                     .map_err(|error| PreviewError::Render(error.to_string()))?;
+                slot_scratch.texture.clone()
             }
             PreviewState::TwoD {
                 module: instance,
@@ -872,16 +951,7 @@ impl ModulePreviews {
                     instance.draw(&mut draw);
                 }
                 canvas.submit();
-                let source = canvas.texture().clone();
-                composite_into(
-                    device,
-                    queue,
-                    executor,
-                    surfaces,
-                    &source,
-                    target,
-                    "preview-2d",
-                )?;
+                canvas.texture().clone()
             }
             PreviewState::Point10 {
                 scene,
@@ -923,16 +993,7 @@ impl ModulePreviews {
                 scene.render(&mut encoder, &scratch.view);
                 queue.submit(Some(encoder.finish()));
 
-                let source = scratch.texture.clone();
-                composite_into(
-                    device,
-                    queue,
-                    executor,
-                    surfaces,
-                    &source,
-                    target,
-                    "preview-point10",
-                )?;
+                scratch.texture.clone()
             }
             PreviewState::Isf {
                 compiled,
@@ -952,8 +1013,22 @@ impl ModulePreviews {
                 };
                 *last_time = Some(frame.time_seconds);
 
-                // No group canvas exists for a thumbnail: filters sample the
-                // test card so an effect is visible instead of a blank tile.
+                // Hover previews filter the live frame. Without one (no main
+                // texture yet) fall back to the test card so the tile is not
+                // blank.
+                if let Some(base_view) = base {
+                    run_scale(
+                        device,
+                        queue,
+                        scale_pipeline,
+                        scale_layout,
+                        sampler,
+                        base_view,
+                        &input.view,
+                    );
+                } else {
+                    write_preview_pattern(device, queue, &input.texture, width, height);
+                }
                 let image_inputs: Vec<(&str, &wgpu::TextureView)> = definition
                     .document
                     .inputs
@@ -972,7 +1047,7 @@ impl ModulePreviews {
                 isf_runtime
                     .draw(
                         compiled,
-                        &target.view,
+                        &slot_scratch.view,
                         [width, height],
                         uniforms,
                         &values,
@@ -986,8 +1061,21 @@ impl ModulePreviews {
                             .unwrap_or_default(),
                     )
                     .map_err(|error| PreviewError::Render(error.to_string()))?;
+                slot_scratch.texture.clone()
             }
-        }
+        };
+
+        // Composite the module layer over the live-output base.
+        let module_view = module_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        run_overlay(
+            device,
+            queue,
+            overlay_pipeline,
+            overlay_layout,
+            sampler,
+            &module_view,
+            &target.view,
+        );
 
         Ok(())
     }
@@ -1034,35 +1122,285 @@ fn build_preview_module(
 /// Uses the frame graph's composite pass so canvas blend math lives in exactly
 /// one place (`modv_render::frame_graph`); the temporary registrations are
 /// removed afterwards so evicted slots never keep a texture alive.
-fn composite_into(
+/// Full-screen-triangle vertex shader shared by the scale and overlay passes.
+///
+/// `uv` is top-left origin (v = 0 top), matching the engine's textures.
+const PREVIEW_QUAD_WGSL: &str = r#"
+struct VsOut {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
+  var positions = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(3.0, -1.0),
+    vec2<f32>(-1.0, 3.0),
+  );
+  let position = positions[index];
+  var out: VsOut;
+  out.position = vec4<f32>(position, 0.0, 1.0);
+  out.uv = vec2<f32>((position.x + 1.0) * 0.5, 1.0 - (position.y + 1.0) * 0.5);
+  return out;
+}
+"#;
+
+const SCALE_BODY: &str = r#"
+@group(0) @binding(0) var source_texture: texture_2d<f32>;
+@group(0) @binding(1) var source_sampler: sampler;
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+  return textureSample(source_texture, source_sampler, in.uv);
+}
+"#;
+
+const OVERLAY_BODY: &str = r#"
+@group(0) @binding(0) var module_texture: texture_2d<f32>;
+@group(0) @binding(1) var surface_sampler: sampler;
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+  // The target already holds the live output; the blend state composites this
+  // premultiplied module layer over it.
+  return textureSample(module_texture, surface_sampler, in.uv);
+}
+"#;
+
+/// Scale the live output to a preview-sized texture (`linear`, one sample).
+fn create_scale_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("modv-preview-scale-shader"),
+        source: wgpu::ShaderSource::Wgsl(
+            [PREVIEW_QUAD_WGSL, SCALE_BODY].concat().into(),
+        ),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("modv-preview-scale-layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let pipeline = create_quad_pipeline(
+        device,
+        "modv-preview-scale-pipeline",
+        &shader,
+        &layout,
+        None,
+    );
+    (pipeline, layout)
+}
+
+/// The overlay pass: draw the module layer with premultiplied source-over onto
+/// a target that already contains the live output.
+fn create_overlay_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("modv-preview-overlay-shader"),
+        source: wgpu::ShaderSource::Wgsl(
+            [PREVIEW_QUAD_WGSL, OVERLAY_BODY].concat().into(),
+        ),
+    });
+    let texture = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("modv-preview-overlay-layout"),
+        entries: &[
+            texture(0),
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let pipeline = create_quad_pipeline(
+        device,
+        "modv-preview-overlay-pipeline",
+        &shader,
+        &layout,
+        Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        }),
+    );
+    (pipeline, layout)
+}
+
+fn create_quad_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::BindGroupLayout,
+    blend: Option<wgpu::BlendState>,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(label),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: TARGET_FORMAT,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Copy + scale `source` into `target` (both the slot's size after scaling).
+fn run_scale(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    executor: &mut Executor,
-    surfaces: &mut TextureSurfaces,
-    source: &wgpu::Texture,
-    target: &OutputTexture,
-    label: &str,
-) -> Result<(), PreviewError> {
-    clear_texture(device, queue, &target.texture, label);
-
-    let source_id = TextureId::from(PREVIEW_SOURCE_ID);
-    let target_id = TextureId::from(PREVIEW_TARGET_ID);
-    surfaces.insert(source_id.clone(), source.clone());
-    surfaces.insert(target_id.clone(), target.texture.clone());
-
-    let mut graph = FrameGraph::new();
-    graph.push(PassNode::Composite {
-        source: source_id.clone(),
-        target: target_id.clone(),
-        alpha: 1.0,
-        blend: modv_render::blend::BlendMode::Normal,
+    pipeline: &wgpu::RenderPipeline,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    source: &wgpu::TextureView,
+    target: &wgpu::TextureView,
+) {
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("modv-preview-scale-bind-group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
     });
-    let result = executor.execute(&mut graph, surfaces);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("modv-preview-scale"),
+    });
+    {
+        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("modv-preview-scale-pass"),
+            color_attachments: &color_attachments,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    queue.submit([encoder.finish()]);
+}
 
-    surfaces.remove(&source_id);
-    surfaces.remove(&target_id);
-
-    result.map_err(|error| PreviewError::Render(error.to_string()))
+/// Composite `module` over the live-output target without clearing it.
+#[allow(clippy::too_many_arguments)]
+fn run_overlay(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pipeline: &wgpu::RenderPipeline,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    module: &wgpu::TextureView,
+    target: &wgpu::TextureView,
+) {
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("modv-preview-overlay-bind-group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(module),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("modv-preview-overlay"),
+    });
+    {
+        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("modv-preview-overlay-pass"),
+            color_attachments: &color_attachments,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    queue.submit([encoder.finish()]);
 }
 
 #[cfg(test)]

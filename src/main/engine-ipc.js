@@ -195,7 +195,7 @@ export function registerEngineIpc(getSupervisor) {
     const sup = getSupervisor();
     if (!sup?.isRunning()) return null;
 
-    const { moduleName, width, height } = message || {};
+    const { moduleName, width, height, withOutput } = message || {};
     if (typeof moduleName !== "string" || moduleName.length === 0) {
       return null;
     }
@@ -206,6 +206,7 @@ export function registerEngineIpc(getSupervisor) {
         moduleName,
         width: previewDimension(width),
         height: previewDimension(height),
+        withOutput: withOutput === true,
       },
       5000,
     );

@@ -795,11 +795,15 @@ impl WindowedApp {
         let registry = self.store.registry_arc();
         for request in requests {
             let result = match &request.kind {
-                PreviewKind::Module { module_name } => compositor.render_module_preview(
+                PreviewKind::Module {
+                    module_name,
+                    with_output,
+                } => compositor.render_module_preview(
                     registry.as_ref(),
                     module_name,
                     request.width,
                     request.height,
+                    *with_output,
                 ),
                 PreviewKind::Scene {
                     scene_id,

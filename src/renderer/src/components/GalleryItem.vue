@@ -20,20 +20,15 @@ import { GROUP_ENABLED, GROUP_DISABLED } from "../application/constants.js";
 import { shouldRefresh } from "../application/engine-client.js";
 import { GalleryItemContextMenu } from "../menus/context/galleryItemContextMenu";
 
-// Engine mode: the engine renders the named module off the live graph (the Rust
-// counterpart of the worker's `isGallery` auxillary output) and answers with a
-// base64 RGBA8 frame. Tiles are tiny, so poll slowly: one frame on mount, ~10
-// fps while hovered, one every four seconds otherwise. Nothing here touches the
-// socket while the tile is unmounted.
+// Engine mode: hovering a tile asks the engine for the module composited over
+// the current output (the Rust counterpart of the worker's gallery auxillary,
+// but with the live frame underneath). Tiles are blank until the pointer
+// enters: 10 fps while hovered, no requests at all otherwise, so a Gallery with
+// hundreds of tiles costs nothing until one is actually inspected.
 const GALLERY_HOVER_FPS = 10;
-const GALLERY_IDLE_FPS = 0.25;
 // The engine may not implement `preview/module` yet (or may be mid-restart):
 // back off so a Gallery full of tiles cannot flood the control socket.
 const GALLERY_FAILURE_RETRY_MS = 15_000;
-// The engine answers four previews per frame; a fresh Gallery mounts hundreds
-// of tiles at once, so stagger the first pull instead of overflowing the
-// engine's pending queue.
-const GALLERY_INITIAL_SPREAD_MS = 4_000;
 // Fallback request size when the tile has not been laid out yet.
 const GALLERY_FALLBACK_WIDTH = 160;
 const GALLERY_FALLBACK_HEIGHT = 90;
@@ -149,11 +144,13 @@ export default {
 
   methods: {
     /**
-     * Engine mode: poll the engine for this module's thumbnail.
+     * Engine mode: poll the engine for this module's hover preview.
      *
      * `requestModulePreview` resolves to `{ width, height, data }` (or null
      * while the engine has no preview for the module), painted into the tile's
-     * own 2D canvas with `putImageData`.
+     * own 2D canvas with `putImageData`. The engine composites the module over
+     * the current live output, so the tile shows what adding it would look
+     * like. Nothing is requested until the pointer enters the tile.
      */
     startEnginePreview() {
       const { canvas } = this.$refs;
@@ -164,43 +161,10 @@ export default {
         inFlight: false,
         disposed: false,
         hovered: false,
-        // Only poll while the tile is near the viewport. The Gallery mounts
-        // every registered module (400+ tiles), and polling all of them was
-        // measured at ~150 preview requests/s — enough to keep the engine's
-        // render thread busy on thumbnail misses.
-        visible: false,
         failures: 0,
-        // null → nothing pulled yet; the first frame is staggered so a fresh
-        // Gallery does not enqueue hundreds of requests in one tick.
+        // null → nothing pulled yet for this hover.
         lastMs: null,
-        firstPullAt:
-          performance.now() + Math.random() * GALLERY_INITIAL_SPREAD_MS,
       };
-
-      if (typeof IntersectionObserver === "function") {
-        this._previewObserver = new IntersectionObserver(
-          (entries) => {
-            const state = this._enginePreview;
-            if (!state || state.disposed) {
-              return;
-            }
-            const visible = entries.some((entry) => entry.isIntersecting);
-            if (visible === state.visible) {
-              return;
-            }
-            state.visible = visible;
-            if (visible) {
-              this.scheduleEnginePreview();
-            }
-          },
-          // Start fetching slightly before a tile scrolls in.
-          { root: null, rootMargin: "240px 0px" },
-        );
-        this._previewObserver.observe(canvas);
-      } else {
-        this._enginePreview.visible = true;
-        this.scheduleEnginePreview();
-      }
     },
 
     stopEnginePreview() {
@@ -214,21 +178,20 @@ export default {
         clearTimeout(state.timer);
         state.timer = null;
       }
-      this._previewObserver?.disconnect();
-      this._previewObserver = null;
+      this.clearEnginePreview(state);
 
       this._enginePreview = null;
     },
 
-    /** Current poll rate: hovered tiles refresh, idle tiles sample. */
-    enginePreviewFps(state) {
-      return state.hovered ? GALLERY_HOVER_FPS : GALLERY_IDLE_FPS;
+    /** Hovered tiles poll; there is no idle polling. */
+    enginePreviewFps() {
+      return GALLERY_HOVER_FPS;
     },
 
-    /** Queue the next pull, honouring the current rate and any failure backoff. */
+    /** Queue the next hover pull, honouring the rate and any failure backoff. */
     scheduleEnginePreview() {
       const state = this._enginePreview;
-      if (!state || state.disposed || !state.visible) {
+      if (!state || state.disposed || !state.hovered) {
         return;
       }
       if (state.inFlight || state.timer !== null) {
@@ -236,12 +199,10 @@ export default {
       }
 
       const now = performance.now();
-      const fps = this.enginePreviewFps(state);
+      const fps = this.enginePreviewFps();
       let wait = 0;
 
-      if (state.lastMs === null && !state.hovered && now < state.firstPullAt) {
-        wait = state.firstPullAt - now;
-      } else if (state.failures > 0) {
+      if (state.failures > 0) {
         wait = GALLERY_FAILURE_RETRY_MS;
       } else if (!shouldRefresh(now, state.lastMs, fps)) {
         wait = Math.max(0, state.lastMs + 1000 / fps - now);
@@ -258,15 +219,13 @@ export default {
       if (!state || state.disposed || state.inFlight) {
         return;
       }
-      if (!state.visible) {
-        // Scrolled out of view while the timer was queued; the observer will
-        // resume polling if it comes back.
+      if (!state.hovered) {
+        // The pointer left while the timer was queued.
         return;
       }
 
-      // Hover changes shorten the interval, so re-check it at pull time too.
       const now = performance.now();
-      if (!shouldRefresh(now, state.lastMs, this.enginePreviewFps(state))) {
+      if (!shouldRefresh(now, state.lastMs, this.enginePreviewFps())) {
         this.scheduleEnginePreview();
         return;
       }
@@ -280,6 +239,7 @@ export default {
           this.moduleName,
           width,
           height,
+          { withOutput: true },
         );
 
         if (!frame || this._enginePreview !== state || state.disposed) {
@@ -331,7 +291,7 @@ export default {
       ctx.putImageData(new ImageData(data, width, height), 0, 0);
     },
 
-    /** Hover changed: switch rates and pull sooner when the tile is focused. */
+    /** Hover changed: start pulling on enter, clear the tile on leave. */
     setEngineHover(hovered) {
       const state = this._enginePreview;
       if (!state || state.disposed) {
@@ -340,19 +300,40 @@ export default {
 
       state.hovered = hovered;
 
-      if (hovered && state.timer !== null) {
+      if (state.timer !== null) {
         clearTimeout(state.timer);
         state.timer = null;
       }
 
+      if (!hovered) {
+        this.clearEnginePreview(state);
+        return;
+      }
+
+      state.lastMs = null;
       this.scheduleEnginePreview();
+    },
+
+    /** Blank the tile so an unhovered Gallery shows no stale previews. */
+    clearEnginePreview(state) {
+      const { canvas } = this.$refs;
+      const ctx = state.ctx || canvas?.getContext?.("2d");
+
+      if (!ctx || !canvas) {
+        return;
+      }
+
+      state.ctx = ctx;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
     },
 
     async focus() {
       if (this.engineMode) {
-        // No gallery Module to enable: the engine renders the thumbnail
-        // off-graph, so hovering only changes the poll rate.
-        this.setEngineHover(true);
+        // No gallery Module to enable: the engine renders the hover preview
+        // off-graph, composited over the live output.
+        if (!this._enginePreview?.hovered) {
+          this.setEngineHover(true);
+        }
         return;
       }
 
@@ -400,8 +381,8 @@ export default {
 
     blur() {
       if (this.engineMode) {
-        // Drop back to the idle poll rate; there is no gallery Group or Module
-        // to disable (the engine renders the thumbnail off-graph).
+        // Stop polling and clear the tile; there is no gallery Group or
+        // Module to disable (the engine renders the preview off-graph).
         this.setEngineHover(false);
         return;
       }

@@ -47,11 +47,12 @@ const engineApi = {
   // Gallery thumbnails: the engine renders one module off-graph and answers
   // with { width, height, pixels } where pixels is base64 RGBA8. The renderer
   // decodes it (application/engine-client.js) so no bytes are duplicated here.
-  requestModulePreview({ moduleName, width, height } = {}) {
+  requestModulePreview({ moduleName, width, height, withOutput } = {}) {
     return ipcRenderer.invoke("engine/preview-module", {
       moduleName,
       width,
       height,
+      withOutput: withOutput === true,
     });
   },
   // Scene hover previews: the engine renders the Scene cell's saved

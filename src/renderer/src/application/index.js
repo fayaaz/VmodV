@@ -1380,12 +1380,17 @@ class ModV {
     return this.engineClient.requestOutputPreview();
   }
 
-  requestModulePreview(moduleName, width, height) {
+  requestModulePreview(moduleName, width, height, options = {}) {
     if (!this.engineMode) {
       return Promise.resolve(null);
     }
 
-    return this.engineClient.requestModulePreview(moduleName, width, height);
+    return this.engineClient.requestModulePreview(
+      moduleName,
+      width,
+      height,
+      options,
+    );
   }
 
   /**

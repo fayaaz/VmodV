@@ -80,6 +80,9 @@ pub enum PreviewKind {
     Module {
         /// Registry name of the module to render.
         module_name: String,
+        /// Composite the module over the frame currently presented (Gallery
+        /// hover previews). `false` keeps the isolated thumbnail.
+        with_output: bool,
     },
     /// A Scene grid-cell preview (`preview/scene`).
     Scene {
@@ -363,12 +366,21 @@ impl EngineSupervisor {
             ));
         }
 
+        let with_output = request
+            .params
+            .get("withOutput")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
         self.pending_previews.push_back(PreviewRequest {
             id: request.id,
             client,
             width,
             height,
-            kind: PreviewKind::Module { module_name },
+            kind: PreviewKind::Module {
+                module_name,
+                with_output,
+            },
         });
         Reply::Deferred
     }
@@ -1417,7 +1429,8 @@ mod tests {
         assert_eq!(
             request.kind,
             PreviewKind::Module {
-                module_name: "Point10 Invert".to_string()
+                module_name: "Point10 Invert".to_string(),
+                with_output: false
             }
         );
         assert_eq!((request.width, request.height), (4, 2));
@@ -1634,6 +1647,7 @@ mod tests {
                 height: 16,
                 kind: PreviewKind::Module {
                     module_name: "Ball".to_string(),
+                    with_output: false,
                 },
             });
         }

@@ -468,14 +468,19 @@ export default class EngineClient {
    * the first failure per module is logged — tiles poll, so warning every poll
    * would flood the log.
    */
-  requestModulePreview(moduleName, width, height) {
+  requestModulePreview(moduleName, width, height, { withOutput = false } = {}) {
     if (typeof moduleName !== "string" || moduleName.length === 0) {
       return Promise.resolve(null);
     }
 
     let pending;
     try {
-      pending = this.engine.requestModulePreview({ moduleName, width, height });
+      pending = this.engine.requestModulePreview({
+        moduleName,
+        width,
+        height,
+        withOutput,
+      });
     } catch (error) {
       this._previewFailed(`module:${moduleName}`, error);
       return Promise.resolve(null);
