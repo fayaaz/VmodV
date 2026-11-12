@@ -12,6 +12,8 @@
 VmodV is a fork of <a href="https://github.com/vcync/modV">modV</a>, a modular audio visualisation environment built upon web technologies.
 </p>
 
+> **License note:** VmodV itself is MIT-licensed, but it bundles third-party modules that are not (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — several Shadertoy-derived modules are CC BY-NC-SA 3.0).
+
 ## Recommended IDE Setup
 
 - [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar)
