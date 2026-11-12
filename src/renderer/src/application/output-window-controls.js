@@ -24,11 +24,35 @@ export function isFullscreenToggleEvent(event) {
     return false;
   }
 
+  if (event.repeat) {
+    // Holding F must not strobe the window in and out at auto-repeat.
+    return false;
+  }
+
   if (event.key.toLowerCase() !== FULLSCREEN_KEY) {
     return false;
   }
 
   return !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+/**
+ * Whether a key event came from a text control, where F must type instead of
+ * toggling fullscreen.
+ *
+ * @param {{ isContentEditable?: boolean, tagName?: string } | null | undefined} target
+ * @returns {boolean}
+ */
+export function isEditableTarget(target) {
+  if (!target) {
+    return false;
+  }
+
+  if (target.isContentEditable === true) {
+    return true;
+  }
+
+  return /^(INPUT|TEXTAREA|SELECT)$/.test(String(target.tagName || ""));
 }
 
 /**

@@ -542,14 +542,27 @@ impl ModulePreviews {
         self.draw_slot(registry, index, frame, base)?;
 
         let slot = &self.slots[index];
-        read_back_texture(
+        let mut pixels = read_back_texture(
             &self.device,
             &self.queue,
             &slot.target.texture,
             width,
             height,
         )
-        .map_err(PreviewError::Render)
+        .map_err(PreviewError::Render)?;
+
+        // The main frame is premultiplied and presented over opaque black; the
+        // renderer paints previews with `putImageData`, which expects straight
+        // alpha. Flattening over black (opaque alpha, premultiplied RGB) makes
+        // a translucent hover tile look like the live output instead of
+        // alpha-darkening every coloured pixel.
+        if base.is_some() {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
+
+        Ok(pixels)
     }
 
     /// Render (once) and cache a volumetric Point10 thumbnail.

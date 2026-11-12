@@ -318,6 +318,17 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   sampled triplanar in the surface shader; the base tint is now the sRGB →
   linear conversion of the JS `0x3a4358` (using the raw bytes made the metal
   ~5x too bright).
+- **Review round-20 fixes.** Hover previews flatten over opaque black on
+  read-back (`putImageData` is straight alpha; the live frame is
+  premultiplied and presented over black), so translucent tiles no longer
+  darken. A request that resolves after the pointer leaves is dropped instead
+  of repainting the cleared tile. Switching between two monitors no longer
+  tears down the new capture: a stale `MediaStreamTrack.stop()` targets its
+  own capture session instead of the module-wide `active` slot. The Audio
+  panel delegates `SET_SYSTEM_AUDIO_STATE` to `modV.setSystemAudioState`
+  (engine mode skips the UI-only commit). `backgroundThrottling: false` is
+  now engine-only, and the legacy output popup ignores auto-repeat F and text
+  controls.
 - **Gallery hover previews are lazy and composited over the live output.**
   Engine-mode tiles are blank until the pointer enters (no idle/visibility
   polling), then request ~10 fps of `preview/module` with `withOutput: true`.

@@ -3,6 +3,10 @@ import os from "node:os";
 import fs from "node:fs";
 import { join } from "path";
 
+// Only engine mode pumps audio from the main window's requestAnimationFrame;
+// the legacy worker loop must keep normal background throttling (power).
+const engineMode = process.env.MODV_ENGINE === "1";
+
 import store from "./media-manager/store";
 // import { autoUpdater } from "electron-updater"; @TODO add back in updater
 import { checkMediaPermission } from "./check-media-permission";
@@ -140,13 +144,14 @@ const windowPrefs = {
         nodeIntegrationInWorker: true,
         nativeWindowOpen: true, // window.open return Window object(like in regular browsers), not BrowserWindowProxy
         affinity: "main-window", // main window, and additional windows should work in one process
-        // The renderer's audio pump runs on requestAnimationFrame (engine
-        // mode has no worker loop). Watching the engine's own output window
-        // occludes this window, and Chromium would otherwise pause rAF — the
-        // engine would keep rendering but never receive another
-        // `meyda/SET_BANDS`, so every audio-reactive scene (the DVD logo's
-        // beat pulse included) freezes. Keep the pump alive when hidden.
-        backgroundThrottling: false,
+        // Engine mode: the renderer's audio pump runs on
+        // requestAnimationFrame (there is no worker loop). Watching the
+        // engine's own output window occludes this window, and Chromium would
+        // otherwise pause rAF — the engine would keep rendering but never
+        // receive another `meyda/SET_BANDS`, so every audio-reactive scene
+        // (the DVD logo's beat pulse included) freezes. Keep the pump alive
+        // when hidden, in engine mode only.
+        ...(engineMode ? { backgroundThrottling: false } : {}),
       },
     },
     unique: true,

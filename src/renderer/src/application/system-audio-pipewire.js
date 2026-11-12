@@ -150,17 +150,32 @@ export function createPipeWireCapture({
 } = {}) {
   let active = null;
 
-  function stopActive() {
-    if (!active) {
+  /**
+   * Stop one capture session.
+   *
+   * A session can outlive its `active` slot when the caller switches monitors:
+   * `start()` stops A and installs B, then `setupMedia` stops A's old
+   * MediaStream track. That stale track's `stop` override must not tear down
+   * B, so every stop targets its own session and only touches the shared
+   * `active`/IPC listener when it still owns them.
+   */
+  function stopSession(session) {
+    if (!session) {
       return;
     }
 
-    const current = active;
+    if (active === session) {
+      active = null;
+      ipcRenderer.removeListener("system-audio:chunk", session.onChunk);
+      ipcRenderer.invoke("system-audio:stop").catch(() => {});
+    }
 
+    session.pcm.close();
+  }
+
+  function stopActive() {
+    stopSession(active);
     active = null;
-    ipcRenderer.removeListener("system-audio:chunk", current.onChunk);
-    ipcRenderer.invoke("system-audio:stop").catch(() => {});
-    current.pcm.close();
   }
 
   return {
@@ -226,7 +241,10 @@ export function createPipeWireCapture({
 
       ipcRenderer.removeListener("system-audio:chunk", onEarlyChunk);
       ipcRenderer.on("system-audio:chunk", onChunk);
-      active = { pcm, onChunk };
+
+      const session = { pcm, onChunk };
+
+      active = session;
 
       for (const chunk of earlyChunks) {
         onChunk(null, chunk);
@@ -240,7 +258,9 @@ export function createPipeWireCapture({
         const originalStop = track.stop.bind(track);
 
         track.stop = () => {
-          stopActive();
+          // Only stop this capture; a track from a superseded capture must
+          // not tear down the one that replaced it (monitor → monitor switch).
+          stopSession(session);
           originalStop();
         };
       }

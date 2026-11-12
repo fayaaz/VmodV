@@ -467,8 +467,10 @@ export default {
     },
 
     setSystemAudioState(payload) {
-      this.$modV.store.commit("mediaStream/SET_SYSTEM_AUDIO_STATE", payload);
-      this.$modV._store.commit("mediaStream/SET_SYSTEM_AUDIO_STATE", payload);
+      // ModV skips the engine commit in engine mode (the engine has no
+      // mediaStream state); committing here bypassed that guard and logged
+      // "not implemented" on every audio-input change.
+      this.$modV.setSystemAudioState(payload);
     },
 
     // -- WS-10 engine capture ------------------------------------------------

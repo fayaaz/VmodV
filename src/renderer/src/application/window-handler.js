@@ -1,6 +1,7 @@
 import {
   exitFullscreen,
   isFullscreen,
+  isEditableTarget,
   isFullscreenExitEvent,
   isFullscreenToggleEvent,
   toggleFullscreen,
@@ -127,6 +128,10 @@ export default function windowHandler() {
       });
 
       outputDocument.addEventListener("keydown", (event) => {
+        if (event.repeat || isEditableTarget(event.target)) {
+          return;
+        }
+
         if (isFullscreenToggleEvent(event)) {
           event.preventDefault();
           toggleFullscreen(outputDocument);

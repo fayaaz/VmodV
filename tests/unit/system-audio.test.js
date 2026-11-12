@@ -604,6 +604,54 @@ describe("createPipeWireCapture", () => {
     expect(listeners.has("system-audio:chunk")).toBe(false);
   });
 
+  it("keeps the new capture alive when the old track stops (monitor switch)", async () => {
+    const listeners = new Map();
+    const stopCalls = [];
+    const invoke = vi.fn(async (channel) => {
+      if (channel === "system-audio:start") {
+        return { available: true, sampleRate: 48000, channels: 2 };
+      }
+      stopCalls.push(channel);
+      return { stopped: true };
+    });
+    const ipcRenderer = {
+      invoke,
+      on: (channel, listener) => listeners.set(channel, listener),
+      removeListener: (channel) => listeners.delete(channel),
+    };
+    const pcmStreams = [];
+    const capture = createPipeWireCapture({
+      ipcRenderer,
+      createStream: () => {
+        const pcm = {
+          stream: new FakeStream([new FakeTrack("audio")]),
+          push: vi.fn(),
+          close: vi.fn(),
+        };
+        pcmStreams.push(pcm);
+        return pcm;
+      },
+    });
+
+    const first = await capture.start({ target: "sink-a" });
+    const second = await capture.start({ target: "sink-b" });
+
+    // setupMedia stops the stale (first) MediaStream track after the second
+    // capture is live. That must not kill capture B.
+    first.stream.getAudioTracks()[0].stop();
+
+    expect(pcmStreams[1].close).not.toHaveBeenCalled();
+    expect(listeners.has("system-audio:chunk")).toBe(true);
+
+    const chunk = new Uint8Array([7, 7, 7, 7]);
+    listeners.get("system-audio:chunk")(null, chunk);
+    expect(pcmStreams[1].push).toHaveBeenCalledWith(chunk);
+
+    // Only the switch's stopActive reached IPC; the stale track did not.
+    expect(stopCalls).toEqual(["system-audio:stop"]);
+    expect(second.stream).toBe(pcmStreams[1].stream);
+  });
+
   it("forwards the selected sink to the native capture", async () => {
     const listeners = new Map();
     const invoke = vi.fn(async (channel, payload) =>

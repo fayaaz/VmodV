@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   exitFullscreen,
+  isEditableTarget,
   isFullscreen,
   isFullscreenExitEvent,
   isFullscreenToggleEvent,
@@ -63,6 +64,17 @@ describe("output window fullscreen controls", () => {
     );
     expect(isFullscreenToggleEvent(keyEvent("g"))).toBe(false);
     expect(isFullscreenToggleEvent(null)).toBe(false);
+    expect(isFullscreenToggleEvent(keyEvent("f", { repeat: true }))).toBe(
+      false,
+    );
+  });
+
+  it("ignores key events from text controls", () => {
+    expect(isEditableTarget(null)).toBe(false);
+    expect(isEditableTarget({ tagName: "DIV" })).toBe(false);
+    expect(isEditableTarget({ tagName: "INPUT" })).toBe(true);
+    expect(isEditableTarget({ tagName: "TEXTAREA" })).toBe(true);
+    expect(isEditableTarget({ isContentEditable: true })).toBe(true);
   });
 
   it("only treats Escape as the exit key", () => {

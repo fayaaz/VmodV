@@ -242,8 +242,15 @@ export default {
           { withOutput: true },
         );
 
-        if (!frame || this._enginePreview !== state || state.disposed) {
-          if (this._enginePreview === state) {
+        if (
+          !frame ||
+          this._enginePreview !== state ||
+          state.disposed ||
+          !state.hovered
+        ) {
+          // A request issued before the pointer left must not repaint the
+          // blanked tile with a stale live-output composite.
+          if (this._enginePreview === state && state.hovered) {
             state.failures += 1;
           }
           return;
