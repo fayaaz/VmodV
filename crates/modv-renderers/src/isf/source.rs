@@ -597,7 +597,19 @@ pub fn build_fragment_glsl(doc: &IsfDocument, pass_index: usize) -> String {
     out.push_str("};\n\n");
 
     out.push_str("in vec2 isf_FragNormCoord;\n");
-    out.push_str("#define isf_FragCoord (floor(gl_FragCoord.xy))\n\n");
+    if bindings.is_empty() {
+        // A texture-free ISF shader is a generator written for WebGL, where
+        // `gl_FragCoord` is bottom-left. The runtime draws it with the
+        // bottom-left vertex shader (see `BOTTOM_LEFT_VERTEX_WGSL`), so the
+        // pixel coordinate must be flipped too or the whole image is
+        // vertically mirrored (The Pool Rooms, rave.exe).
+        out.push_str(
+            "vec4 isf_gl_frag_coord() {\n  return vec4(gl_FragCoord.x, RENDERSIZE.y - gl_FragCoord.y, gl_FragCoord.z, gl_FragCoord.w);\n}\n\n",
+        );
+        out.push_str("#define isf_FragCoord (floor(isf_gl_frag_coord().xy))\n\n");
+    } else {
+        out.push_str("#define isf_FragCoord (floor(gl_FragCoord.xy))\n\n");
+    }
     out.push_str("layout(location = 0) out vec4 isf_FragColor;\n\n");
 
     out.push_str(&bool_globals(doc));
@@ -872,6 +884,12 @@ struct RewrittenBody {
 /// substitution and qualifier stripping.
 fn rewrite_fragment_body(doc: &IsfDocument) -> RewrittenBody {
     let mut body = rewrite_fragment_source(&doc.fragment_source, &texture_inputs(doc));
+    if texture_bindings(doc).is_empty() {
+        // Match the bottom-left vertex shader: `gl_FragCoord` in a generator
+        // must start at the bottom-left, like WebGL. Textured shaders keep the
+        // wgpu top-left origin so input sampling stays upright.
+        body = replace_ident(&body, "gl_FragCoord", "isf_gl_frag_coord()");
+    }
     for (original, sanitised) in body_input_renames(doc) {
         body = replace_ident(&body, &original, &sanitised);
     }
@@ -2687,6 +2705,30 @@ mod tests {
         ));
         assert!(glsl.contains("isf_FragColor ="));
         assert!(!glsl.contains("gl_FragColor ="), "rewritten to the out var");
+    }
+
+    #[test]
+    fn texture_free_shaders_flip_gl_fragcoord_to_bottom_left() {
+        // The Pool Rooms and rave.exe are generators that build their camera
+        // from `gl_FragCoord`. WebGL's origin is bottom-left, so the pixel
+        // coordinate has to be flipped to match the bottom-left vertex
+        // shader; otherwise the whole image is upside down.
+        let shader =
+            "void main() { vec2 p = gl_FragCoord.xy / RENDERSIZE; gl_FragColor = vec4(p, 0.0, 1.0); }";
+        let glsl = build_fragment_glsl(&doc(shader), 0);
+        assert!(glsl.contains("RENDERSIZE.y - gl_FragCoord.y"), "{glsl}");
+        assert!(glsl.contains("#define isf_FragCoord (floor(isf_gl_frag_coord().xy))"));
+        assert!(glsl.contains("isf_gl_frag_coord().xy / RENDERSIZE"), "{glsl}");
+        assert!(!glsl.contains("p = gl_FragCoord.xy"), "{glsl}");
+    }
+
+    #[test]
+    fn textured_shaders_keep_the_top_left_fragcoord() {
+        let shader = r#"/*{ "INPUTS": [ { "NAME": "inputImage", "TYPE": "image" } ] }*/
+        void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
+        let glsl = build_fragment_glsl(&doc(shader), 0);
+        assert!(!glsl.contains("isf_gl_frag_coord"), "{glsl}");
+        assert!(glsl.contains("#define isf_FragCoord (floor(gl_FragCoord.xy))"));
     }
 
     #[test]

@@ -12,8 +12,8 @@ Tooling: the engine builds only inside Docker (`make engine` / `engine-test` /
 
 ## Verification snapshot
 
-- Rust workspace: **1809 tests pass** (modv-app 305, modv-engine 439,
-  modv-ipc 42, modv-media 233, modv-render 22, modv-renderers 766).
+- Rust workspace: **1811 tests pass** (modv-app 305, modv-engine 439,
+  modv-ipc 42, modv-media 233, modv-render 22, modv-renderers 768).
 - Vitest: **1145 tests pass** across 91 files (engine mirror-parity replay,
   preview/read helpers, supervisor restart budget, preload scoping, sync
   replay, plugin host, engine media controller/paths, module meta and payload
@@ -318,6 +318,14 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   sampled triplanar in the surface shader; the base tint is now the sRGB →
   linear conversion of the JS `0x3a4358` (using the raw bytes made the metal
   ~5x too bright).
+- **Texture-free ISF generators are upright.** `gl_FragCoord` is bottom-left
+  in WebGL but top-left in wgpu. Texture-free shaders already used the
+  bottom-left vertex shader, but the pixel coordinate stayed top-left, so
+  generators that build their camera from `gl_FragCoord` (The Pool Rooms,
+  `st_Ms2SD1`, and 29 other corpus raymarchers) rendered vertically mirrored.
+  The translator now routes `gl_FragCoord` (and `isf_FragCoord`) through a
+  Y-flipped helper for texture-free shaders; textured shaders keep the
+  top-left origin so input sampling stays upright.
 - **Audio pump while the output window is watched.** Engine mode drives the
   renderer's analyser from `requestAnimationFrame`; Chromium throttled it when
   the main window was occluded by the engine's own output window, freezing

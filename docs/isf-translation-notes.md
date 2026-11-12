@@ -61,6 +61,11 @@ Vertex skeleton injects `void isf_vertShaderInit()` + per-buffer uniforms.
 `isf_vertShaderInit` sets `isf_position` (attribute, -1..1), `gl_Position`,
 `isf_FragNormCoord`, `isf_FragCoord = floor(norm * RENDERSIZE)`.
 
+Texture-free generators (raymarchers, shadertoy conversions) are drawn with
+the legacy bottom-left vertex shader and their `gl_FragCoord`/`isf_FragCoord`
+reads are Y-flipped in the translator, so they match WebGL. Shaders that
+sample textures keep the wgpu top-left origin so input sampling stays upright.
+
 TIME/TIMEDELTA/FRAMEINDEX/DATE are also set every frame by
 `ISFRenderer.setDateUniforms` (`TIME = (now - startTime)/1000`, startTime =
 launch; `DATE.y` is **1-based** month; `DATE.w` = secs since midnight).
