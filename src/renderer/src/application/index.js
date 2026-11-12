@@ -518,7 +518,13 @@ class ModV {
           // auto-starting would open the display picker at launch.
           if (window.remote?.process?.platform === "linux") {
             try {
-              const captured = await this.systemAudioCapture.capture();
+              const monitor = (enumerated.audio || []).find(
+                (device) => device?.deviceId === restoredAudio,
+              );
+              const captured = await this.systemAudioCapture.capture({
+                sourceId: restoredAudio,
+                label: monitor?.label,
+              });
 
               restoredSystemAudio = captured;
               restoredAudioId = restoredAudio;
@@ -1247,7 +1253,13 @@ class ModV {
   }
 
   setSystemAudioState(payload) {
-    this.store.commit("mediaStream/SET_SYSTEM_AUDIO_STATE", payload);
+    // The engine has no mediaStream state (it is UI-only); in engine mode the
+    // mirror is the only store that needs it. Skipping the engine commit also
+    // avoids the "not implemented" warning for every audio-input change.
+    if (!this.engineMode) {
+      this.store.commit("mediaStream/SET_SYSTEM_AUDIO_STATE", payload);
+    }
+
     this._store.commit("mediaStream/SET_SYSTEM_AUDIO_STATE", payload);
   }
 

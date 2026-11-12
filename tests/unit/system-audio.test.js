@@ -7,6 +7,7 @@ import {
   findMonitorDevice,
   isMonitorDeviceLabel,
   isSystemAudioSource,
+  resolvePlatform,
 } from "../../src/renderer/src/application/system-audio.js";
 import {
   createPipeWireCapture,
@@ -54,14 +55,54 @@ const silentLogger = {
 };
 
 describe("system audio source id", () => {
-  it("matches only the exact system audio id", () => {
+  it("matches the legacy loopback id and every per-output monitor id", () => {
     expect(SYSTEM_AUDIO_SOURCE_ID).toBe("modv:system-audio");
     expect(SYSTEM_AUDIO_SOURCE_LABEL).toBe("System Audio (loopback)");
     expect(isSystemAudioSource(SYSTEM_AUDIO_SOURCE_ID)).toBe(true);
+    expect(
+      isSystemAudioSource(
+        "modv:monitor:alsa_output.usb-ADAM_Audio_D3V-00.analog-stereo",
+      ),
+    ).toBe(true);
     expect(isSystemAudioSource("modv:system-audio-2")).toBe(false);
+    expect(isSystemAudioSource("modv:monitor:")).toBe(false);
     expect(isSystemAudioSource("default")).toBe(false);
     expect(isSystemAudioSource(undefined)).toBe(false);
     expect(isSystemAudioSource(null)).toBe(false);
+  });
+});
+
+describe("resolvePlatform", () => {
+  it("prefers Electron's remote process over the browser-shimmed global", () => {
+    // The renderer bundle's `process` is a browser shim without a platform;
+    // trusting the Node global first made the platform "unknown" and silently
+    // disabled PipeWire system audio on Linux.
+    expect(
+      resolvePlatform({
+        remoteProcess: { platform: "linux" },
+        nodeProcess: {},
+      }),
+    ).toBe("linux");
+    expect(
+      resolvePlatform({
+        electronProcess: { platform: "darwin" },
+        nodeProcess: {},
+      }),
+    ).toBe("darwin");
+    expect(resolvePlatform({ nodeProcess: { platform: "win32" } })).toBe(
+      "win32",
+    );
+  });
+
+  it("reports unknown when no source carries a platform", () => {
+    expect(resolvePlatform()).toBe("unknown");
+    expect(
+      resolvePlatform({
+        remoteProcess: {},
+        electronProcess: {},
+        nodeProcess: {},
+      }),
+    ).toBe("unknown");
   });
 });
 
@@ -396,6 +437,61 @@ describe("SystemAudioCapture native PipeWire fallback", () => {
     expect(result.label).toBe(SYSTEM_AUDIO_SOURCE_LABEL);
   });
 
+  it("targets the selected output device for a monitor source id", async () => {
+    const stream = new FakeStream([new FakeTrack("audio")]);
+    const nativeCapture = {
+      start: vi.fn(async () => ({ stream, sampleRate: 48000, channels: 2 })),
+      stop: vi.fn(),
+    };
+    const enumerateDevices = vi.fn(async () => [
+      { deviceId: "mic-1", kind: "audioinput", label: "USB Microphone" },
+    ]);
+    const getUserMedia = vi.fn();
+
+    const capture = new SystemAudioCapture({
+      mediaDevices: { enumerateDevices, getUserMedia },
+      platform: "linux",
+      logger: silentLogger,
+      nativeCapture,
+    });
+
+    const result = await capture.capture({
+      sourceId: "modv:monitor:alsa_output.pci-0000_03_00.1.hdmi-stereo-extra3",
+      label: "Monitor of Navi 48 HDMI/DP Audio Controller",
+    });
+
+    expect(nativeCapture.start).toHaveBeenCalledWith({
+      target: "alsa_output.pci-0000_03_00.1.hdmi-stereo-extra3",
+    });
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(enumerateDevices).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stream,
+      backend: "pipewire",
+      label: "Monitor of Navi 48 HDMI/DP Audio Controller",
+    });
+  });
+
+  it("rejects when the selected monitor cannot be captured", async () => {
+    const nativeCapture = {
+      start: vi.fn(async () => ({
+        available: false,
+        reason: 'Unknown audio output "sink"',
+      })),
+    };
+
+    const capture = new SystemAudioCapture({
+      mediaDevices: { enumerateDevices: vi.fn(async () => []) },
+      platform: "linux",
+      logger: silentLogger,
+      nativeCapture,
+    });
+
+    await expect(
+      capture.capture({ sourceId: "modv:monitor:sink" }),
+    ).rejects.toThrow('Unknown audio output "sink"');
+  });
+
   it("does not try the native capture on other platforms", async () => {
     const nativeCapture = { start: vi.fn() };
 
@@ -506,6 +602,39 @@ describe("createPipeWireCapture", () => {
     expect(pcm.close).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith("system-audio:stop");
     expect(listeners.has("system-audio:chunk")).toBe(false);
+  });
+
+  it("forwards the selected sink to the native capture", async () => {
+    const listeners = new Map();
+    const invoke = vi.fn(async (channel, payload) =>
+      channel === "system-audio:start"
+        ? {
+            available: true,
+            sampleRate: 48000,
+            channels: 2,
+            target: payload?.target,
+          }
+        : { stopped: true },
+    );
+    const ipcRenderer = {
+      invoke,
+      on: (channel, listener) => listeners.set(channel, listener),
+      removeListener: (channel) => listeners.delete(channel),
+    };
+    const capture = createPipeWireCapture({
+      ipcRenderer,
+      createStream: () => ({
+        stream: new FakeStream([new FakeTrack("audio")]),
+        push: vi.fn(),
+        close: vi.fn(),
+      }),
+    });
+
+    await capture.start({ target: "alsa_output.hdmi" });
+
+    expect(invoke).toHaveBeenCalledWith("system-audio:start", {
+      target: "alsa_output.hdmi",
+    });
   });
 
   it("keeps chunks that arrive before the stream is ready", async () => {

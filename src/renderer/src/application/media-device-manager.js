@@ -1,9 +1,11 @@
 import store from "./worker/store";
 import { createLogger } from "./logger";
 import {
+  isMonitorDeviceLabel,
   SYSTEM_AUDIO_SOURCE_ID,
   SYSTEM_AUDIO_SOURCE_LABEL,
 } from "./system-audio";
+import { listAudioMonitorInputs } from "./audio-monitor-inputs";
 import {
   cameraCapabilities,
   engineCameraDevices,
@@ -36,15 +38,25 @@ class MediaDeviceManager {
    * @returns {Promise<{audio: Array, video: Array}>}
    */
   async enumerateDevices() {
+    // One audio input per output device's monitor ("Monitor of …"), like
+    // Firefox. When PipeWire cannot enumerate sinks, keep the single legacy
+    // loopback entry (which captures the default sink's monitor).
+    const monitorInputs = await listAudioMonitorInputs(
+      typeof window !== "undefined" ? window.electron?.ipcRenderer : null,
+    );
+
     const sources = {
-      audio: [
-        {
-          deviceId: SYSTEM_AUDIO_SOURCE_ID,
-          label: SYSTEM_AUDIO_SOURCE_LABEL,
-          kind: "audioinput",
-          isSystemAudio: true,
-        },
-      ],
+      audio:
+        monitorInputs.length > 0
+          ? monitorInputs
+          : [
+              {
+                deviceId: SYSTEM_AUDIO_SOURCE_ID,
+                label: SYSTEM_AUDIO_SOURCE_LABEL,
+                kind: "audioinput",
+                isSystemAudio: true,
+              },
+            ],
       video: [],
     };
 
@@ -57,6 +69,14 @@ class MediaDeviceManager {
 
       for (const device of devices) {
         if (device.kind === "audioinput") {
+          // Chromium may expose the same monitors as ordinary audio inputs.
+          // The native PipeWire entries above are authoritative, so drop the
+          // browser duplicates (their capture goes through getUserMedia and
+          // cannot target a specific sink).
+          if (monitorInputs.length > 0 && isMonitorDeviceLabel(device.label)) {
+            continue;
+          }
+
           sources.audio.push(device);
         } else if (device.kind === "videoinput" && !this.engineMedia) {
           // Engine mode: the engine's camera list is authoritative, so the

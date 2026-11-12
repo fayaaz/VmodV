@@ -320,7 +320,13 @@ export default {
 
         try {
           if (isSystemAudioSource(value)) {
-            const captured = await this.$modV.systemAudioCapture.capture();
+            const input = (this.audioInputs || []).find(
+              (device) => device.deviceId === value,
+            );
+            const captured = await this.$modV.systemAudioCapture.capture({
+              sourceId: value,
+              label: input?.label,
+            });
 
             await this.$modV.setupMedia({
               audioId: value,

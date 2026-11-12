@@ -14,7 +14,7 @@ Tooling: the engine builds only inside Docker (`make engine` / `engine-test` /
 
 - Rust workspace: **1811 tests pass** (modv-app 305, modv-engine 439,
   modv-ipc 42, modv-media 233, modv-render 22, modv-renderers 768).
-- Vitest: **1145 tests pass** across 91 files (engine mirror-parity replay,
+- Vitest: **1165 tests pass** across 94 files (engine mirror-parity replay,
   preview/read helpers, supervisor restart budget, preload scoping, sync
   replay, plugin host, engine media controller/paths, module meta and payload
   shapes).
@@ -318,6 +318,15 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   sampled triplanar in the surface shader; the base tint is now the sRGB →
   linear conversion of the JS `0x3a4358` (using the raw bytes made the metal
   ~5x too bright).
+- **Per-output monitor audio inputs (Firefox-style).** The Audio Input picker
+  now lists "Monitor of …" for every PipeWire output device (`pw-dump` sink
+  discovery in `src/main/audio-monitors.js`), plus the browser's microphones.
+  Selecting one records that sink's monitor with `pw-record --target <sink>`
+  and feeds the renderer's analyser, which drives both the UI meters and the
+  engine's audio-reactive scenes. The single legacy "System Audio (loopback)"
+  entry stays as the fallback when no sinks are discovered (or on non-Linux).
+  Requires the host PipeWire tools (`pw-dump`/`pw-record`); the `.deb` should
+  depend on `pipewire-bin`.
 - **Texture-free ISF generators are upright.** `gl_FragCoord` is bottom-left
   in WebGL but top-left in wgpu. Texture-free shaders already used the
   bottom-left vertex shader, but the pixel coordinate stayed top-left, so

@@ -4,6 +4,7 @@ import {
   resolveDefaultSink,
   startPipeWireCapture,
 } from "./system-audio-pipewire";
+import { isAudioMonitorTarget, listAudioMonitors } from "./audio-monitors";
 
 const logger = createLogger("main:system-audio");
 const START_TIMEOUT_MS = 3000;
@@ -52,7 +53,11 @@ export function registerSystemAudioIpc() {
 
   registered = true;
 
-  ipcMain.handle("system-audio:start", async (event) => {
+  // List every output device's monitor so the Audio Input picker can offer
+  // per-sink entries (Firefox's "Monitor of …" inputs).
+  ipcMain.handle("system-audio:list-monitors", () => listAudioMonitors());
+
+  ipcMain.handle("system-audio:start", async (event, payload = {}) => {
     if (process.platform !== "linux") {
       return {
         available: false,
@@ -60,10 +65,27 @@ export function registerSystemAudioIpc() {
       };
     }
 
+    // `target` comes from a renderer-supplied monitor source id. Validate it
+    // against the sinks `pw-dump` reports so the argument cannot point the
+    // capture at an arbitrary node.
+    const requested =
+      typeof payload?.target === "string" && payload.target.length > 0
+        ? payload.target
+        : null;
+
+    if (requested && !(await isAudioMonitorTarget(requested))) {
+      return {
+        available: false,
+        reason: `Unknown audio output "${requested}".`,
+      };
+    }
+
     stopActive();
 
     const target =
-      process.env.MODV_SYSTEM_AUDIO_TARGET || (await resolveDefaultSink());
+      requested ||
+      process.env.MODV_SYSTEM_AUDIO_TARGET ||
+      (await resolveDefaultSink());
     const session = startForSender(event.sender);
 
     try {

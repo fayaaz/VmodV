@@ -87,6 +87,9 @@ deb:
     - libuuid1
     - libsecret-1-0
     - libpipewire-0.3-0
+    # The renderer lists output monitors with `pw-dump` and records them with
+    # `pw-record` (Debian ships both in pipewire-bin).
+    - pipewire-bin
     # Engine-owned video capture (MODV_ENGINE=1, WS-10) uses GStreamer:
     # cameras need v4l2src (plugins-good), files uridecodebin + decoders
     # (plugins-base/libav), screens pipewiresrc (pipewire). The engine degrades

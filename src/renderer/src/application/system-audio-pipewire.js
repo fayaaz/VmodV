@@ -164,7 +164,14 @@ export function createPipeWireCapture({
   }
 
   return {
-    async start() {
+    /**
+     * Start capturing a monitor.
+     *
+     * @param {{ target?: string | null }} [options] `target` is a PipeWire
+     *   sink `node.name` (a per-output monitor entry); omitted means the
+     *   default sink.
+     */
+    async start({ target = null } = {}) {
       if (!ipcRenderer) {
         return {
           available: false,
@@ -182,7 +189,10 @@ export function createPipeWireCapture({
       let info;
 
       try {
-        info = await ipcRenderer.invoke("system-audio:start");
+        info = await ipcRenderer.invoke(
+          "system-audio:start",
+          target ? { target } : {},
+        );
       } catch (e) {
         ipcRenderer.removeListener("system-audio:chunk", onEarlyChunk);
         earlyChunks = [];

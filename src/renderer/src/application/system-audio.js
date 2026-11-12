@@ -1,5 +1,10 @@
 import { createLogger } from "./logger";
 import { createPipeWireCapture } from "./system-audio-pipewire";
+import {
+  isMonitorSourceId,
+  monitorSourceLabel,
+  parseMonitorSourceId,
+} from "../../../shared/audio-monitor-source.js";
 
 export const SYSTEM_AUDIO_SOURCE_ID = "modv:system-audio";
 export const SYSTEM_AUDIO_SOURCE_LABEL = "System Audio (loopback)";
@@ -44,12 +49,44 @@ function getDefaultNativeCapture(platform = getDefaultPlatform()) {
   return createPipeWireCapture({ ipcRenderer: window.electron.ipcRenderer });
 }
 
-function getDefaultPlatform() {
-  if (typeof process !== "undefined" && process.platform) {
-    return process.platform;
+/**
+ * Resolve the platform the renderer is running on.
+ *
+ * The Vite renderer bundle's `process` is a browser shim (no `platform`), so
+ * the Node global is not reliable here. Prefer Electron's remote process,
+ * then the preload's electronAPI process, then a Node global if one survived.
+ * Kept pure so the "unknown platform" regression has a unit test — an unknown
+ * platform silently disabled the Linux PipeWire capture.
+ *
+ * @param {{
+ *   remoteProcess?: { platform?: string } | null,
+ *   electronProcess?: { platform?: string } | null,
+ *   nodeProcess?: { platform?: string } | null,
+ * }} [sources]
+ * @returns {string}
+ */
+export function resolvePlatform({
+  remoteProcess = null,
+  electronProcess = null,
+  nodeProcess = null,
+} = {}) {
+  for (const candidate of [remoteProcess, electronProcess, nodeProcess]) {
+    if (typeof candidate?.platform === "string" && candidate.platform) {
+      return candidate.platform;
+    }
   }
 
   return "unknown";
+}
+
+function getDefaultPlatform() {
+  const browserScope = typeof window !== "undefined" ? window : undefined;
+
+  return resolvePlatform({
+    remoteProcess: browserScope?.remote?.process,
+    electronProcess: browserScope?.electron?.process,
+    nodeProcess: typeof process !== "undefined" ? process : null,
+  });
 }
 
 function describeTracks(stream) {
@@ -64,7 +101,9 @@ function describeTracks(stream) {
 }
 
 export function isSystemAudioSource(sourceId) {
-  return sourceId === SYSTEM_AUDIO_SOURCE_ID;
+  // The legacy single loopback entry and every per-output monitor entry the
+  // picker discovers (Firefox-style "Monitor of …" inputs).
+  return sourceId === SYSTEM_AUDIO_SOURCE_ID || isMonitorSourceId(sourceId);
 }
 
 export function isMonitorDeviceLabel(label) {
@@ -143,14 +182,52 @@ export class SystemAudioCapture {
     return typeof mediaDevices?.getDisplayMedia === "function";
   }
 
-  async capture() {
+  /**
+   * Capture system audio.
+   *
+   * With `sourceId` naming a per-output monitor, the native PipeWire capture
+   * targets that sink. Without one it keeps the legacy behaviour (a browser
+   * monitor device if one exists, otherwise the default sink's monitor).
+   *
+   * @param {{ sourceId?: string | null, label?: string | null }} [options]
+   */
+  async capture({ sourceId = null, label = null } = {}) {
     const logger = this.logger;
+    const monitorTarget = parseMonitorSourceId(sourceId);
 
     logger.info("system audio capture requested", {
       platform: this.platform,
+      target: monitorTarget,
     });
 
     try {
+      if (monitorTarget && this.nativeCapture) {
+        const captured = await this.nativeCapture.start({
+          target: monitorTarget,
+        });
+
+        if (captured?.stream) {
+          logger.info("capturing a selected monitor source", {
+            target: monitorTarget,
+            sampleRate: captured.sampleRate,
+            channels: captured.channels,
+          });
+
+          return {
+            stream: captured.stream,
+            label:
+              label ||
+              monitorSourceLabel({ target: monitorTarget, description: "" }),
+            backend: captured.backend || "pipewire",
+          };
+        }
+
+        throw new Error(
+          captured?.reason ||
+            `Could not capture the monitor of "${monitorTarget}".`,
+        );
+      }
+
       const device = await this._findMonitorDevice();
 
       if (device) {
