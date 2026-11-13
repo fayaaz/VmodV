@@ -78,6 +78,7 @@ use crate::compositor::{
     encode_props, interim_band_payload, isf_values, isf_wall_clock_date, read_back_texture,
 };
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
+use crate::texture_sources::{ImageTextures, TextureRequest};
 
 /// Read one Point10 scene prop for a preview.
 ///
@@ -448,6 +449,10 @@ pub struct ModulePreviews {
     /// Static thumbnails for the volumetric Point10 scenes, keyed by
     /// `(module name, width, height)`. Their instances are never retained.
     volumetric_frames: HashMap<(String, u32, u32), Vec<u8>>,
+    /// Decoded image assets for ISF image inputs. A preview has no group
+    /// canvas, media source or module output, so an assigned image is the only
+    /// texture prop a thumbnail can honour.
+    images: ImageTextures,
 }
 
 impl ModulePreviews {
@@ -485,7 +490,14 @@ impl ModulePreviews {
             overlay_layout,
             slots: Vec::new(),
             volumetric_frames: HashMap::new(),
+            images: ImageTextures::new(),
         }
+    }
+
+    /// Point the preview image registry at the project media directory.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn set_media_root(&mut self, root: impl Into<std::path::PathBuf>) {
+        self.images.set_media_root(root);
     }
 
     /// Drop every cached instance, pipeline and target.
@@ -819,6 +831,7 @@ impl ModulePreviews {
             overlay_pipeline,
             overlay_layout,
             slots,
+            images,
             ..
         } = self;
 
@@ -1048,12 +1061,33 @@ impl ModulePreviews {
                 } else {
                     write_preview_pattern(device, queue, &input.texture, width, height);
                 }
-                let image_inputs: Vec<(&str, &wgpu::TextureView)> = definition
+                let image_views: Vec<(&str, wgpu::TextureView)> = definition
                     .document
                     .inputs
                     .iter()
                     .filter(|input| input.type_ == "image")
-                    .map(|decl| (decl.name.as_str(), &input.view))
+                    .map(|decl| {
+                        // An assigned image asset previews as itself; every
+                        // other texture prop has no live source inside an
+                        // isolated thumbnail, so it keeps the live frame (or
+                        // the test card) that seeded `input`.
+                        let assigned = props
+                            .get(&decl.name)
+                            .and_then(|value| TextureRequest::from_value(Some(value)))
+                            .and_then(|request| request.first_image_path().map(str::to_string))
+                            .and_then(|path| {
+                                images.get(device, queue, &path, Some((width, height))).ok()
+                            })
+                            .map(|image| image.view);
+                        (
+                            decl.name.as_str(),
+                            assigned.unwrap_or_else(|| input.view.clone()),
+                        )
+                    })
+                    .collect();
+                let image_inputs: Vec<(&str, &wgpu::TextureView)> = image_views
+                    .iter()
+                    .map(|(name, view)| (*name, view))
                     .collect();
                 let values = isf_values(&definition.document, props);
                 let uniforms = IsfFrameUniforms {

@@ -22,7 +22,9 @@ mod scene_preview;
 mod scene_transition;
 mod store_ops;
 mod supervisor;
+mod texture_sources;
 mod window;
+mod windows;
 
 use std::process::ExitCode;
 

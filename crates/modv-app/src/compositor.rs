@@ -107,6 +107,20 @@
 //!   image asset the engine has no registry for yet) and the rest draw from
 //!   their props alone. With no running source the Webcam module draws
 //!   nothing, exactly like the JS with an unset `video`.
+//! * **ISF image inputs bind a resolved texture, else the group canvas.** A
+//!   texture prop is parsed by [`crate::texture_sources::TextureRequest`] and
+//!   resolved to a live GPU texture: an image asset from the media directory,
+//!   a running media source (camera/screen/video), a module output, another
+//!   group's canvas, or the current group canvas (the JS default for an
+//!   unassigned or unresolvable prop, `renderers/isf/index.js:84-91`). A filter
+//!   whose canvas-sampling input is bound to that canvas keeps the alpha mask
+//!   described in [`Compositor::render_isf_module`]; a filter whose image
+//!   inputs are all external does not, so an assigned photo is not erased by a
+//!   transparent group.
+//! * **ISF whole-scene transitions are not rendered.** The six native
+//!   transitions are WGSL ports ([`crate::scene_transition`]) that already bind
+//!   the captured outgoing frame and the incoming main frame; a custom ISF
+//!   transition name still falls back to Fade in `scene_ops`.
 //! * **Row crossfades (M5c).** A row fade keeps the old group alive with
 //!   `transitionGhost: true`. The compositor renders both halves even when
 //!   their alpha would be culled (the transition-group exception,
@@ -300,6 +314,7 @@ use crate::module_preview::{ModulePreviews, PreviewError};
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
 use crate::scene_preview::ScenePreviews;
 use crate::scene_transition::{SceneTransitionInfo, SceneTransitionPass};
+use crate::texture_sources::{ImageTextures, TextureRequest};
 
 /// Preview frame width published to the UI (`modv-ipc` `VMP1` ring).
 pub const PREVIEW_WIDTH: u32 = 640;
@@ -845,6 +860,9 @@ pub struct Compositor {
     failed_isf: HashSet<String>,
     /// Uploaded video frames keyed by media source id (WS-10).
     media_textures: HashMap<String, MediaTexture>,
+    /// Decoded image assets keyed by `(path, requested size)` — the image
+    /// half of a texture prop (`Images/image` in the legacy store).
+    images: ImageTextures,
     /// Media source ids in start order (all kinds; textures are uploaded for
     /// every source).
     media_order: Vec<String>,
@@ -1012,6 +1030,7 @@ impl Compositor {
             isf_mask_pipeline,
             failed_isf: HashSet::new(),
             media_textures: HashMap::new(),
+            images: ImageTextures::new(),
             media_order: Vec::new(),
             media_camera_order: Vec::new(),
             warned: HashSet::new(),
@@ -1178,6 +1197,147 @@ impl Compositor {
         let texture = media_textures.get(source_id)?;
 
         Some((texture.view.as_ref()?, texture.size))
+    }
+
+    /// Point the image registry at the project media directory.
+    ///
+    /// The engine is not told `media/path` over the control socket, so by
+    /// default [`ImageTextures`] falls back to `$MODV_MEDIA_DIR` and Electron's
+    /// `<userData>/media` for `VmodV`. An explicit root (tests, a future
+    /// `media/*` IPC) wins; changing it drops the decoded-image cache.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn set_media_root(&mut self, root: impl Into<std::path::PathBuf>) {
+        let root = root.into();
+        self.images.set_media_root(root.clone());
+        if let Some(previews) = &mut self.previews {
+            previews.set_media_root(root);
+        }
+    }
+
+    /// Resolve one texture id to a live surface view.
+    ///
+    /// Tries every module-output kind and the group canvases, then the raw id
+    /// (which lets a prop name a registered surface directly).
+    fn surface_view(&self, id: &str) -> Option<wgpu::TextureView> {
+        let candidates = [
+            isf_texture_id(id),
+            two_d_texture_id(id),
+            point10_texture_id(id),
+            group_texture_id(id),
+            TextureId::from(id),
+        ];
+        candidates
+            .iter()
+            .find_map(|candidate| self.surfaces.get(candidate))
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+    }
+
+    /// View of a running media source, by exact source id.
+    fn media_texture_view(&self, source_id: &str) -> Option<wgpu::TextureView> {
+        self.media_textures
+            .get(source_id)
+            .and_then(|texture| texture.view.as_ref())
+            .cloned()
+    }
+
+    /// Resolve a texture prop to a running media source.
+    ///
+    /// Accepts the engine source id verbatim (`camera:<deviceId>`,
+    /// `video:<path>`, `screen:<nodeId>`), a bare key, or a media-library video
+    /// path that a file source was started from (the renderer keys file sources
+    /// by the absolute path it resolved, e.g.
+    /// `video:/home/u/VmodV/media/default/video/clip.mp4`).
+    fn media_view_for(&self, request: &TextureRequest) -> Option<wgpu::TextureView> {
+        for candidate in request.media_ids() {
+            if let Some(view) = self.media_texture_view(&candidate) {
+                return Some(view);
+            }
+        }
+        self.media_order
+            .iter()
+            .find(|source_id| request.matches_video_path(source_id))
+            .and_then(|source_id| self.media_texture_view(source_id))
+    }
+
+    /// Decode an image prop path, warning once per path on failure.
+    fn image_view(&mut self, raw: &str, max_size: Option<(u32, u32)>) -> Option<wgpu::TextureView> {
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        match self.images.get(&device, &queue, raw, max_size) {
+            Ok(image) => Some(image.view),
+            Err(error) => {
+                self.warn_once(
+                    format!("image:{raw}"),
+                    &format!("engine: WARN could not load the image {raw:?}: {error}"),
+                );
+                None
+            }
+        }
+    }
+
+    /// Resolve one ISF image input's texture.
+    ///
+    /// The rules mirror `renderers/isf/index.js:84-91` with the engine's
+    /// texture sources layered in:
+    ///
+    /// * `image` props resolve their path first (an assigned asset is the
+    ///   whole point of the prop);
+    /// * any prop id — a module id, a group id or a media source id — resolves
+    ///   to that live surface next;
+    /// * `group`/`inherit`/unassigned/unresolvable props bind the group canvas
+    ///   handed in by the caller.
+    ///
+    /// The flag reports whether the returned view **is** the group canvas, so
+    /// the filter alpha mask only applies when the shader actually samples the
+    /// canvas.
+    fn resolve_image_input(
+        &mut self,
+        prop: Option<&Value>,
+        group_view: &wgpu::TextureView,
+        current_group: &TextureId,
+        module_id: &str,
+    ) -> (wgpu::TextureView, bool) {
+        let Some(request) = TextureRequest::from_value(prop) else {
+            return (group_view.clone(), true);
+        };
+
+        if request.wants_image() {
+            for path in request.image_paths() {
+                if let Some(view) = self.image_view(path, None) {
+                    return (view, false);
+                }
+            }
+        }
+
+        for id in &request.ids {
+            // A prop that names the current group's canvas *is* the canvas;
+            // reporting it as external would skip the filter alpha mask.
+            if group_texture_id(id) == *current_group {
+                return (group_view.clone(), true);
+            }
+            // A shader cannot sample the target it is about to render into
+            // (the runtime requires them not to alias), so a self-reference
+            // binds the group canvas — the composited equivalent.
+            if id == module_id {
+                return (group_view.clone(), true);
+            }
+            if let Some(view) = self.surface_view(id) {
+                return (view, false);
+            }
+        }
+        if let Some(view) = self.media_view_for(&request) {
+            return (view, false);
+        }
+
+        if !request.wants_image() {
+            for path in request.image_paths() {
+                if let Some(view) = self.image_view(path, None) {
+                    return (view, false);
+                }
+            }
+        }
+
+        (group_view.clone(), true)
     }
 
     fn drop_output_textures(&mut self) {
@@ -1923,7 +2083,9 @@ impl Compositor {
     /// pipelines). Frame uniforms follow `ISFRenderer.setDateUniforms`:
     /// `FRAMEINDEX` is 1-based, `DATE` is `[year, month 1-based, day, seconds
     /// since midnight]`. Audio inputs sample the per-instance
-    /// [`IsfAudioTextures`] pair uploaded from the current [`FrameInfo`].
+    /// [`IsfAudioTextures`] pair uploaded from the current [`FrameInfo`];
+    /// image inputs resolve their texture prop
+    /// ([`Compositor::resolve_image_input`]).
     fn render_isf_module(
         &mut self,
         module: &ModuleInstance,
@@ -2019,19 +2181,33 @@ impl Compositor {
             return Ok(());
         };
 
-        // Input images sample the group canvas — the JS default when no
-        // texture prop resolves (`renderers/isf/index.js:84-91`). There is no
-        // texture registry yet, so a texture prop cannot supply a GPU texture.
+        // Every image input resolves its texture prop (`renderers/isf/index.js:84-91`):
+        // an assigned image asset, live media source, module output or other
+        // group canvas, falling back to this group's canvas. The canvas is the
+        // JS default for an unassigned prop, so a Scene without assigned
+        // textures renders exactly as before.
         let Some(group_texture) = self.surfaces.get(target).cloned() else {
             return Ok(());
         };
         let group_view = group_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let image_inputs: Vec<(&str, &wgpu::TextureView)> = definition
-            .document
-            .inputs
+        let mut image_views: Vec<(&str, wgpu::TextureView)> = Vec::new();
+        let mut samples_group_canvas = false;
+        for input in &definition.document.inputs {
+            if input.type_ != "image" {
+                continue;
+            }
+            let (view, is_canvas) = self.resolve_image_input(
+                module.props.get(&input.name),
+                &group_view,
+                target,
+                module_id,
+            );
+            samples_group_canvas |= is_canvas;
+            image_views.push((input.name.as_str(), view));
+        }
+        let image_inputs: Vec<(&str, &wgpu::TextureView)> = image_views
             .iter()
-            .filter(|input| input.type_ == "image")
-            .map(|input| (input.name.as_str(), &group_view))
+            .map(|(name, view)| (*name, view))
             .collect();
 
         // Compile lazily. A compiled shader is tied to its target format; the
@@ -2178,12 +2354,14 @@ impl Compositor {
             return Ok(());
         }
 
-        // Filters sample the group canvas and usually return alpha 1. Mask
+        // Filters that sample the group canvas usually return alpha 1. Mask
         // their output by the canvas alpha so transparent canvas areas stay
         // transparent instead of blacking out the groups below (Vignette over
-        // Point10 layers was the reported case). Generators have no image
-        // input and keep their own alpha.
-        let final_texture = if image_inputs.is_empty() {
+        // Point10 layers was the reported case). A shader whose image inputs
+        // are all external (an assigned photo/video) does not read the canvas,
+        // so masking it would erase the assigned texture over an empty group;
+        // generators have no image input and keep their own alpha.
+        let final_texture = if image_views.is_empty() || !samples_group_canvas {
             target_texture.clone()
         } else {
             let masked = self
@@ -4904,6 +5082,29 @@ mod tests {
         compositor
     }
 
+    /// A unique temp directory for the image-input tests.
+    fn isf_temp_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-app-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// Write a solid-colour PNG for the image-input tests.
+    fn write_test_png(path: &std::path::Path, colour: [u8; 4]) {
+        let mut image = image::RgbaImage::new(4, 2);
+        for pixel in image.pixels_mut() {
+            *pixel = image::Rgba(colour);
+        }
+        image.save(path).expect("test png written");
+    }
+
     #[test]
     fn isf_generator_renders_through_the_runtime() {
         let Some(engine) = try_engine() else {
@@ -5074,6 +5275,258 @@ mod tests {
             pixels.chunks_exact(4).all(|pixel| pixel[3] == 0),
             "an ISF filter turned the transparent group canvas opaque"
         );
+    }
+
+    #[test]
+    fn isf_image_input_samples_an_assigned_texture() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(&engine, registry);
+
+        // A solid red PNG stands in for a media-library image. `Color Invert`
+        // samples its `inputImage`; with the image assigned it must invert the
+        // image (red -> cyan), not the empty transparent group canvas (which
+        // would yield white or nothing).
+        let dir = isf_temp_dir("isf-image-input");
+        let image_dir = dir.join("default/image");
+        std::fs::create_dir_all(&image_dir).expect("media folders");
+        write_test_png(&image_dir.join("red.png"), [255, 0, 0, 255]);
+        // The saved prop carries the media-library path; the engine resolves it
+        // against the project media directory.
+        compositor.set_media_root(&dir);
+
+        let state = isf_state(&[(
+            "module-a",
+            "Color Invert",
+            json!({
+                "inputImage": {
+                    "type": "image",
+                    "options": { "path": "default/image/red.png" }
+                }
+            }),
+        )]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("image-input frame renders");
+
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert_pixels_close(
+            &pixels,
+            [0, 255, 255, 255],
+            4,
+            "the assigned image was not sampled by the image input",
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn isf_image_input_falls_back_to_the_group_canvas_for_an_unresolved_prop() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(&engine, registry);
+
+        let dir = isf_temp_dir("isf-image-fallback");
+        let missing_path = dir.join("not-there.png");
+
+        // Checkerboard draws into the group; Color Invert then samples the
+        // group canvas through `inputImage`.
+        let mut state = isf_state(&[("module-a", "Checkerboard", json!({}))]);
+        state.modules.insert(
+            "module-b".to_string(),
+            isf_module(
+                "module-b",
+                "Color Invert",
+                json!({
+                    "inputImage": {
+                        "type": "image",
+                        "options": { "path": missing_path.to_string_lossy() }
+                    }
+                }),
+            ),
+        );
+        state.groups[0].modules.push("module-b".to_string());
+
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("unresolved image prop frame renders");
+        let unresolved = compositor.read_main_rgba8().expect("main reads back");
+
+        // Clearing the prop must render exactly the same frame: an unresolved
+        // texture source is the JS canvas default, not a transparent dummy.
+        if let Some(module) = state.modules.get_mut("module-b") {
+            module.props = json!({});
+        }
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("unset image prop frame renders");
+        let unset = compositor.read_main_rgba8().expect("main reads back");
+
+        assert!(
+            lit_pixels(&unresolved) > 0,
+            "the unresolved image prop rendered an empty frame"
+        );
+        assert_eq!(
+            unresolved, unset,
+            "an unresolved image prop must fall back to the group canvas"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn isf_image_input_samples_an_assigned_module_output() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(&engine, registry);
+
+        // Checkerboard (module-a) is covered in the group canvas by an opaque
+        // yellow solid (module-b), so sampling the canvas and sampling
+        // module-a's output are visibly different. Color Invert (module-c)
+        // names module-a as its texture source.
+        let mut state = isf_state(&[
+            ("module-a", "Checkerboard", json!({})),
+            (
+                "module-b",
+                "block-color",
+                json!({ "r": 1.0, "g": 1.0, "b": 0.0, "a": 1.0 }),
+            ),
+        ]);
+        state.modules.insert(
+            "module-c".to_string(),
+            isf_module(
+                "module-c",
+                "Color Invert",
+                json!({ "inputImage": { "type": "canvas", "options": { "id": "module-a" } } }),
+            ),
+        );
+        state.groups[0].modules.push("module-c".to_string());
+
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("module-output frame renders");
+        let bound = compositor.read_main_rgba8().expect("main reads back");
+
+        // The same shader unbound samples the yellow canvas (inverted: blue).
+        if let Some(module) = state.modules.get_mut("module-c") {
+            module.props = json!({});
+        }
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("canvas fallback frame renders");
+        let canvas = compositor.read_main_rgba8().expect("main reads back");
+
+        assert_ne!(
+            bound, canvas,
+            "an image input naming a module id did not sample that module's output"
+        );
+        // Inverted yellow is uniform; the checkerboard (and its inversion) is
+        // not, so the bound frame must contain more than one colour.
+        let distinct: HashSet<&[u8]> = bound.chunks_exact(4).collect();
+        assert!(
+            distinct.len() > 1,
+            "the module-output binding produced a uniform frame, so it sampled the canvas"
+        );
+    }
+
+    #[test]
+    fn isf_image_input_self_reference_falls_back_to_the_group_canvas() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(&engine, registry);
+
+        // A module naming itself would alias its render target with an input
+        // bind group entry, which wgpu rejects. The canvas is the composited
+        // equivalent and never aliases the target.
+        let state = isf_state(&[(
+            "module-a",
+            "Color Invert",
+            json!({ "inputImage": { "type": "canvas", "options": { "id": "module-a" } } }),
+        )]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("self-referencing frame renders");
+
+        assert!(
+            !compositor.failed_isf.contains("module-a"),
+            "a self-referencing image input disabled the shader"
+        );
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert_eq!(
+            lit_pixels(&pixels),
+            0,
+            "the self reference should invert the empty group canvas, not its own output"
+        );
+    }
+
+    #[test]
+    fn isf_image_input_samples_a_live_media_source() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut media = crate::media::MediaHub::new();
+        if !media.is_available() {
+            eprintln!("skipping media compositor test: no GStreamer");
+            return;
+        }
+        if start_test_source(
+            &mut media,
+            "cam-a",
+            modv_media::video::TestPattern::White,
+            SIZE,
+            SIZE,
+        )
+        .is_none()
+        {
+            return;
+        }
+
+        let mut compositor = isf_compositor(&engine, registry);
+        sync_until_uploaded(&mut compositor, &mut media, "cam-a");
+
+        // `Color Invert` samples the white test pattern through an image input
+        // naming the camera source. The inverted frame is opaque black; the
+        // transparent group-canvas fallback would invert to transparent, so an
+        // opaque frame proves the live texture was bound.
+        let state = isf_state(&[(
+            "module-a",
+            "Color Invert",
+            json!({
+                "inputImage": { "type": "canvas", "options": { "id": "camera:cam-a" } }
+            }),
+        )]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("media-input frame renders");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+
+        assert_pixels_close(
+            &pixels,
+            [0, 0, 0, 255],
+            4,
+            "the image input did not sample the live media source",
+        );
+
+        media.stop_all();
     }
 
     #[test]
