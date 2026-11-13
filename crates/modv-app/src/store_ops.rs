@@ -457,6 +457,7 @@ impl Store {
             "scenes/clearSceneCell" => self.clear_scene_cell(params),
             "scenes/captureSceneRowToScene" => self.capture_scene_row_to_scene(params),
             "scenes/createSceneCellGroup" => self.create_scene_cell_group(params),
+            "scenes/copySceneCellToScene" => self.copy_scene_cell_to_scene(params),
             // ————————————————— Performance runtime (WS-8 / M5c) ————————
             "scenes/startPerformance" => self.start_performance(),
             "scenes/stopPerformance" => self.stop_performance(),

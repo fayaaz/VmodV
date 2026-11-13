@@ -105,7 +105,7 @@ use modv_engine::inputs::{Input, InputLink};
 use modv_engine::props::coerce_prop_value;
 use modv_engine::preset::create_preset_from_state;
 use modv_engine::scene_capture::{capture_live_state, collect_scene_groups, scene_has_groups};
-use modv_engine::scene_cells::{clear_scene_cell_modules, merge_scene_cell};
+use modv_engine::scene_cells::{clear_scene_cell_modules, copy_scene_cell, merge_scene_cell};
 use modv_engine::scene_rows::get_row_label;
 use modv_engine::scene_link_defaults::{
     LinkMode, default_link_for_input, default_link_tween, get_bass_link_range, get_bpm_link_range,
@@ -1241,6 +1241,84 @@ impl Store {
             .push("scenes/SET_ACTIVE_ROWS", self.live_scene_rows());
         self.persist_best_effort();
         Ok(json!({ "groupId": group["id"] }))
+    }
+
+    /// `scenes/copySceneCellToScene` (`scenes.js:3568-3735`).
+    ///
+    /// Ctrl+drag a grid cell onto another Scene: copies the Group and Module
+    /// snapshots verbatim (ids included) plus the saved inputs, input links,
+    /// expression assignments and tweens that belong to them. Rows the target
+    /// does not define become `null` holes so row indexes stay aligned.
+    pub fn copy_scene_cell_to_scene(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        let from_scene_id = params
+            .get("fromSceneId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let to_scene_id = params
+            .get("toSceneId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let (Some(from_row), Some(to_row)) = (
+            params
+                .get("fromRowIndex")
+                .and_then(Value::as_i64)
+                .filter(|row| *row >= 0)
+                .map(|row| row as usize),
+            params
+                .get("toRowIndex")
+                .and_then(Value::as_i64)
+                .filter(|row| *row >= 0)
+                .map(|row| row as usize),
+        ) else {
+            return Ok(Value::Null);
+        };
+        if from_scene_id == to_scene_id {
+            return Ok(Value::Null);
+        }
+
+        let Some(from_scene) = self
+            .scenes
+            .scenes
+            .iter()
+            .find(|scene| scene.get("id").and_then(Value::as_str) == Some(from_scene_id.as_str()))
+            .cloned()
+        else {
+            return Ok(Value::Null);
+        };
+        let Some(index) = self
+            .scenes
+            .scenes
+            .iter()
+            .position(|scene| scene.get("id").and_then(Value::as_str) == Some(to_scene_id.as_str()))
+        else {
+            return Ok(Value::Null);
+        };
+        let to_scene = self.scenes.scenes[index].clone();
+        let row_names = self.row_names();
+
+        let Some(data) = copy_scene_cell(&from_scene, &to_scene, from_row, to_row, &row_names)
+        else {
+            return Ok(Value::Null);
+        };
+
+        let mut updated = to_scene;
+        if let (Value::Object(object), Value::Object(data)) = (&mut updated, &data) {
+            for key in ["groups", "modules", "inputs", "expressions", "tweens"] {
+                if let Some(value) = data.get(key) {
+                    object.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+        self.scenes.scenes[index] = updated.clone();
+        self.touch_scene_list();
+        self.deltas.push("scenes/ADD_SCENE", updated.clone());
+        self.persist_best_effort();
+        Ok(updated)
     }
 
     /// `scenes/captureSceneRowToScene` (`scenes.js:3487-3567`).
@@ -5185,5 +5263,63 @@ mod tests {
                 "the other gallery modules are disabled"
             );
         }
+    }
+
+    #[test]
+    fn copy_scene_cell_copies_a_row_between_scenes() {
+        let mut store = Store::new();
+        for (id, name) in [("scene-a", "Alpha"), ("scene-b", "Beta")] {
+            let mut scene = two_row_scene(id);
+            scene["name"] = json!(name);
+            seed_scene(&mut store, scene);
+        }
+        // Give Alpha's Background a module snapshot the copy can carry.
+        let alpha = find_default_scene(&store, "Alpha");
+        let source_group = alpha["groups"][0].clone();
+        let source_modules = alpha["modules"].as_object().expect("modules").clone();
+        let source_module_id = source_modules
+            .keys()
+            .next()
+            .expect("Alpha has a Background module")
+            .clone();
+
+        let copied = store
+            .dispatch(
+                "scenes/copySceneCellToScene",
+                json!({
+                    "fromSceneId": "scene-a",
+                    "toSceneId": "scene-b",
+                    "fromRowIndex": 0,
+                    "toRowIndex": 0,
+                }),
+            )
+            .expect("copySceneCellToScene dispatches");
+        assert_ne!(copied, Value::Null, "the copy succeeded");
+        let beta = find_default_scene(&store, "Beta");
+        assert_eq!(beta["groups"][0]["name"], source_group["name"]);
+        assert!(
+            beta["modules"]
+                .as_object()
+                .expect("modules")
+                .contains_key(&source_module_id),
+            "the copied module snapshot travels: {}",
+            beta["modules"]
+        );
+        // Beta's own row 1 is untouched.
+        assert_eq!(beta["groups"][1]["name"], "Effects");
+
+        // An empty source cell returns null.
+        let empty = store
+            .dispatch(
+                "scenes/copySceneCellToScene",
+                json!({
+                    "fromSceneId": "scene-a",
+                    "toSceneId": "scene-b",
+                    "fromRowIndex": 9,
+                    "toRowIndex": 0,
+                }),
+            )
+            .expect("empty copy dispatches");
+        assert_eq!(empty, Value::Null);
     }
 }
