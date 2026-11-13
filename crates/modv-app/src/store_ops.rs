@@ -445,6 +445,12 @@ impl Store {
             "scenes/applyScene" => self.apply_scene_action(params),
             "scenes/captureLiveStateToScene" => self.capture_live_state_to_scene(params),
             "scenes/saveCurrentAsScene" => self.save_current_as_scene(params),
+            "scenes/addEmptyScene" => self.add_empty_scene(params),
+            "scenes/moveScene" => self.move_scene(params),
+            "scenes/setSceneEnabled" => self.set_scene_enabled(params),
+            "scenes/updateSceneName" => self.update_scene_name(params),
+            "scenes/updateSceneTiming" => self.update_scene_timing(params),
+            "scenes/resetSceneTiming" => self.reset_scene_timing(params),
             // ————————————————— Performance runtime (WS-8 / M5c) ————————
             "scenes/startPerformance" => self.start_performance(),
             "scenes/stopPerformance" => self.stop_performance(),

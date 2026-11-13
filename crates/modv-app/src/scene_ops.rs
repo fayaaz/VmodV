@@ -118,6 +118,9 @@ use modv_engine::scene_timing::{
     to_finite_number,
 };
 use modv_engine::scene_transition_pick::{FADE_TRANSITION, NONE_TRANSITION};
+use modv_engine::scene_columns::{
+    EmptySceneOptions, create_empty_scene, move_scene_to_index,
+};
 use modv_engine::scenes_playlist::{
     ImportMode, export_playlist, generate_scene_id, import_playlist_with,
     normalize_performance_data, normalize_transition_list,
@@ -1265,6 +1268,216 @@ impl Store {
         self.deltas.push("scenes/ADD_SCENE", scene.clone());
         self.persist_best_effort();
         Ok(scene)
+    }
+
+    /// `scenes/addEmptyScene` (`scenes.js:1892-1905`).
+    pub fn add_empty_scene(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let timing = normalize_performance_timing(Some(&self.scenes.performance));
+        let timing = json!({
+            "minSeconds": timing.min_seconds,
+            "maxSeconds": timing.max_seconds,
+        });
+        let existing_names: Vec<Value> = self
+            .scenes
+            .scenes
+            .iter()
+            .map(|scene| scene.get("name").cloned().unwrap_or(Value::Null))
+            .collect();
+        let id = generate_scene_id();
+        let scene = create_empty_scene(&EmptySceneOptions {
+            id: &id,
+            name: params.get("name").and_then(Value::as_str),
+            existing_names: &existing_names,
+            timing: Some(&timing),
+        });
+
+        self.scenes.scenes.push(scene.clone());
+        self.touch_scene_list();
+        self.deltas.push("scenes/ADD_SCENE", scene.clone());
+        self.persist_best_effort();
+        Ok(scene)
+    }
+
+    /// `scenes/moveScene` (`scenes.js:1911-1922`).
+    ///
+    /// Returns `true` when the list changed. The Scene order is the
+    /// performance order, so this also changes which Scene runs next.
+    pub fn move_scene(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let to_index = params
+            .get("toIndex")
+            .or_else(|| params.get("index"))
+            .and_then(Value::as_i64);
+
+        let Some(reordered) = move_scene_to_index(&self.scenes.scenes, scene_id, to_index) else {
+            return Ok(json!(false));
+        };
+
+        self.scenes.scenes = reordered;
+        self.touch_scene_list();
+        self.emit_scene_list();
+        self.persist_best_effort();
+        Ok(json!(true))
+    }
+
+    /// `scenes/setSceneEnabled` (`scenes.js:3317-3330`).
+    pub fn set_scene_enabled(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let enabled = match params.get("enabled") {
+            Some(Value::Bool(flag)) => *flag,
+            Some(Value::Number(number)) => number.as_f64().is_some_and(|value| value != 0.0),
+            _ => false,
+        };
+
+        let Some(scene) = self.update_scene_document(scene_id, |scene| {
+            scene.insert("enabled".to_string(), json!(enabled));
+        }) else {
+            return Ok(Value::Null);
+        };
+        Ok(scene)
+    }
+
+    /// `scenes/updateSceneName` (`scenes.js:2165-2187`).
+    ///
+    /// The name is trimmed and must not collide with another Scene
+    /// (case-insensitive); a rejected rename returns `null` like the JS.
+    pub fn update_scene_name(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        if name.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        let duplicate = self.scenes.scenes.iter().any(|scene| {
+            scene.get("id").and_then(Value::as_str) != Some(scene_id)
+                && scene
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|existing| existing.eq_ignore_ascii_case(&name))
+        });
+        if duplicate {
+            return Ok(Value::Null);
+        }
+
+        let Some(scene) = self.update_scene_document(scene_id, |scene| {
+            scene.insert("name".to_string(), json!(name));
+        }) else {
+            return Ok(Value::Null);
+        };
+        Ok(scene)
+    }
+
+    /// `scenes/updateSceneTiming` (`scenes.js:2188-2209`): writes an explicit
+    /// per-Scene override, normalised against the performance timing.
+    pub fn update_scene_timing(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Some(existing) = self
+            .scenes
+            .scenes
+            .iter()
+            .find(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id))
+            .cloned()
+        else {
+            return Ok(Value::Null);
+        };
+
+        let current = normalize_scene_timing(Some(&existing), Some(&self.scenes.performance));
+        let mut candidate = Map::new();
+        candidate.insert(
+            "minSeconds".to_string(),
+            params
+                .get("minSeconds")
+                .cloned()
+                .unwrap_or_else(|| json_number(current.min_seconds)),
+        );
+        candidate.insert(
+            "maxSeconds".to_string(),
+            params
+                .get("maxSeconds")
+                .cloned()
+                .unwrap_or_else(|| json_number(current.max_seconds)),
+        );
+        candidate.insert("timingOverride".to_string(), json!(true));
+        let timing = normalize_scene_timing(
+            Some(&Value::Object(candidate)),
+            Some(&self.scenes.performance),
+        );
+
+        let Some(scene) = self.update_scene_document(scene_id, |scene| {
+            scene.insert("minSeconds".to_string(), json_number(timing.min_seconds));
+            scene.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+            scene.insert("timingOverride".to_string(), json!(true));
+        }) else {
+            return Ok(Value::Null);
+        };
+        Ok(scene)
+    }
+
+    /// `scenes/resetSceneTiming` (`scenes.js:2210-2231`): drops the override
+    /// and re-inherits the global performance timing.
+    pub fn reset_scene_timing(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let timing = normalize_performance_timing(Some(&self.scenes.performance));
+
+        let Some(scene) = self.update_scene_document(scene_id, |scene| {
+            scene.insert("minSeconds".to_string(), json_number(timing.min_seconds));
+            scene.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+            scene.insert("timingOverride".to_string(), json!(false));
+        }) else {
+            return Ok(Value::Null);
+        };
+        Ok(scene)
+    }
+
+    /// Apply `mutate` to one Scene document, persist, and emit the upsert
+    /// delta the mirror replays. Returns the updated Scene, or `None` when the
+    /// id is unknown.
+    fn update_scene_document(
+        &mut self,
+        scene_id: &str,
+        mutate: impl FnOnce(&mut Map<String, Value>),
+    ) -> Option<Value> {
+        let index = self
+            .scenes
+            .scenes
+            .iter()
+            .position(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id))?;
+        let scene = self.scenes.scenes[index].as_object_mut()?;
+        mutate(scene);
+        let updated = self.scenes.scenes[index].clone();
+        self.touch_scene_list();
+        self.deltas.push("scenes/ADD_SCENE", updated.clone());
+        self.persist_best_effort();
+        Some(updated)
     }
 
     /// `scenes/loadSceneFromJson` (`scenes.js:2059-2092`).
@@ -4462,5 +4675,94 @@ mod tests {
             .dispatch("scenes/saveCurrentAsScene", json!({}))
             .expect("unnamed save dispatches");
         assert_eq!(unnamed["name"], json!(format!("Scene {}", before + 2)));
+    }
+
+    #[test]
+    fn scene_list_actions_rename_move_enable_and_retime() {
+        // The Scene grid's column actions (`Scenes.vue` / the header context
+        // menu) all dispatch engine actions; these used to fall through to the
+        // dispatch wildcard and silently do nothing in engine mode.
+        let mut store = Store::new();
+        for (id, name) in [("scene-a", "Alpha"), ("scene-b", "Beta")] {
+            let mut scene = two_row_scene(id);
+            scene["name"] = json!(name);
+            seed_scene(&mut store, scene);
+        }
+
+        // addEmptyScene: a valid empty document with a unique name.
+        let empty = store
+            .dispatch("scenes/addEmptyScene", json!({ "name": "Empty" }))
+            .expect("addEmptyScene dispatches");
+        assert_eq!(empty["name"], json!("Empty"));
+        assert_eq!(empty["enabled"], json!(true));
+        assert_eq!(empty["groups"], json!([]));
+        assert!(empty["id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert_eq!(store.scenes_state().scenes.len(), 3);
+
+        // updateSceneName: trimmed, case-insensitively unique.
+        let renamed = store
+            .dispatch(
+                "scenes/updateSceneName",
+                json!({ "sceneId": "scene-a", "name": "  Alpha Two  " }),
+            )
+            .expect("updateSceneName dispatches");
+        assert_eq!(renamed["name"], json!("Alpha Two"));
+        assert_eq!(
+            find_default_scene(&store, "Alpha Two")["id"],
+            json!("scene-a")
+        );
+        let duplicate = store
+            .dispatch(
+                "scenes/updateSceneName",
+                json!({ "sceneId": "scene-b", "name": "alpha two" }),
+            )
+            .expect("duplicate rename dispatches");
+        assert_eq!(duplicate, Value::Null, "duplicate names are rejected");
+
+        // setSceneEnabled returns the updated Scene.
+        let disabled = store
+            .dispatch(
+                "scenes/setSceneEnabled",
+                json!({ "sceneId": "scene-b", "enabled": false }),
+            )
+            .expect("setSceneEnabled dispatches");
+        assert_eq!(disabled["enabled"], json!(false));
+        assert_eq!(
+            find_default_scene(&store, "Beta")["enabled"],
+            json!(false)
+        );
+
+        // updateSceneTiming sets an explicit override, reset clears it.
+        let timed = store
+            .dispatch(
+                "scenes/updateSceneTiming",
+                json!({ "sceneId": "scene-a", "minSeconds": 4.0, "maxSeconds": 9.0 }),
+            )
+            .expect("updateSceneTiming dispatches");
+        assert_eq!(timed["timingOverride"], json!(true));
+        assert_eq!(timed["minSeconds"], json!(4));
+        assert_eq!(timed["maxSeconds"], json!(9));
+
+        let reset = store
+            .dispatch("scenes/resetSceneTiming", json!({ "sceneId": "scene-a" }))
+            .expect("resetSceneTiming dispatches");
+        assert_eq!(reset["timingOverride"], json!(false));
+        assert_eq!(reset["minSeconds"], json!(8));
+        assert_eq!(reset["maxSeconds"], json!(24));
+
+        // moveScene reorders the list (performance order) and returns true.
+        assert_eq!(
+            store
+                .dispatch("scenes/moveScene", json!({ "sceneId": "scene-b", "toIndex": 0 }))
+                .expect("moveScene dispatches"),
+            json!(true)
+        );
+        assert_eq!(store.scenes_state().scenes[0]["id"], json!("scene-b"));
+        assert_eq!(
+            store
+                .dispatch("scenes/moveScene", json!({ "sceneId": "scene-b", "toIndex": 0 }))
+                .expect("no-op move dispatches"),
+            json!(false)
+        );
     }
 }
