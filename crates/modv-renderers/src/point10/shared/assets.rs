@@ -544,7 +544,8 @@ mod tests {
         };
         // The first checker block is the dark tone, its neighbour the light one.
         assert!(pixel(4, 4)[0] < pixel(40, 4)[0]);
-        assert!(pixel(40, 40)[0] < pixel(40, 4)[0] + 200);
+        // Compare as i32: a u8 + 200 can overflow in debug builds.
+        assert!(i32::from(pixel(40, 40)[0]) < i32::from(pixel(40, 4)[0]) + 200);
         assert!(image.rgba.chunks_exact(4).all(|texel| texel[3] == 255));
     }
 

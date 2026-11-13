@@ -117,10 +117,13 @@
 //!   described in [`Compositor::render_isf_module`]; a filter whose image
 //!   inputs are all external does not, so an assigned photo is not erased by a
 //!   transparent group.
-//! * **ISF whole-scene transitions are not rendered.** The six native
-//!   transitions are WGSL ports ([`crate::scene_transition`]) that already bind
-//!   the captured outgoing frame and the incoming main frame; a custom ISF
-//!   transition name still falls back to Fade in `scene_ops`.
+//! * **ISF whole-scene transitions run through the ISF runtime.** The six
+//!   native transitions are WGSL ports ([`crate::scene_transition`]) that bind
+//!   the captured outgoing frame and the incoming main frame; a registered ISF
+//!   transition-shaped module binds the same two frames as `startImage`/
+//!   `endImage` and runs through [`modv_renderers::isf::IsfRuntime`] on the
+//!   transition scratch target. A non-transition or unloadable name still falls
+//!   back to Fade in `scene_ops`.
 //! * **Row crossfades (M5c).** A row fade keeps the old group alive with
 //!   `transitionGhost: true`. The compositor renders both halves even when
 //!   their alpha would be culled (the transition-group exception,
@@ -134,12 +137,13 @@
 //!   every group's alpha; the compositor's normal `group.alpha` composite is
 //!   therefore the whole-scene fade.
 //! * **Whole-scene shader transitions (WS-8).** When the picked transition is
-//!   one of the six native effects ([`crate::scene_transition`]) the switch is
-//!   composited by a shader over two frames instead of animating alphas: the
-//!   outgoing frame is captured from the main texture of the last presented
-//!   frame ([`Compositor::capture_transition_source`]) and the incoming frame
-//!   is this frame's main composite. The outgoing Groups stay in the state at
-//!   full alpha but are **hidden** for the duration (their ids travel in
+//!   a native effect or a registered ISF transition
+//!   ([`crate::scene_transition`]) the switch is composited by a shader over two
+//!   frames instead of animating alphas: the outgoing frame is captured from
+//!   the main texture of the last presented frame
+//!   ([`Compositor::capture_transition_source`]) and the incoming frame is this
+//!   frame's main composite. The outgoing Groups stay in the state at full
+//!   alpha but are **hidden** for the duration (their ids travel in
 //!   [`SceneTransitionInfo::from_groups`]), so they neither pollute `main` nor
 //!   are faded a second time. The pass writes into its scratch target and the
 //!   result is copied back into main, which keeps `present`, `read_preview`
@@ -405,9 +409,10 @@ pub struct FrameInfo {
     pub row_fades: Vec<RowFadeInfo>,
     /// Whole-scene shader transition running this frame, if any.
     ///
-    /// `Some` only when the outgoing frame was captured and the picked effect
-    /// is a native shader; `Fade`/`None`/unknown kinds stay `None` and take the
-    /// alpha path (see [`crate::scene_transition`]).
+    /// `Some` only when the outgoing frame was captured and the picked effect is
+    /// a native or registered ISF shader transition; `Fade`/`None`/unknown
+    /// kinds stay `None` and take the alpha path (see
+    /// [`crate::scene_transition`]).
     pub scene_transition: Option<SceneTransitionInfo>,
 }
 
@@ -833,7 +838,8 @@ pub struct Compositor {
     /// resize, reset and when the transition ends.
     transition_from: Option<OutputTexture>,
     /// The whole-scene transition pass, created on the first shader
-    /// transition. Owns one pipeline per effect plus its scratch target.
+    /// transition. Owns one pipeline per native effect, the compiled ISF
+    /// transitions and the scratch target.
     scene_transition: Option<SceneTransitionPass>,
     /// Pipeline slot per active module id.
     slots: HashMap<String, usize>,
@@ -1617,7 +1623,7 @@ impl Compositor {
         // main (present/preview read main). A failed pass drops the capture so
         // the window loop falls back to the Fade ghost path next frame.
         if let Some(transition) = &frame.scene_transition
-            && !self.apply_scene_transition(transition)?
+            && !self.apply_scene_transition(transition, frame.time_seconds)?
         {
             self.transition_from = None;
         }
@@ -3043,10 +3049,12 @@ impl Compositor {
     ///
     /// Pre-build the shader-transition pipeline before the first transition
     /// frame. A false result means the effect cannot run and the store should
-    /// fall back to Fade for this same frame.
+    /// fall back to Fade for this same frame. ISF transitions compile their
+    /// document here too, so a broken custom shader falls back on the same
+    /// frame rather than after one unblended frame.
     pub fn prepare_scene_transition(
         &mut self,
-        effect: crate::scene_transition::TransitionEffect,
+        effect: &crate::scene_transition::TransitionEffect,
     ) -> bool {
         let (width, height) = self.size;
         let pass = self.scene_transition.get_or_insert_with(|| {
@@ -3059,11 +3067,13 @@ impl Compositor {
     /// `from` is the captured outgoing frame, `to` is this frame's main
     /// composite. The pass renders into its own scratch target; the result is
     /// copied back into main so every downstream reader (present, preview,
-    /// read-back) sees the transition. Returns `false` when either half is
-    /// missing, in which case the caller falls back to Fade.
+    /// read-back) sees the transition. `time` feeds the ISF frame uniforms for
+    /// an ISF transition. Returns `false` when either half is missing or the
+    /// shader cannot run, in which case the caller falls back to Fade.
     fn apply_scene_transition(
         &mut self,
         transition: &SceneTransitionInfo,
+        time: f32,
     ) -> Result<bool, CompositorError> {
         let (width, height) = self.size;
         let (Some(from), Some(main)) = (self.transition_from.as_ref(), self.main.as_ref()) else {
@@ -3094,10 +3104,11 @@ impl Compositor {
             if let Some(destination) = pass.target_view() {
                 applied = pass.encode(
                     &mut encoder,
-                    transition.effect,
+                    &transition.effect,
                     &from_view,
                     &main_view,
                     transition.progress,
+                    time,
                     &destination,
                 );
             }
@@ -4411,6 +4422,104 @@ mod tests {
             .expect("progress 1 renders");
         let pixels = compositor.read_main_rgba8().expect("main reads back");
         assert_pixels_close(&pixels, [0, 0, 0, 0], 1, "progress 1 is the incoming scene");
+    }
+
+    #[test]
+    fn isf_transition_renders_the_captured_frame_through_the_incoming_scene() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "modv-isf-transition-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp ISF directory");
+        std::fs::write(
+            dir.join("Scene Fade.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "INPUTS": [
+    { "NAME": "startImage", "TYPE": "image" },
+    { "NAME": "endImage", "TYPE": "image" },
+    { "NAME": "progress", "TYPE": "float", "MIN": 0, "MAX": 1, "DEFAULT": 0 }
+  ]
+}*/
+void main() {
+  gl_FragColor = mix(
+    IMG_NORM_PIXEL(startImage, isf_FragNormCoord),
+    IMG_NORM_PIXEL(endImage, isf_FragNormCoord),
+    progress
+  );
+}"#,
+        )
+        .expect("transition shader written");
+        let registry = Arc::new(ModuleRegistry::build(Some(&dir)));
+        let effect = TransitionEffect::from_name("Scene Fade", &registry)
+            .expect("the shader is transition-shaped");
+        let mut compositor = isf_compositor(&engine, Arc::clone(&registry));
+
+        // The outgoing Scene is opaque white; the incoming Scene is empty
+        // (transparent), exactly like the native crossfade test.
+        compositor
+            .render_frame(&invert_state(1.0), &frame_info())
+            .expect("outgoing frame renders");
+        assert!(compositor.capture_transition_source());
+
+        let incoming = EngineState::new();
+        let mut frame = frame_info();
+        frame.scene_transition = Some(SceneTransitionInfo {
+            effect,
+            progress: 0.0,
+            from_groups: vec!["group-a".to_string()],
+        });
+        compositor
+            .render_frame(&incoming, &frame)
+            .expect("progress 0 renders");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert_pixels_close(
+            &pixels,
+            [255, 255, 255, 255],
+            2,
+            "the ISF transition shows startImage at progress 0",
+        );
+
+        frame
+            .scene_transition
+            .as_mut()
+            .expect("transition")
+            .progress = 0.5;
+        compositor
+            .render_frame(&incoming, &frame)
+            .expect("progress 0.5 renders");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert_pixels_close(
+            &pixels,
+            [128, 128, 128, 128],
+            3,
+            "the ISF transition mixes endImage in at progress 0.5",
+        );
+
+        frame
+            .scene_transition
+            .as_mut()
+            .expect("transition")
+            .progress = 1.0;
+        compositor
+            .render_frame(&incoming, &frame)
+            .expect("progress 1 renders");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert_pixels_close(
+            &pixels,
+            [0, 0, 0, 0],
+            1,
+            "the ISF transition shows endImage at progress 1",
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

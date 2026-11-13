@@ -30,12 +30,13 @@
 //! * **Whole-scene transitions** — a manual `scenes/applyScene` during
 //!   performance mode picks a crossfade style. `Fade` keeps the outgoing
 //!   Groups alive for `transitionSeconds` and crossfades their alphas against
-//!   the incoming set (exactly like `applySceneNow`'s Fade branch). One of the
-//!   six native shader effects ([`crate::scene_transition`]) instead keeps the
-//!   outgoing Groups at full alpha, marks them as hidden for the compositor
-//!   and records a pending capture so the engine can freeze the outgoing
-//!   frame; the shader then composites both Scenes itself and completion
-//!   removes the outgoing Groups. `None` switches instantly.
+//!   the incoming set (exactly like `applySceneNow`'s Fade branch). A shader
+//!   effect (one of the six natives, or a registered ISF transition from
+//!   [`crate::scene_transition`]) instead keeps the outgoing Groups at full
+//!   alpha, marks them as hidden for the compositor and records a pending
+//!   capture so the engine can freeze the outgoing frame; the shader then
+//!   composites both Scenes itself and completion removes the outgoing Groups.
+//!   `None` switches instantly.
 //! * **`stopPerformance` finalises** — in-flight row/whole-scene crossfades
 //!   are completed (final alphas, ghosts removed) before the flag is turned
 //!   off, so nothing stale survives.
@@ -210,11 +211,16 @@ pub struct WholeSceneTransition {
     pub from: Vec<(String, f64)>,
     /// Incoming Groups with their target alpha.
     pub to: Vec<(String, f64)>,
-    /// Transition name. [`FADE_TRANSITION`] runs the per-Group alpha path; a
-    /// native name (`NONE_TRANSITION` never reaches here) runs the matching
-    /// [`crate::scene_transition::TransitionEffect`] over the captured outgoing
-    /// frame.
+    /// Transition name. [`FADE_TRANSITION`] runs the per-Group alpha path; any
+    /// other name runs the [`WholeSceneTransition::effect`] resolved when the
+    /// change started (a native effect or a registered ISF transition).
     pub kind: String,
+    /// The resolved shader effect, when the name maps to one.
+    ///
+    /// Resolved once from the store's module registry so a running transition
+    /// never re-scans the ISF corpus: `None` for Fade, for an unknown name and
+    /// for a registered module that is not transition-shaped.
+    pub effect: Option<crate::scene_transition::TransitionEffect>,
     /// Seconds elapsed.
     pub elapsed: f64,
     /// Total duration (`transitionSeconds`).
@@ -238,7 +244,7 @@ impl WholeSceneTransition {
     /// a shader here: it degrades to the Fade alpha path, which is the JS
     /// `fallbackToFade` behaviour.
     pub fn shader_effect(&self) -> Option<crate::scene_transition::TransitionEffect> {
-        crate::scene_transition::TransitionEffect::from_name(&self.kind)
+        self.effect.clone()
     }
 }
 
@@ -471,17 +477,26 @@ impl Store {
 
     /// `pickTransitionName` with the engine's available set.
     ///
-    /// The engine executes `Fade` (the per-Group alpha path) and the six native
-    /// shader effects ([`crate::scene_transition`]); `None` is preserved so a
-    /// manual change can still switch instantly. An allowed name that is not
-    /// available (a custom ISF transition the engine cannot load) is filtered
-    /// out by [`pick_transition_name`] and the change fades instead, which is
-    /// the JS `fallbackToFade` path — the Scene change itself never fails.
+    /// The engine executes `Fade` (the per-Group alpha path), the six native
+    /// shader effects ([`crate::scene_transition`]) and every registered ISF
+    /// transition-shaped module (the same list `Scenes.vue` shows in its
+    /// transition picker); `None` is preserved so a manual change can still
+    /// switch instantly. An allowed name that is not available (an
+    /// unregistered/custom transition the engine cannot load) is filtered out
+    /// by [`pick_transition_name`] and the change fades instead, which is the
+    /// JS `fallbackToFade` path — the Scene change itself never fails.
     pub(crate) fn pick_scene_transition_name(&mut self) -> String {
         let enabled = self.performance.enabled;
         let allowed = normalize_transition_list(self.scenes.performance.get("allowedTransitions"));
         let mut available = vec![FADE_TRANSITION.to_string(), NONE_TRANSITION.to_string()];
         available.extend(NATIVE_TRANSITION_NAMES.iter().map(|name| name.to_string()));
+        available.extend(
+            self.registry
+                .isf_definitions()
+                .iter()
+                .filter(|definition| definition.document.filter_type() == "transition")
+                .map(|definition| definition.name.clone()),
+        );
         pick_transition_name(enabled, &allowed, &available, || {
             self.performance.rng.next_f64()
         })
@@ -904,23 +919,25 @@ impl Store {
 
     /// Record the whole-scene transition started by `applySceneNow`.
     ///
-    /// A native shader kind leaves a pending capture request for the window
-    /// loop (see [`Store::take_pending_transition_capture`]); `Fade` and
-    /// unknown kinds do not, and keep the alpha path.
+    /// `effect` is the already-resolved shader effect (native or ISF). A
+    /// `Some` effect leaves a pending capture request for the window loop (see
+    /// [`Store::take_pending_transition_capture`]); `Fade` and unknown kinds
+    /// pass `None`, do not capture, and keep the alpha path.
     pub(crate) fn begin_whole_scene_transition(
         &mut self,
         from: Vec<(String, f64)>,
         to: Vec<(String, f64)>,
         kind: String,
+        effect: Option<crate::scene_transition::TransitionEffect>,
     ) {
         let duration =
             normalize_transition_duration(self.scenes.performance.get("transitionSeconds"));
-        self.pending_transition_capture =
-            crate::scene_transition::TransitionEffect::from_name(&kind);
+        self.pending_transition_capture = effect.clone();
         self.performance.transition = Some(WholeSceneTransition {
             from,
             to,
             kind,
+            effect,
             elapsed: 0.0,
             duration,
         });
@@ -942,7 +959,7 @@ impl Store {
     /// Downgrade the active whole-scene transition to the Fade alpha path.
     ///
     /// Used when the outgoing frame could not be captured (no main texture yet,
-    /// a resize invalidated it, or the effect failed to compile). The change is
+    /// a resize invalidated it) or the effect could not compile. The change is
     /// never dropped: the incoming Groups are reset to alpha 0 and the outgoing
     /// ones to the alpha they recorded when the change started — exactly the
     /// Fade setup — so `scenes/tick` crossfades them as usual and the Scene
@@ -964,6 +981,7 @@ impl Store {
         let eased = smoothstep(transition.progress());
         if let Some(transition) = self.performance.transition.as_mut() {
             transition.kind = FADE_TRANSITION.to_string();
+            transition.effect = None;
         }
         for (group_id, alpha) in &to {
             self.set_group_alpha(group_id, alpha * eased, true);
@@ -1808,6 +1826,170 @@ mod tests {
         for (group_id, alpha) in &transition.to {
             assert_eq!(store.state().find_group(group_id).unwrap().alpha, *alpha);
         }
+    }
+
+    /// A temp ISF corpus with one transition-shaped shader and one filter.
+    fn isf_registry_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-performance-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp ISF directory");
+        std::fs::write(
+            dir.join("Transition Probe.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "INPUTS": [
+    { "NAME": "startImage", "TYPE": "image" },
+    { "NAME": "endImage", "TYPE": "image" },
+    { "NAME": "progress", "TYPE": "float", "MIN": 0, "MAX": 1, "DEFAULT": 0 }
+  ]
+}*/
+void main() {
+  gl_FragColor = mix(
+    IMG_NORM_PIXEL(startImage, isf_FragNormCoord),
+    IMG_NORM_PIXEL(endImage, isf_FragNormCoord),
+    progress
+  );
+}"#,
+        )
+        .expect("transition shader written");
+        std::fs::write(
+            dir.join("Filter Probe.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "INPUTS": [ { "NAME": "inputImage", "TYPE": "image" } ]
+}*/
+void main() {
+  gl_FragColor = IMG_NORM_PIXEL(inputImage, isf_FragNormCoord);
+}"#,
+        )
+        .expect("filter shader written");
+        dir
+    }
+
+    /// [`store_with_scenes`] with an ISF corpus registered.
+    fn store_with_scenes_and_isf(dir: &std::path::Path) -> Store {
+        let mut store = Store::with_state_path_and_isf(None, Some(dir));
+        for (id, name) in [
+            ("scene-a", "Alpha"),
+            ("scene-b", "Beta"),
+            ("scene-c", "Gamma"),
+        ] {
+            store
+                .dispatch(
+                    "scenes/loadSceneFromJson",
+                    json!({ "scene": scene(id, name), "persist": false }),
+                )
+                .expect("scene loads");
+        }
+        store.performance.rng = Rng::seeded(7);
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({
+                    "config": {
+                        "minSeconds": 1,
+                        "maxSeconds": 2,
+                        "transitionSeconds": 1,
+                        "order": "in-order",
+                        "allowedTransitions": ["None"],
+                    }
+                }),
+            )
+            .expect("performance config");
+        store.drain_deltas();
+        store
+    }
+
+    #[test]
+    fn manual_change_with_an_isf_transition_uses_the_shader_path() {
+        let dir = isf_registry_dir("isf-transition");
+        let mut store = store_with_scenes_and_isf(&dir);
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({
+                    "config": {
+                        "allowedTransitions": ["Transition Probe"],
+                        "transitionSeconds": 1,
+                    }
+                }),
+            )
+            .expect("config");
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-b" }))
+            .expect("apply b");
+        store.drain_deltas();
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-c" }))
+            .expect("apply c");
+
+        let transition = store
+            .whole_scene_transition()
+            .cloned()
+            .expect("a transition is recorded");
+        assert_eq!(transition.kind, "Transition Probe");
+        match transition.shader_effect() {
+            Some(crate::scene_transition::TransitionEffect::Isf { name, .. }) => {
+                assert_eq!(name, "Transition Probe");
+            }
+            other => panic!("expected the ISF transition effect, got {other:?}"),
+        }
+        assert_eq!(
+            store
+                .take_pending_transition_capture()
+                .map(|effect| effect.name().to_string()),
+            Some("Transition Probe".to_string()),
+            "the ISF transition asks for the outgoing frame too"
+        );
+
+        // Both Scenes stay at final opacity: the shader does the blending.
+        for (group_id, _) in &transition.to {
+            assert_eq!(store.state().find_group(group_id).unwrap().alpha, 1.0);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_non_transition_isf_name_falls_back_to_fade() {
+        let dir = isf_registry_dir("isf-filter");
+        let mut store = store_with_scenes_and_isf(&dir);
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({
+                    "config": {
+                        // A registered module, but a filter: not a transition.
+                        "allowedTransitions": ["Filter Probe"],
+                        "transitionSeconds": 1,
+                    }
+                }),
+            )
+            .expect("config");
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-b" }))
+            .expect("apply b");
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-c" }))
+            .expect("apply c");
+
+        let transition = store
+            .whole_scene_transition()
+            .cloned()
+            .expect("a transition is recorded");
+        assert_eq!(transition.kind, FADE_TRANSITION);
+        assert_eq!(transition.shader_effect(), None);
+        assert_eq!(
+            store.take_pending_transition_capture(),
+            None,
+            "the Fade fallback captures nothing"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

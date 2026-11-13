@@ -761,17 +761,20 @@ impl Store {
 
         // A manual change picks its transition style (`applySceneNow`,
         // `scenes.js:2714`): `None` switches instantly, `Fade` crossfades the
-        // outgoing Groups' alphas, and a native shader effect keeps both
-        // Scenes at full opacity while the compositor runs the effect over the
-        // captured outgoing frame. The outgoing Groups are hidden, not faded,
-        // for the shader path, so only one animation runs.
+        // outgoing Groups' alphas, and a shader effect (one of the six natives
+        // or a registered ISF transition) keeps both Scenes at full opacity
+        // while the compositor runs the effect over the captured outgoing
+        // frame. The outgoing Groups are hidden, not faded, for the shader
+        // path, so only one animation runs.
         let transition_name = self.pick_scene_transition_name();
-        let effect = crate::scene_transition::TransitionEffect::from_name(&transition_name);
-        // A name that is neither `Fade`, `None` nor a native effect (a custom
-        // ISF transition the engine cannot run) degrades to Fade, the JS
-        // `fallbackToFade` behaviour. The picker's available list normally
-        // prevents this, but an explicit request must never switch instantly
-        // just because its effect is missing.
+        let effect =
+            crate::scene_transition::TransitionEffect::from_name(&transition_name, &self.registry);
+        // A name that is neither `Fade`, `None` nor a runnable effect (an
+        // unknown/custom transition, or a registered module that is a filter
+        // rather than a transition) degrades to Fade, the JS `fallbackToFade`
+        // behaviour. The picker's available list normally prevents this, but
+        // an explicit request must never switch instantly just because its
+        // effect is missing.
         let transition_name = if effect.is_none()
             && transition_name != FADE_TRANSITION
             && transition_name != NONE_TRANSITION
@@ -828,7 +831,7 @@ impl Store {
                 }
             }
             self.emit_group_order();
-            self.begin_whole_scene_transition(from, created_alphas, transition_name);
+            self.begin_whole_scene_transition(from, created_alphas, transition_name, effect);
         } else {
             for group in old_groups {
                 self.release_group(group);

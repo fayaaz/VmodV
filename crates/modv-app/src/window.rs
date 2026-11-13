@@ -764,10 +764,11 @@ impl WindowedApp {
         }
 
         // 1f. Resolve the whole-scene transition for this frame. A shader
-        // effect needs its captured outgoing frame; when the capture vanished
-        // (a resize between frames invalidated it) downgrade to Fade without
-        // dropping the change. Fade/None/unknown kinds stay on the alpha path,
-        // so any capture from a previous change is released.
+        // effect (native or a registered ISF transition) needs its captured
+        // outgoing frame; when the capture vanished (a resize between frames
+        // invalidated it) downgrade to Fade without dropping the change.
+        // Fade/None/unknown kinds stay on the alpha path, so any capture from a
+        // previous change is released.
         let mut scene_transition = None;
         if let Some(transition) = self.store.performance_runtime().transition.clone()
             && let Some(effect) = transition.shader_effect()
@@ -780,7 +781,7 @@ impl WindowedApp {
                 let prepared = self
                     .compositor
                     .as_mut()
-                    .is_some_and(|compositor| compositor.prepare_scene_transition(effect));
+                    .is_some_and(|compositor| compositor.prepare_scene_transition(&effect));
                 if prepared {
                     scene_transition = Some(SceneTransitionInfo {
                         effect,

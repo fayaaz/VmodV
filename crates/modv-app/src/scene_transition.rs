@@ -50,20 +50,63 @@
 //! their recorded alpha but the compositor skips them until the transition
 //! completes and removes them. That keeps the Fade fallback intact if the
 //! capture ever disappears, without running two animations at once.
+//!
+//! ## ISF / custom transitions
+//!
+//! Besides the six natives, any registered ISF shader the registry classifies
+//! as a transition (`startImage` + `endImage` image inputs plus a `progress`
+//! float, [`modv_renderers::isf::IsfDocument::filter_type`]) runs natively
+//! through [`modv_renderers::isf::IsfRuntime`]. That is the same module list the
+//! Scenes transition picker shows (`Scenes.vue` `transitionOptions`), so a
+//! corpus/gl-transitions shader the user allowed actually plays instead of
+//! silently fading.
+//!
+//! [`TransitionEffect::from_name`] therefore classifies a name as:
+//!
+//! * a native effect when it is one of [`TransitionEffect::ALL`];
+//! * [`TransitionEffect::Isf`] when the registry has a transition-shaped
+//!   document of that name (the document travels with the effect, so the render
+//!   path never has to re-read the corpus);
+//! * `None` for `Fade`/`None`, an unregistered name, or a registered module
+//!   that is a filter/generator rather than a transition. Excluding `Fade`
+//!   first is deliberate: the corpus ships a `Fade.fs` transition, but `Fade`
+//!   must keep meaning the per-Group alpha ghost path the JS and the picker
+//!   use. The caller keeps the Fade alpha path for those — the JS
+//!   `fallbackToFade` behaviour — and a shader that fails to compile or draw
+//!   downgrades to Fade on the same frame ([`crate::window`] calls
+//!   [`crate::compositor::Compositor::prepare_scene_transition`] before the
+//!   first transition frame).
+//!
+//! The ISF branch binds the captured `from` texture as `startImage` and the
+//! incoming main texture as `endImage` (both are the premultiplied RGBA8 frames
+//! the natives sample, so the shader sees exactly what the JS WebGL renderer
+//! gave it), sets `progress` from the transition timeline and draws into the
+//! same output-sized scratch target the natives use. Corpus transitions that
+//! declare extra inputs (e.g. `strength`) take their header defaults, exactly
+//! like an ISF module whose props were never touched.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use modv_engine::scene_transition_pick::{FADE_TRANSITION, NONE_TRANSITION};
 use modv_render::wgpu;
+use modv_renderers::isf::{
+    CompiledIsf, IsfDocument, IsfFrameUniforms, IsfRuntime, IsfValue, IsfValues,
+};
 
 use crate::compositor::{OutputTexture, create_output_texture};
+use crate::module_registry::ModuleRegistry;
 
 /// The internal texture format every transition target uses (the compositor's
 /// group/main format).
 pub const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// One native whole-scene transition (`scene-transition-defs.js:19-125`).
+/// One whole-scene transition the engine can run (`scene-transition-defs.js:19-125`
+/// for the natives, the ISF corpus for [`Self::Isf`]).
 ///
 /// `Fade` and `None` are intentionally not variants: the first is the alpha
 /// ghost path, the second an instant switch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TransitionEffect {
     /// `Three Crossfade`.
     Crossfade,
@@ -77,13 +120,23 @@ pub enum TransitionEffect {
     Wipe,
     /// `Three Circle`.
     Circle,
+    /// A registered ISF shader transition (`startImage` + `endImage` +
+    /// `progress`), run through the ISF runtime.
+    Isf {
+        /// The module name (the `.fs` file stem, `getIsfModuleName`).
+        name: String,
+        /// The parsed document from the registry, carried with the effect so a
+        /// running transition never re-reads the corpus. Shared so the effect
+        /// can be cloned per frame (the store caches one per transition).
+        document: Arc<IsfDocument>,
+    },
 }
 
 impl TransitionEffect {
-    /// Number of shader effects (one pipeline each).
+    /// Number of native shader effects (one pipeline each).
     pub const COUNT: usize = 6;
 
-    /// Every effect, in `NATIVE_TRANSITION_NAMES` order
+    /// Every native effect, in `NATIVE_TRANSITION_NAMES` order
     /// (`scene-transition-defs.js:123-125`).
     pub const ALL: [Self; Self::COUNT] = [
         Self::Crossfade,
@@ -94,20 +147,29 @@ impl TransitionEffect {
         Self::Circle,
     ];
 
-    /// The effect's index in [`Self::ALL`] (pipeline slot).
-    pub fn index(self) -> usize {
+    /// The native effect's index in [`Self::ALL`] (pipeline slot).
+    ///
+    /// `None` for [`Self::Isf`], which owns a compiled ISF pipeline instead.
+    pub fn index(&self) -> Option<usize> {
         match self {
-            Self::Crossfade => 0,
-            Self::Dissolve => 1,
-            Self::Pixelate => 2,
-            Self::Glitch => 3,
-            Self::Wipe => 4,
-            Self::Circle => 5,
+            Self::Crossfade => Some(0),
+            Self::Dissolve => Some(1),
+            Self::Pixelate => Some(2),
+            Self::Glitch => Some(3),
+            Self::Wipe => Some(4),
+            Self::Circle => Some(5),
+            Self::Isf { .. } => None,
         }
     }
 
+    /// `true` when the effect is one of the six natives (`index` is `Some`).
+    #[cfg(test)]
+    pub fn is_native(&self) -> bool {
+        self.index().is_some()
+    }
+
     /// The ISF/native name (`scene-transition-defs.js:21`, `:31`, …).
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &str {
         match self {
             Self::Crossfade => "Three Crossfade",
             Self::Dissolve => "Three Dissolve",
@@ -115,25 +177,54 @@ impl TransitionEffect {
             Self::Glitch => "Three Glitch",
             Self::Wipe => "Three Wipe",
             Self::Circle => "Three Circle",
+            Self::Isf { name, .. } => name,
         }
     }
 
-    /// Map a picked transition name to a shader effect.
-    ///
-    /// Returns `None` for `Fade`, `None` and any unknown/custom ISF name: the
-    /// caller keeps Fade for those, which is the JS `fallbackToFade` path.
-    pub fn from_name(name: &str) -> Option<Self> {
+    /// Map a native transition name to its effect.
+    pub fn native_from_name(name: &str) -> Option<Self> {
         Self::ALL
             .iter()
-            .copied()
             .find(|effect| effect.name() == name)
+            .cloned()
+    }
+
+    /// Map a picked transition name to a runnable effect.
+    ///
+    /// * one of the six native names → the matching native effect;
+    /// * a name whose registered ISF document is transition-shaped
+    ///   ([`IsfDocument::filter_type`] `== "transition"`) → [`Self::Isf`]
+    ///   carrying the document;
+    /// * `Fade`, `None`, an unknown name or a registered non-transition module
+    ///   → `None`. `Fade` is checked before the corpus lookup, so a corpus
+    ///   `Fade.fs` cannot hijack the alpha ghost path. The caller keeps Fade
+    ///   for those, which is the JS `fallbackToFade` path (never a sudden
+    ///   `None` switch).
+    ///
+    /// Names are matched exactly, like the JS `Map`/`meta.name` lookups.
+    pub fn from_name(name: &str, registry: &ModuleRegistry) -> Option<Self> {
+        if name == FADE_TRANSITION || name == NONE_TRANSITION {
+            return None;
+        }
+        if let Some(native) = Self::native_from_name(name) {
+            return Some(native);
+        }
+        let definition = registry.isf_definition(name)?;
+        if definition.document.filter_type() != "transition" {
+            return None;
+        }
+        Some(Self::Isf {
+            name: name.to_string(),
+            document: Arc::new(definition.document.clone()),
+        })
     }
 }
 
 /// A whole-scene shader transition handed to the compositor for one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneTransitionInfo {
-    /// The shader to run.
+    /// The shader to run: one of the six natives, or a registered ISF
+    /// transition ([`TransitionEffect::Isf`]).
     pub effect: TransitionEffect,
     /// Timeline position in `[0, 1]` (`transition.progress()`), un-eased in
     /// exactly the same way the Fade path is: every effect applies its own
@@ -323,8 +414,9 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// The complete WGSL program for one effect.
-pub(crate) fn shader_source(effect: TransitionEffect) -> String {
+/// The complete WGSL program for one native effect, or `None` for an ISF
+/// transition (which the ISF runtime compiles from its document instead).
+pub(crate) fn shader_source(effect: &TransitionEffect) -> Option<String> {
     let body = match effect {
         TransitionEffect::Crossfade => CROSSFADE_BODY,
         TransitionEffect::Dissolve => DISSOLVE_BODY,
@@ -332,21 +424,44 @@ pub(crate) fn shader_source(effect: TransitionEffect) -> String {
         TransitionEffect::Glitch => GLITCH_BODY,
         TransitionEffect::Wipe => WIPE_BODY,
         TransitionEffect::Circle => CIRCLE_BODY,
+        TransitionEffect::Isf { .. } => return None,
     };
-    format!("{TRANSITION_PREFIX}{body}")
+    Some(format!("{TRANSITION_PREFIX}{body}"))
 }
 
-/// The GPU side of whole-scene shader transitions: one pipeline per effect, a
-/// shared uniform buffer and a single output-sized scratch target.
+/// How many ISF transitions keep a compiled pipeline at a time.
+///
+/// Performance mode can try every transition in the allowlist, so the cache is
+/// bounded like the JS `MAX_CACHED_RENDERERS` (4) instead of growing with every
+/// shader the user tries.
+const MAX_ISF_TRANSITIONS: usize = 4;
+
+/// One compiled ISF transition.
+struct IsfTransition {
+    compiled: CompiledIsf,
+}
+
+/// The GPU side of whole-scene shader transitions: one pipeline per native
+/// effect, a compiled pipeline per ISF transition, a shared uniform buffer and a
+/// single output-sized scratch target.
 pub(crate) struct SceneTransitionPass {
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
+    /// The ISF runtime that compiles and draws registered ISF transitions,
+    /// against the same [`OUTPUT_FORMAT`] the natives write.
+    isf_runtime: IsfRuntime,
     pipelines: [Option<wgpu::RenderPipeline>; TransitionEffect::COUNT],
-    /// Effects whose pipeline could not be built; never retried.
+    /// Native effects whose pipeline could not be built; never retried.
     failed: [bool; TransitionEffect::COUNT],
+    /// Compiled ISF transitions keyed by module name, with first-use order for
+    /// eviction.
+    isf: HashMap<String, IsfTransition>,
+    isf_order: Vec<String>,
+    /// ISF transitions whose compile/draw failed; never retried.
+    failed_isf: HashSet<String>,
     scratch: Option<OutputTexture>,
     /// Size of the current scratch target and uniform `resolution`.
     size: (u32, u32),
@@ -425,8 +540,12 @@ impl SceneTransitionPass {
             layout,
             sampler,
             uniforms,
+            isf_runtime: IsfRuntime::new(device.clone(), queue.clone(), MAX_ISF_TRANSITIONS),
             pipelines: Default::default(),
             failed: [false; TransitionEffect::COUNT],
+            isf: HashMap::new(),
+            isf_order: Vec::new(),
+            failed_isf: HashSet::new(),
             scratch: None,
             size: (0, 0),
         }
@@ -461,33 +580,49 @@ impl SceneTransitionPass {
         self.size = (0, 0);
     }
 
-    /// Run one effect into `destination`.
-    ///
-    /// Both inputs must be the current output size; the pass records a
-    /// validation-time mismatch as a failure so the caller can fall back to
-    /// Fade. Returns `false` when the effect's pipeline could not be built.
-    /// Pre-build the pipeline for `effect` (called when a shader transition
-    /// starts, before the first frame is composited) so a compile failure
-    /// downgrades to Fade on the same frame instead of showing one unblended
-    /// frame.
-    pub(crate) fn prepare(&mut self, effect: TransitionEffect) -> bool {
-        self.ensure_pipeline(effect)
+    /// Pre-build `effect` before the first transition frame so a compile
+    /// failure downgrades to Fade on the same frame instead of showing one
+    /// unblended frame. Native effects build their WGSL pipeline here; an ISF
+    /// transition compiles its document through the ISF runtime.
+    pub(crate) fn prepare(&mut self, effect: &TransitionEffect) -> bool {
+        match effect {
+            TransitionEffect::Isf { name, document } => self.ensure_isf(name, document),
+            native => self.ensure_pipeline(native),
+        }
     }
 
+    /// Run one effect into `destination`.
+    ///
+    /// Both inputs must be the current output size. `time` feeds the ISF frame
+    /// uniforms (`TIME`); native effects ignore it.
+    ///
+    /// Returns `false` when the effect cannot run (pipeline compile failure,
+    /// ISF compile/draw error), so the caller can fall back to Fade.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        effect: TransitionEffect,
+        effect: &TransitionEffect,
         from: &wgpu::TextureView,
         to: &wgpu::TextureView,
         progress: f64,
+        time: f32,
         destination: &wgpu::TextureView,
     ) -> bool {
         let (width, height) = self.size;
-        if width == 0 || height == 0 || !self.ensure_pipeline(effect) {
+        if width == 0 || height == 0 {
             return false;
         }
-        let Some(pipeline) = &self.pipelines[effect.index()] else {
+        if let TransitionEffect::Isf { name, document } = effect {
+            return self.encode_isf(name, document, from, to, progress, time, destination);
+        }
+        if !self.ensure_pipeline(effect) {
+            return false;
+        }
+        let Some(index) = effect.index() else {
+            return false;
+        };
+        let Some(pipeline) = &self.pipelines[index] else {
             return false;
         };
 
@@ -543,9 +678,146 @@ impl SceneTransitionPass {
         true
     }
 
+    /// Run a registered ISF transition (`renderers/isf/index.js` contract).
+    ///
+    /// The captured outgoing frame binds as `startImage`, the incoming main
+    /// texture as `endImage` and the timeline position as `progress`, both in
+    /// the same premultiplied RGBA8 convention the natives sample. The ISF
+    /// runtime owns its pass scheduling and submits its own command buffer;
+    /// the caller's copy of the scratch target into main runs after it on the
+    /// same queue.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_isf(
+        &mut self,
+        name: &str,
+        document: &IsfDocument,
+        from: &wgpu::TextureView,
+        to: &wgpu::TextureView,
+        progress: f64,
+        time: f32,
+        destination: &wgpu::TextureView,
+    ) -> bool {
+        if !self.ensure_isf(name, document) {
+            return false;
+        }
+        let (width, height) = self.size;
+        // ISF clears the destination itself when the final pass is implicit
+        // with `CLEAR` (the default) or when a trailing buffer is blitted; only
+        // a `CLEAR: false` final pass would otherwise blend onto the previous
+        // transition's scratch contents.
+        let needs_clear = self.isf.get(name).is_some_and(|entry| {
+            entry.compiled.last_target.is_none()
+                && entry.compiled.passes.last().is_some_and(|pass| !pass.clear)
+        });
+        if needs_clear {
+            self.clear_target(destination);
+        }
+
+        let uniforms = IsfFrameUniforms {
+            time,
+            time_delta: 0.0,
+            frame_index: 0,
+            date: [0.0; 4],
+        };
+        let mut values = IsfValues::new();
+        let progress = if progress.is_finite() {
+            progress.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        values.insert("progress".to_string(), IsfValue::Float(progress));
+        let images = [("startImage", from), ("endImage", to)];
+
+        let Some(entry) = self.isf.get_mut(name) else {
+            return false;
+        };
+        let result = self.isf_runtime.draw(
+            &mut entry.compiled,
+            destination,
+            [width, height],
+            uniforms,
+            &values,
+            &images,
+            &[],
+        );
+        match result {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("engine: WARN ISF transition '{name}' failed to draw: {error}");
+                self.isf.remove(name);
+                self.isf_order.retain(|candidate| candidate != name);
+                self.failed_isf.insert(name.to_string());
+                false
+            }
+        }
+    }
+
+    /// Clear the scratch target before an ISF transition draws into it.
+    fn clear_target(&self, destination: &wgpu::TextureView) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("modv-scene-transition-clear"),
+            });
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("modv-scene-transition-clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: destination,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.queue.submit(Some(encoder.finish()));
+    }
+
+    /// Compile an ISF transition on first use; remember a failure.
+    ///
+    /// The compiled pipeline is kept (bounded to [`MAX_ISF_TRANSITIONS`]) so a
+    /// running transition does not recompile every frame, matching the JS
+    /// renderer cache.
+    fn ensure_isf(&mut self, name: &str, document: &IsfDocument) -> bool {
+        if self.isf.contains_key(name) {
+            if let Some(position) = self.isf_order.iter().position(|entry| entry == name) {
+                let entry = self.isf_order.remove(position);
+                self.isf_order.push(entry);
+            }
+            return true;
+        }
+        if self.failed_isf.contains(name) {
+            return false;
+        }
+        match self.isf_runtime.compile(document, name, OUTPUT_FORMAT) {
+            Ok(compiled) => {
+                self.isf
+                    .insert(name.to_string(), IsfTransition { compiled });
+                self.isf_order.push(name.to_string());
+                while self.isf_order.len() > MAX_ISF_TRANSITIONS {
+                    let evicted = self.isf_order.remove(0);
+                    self.isf.remove(&evicted);
+                }
+                true
+            }
+            Err(error) => {
+                eprintln!("engine: WARN ISF transition '{name}' failed to compile: {error}");
+                self.failed_isf.insert(name.to_string());
+                false
+            }
+        }
+    }
+
     /// Build the effect's pipeline on first use; remember a failure.
-    fn ensure_pipeline(&mut self, effect: TransitionEffect) -> bool {
-        let index = effect.index();
+    fn ensure_pipeline(&mut self, effect: &TransitionEffect) -> bool {
+        let Some(index) = effect.index() else {
+            return false;
+        };
         if self.pipelines[index].is_some() {
             return true;
         }
@@ -553,7 +825,9 @@ impl SceneTransitionPass {
             return false;
         }
 
-        let source = shader_source(effect);
+        let Some(source) = shader_source(effect) else {
+            return false;
+        };
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -613,14 +887,91 @@ impl SceneTransitionPass {
 mod tests {
     use super::*;
     use crate::compositor::read_back_texture;
-    use modv_engine::scene_transition_pick::{
-        FADE_TRANSITION, NATIVE_TRANSITION_NAMES, NONE_TRANSITION,
-    };
+    use modv_engine::scene_transition_pick::NATIVE_TRANSITION_NAMES;
     use modv_render::wgpu::naga;
     use modv_render::{Engine, EngineConfig};
 
     const WIDTH: u32 = 128;
     const HEIGHT: u32 = 72;
+
+    /// A temp ISF corpus with one transition-shaped shader and one filter.
+    ///
+    /// Returns the directory (kept alive for the test) and a registry built
+    /// from it, so classification runs the real corpus scan + parser.
+    fn isf_registry(label: &str) -> (std::path::PathBuf, ModuleRegistry) {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-scene-transition-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp ISF directory");
+        std::fs::write(
+            dir.join("Transition Probe.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "INPUTS": [
+    { "NAME": "startImage", "TYPE": "image" },
+    { "NAME": "endImage", "TYPE": "image" },
+    { "NAME": "progress", "TYPE": "float", "MIN": 0, "MAX": 1, "DEFAULT": 0 }
+  ]
+}*/
+void main() {
+  gl_FragColor = mix(
+    IMG_NORM_PIXEL(startImage, isf_FragNormCoord),
+    IMG_NORM_PIXEL(endImage, isf_FragNormCoord),
+    progress
+  );
+}"#,
+        )
+        .expect("transition shader written");
+        // The corpus ships a `Fade.fs`; `Fade` must keep meaning the alpha
+        // ghost path even when a transition-shaped module has that name.
+        std::fs::write(
+            dir.join("Fade.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "INPUTS": [
+    { "NAME": "startImage", "TYPE": "image" },
+    { "NAME": "endImage", "TYPE": "image" },
+    { "NAME": "progress", "TYPE": "float", "MIN": 0, "MAX": 1, "DEFAULT": 0 }
+  ]
+}*/
+void main() {
+  gl_FragColor = mix(
+    IMG_NORM_PIXEL(startImage, isf_FragNormCoord),
+    IMG_NORM_PIXEL(endImage, isf_FragNormCoord),
+    progress
+  );
+}"#,
+        )
+        .expect("fade shader written");
+        // A filter: transition-shaped *except* for the missing `progress`, and
+        // a generator with no image inputs at all.
+        std::fs::write(
+            dir.join("Filter Probe.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "INPUTS": [ { "NAME": "inputImage", "TYPE": "image" } ]
+}*/
+void main() {
+  gl_FragColor = IMG_NORM_PIXEL(inputImage, isf_FragNormCoord);
+}"#,
+        )
+        .expect("filter shader written");
+        std::fs::write(
+            dir.join("Generator Probe.fs"),
+            r#"/*{ "ISFVSN": "2", "INPUTS": [] }*/
+void main() {
+  gl_FragColor = vec4(1.0);
+}"#,
+        )
+        .expect("generator shader written");
+        let registry = ModuleRegistry::build(Some(&dir));
+        (dir, registry)
+    }
 
     #[test]
     fn uniform_block_is_sixteen_bytes() {
@@ -649,22 +1000,72 @@ mod tests {
 
     #[test]
     fn effect_names_map_to_the_defs_module_and_fade_stays_out() {
+        let registry = ModuleRegistry::builtin();
         assert_eq!(TransitionEffect::ALL.len(), NATIVE_TRANSITION_NAMES.len());
         for (effect, name) in TransitionEffect::ALL.iter().zip(NATIVE_TRANSITION_NAMES) {
             assert_eq!(effect.name(), *name);
-            assert_eq!(TransitionEffect::from_name(name), Some(*effect));
+            assert_eq!(
+                TransitionEffect::from_name(name, &registry),
+                Some(effect.clone())
+            );
         }
-        assert_eq!(TransitionEffect::from_name(FADE_TRANSITION), None);
-        assert_eq!(TransitionEffect::from_name(NONE_TRANSITION), None);
-        assert_eq!(TransitionEffect::from_name("E2E Missing Transition"), None);
+        assert_eq!(
+            TransitionEffect::from_name(FADE_TRANSITION, &registry),
+            None
+        );
+        assert_eq!(
+            TransitionEffect::from_name(NONE_TRANSITION, &registry),
+            None
+        );
+        assert_eq!(
+            TransitionEffect::from_name("E2E Missing Transition", &registry),
+            None
+        );
         // Names are matched exactly, like the JS `Map` lookup.
-        assert_eq!(TransitionEffect::from_name("three wipe"), None);
+        assert_eq!(TransitionEffect::from_name("three wipe", &registry), None);
+    }
+
+    #[test]
+    fn transition_shaped_isf_registry_entries_resolve_to_an_isf_effect() {
+        let (dir, registry) = isf_registry("classify");
+        let effect = TransitionEffect::from_name("Transition Probe", &registry)
+            .expect("a startImage/endImage/progress shader is a transition");
+        match &effect {
+            TransitionEffect::Isf { name, document } => {
+                assert_eq!(name, "Transition Probe");
+                assert_eq!(document.filter_type(), "transition");
+                assert!(document.inputs.iter().any(|input| input.name == "progress"));
+            }
+            other => panic!("expected an ISF effect, got {other:?}"),
+        }
+        assert_eq!(effect.name(), "Transition Probe");
+        assert!(!effect.is_native());
+        assert_eq!(effect.index(), None);
+        assert_eq!(shader_source(&effect), None);
+
+        // A registered filter or generator is *not* a transition: the caller
+        // keeps the Fade alpha path instead of running it over two frames.
+        assert_eq!(TransitionEffect::from_name("Filter Probe", &registry), None);
+        assert_eq!(
+            TransitionEffect::from_name("Generator Probe", &registry),
+            None
+        );
+        // The corpus ships `Fade.fs`, but `Fade` stays the alpha ghost path:
+        // the reserved names are checked before the registry.
+        assert!(registry.isf_definition("Fade").is_some());
+        assert_eq!(
+            TransitionEffect::from_name(FADE_TRANSITION, &registry),
+            None
+        );
+        // And an unregistered name has no document to run.
+        assert_eq!(TransitionEffect::from_name("Nope", &registry), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn every_effect_program_parses_and_validates() {
         for effect in TransitionEffect::ALL {
-            let source = shader_source(effect);
+            let source = shader_source(&effect).expect("natives have WGSL sources");
             let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|error| {
                 panic!(
                     "{effect:?} does not parse:\n{}",
@@ -736,7 +1137,7 @@ mod tests {
     fn run_effect(
         engine: &Engine,
         pass: &mut SceneTransitionPass,
-        effect: TransitionEffect,
+        effect: &TransitionEffect,
         from: &wgpu::TextureView,
         to: &wgpu::TextureView,
         progress: f64,
@@ -749,7 +1150,7 @@ mod tests {
                 label: Some("scene-transition-test"),
             });
         assert!(
-            pass.encode(&mut encoder, effect, from, to, progress, &destination),
+            pass.encode(&mut encoder, effect, from, to, progress, 0.0, &destination),
             "{effect:?} encodes"
         );
         engine.queue.submit(Some(encoder.finish()));
@@ -801,6 +1202,7 @@ mod tests {
         let blue_view = blue.create_view(&wgpu::TextureViewDescriptor::default());
 
         for effect in TransitionEffect::ALL {
+            let effect = &effect;
             let start = run_effect(&engine, &mut pass, effect, &red_view, &blue_view, 0.0);
             assert_dominant(&start, true, &format!("{effect:?} at progress 0"));
 
@@ -810,9 +1212,9 @@ mod tests {
             let middle = run_effect(&engine, &mut pass, effect, &red_view, &blue_view, 0.5);
             let r = mean_channel(&middle, 0, None);
             let b = mean_channel(&middle, 2, None);
-            if effect == TransitionEffect::Crossfade
-                || effect == TransitionEffect::Pixelate
-                || effect == TransitionEffect::Circle
+            if *effect == TransitionEffect::Crossfade
+                || *effect == TransitionEffect::Pixelate
+                || *effect == TransitionEffect::Circle
             {
                 // Smooth blends: both frames are present in bulk.
                 assert!(
@@ -831,6 +1233,81 @@ mod tests {
     }
 
     #[test]
+    fn isf_transition_effect_moves_from_red_to_blue_through_a_mix() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let (dir, registry) = isf_registry("render");
+        let effect = TransitionEffect::from_name("Transition Probe", &registry)
+            .expect("a transition-shaped ISF shader resolves");
+        let mut pass = SceneTransitionPass::new(&engine.device, &engine.queue);
+        assert!(
+            pass.prepare(&effect),
+            "the ISF transition compiles before the first frame"
+        );
+
+        let red = solid_frame(&engine, "transition-red", [255, 0, 0, 255]);
+        let blue = solid_frame(&engine, "transition-blue", [0, 0, 255, 255]);
+        let red_view = red.create_view(&wgpu::TextureViewDescriptor::default());
+        let blue_view = blue.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let start = run_effect(&engine, &mut pass, &effect, &red_view, &blue_view, 0.0);
+        assert_dominant(&start, true, "ISF transition at progress 0");
+
+        let end = run_effect(&engine, &mut pass, &effect, &red_view, &blue_view, 1.0);
+        assert_dominant(&end, false, "ISF transition at progress 1");
+
+        let middle = run_effect(&engine, &mut pass, &effect, &red_view, &blue_view, 0.5);
+        let r = mean_channel(&middle, 0, None);
+        let b = mean_channel(&middle, 2, None);
+        assert!(
+            (100.0..=156.0).contains(&r) && (100.0..=156.0).contains(&b),
+            "the ISF crossfade mixes both frames evenly (r={r:.1}, b={b:.1})"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_uncompilable_isf_transition_fails_prepare_so_the_caller_can_fade() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "modv-scene-transition-broken-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp ISF directory");
+        std::fs::write(
+            dir.join("Broken Transition.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "INPUTS": [
+    { "NAME": "startImage", "TYPE": "image" },
+    { "NAME": "endImage", "TYPE": "image" },
+    { "NAME": "progress", "TYPE": "float", "MIN": 0, "MAX": 1, "DEFAULT": 0 }
+  ]
+}*/
+void main() {
+  gl_FragColor = this_is_not_glsl(startImage, endImage);
+}"#,
+        )
+        .expect("broken shader written");
+        let registry = ModuleRegistry::build(Some(&dir));
+        let effect = TransitionEffect::from_name("Broken Transition", &registry)
+            .expect("the document is transition-shaped even though the body is broken");
+        let mut pass = SceneTransitionPass::new(&engine.device, &engine.queue);
+        assert!(
+            !pass.prepare(&effect),
+            "a shader that cannot compile must report failure so the store falls back to Fade"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn wipe_splits_hard_at_the_eased_half_way_point() {
         let Some(engine) = try_engine() else {
             return;
@@ -844,7 +1321,7 @@ mod tests {
         let middle = run_effect(
             &engine,
             &mut pass,
-            TransitionEffect::Wipe,
+            &TransitionEffect::Wipe,
             &red_view,
             &blue_view,
             0.5,
@@ -877,7 +1354,7 @@ mod tests {
         let middle = run_effect(
             &engine,
             &mut pass,
-            TransitionEffect::Circle,
+            &TransitionEffect::Circle,
             &red_view,
             &blue_view,
             0.5,
