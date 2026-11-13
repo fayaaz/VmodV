@@ -103,6 +103,7 @@ use modv_engine::engine_state::{
 };
 use modv_engine::inputs::{Input, InputLink};
 use modv_engine::props::coerce_prop_value;
+use modv_engine::preset::create_preset_from_state;
 use modv_engine::scene_capture::{capture_live_state, collect_scene_groups, scene_has_groups};
 use modv_engine::scene_link_defaults::{
     LinkMode, default_link_for_input, default_link_tween, get_bass_link_range, get_bpm_link_range,
@@ -1222,6 +1223,48 @@ impl Store {
         self.deltas.push("scenes/ADD_SCENE", updated.clone());
         self.persist_best_effort();
         Ok(json!({ "scene": updated }))
+    }
+
+    /// `scenes/saveCurrentAsScene` (`scenes.js:1928-1954`).
+    ///
+    /// Snapshots the live preset-aware state (the same six-key document a
+    /// preset export produces), adds the Scene metadata and appends it to the
+    /// Scene list. `Scenes.vue` then writes the returned document to
+    /// `scene/<name>.json`; before this action existed the save button hit the
+    /// dispatch wildcard and silently did nothing.
+    pub fn save_current_as_scene(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Scene {}", self.scenes.scenes.len() + 1));
+
+        // `completeTransition` + `completeAllRowTransitions`: capture the
+        // settled stack, never a half-faded ghost.
+        self.complete_all_row_transitions();
+        self.complete_whole_scene_transition();
+
+        let timing = normalize_performance_timing(Some(&self.scenes.performance));
+        let mut scene = create_preset_from_state(&self.state);
+        if let Value::Object(object) = &mut scene {
+            object.insert("id".to_string(), json!(generate_scene_id()));
+            object.insert("name".to_string(), json!(name));
+            object.insert("enabled".to_string(), json!(true));
+            object.insert("minSeconds".to_string(), json_number(timing.min_seconds));
+            object.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+            object.insert("timingOverride".to_string(), json!(false));
+        }
+
+        self.scenes.scenes.push(scene.clone());
+        self.touch_scene_list();
+        self.deltas.push("scenes/ADD_SCENE", scene.clone());
+        self.persist_best_effort();
+        Ok(scene)
     }
 
     /// `scenes/loadSceneFromJson` (`scenes.js:2059-2092`).
@@ -4365,5 +4408,59 @@ mod tests {
 
         let types = delta_types(&mut store);
         assert!(types.contains(&"expressions/ADD_EXPRESSION".to_string()));
+    }
+
+    #[test]
+    fn save_current_as_scene_snapshots_the_live_state() {
+        // Scenes.vue's "Save current as Scene" dispatches
+        // `scenes/saveCurrentAsScene` and writes the returned document as a
+        // Scene file. The engine used to hit the dispatch wildcard and the
+        // button silently did nothing.
+        let mut store = Store::new();
+        seed_scene(&mut store, two_row_scene("scene-1"));
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-1" }))
+            .expect("applyScene dispatches");
+
+        let before = store.scenes_state().scenes.len();
+        let saved = store
+            .dispatch(
+                "scenes/saveCurrentAsScene",
+                json!({ "name": "Webcam Halftone" }),
+            )
+            .expect("saveCurrentAsScene dispatches");
+
+        assert_eq!(saved["name"], json!("Webcam Halftone"));
+        assert_eq!(saved["enabled"], json!(true));
+        assert_eq!(saved["timingOverride"], json!(false));
+        assert!(
+            saved["id"].as_str().is_some_and(|id| !id.is_empty()),
+            "a Scene id is generated: {saved}"
+        );
+        assert!(saved["minSeconds"].is_number(), "{saved}");
+        assert!(saved["maxSeconds"].is_number(), "{saved}");
+        let groups = saved["groups"].as_array().expect("groups");
+        assert!(
+            groups.iter().any(|group| group["name"] == json!("Background")),
+            "the live Groups are snapshotted: {groups:?}"
+        );
+        let modules = saved["modules"].as_object().expect("modules");
+        assert!(
+            modules
+                .values()
+                .any(|module| module["$moduleName"] == json!("Bands")),
+            "the live Modules are snapshotted: {modules:?}"
+        );
+        assert_eq!(
+            store.scenes_state().scenes.len(),
+            before + 1,
+            "the Scene list grows by one"
+        );
+
+        // An empty name falls back to `Scene <n>` (`scenes.js:1934`).
+        let unnamed = store
+            .dispatch("scenes/saveCurrentAsScene", json!({}))
+            .expect("unnamed save dispatches");
+        assert_eq!(unnamed["name"], json!(format!("Scene {}", before + 2)));
     }
 }

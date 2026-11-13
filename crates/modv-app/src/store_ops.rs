@@ -444,6 +444,7 @@ impl Store {
             "scenes/setPerformanceEnabled" => self.set_performance_enabled(params),
             "scenes/applyScene" => self.apply_scene_action(params),
             "scenes/captureLiveStateToScene" => self.capture_live_state_to_scene(params),
+            "scenes/saveCurrentAsScene" => self.save_current_as_scene(params),
             // ————————————————— Performance runtime (WS-8 / M5c) ————————
             "scenes/startPerformance" => self.start_performance(),
             "scenes/stopPerformance" => self.stop_performance(),
