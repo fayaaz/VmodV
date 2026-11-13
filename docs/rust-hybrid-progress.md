@@ -486,3 +486,14 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
 - **MediaStream selection state is UI-plane**: source/video-settings commits
   go to the mirror only in engine mode, so the audio pump and device pickers
   read the same state without engine warnings.
+- **ISF Scene transitions render in engine mode.** TransitionEffect gained an
+  `Isf { name, document }` variant; the reserved `Fade`/`None` names win
+  before the corpus lookup (the corpus ships `Fade.fs`), the six natives stay
+  unchanged, and a transition-shaped document (`startImage` + `endImage` +
+  `progress`) renders between the captured outgoing texture and the incoming
+  frame with the transition timeline as `progress`. Compile/draw failures
+  fall back to Fade. The pass keeps a bounded 4-shader IsfRuntime, and the
+  performance picker now includes every registry transition-shaped module.
+  GPU tests cover classification, a red→blue mix, the uncompilable fallback
+  and an end-to-end frame; the performance tests cover the shader path and a
+  filter falling back to Fade.
