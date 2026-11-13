@@ -393,3 +393,16 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   args on reopen, and the near-silence gate in `audio-bands.js` stops the AGC
   turning dither into a full-scale bass reading. Input Links read the
   `AudioBands` grid means again, matching pre-Rust levels.
+- **Engine default Scenes are on version 13.** The embedded
+  `default-scenes.json` now matches the JS set: `Halftone Harbor` no longer
+  contains `CMYK Halftone`, and `MBOX Light Tunnel` fixes `MBOX3`'s `dhue` at
+  0 and drops its BPM tween. `ensure_default_scenes` applies the
+  `get_default_scenes_to_replace` payload swap before seeding (id, name,
+  timing and enabled flag kept), so an install already on v12 receives the
+  edits in place instead of only fresh installs getting them.
+- **Point10 previews honour boolean props.** The Gallery/Scene preview path
+  read props with `Value::as_f64`, so `useAgc: false` was dropped and preview
+  tiles kept AGC on; it now uses the same coercion as the live compositor.
+  The Audio Feature smoothing slider also captures its smoothing id before
+  clearing the field and restores it from the saved link args, so turning
+  smoothing down actually releases the entry.
