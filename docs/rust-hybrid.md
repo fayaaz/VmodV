@@ -261,7 +261,7 @@ Notes and caveats:
 | ------------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------- | ----------------------- | --------------------- |
 | [WS-1](#ws-1-engine-state-model)                             | Engine state model           | `worker/store/modules/*`                                      | ~12.8k LOC              | M1–M2                 |
 | [WS-2](#ws-2-render-loop-and-compositor)                     | Render loop + compositor     | `worker/loop.js`, `worker/index.worker.js`                    | ~1.3k LOC               | M1–M2                 |
-| [WS-3](#ws-3-shader-renderer)                                | Shader renderer              | `renderers/shader/`                                           | 1.3k LOC + 37 modules   | M2                    |
+| [WS-3](#ws-3-shader-renderer)                                | Shader renderer              | `renderers/shader/`                                           | 1.3k LOC + 36 modules   | M2                    |
 | [WS-4](#ws-4-isf-renderer)                                   | ISF renderer                 | `renderers/isf/`                                              | 313 LOC + 387 shaders   | M2                    |
 | [WS-5](#ws-5-2d-renderer-and-canvas-facade)                  | 2D renderer + canvas facade  | `renderers/2d/`                                               | 210 LOC + 15 modules    | M3                    |
 | [WS-6](#ws-6-three-renderer)                                 | three renderer               | `renderers/three/`                                            | 210 LOC + 1 module      | M3                    |
@@ -569,12 +569,14 @@ legacy Electron renderer.
 
 **Source.** `src/renderer/src/application/renderers/shader/`
 (`index.js` 372 LOC, `default-shader.js` 89 LOC, `utils.js` shared) plus
-37 shader modules:
+36 shader modules:
 
 - 6 single-effect modules: `Bands.js`, `ChromaticAbberation.js`, `Fisheye.js`,
   `MattiasCRT-2.0.js`, `Plasma.js`, `Wobble.js` (5 of them backed by a `.frag`
   file, 181 LOC total).
-- `Point10Effects.js` (675 LOC) exporting **31** inline-GLSL effects.
+- `Point10Effects.js` (675 LOC) exporting **30** inline-GLSL effects
+  (the retired `Old Movie` effect is gone; presets use the `Sepia Tone` ISF
+  filter instead).
 
 **Target.** Direct WGSL pipelines. The GLSL corpus is small (~800 LOC), so it
 is hand-ported rather than machine-translated. A user-supplied `.frag` is not a
@@ -631,7 +633,7 @@ already a GPU texture, so the "upload" is a bind-group swap with no copy —
 a direct latency and bandwidth win. The same applies to the `three` renderer's
 `inputTexture` (`renderers/three/index.js:84`).
 
-**Done when.** All 37 shader modules render in the Rust engine and produce
+**Done when.** All 36 shader modules render in the Rust engine and produce
 golden images matching the legacy renderer within a tolerance (see
 [WS-15](#ws-15-testing-and-benchmarking)).
 
@@ -1982,7 +1984,7 @@ Three different shader corpora, three different strategies:
 
 | Corpus                  | Size                      | Strategy                                                                                                                                   |
 | ----------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Built-in shader modules | 37 modules, ~800 LOC GLSL | **Hand-port to WGSL.** Small enough that machine translation costs more than writing it.                                                   |
+| Built-in shader modules | 36 modules, ~800 LOC GLSL | **Hand-port to WGSL.** Small enough that machine translation costs more than writing it.                                                   |
 | ISF corpus              | 351 `.fs` + 36 `.vs`      | **Machine-translate** with an ISF-aware preprocessor, plus per-shader WGSL overrides for the failures. A corpus test tracks the pass rate. |
 | Point10                 | 25 scenes, TSL + GLSL     | **Hand-port.** TSL has no Rust analogue; the compute passes (curl noise, gaussian blur, bloom) are written directly in WGSL.               |
 

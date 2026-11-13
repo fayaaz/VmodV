@@ -11,7 +11,7 @@
 //! * The **default shader flavours** — [`default_shader`]: the
 //!   full-screen-triangle vertex shader and the gradient fallback, plus
 //!   the mainImage wrapper template.
-//! * The **module registry** — [`modules`]: the 37 built-in modules,
+//! * The **module registry** — [`modules`]: the 36 built-in modules,
 //!   ported from GLSL to WGSL. Sources are cited per module.
 //! * **Pipeline creation & rendering** — [`pipeline`]: one fixed bind
 //!   group layout, per-slot pipelines (live vs gallery), and the

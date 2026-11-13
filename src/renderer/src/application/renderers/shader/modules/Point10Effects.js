@@ -549,22 +549,6 @@ export default [
   ),
 
   effect(
-    "Old Movie",
-    `${noise}
-      void mainImage(out vec4 fragColor, in vec2 fragCoord) {
-        vec4 c = texture(u_modVCanvas, vUv);
-        float gray = dot(vec3(0.3, 0.59, 0.11), c.rgb);
-        vec3 muted = mix(c.rgb, vec3(gray), 0.5);
-        vec3 sepia = mix(vec3(0.1, 0.05, 0.0), vec3(1.0, 0.9, 0.5), gray);
-        c.rgb = sepia;
-        vec2 s = vUv * vec2(3.0, 80.0) + vec2(iTime * 0.03, iTime * 0.03);
-        float scratch = p10Hash(floor(s * vec2(80.0, 1.0)));
-        scratch = smoothstep(0.985, 1.0, scratch);
-        fragColor = c + vec4(vec3(scratch), 0.0);
-      }`,
-  ),
-
-  effect(
     "Embos Merge",
     `
       void mainImage(out vec4 fragColor, in vec2 fragCoord) {

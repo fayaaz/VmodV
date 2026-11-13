@@ -1,7 +1,7 @@
 //! The built-in shader module registry — every module the Gallery ships,
 //! ported from `src/renderer/src/application/renderers/shader/modules/`.
 //!
-//! # Count (37)
+//! # Count (36)
 //!
 //! | Flavour | Count | Modules |
 //! |---------|-------|---------|
@@ -100,12 +100,12 @@ pub struct ShaderModule {
     pub props: Vec<ShaderProp>,
 }
 
-/// All 37 built-in shader modules, in registration order.
+/// All 36 built-in shader modules, in registration order.
 ///
 /// Always returns freshly built values (the fragment sources are
 /// `format!`-expanded at call time — cheap, once per activation).
 pub fn all_modules() -> Vec<ShaderModule> {
-    let mut modules = Vec::with_capacity(37);
+    let mut modules = Vec::with_capacity(36);
     modules.push(bands::module());
     modules.push(chromatic_abberation::module());
     modules.push(fisheye::module());
@@ -117,7 +117,7 @@ pub fn all_modules() -> Vec<ShaderModule> {
 }
 
 /// The number of built-in modules; asserted by the tests below.
-pub const MODULE_COUNT: usize = 37;
+pub const MODULE_COUNT: usize = 36;
 
 /// Compose a module's fragment body with its generated `ModuleProps`
 /// declaration (or nothing, for prop-less modules). Keeps the WGSL member
@@ -137,7 +137,7 @@ mod tests {
     use crate::shader::default_shader::validate_wgsl;
 
     #[test]
-    fn module_count_is_37() {
+    fn module_count_is_36() {
         assert_eq!(all_modules().len(), MODULE_COUNT);
     }
 
@@ -175,8 +175,8 @@ mod tests {
             .filter(|module| module.fragment_wgsl.contains("mainImage"));
         assert_eq!(
             with_main_image.count(),
-            32,
-            "exactly the 31 Point10 effects and Chromatic Abberation use the mainImage shim"
+            31,
+            "exactly the 30 Point10 effects and Chromatic Abberation use the mainImage shim"
         );
     }
 
@@ -203,13 +203,13 @@ mod tests {
 
     #[test]
     fn point10_modules_consume_builtins_only() {
-        // The 31 Point10 effects request no props, and all of them opt into
+        // The 30 Point10 effects request no props, and all of them opt into
         // preview-with-output, like the JS meta.
         let modules = all_modules();
         let point10 = modules
             .iter()
             .filter(|module| module.name.starts_with("Point10 "));
-        assert_eq!(point10.clone().count(), 31);
+        assert_eq!(point10.clone().count(), 30);
         for module in point10 {
             assert!(
                 module.props.is_empty(),

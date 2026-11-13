@@ -678,7 +678,7 @@ pub struct ModuleRegistry {
 }
 
 impl ModuleRegistry {
-    /// The 37 built-in shader modules, the 15 ported 2D modules and the ported
+    /// The 36 built-in shader modules, the 15 ported 2D modules and the ported
     /// Point10 scenes, with no ISF corpus.
     ///
     /// Used by unit tests and the headless benchmark, which must not depend on
@@ -1396,7 +1396,7 @@ mod tests {
         assert_eq!(registry.kind("Bands"), Some(ModuleKind::Shader));
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Not A Module"), None);
-        assert!(registry.shader_modules().len() >= 37);
+        assert!(registry.shader_modules().len() >= 36);
         assert_eq!(registry.two_d_definitions().len(), 15);
     }
 
@@ -1511,7 +1511,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert!(map.len() >= 37 + 15 + 26);
+        assert!(map.len() >= 36 + 15 + 26);
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }

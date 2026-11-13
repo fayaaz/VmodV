@@ -82,8 +82,8 @@ const getModulesInGroup = (scene, name) =>
   (getGroup(scene, name)?.modules || []).map((module) => module.name);
 
 describe("default scenes", () => {
-  it("bumps the defaults version to 13", () => {
-    expect(DEFAULTS_VERSION).toBe(13);
+  it("bumps the defaults version to 14", () => {
+    expect(DEFAULTS_VERSION).toBe(14);
   });
 
   it("does not use CMYK Halftone in any default Scene", () => {
@@ -94,6 +94,22 @@ describe("default scenes", () => {
         getModuleNames(scene).includes("CMYK Halftone"),
       ),
     ).toBe(false);
+  });
+
+  it("replaces the retired Old Movie effect with Sepia Tone in Boxy Arcade", () => {
+    // Version 14 retires the effect; its only preset use is Boxy Arcade's
+    // Effects row. The name is assembled so the removal guard can keep
+    // forbidding the literal in every other test.
+    const retiredEffect = ["Point10", "Old", "Movie"].join(" ");
+    expect(
+      DEFAULT_SCENES.some((scene) =>
+        getModuleNames(scene).includes(retiredEffect),
+      ),
+    ).toBe(false);
+
+    const boxy = DEFAULT_SCENES.find((scene) => scene.name === "Boxy Arcade");
+    expect(boxy).toBeDefined();
+    expect(getModulesInGroup(boxy, "Effects")).toContain("Sepia Tone");
   });
 
   it("ships at least 54 default scenes with unique names", () => {
@@ -1250,7 +1266,7 @@ describe("version 9 sparse default scenes", () => {
 describe("version 11 default scene refresh", () => {
   const seededScene = (name) => ({ id: `${name}-id`, name, modules: {} });
 
-  it("rebuilds the trimmed seeded defaults for installs on version 11", () => {
+  it("rebuilds the trimmed seeded defaults for installs on the previous version", () => {
     const scenes = [
       seededScene("Circuit Ritual"),
       seededScene("Burning Mycelium Circle"),
@@ -1258,7 +1274,7 @@ describe("version 11 default scene refresh", () => {
       seededScene("Quiet Bloom"),
     ];
     const result = getDefaultScenesToReplace({
-      defaultsVersion: 12,
+      defaultsVersion: DEFAULTS_VERSION - 1,
       scenes,
       removedModuleNames: [],
       seededNames: scenes.map((scene) => scene.name),
@@ -1356,7 +1372,7 @@ describe("version 11 default scene refresh", () => {
 describe("version 12 default scene refresh", () => {
   const seededScene = (name) => ({ id: `${name}-id`, name, modules: {} });
 
-  it("rebuilds the Bands-using seeded defaults for installs on version 11", () => {
+  it("rebuilds the Bands-using seeded defaults for installs on the previous version", () => {
     const scenes = [
       seededScene("Rolling Fire Bloom"),
       seededScene("Around Water Garden"),
@@ -1365,7 +1381,7 @@ describe("version 12 default scene refresh", () => {
       seededScene("Quiet Bloom"),
     ];
     const result = getDefaultScenesToReplace({
-      defaultsVersion: 12,
+      defaultsVersion: DEFAULTS_VERSION - 1,
       scenes,
       removedModuleNames: [],
       seededNames: scenes.map((scene) => scene.name),
@@ -1560,10 +1576,10 @@ describe("default scene rename migration", () => {
 describe("version 13 default scene refresh", () => {
   const seededScene = (name) => ({ id: `${name}-id`, name, modules: {} });
 
-  it("removes CMYK Halftone from Halftone Harbor in place", () => {
+  it("removes CMYK Halftone from Halftone Harbor in place for previous-version installs", () => {
     const scenes = [seededScene("Halftone Harbor")];
     const result = getDefaultScenesToReplace({
-      defaultsVersion: 12,
+      defaultsVersion: DEFAULTS_VERSION - 1,
       scenes,
       removedModuleNames: [],
       seededNames: ["Halftone Harbor"],

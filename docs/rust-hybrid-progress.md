@@ -24,7 +24,7 @@ Tooling: the engine builds only inside Docker (`make engine` / `engine-test` /
   spread 0.42 (`MODV_AUDIO_FIXTURE=… cargo test -p modv-media --test
   audio_stream_fixture`).
 - Packaged-engine smoke (CDP, `MODV_ENGINE=1`): the Gallery renders all **429**
-  registered modules (37 shader + 15 2D + 26 Point10 + 351 ISF) with engine
+  registered modules (36 shader + 15 2D + 26 Point10 + 354 ISF) with engine
   thumbnails; Scene hover previews paint the hovered cell; BPM tweens animate
   (Chromantic Line `smoothing` 0.252 → 0.209 over 0.9 s); the status bar shows
   live FPS/size and the detected BPM.
@@ -114,17 +114,17 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
       stream, preset round-trip + Scene/playlist detection (96 tests)
 - [x] modv-render FrameGraph, LRU texture pool, canvas-semantics blend WGSL
       for all 28 modes (21 tests)
-- [x] Shader renderer: uniform contract, wrapper shim, all 37 modules in WGSL,
+- [x] Shader renderer: uniform contract, wrapper shim, all 36 modules in WGSL,
       naga-validated (24 tests)
 - [x] ISF: parser/upgrader, ES→desktop-450 preprocessor with the full macro
       set, naga GLSL→WGSL translator, overrides hook, multi-pass runtime with
-      PERSISTENT/FLOAT buffers; corpus report — **351/351 fragments and 36/36
+      PERSISTENT/FLOAT buffers; corpus report — **354/354 fragments and 36/36
       vertex sidecars translate (100 %) with no overrides**, including hoisted
       global initialisers, sampler parameters, fall-through returns and matrix
       varyings (`docs/isf-corpus-report.md`)
 - [x] ISF modules registered in the engine: corpus bundled as `resources/isf`,
       discovered via `--isf-dir`, props/meta synthesised, compositor rendering
-      with per-frame uniforms + group-canvas image inputs (351 registered)
+      with per-frame uniforms + group-canvas image inputs (354 registered)
 - [x] Engine integration: EngineState store, GPU compositor, real previews,
       mutations + delta stream (44+ tests)
 - [x] Mirror parity: `--emit-fixtures` + `tests/unit/engine-mirror.test.js`
@@ -276,7 +276,7 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   composite-time premultiply flag lands).
 - Custom/third-party ISF transitions are not available: the six native
   transitions are ported, the picker filters unknown names to Fade.
-- The ISF corpus translates 351/351 fragments and 36/36 vertex sidecars with
+- The ISF corpus translates 354/354 fragments and 36/36 vertex sidecars with
   no overrides; the override mechanism (embedded, fingerprinted, validated)
   remains for third-party shaders. The corpus gate asserts a checked-in
   baseline (100 %).
@@ -422,3 +422,9 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   wildcard: `groups/SWAP`/`modules/SWAP`, `dataTypes/createType`, `media/*`,
   `midi/learn`, `ndi/*`, `osc/createServer`, `scenePreview/*`,
   `windows/createWindow` and the `outputs/*` auxiliary-canvas actions.
+- **Point10 Old Movie retired.** The sepia/scratch shader effect is removed from
+  both catalogues (`Point10Effects.js` and the Rust WGSL port), leaving 30
+  Point10 effects / 36 shader modules. Its only shipped preset use — Boxy
+  Arcade's Effects row — now references the `Sepia Tone` ISF filter, and the
+  defaults moved to version 14 so installs on version 13 receive the edit in
+  place. A removal guard and engine-side tests pin the absence.

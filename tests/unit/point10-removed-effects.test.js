@@ -18,6 +18,7 @@ const REMOVED_FILES = [
 const FORBIDDEN = [
   "Point10 Spectrum Bars",
   "Point10 Ferrofluid",
+  "Point10 Old Movie",
   "SpectrumBars",
   "scenes/Ferrofluid",
   "Point10Ferrofluid",
@@ -31,7 +32,7 @@ function walk(dir) {
   });
 }
 
-describe("Point10 spectrum bars and ferrofluid removal", () => {
+describe("removed Point10 effects and scenes", () => {
   it("removes the module and scene files", () => {
     for (const relativePath of REMOVED_FILES) {
       expect(existsSync(join(ROOT, relativePath)), relativePath).toBe(false);

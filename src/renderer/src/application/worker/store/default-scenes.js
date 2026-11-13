@@ -38,7 +38,7 @@
 // CMYK Halftone from Halftone Harbor (its only default Scene); the Effects row
 // stays empty, and the Scene is refreshed in place for version-12 installs.
 export const LEGACY_DEFAULTS_VERSION = 1;
-export const DEFAULTS_VERSION = 13;
+export const DEFAULTS_VERSION = 14;
 
 // The Cube Floor module was removed in version 7. Existing installs may still
 // hold default Scenes that reference it, so the migration below rebuilds those
@@ -2381,7 +2381,7 @@ const DEFAULT_SCENES = [
         compositeOperation: "normal",
         modules: [
           {
-            name: "Point10 Old Movie",
+            name: "Sepia Tone",
             props: {},
           },
           {

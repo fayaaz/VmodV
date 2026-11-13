@@ -1034,14 +1034,15 @@ mod tests {
     }
 
     #[test]
-    fn the_version_13_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
-        // Version 13 only edits two definitions in place — CMYK Halftone leaves
-        // Halftone Harbor and MBOX3's hue is fixed — so no rename/removal rule
-        // ships and the version-keyed table stays empty. Installs on version 12
-        // receive the edits through `get_default_scenes_to_replace`.
+    fn the_version_14_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
+        // Versions 13/14 only edit definitions in place — CMYK Halftone leaves
+        // Halftone Harbor, MBOX3's hue is fixed and Point10 Old Movie becomes
+        // Sepia Tone — so no rename/removal rule ships and the version-keyed
+        // table stays empty. Installs on the previous version receive the edits
+        // through `get_default_scenes_to_replace`.
         assert!(get_default_scene_migrations(12, DEFAULTS_VERSION).is_empty());
 
-        let names = ["Halftone Harbor", "MBOX Light Tunnel"];
+        let names = ["Halftone Harbor", "MBOX Light Tunnel", "Boxy Arcade"];
         let scenes: Vec<Value> = names
             .iter()
             .map(|name| scene(name, &format!("{name}-id")))
@@ -1049,7 +1050,7 @@ mod tests {
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
         let plan = crate::default_scenes::get_default_scenes_to_replace(
-            12,
+            13,
             &scenes,
             None,
             Some(&seeded_names),
@@ -1094,5 +1095,18 @@ mod tests {
             Some(&json!(0))
         );
         assert!(mbox.definition.link("MBOX3", "dhue").is_none());
+
+        let boxy = plan
+            .replacements
+            .iter()
+            .find(|replacement| replacement.name == "Boxy Arcade")
+            .expect("Boxy Arcade refresh");
+        assert_eq!(boxy.id, json!("Boxy Arcade-id"));
+        let effects = boxy.definition.modules_in_group("Effects");
+        assert!(
+            effects.contains(&"Sepia Tone"),
+            "Boxy Arcade was not refreshed: {effects:?}"
+        );
+        assert!(!effects.contains(&"Point10 Old Movie"));
     }
 }

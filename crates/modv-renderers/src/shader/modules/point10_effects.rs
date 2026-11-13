@@ -1,4 +1,4 @@
-//! The 31 Point10 effects — port of
+//! The 30 Point10 effects — port of
 //! `src/renderer/src/application/renderers/shader/modules/Point10Effects.js`.
 //!
 //! Every effect is registered with the `Point10 ` name prefix,
@@ -21,7 +21,7 @@
 //!
 //! * [`P10_NOISE_WGSL`] — `p10Hash`, `p10Hash2`, `p10Noise`, `p10Fbm`.
 //!   Used by Fuzzy Pixels, Fractured, Bathroom Window, Color Distort,
-//!   Old Movie, Digital Glitch. `p10Hash2` is unused by every effect but
+//!   Digital Glitch. `p10Hash2` is unused by every effect but
 //!   kept: it is part of the shared chunk's contract.
 //! * [`P10_BAYER_WGSL`] — `p10Bayer2/4/8`. Used by Bayer 8 Matrix
 //!   Dithering BW and Bayer Matrix Dithering Color.
@@ -715,26 +715,6 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
 }
 "#,
     },
-    // Point10Effects.js:551-565 — Old Movie
-    P10Effect {
-        name: "Point10 Old Movie",
-        chunks: &[P10Chunk::Noise],
-        audio: false,
-        body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
-  let vUv = modv_uv(fragCoord);
-  var c = textureSample(u_modVCanvas, modvGroupSampler, vUv);
-  let gray = dot(vec3<f32>(0.3, 0.59, 0.11), c.rgb);
-  // The GLSL `muted` capture is intentionally dropped (unused there too);
-  // `sepia` is the one the source actually keeps.
-  let sepia = mix(vec3<f32>(0.1, 0.05, 0.0), vec3<f32>(1.0, 0.9, 0.5), gray);
-  c = vec4<f32>(sepia, c.a);
-  let s = vUv * vec2<f32>(3.0, 80.0) + vec2<f32>(u.iTime * 0.03, u.iTime * 0.03);
-  var scratch = p10Hash(floor(s * vec2<f32>(80.0, 1.0)));
-  scratch = smoothstep(0.985, 1.0, scratch);
-  return c + vec4<f32>(vec3<f32>(scratch), 0.0);
-}
-"#,
-    },
     // Point10Effects.js:567-578 — Embos Merge
     P10Effect {
         name: "Point10 Embos Merge",
@@ -859,7 +839,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
 ];
 
-/// All 31 Point10 effect modules, in `Point10Effects.js` registration order.
+/// All 30 Point10 effect modules, in `Point10Effects.js` registration order.
 pub(crate) fn modules() -> Vec<ShaderModule> {
     P10_EFFECTS
         .iter()
@@ -891,4 +871,22 @@ pub(crate) fn modules() -> Vec<ShaderModule> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retires_the_old_movie_effect() {
+        let modules = modules();
+
+        assert_eq!(modules.len(), 30, "the Old Movie effect is retired");
+        assert!(
+            !modules
+                .iter()
+                .any(|module| module.name == "Point10 Old Movie"),
+            "Point10 Old Movie is still registered"
+        );
+    }
 }
