@@ -30,6 +30,17 @@ gst-app = { package = "gstreamer-app", version = "0.24.5" }
 gst-video = { package = "gstreamer-video", version = "0.24.5" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# XDG desktop portal ScreenCast (WS-10): the engine asks the compositor's
+# portal for a PipeWire node itself, so engine-mode screen capture no longer
+# depends on Electron exposing the node id from `getDisplayMedia`
+# (see `video/portal.rs`). `ashpd` is the zbus wrapper; the `tokio` feature
+# makes zbus use a tokio reactor, which `portal::request_screencast` drives on
+# a dedicated single-thread runtime of its own.
+ashpd = { version = "0.14.0", default-features = false, features = [
+  "screencast",
+  "tokio",
+] }
+tokio = { version = "1.54.1", features = ["rt", "sync", "time", "net"] }
 # Native PipeWire monitor-source capture (WS-9), replacing the `pw-record`
 # subprocess. Links against the system libpipewire-0.3 (installed in the
 # Docker `rust` stage); `pipewire-sys` generates its bindings with bindgen, so

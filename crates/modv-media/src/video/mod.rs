@@ -9,7 +9,8 @@
 //! Electron renderer                         engine (this crate)
 //! ----------------                         -------------------
 //! mediaDevices.enumerateDevices()  ──────▶ list_cameras()
-//! ScreenPickerDialog (portal consent) ────▶ VideoSourceKind::Screen { node_id }
+//! ScreenPickerDialog (portal consent) ────▶ portal::request_screencast()
+//!                                            └─▶ VideoSourceKind::Screen { node_id }
 //! videos/assignVideoStream             ───▶ VideoSourceKind::File { uri }
 //! ```
 //!
@@ -19,6 +20,10 @@
 //!   `gst::DeviceMonitor`, plus the 1-based `camera` prop resolver.
 //! * [`pipeline`] — `VideoSourceConfig` and the pure pipeline-description
 //!   builders (so the exact `gst-launch` text can be unit tested).
+//! * [`portal`] — the engine-owned screen picker: an xdg-desktop-portal
+//!   `ScreenCast` request whose system dialog yields the PipeWire node id a
+//!   [`pipeline::VideoSourceKind::Screen`] needs (the portal's own dialog is
+//!   the picker, so no node id has to come from Electron).
 //! * [`source`] — a running [`VideoSource`]: pipeline, appsink callbacks, the
 //!   latest-frame slot, bus polling, status and stop.
 //! * [`hub`] — [`VideoHub`], several sources keyed by a caller id.
@@ -58,6 +63,7 @@ pub mod camera;
 pub mod frame;
 pub mod hub;
 pub mod pipeline;
+pub mod portal;
 pub mod source;
 
 #[cfg(test)]
@@ -70,6 +76,10 @@ pub use pipeline::{
     DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH, FRAME_RATE_PRESETS, RESOLUTION_PRESETS,
     ScreenSupport, TestPattern, VideoSourceConfig, VideoSourceKind, path_to_file_uri,
     pipeline_description, screen_support,
+};
+pub use portal::{
+    PortalError, PortalSourceType, PortalStream, RawStream, SourceSelection, StreamInfo,
+    describe_streams, request_screencast, request_screencast_restoring, select_stream,
 };
 pub use source::{
     VideoError, VideoSource, VideoSourceState, VideoSourceStatus, ensure_gst, gstreamer_version,
@@ -92,6 +102,11 @@ mod tests {
         assert_send::<CameraInfo>();
         assert_send::<VideoFrame>();
         assert_send::<VideoError>();
+        // The portal answer travels from a worker thread to the engine that
+        // stores it next to the running screen source.
+        assert_send::<PortalStream>();
+        assert_send::<PortalError>();
+        assert_send::<SourceSelection>();
         assert_sync::<VideoHub>();
     }
 
