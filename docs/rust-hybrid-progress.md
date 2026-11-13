@@ -406,3 +406,13 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   The Audio Feature smoothing slider also captures its smoothing id before
   clearing the field and restores it from the saved link args, so turning
   smoothing down actually releases the entry.
+- **The Scene grid can save and manage Scenes in engine mode.** Saving the
+  live stack (`scenes/saveCurrentAsScene`) builds the six-key preset document
+  from the settled layer stack, adds Scene metadata and appends it; before
+  this the button hit the dispatch wildcard and no file was written. The
+  column actions (`addEmptyScene`, `moveScene`, `setSceneEnabled`,
+  `updateSceneName`, `updateSceneTiming`, `resetSceneTiming`) are implemented
+  too. Still open: the grid cell actions (`captureSceneRowToScene`,
+  `clearSceneCell`, `copySceneCellToScene`, `createSceneCellGroup`) and
+  `groups/disableGalleryItemModules` / `dataTypes/createType`, which still hit
+  the wildcard.
