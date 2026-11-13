@@ -127,3 +127,24 @@ translate at a high rate; the multi-pass + PERSISTENT paths are separate
 The one known-gap area: shaders declaring `uniform` for inputs the JSON
 header also declares with `DEFAULT` values (overlapping declarations are
 harmless).
+
+## Vertex sidecars (`.vs`)
+
+36 corpus shaders ship a `.vs`; the runtime translates both stages
+(`translate_with_sidecar_vertex`) and links them with explicit locations.
+
+- **Coordinate origin.** `isf_FragNormCoord` is emitted top-left
+  (`1 - (y + 1) / 2`), matching wgpu texture sampling and the fragment's
+  top-left `gl_FragCoord`. WebGL flips textures on upload
+  (`UNPACK_FLIP_Y_WEBGL`), so its bottom-left varying produced the same
+  upright result; keeping the GL origin made every sidecar filter sample the
+  group canvas mirrored.
+- **Geometry.** Sidecar shaders draw the legacy six-vertex quad
+  (`ISFGLProgram.bindVertices`), not the oversized full-screen triangle.
+  `.vs` files evaluate non-linear maths in the vertex stage from
+  `isf_FragNormCoord` (`clamp`ed blur offsets, rotations); off-screen triangle
+  corners saturate those clamps before interpolation and stretch/zoom the
+  result (Edge Blur). The triangle stays for shaders without a sidecar.
+- **Locations.** `sidecar_varyings` scans the same active `#if __VERSION__`
+  branch that `assign_output_locations` numbers; arrays consume one location
+  per element and `matN` is split into columns.
