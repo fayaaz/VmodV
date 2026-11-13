@@ -15,6 +15,7 @@ mod input_links;
 mod media;
 mod module_preview;
 mod module_registry;
+mod ndi_runtime;
 mod performance;
 mod report;
 mod scene_ops;

@@ -100,6 +100,7 @@ use crate::input_links::{
     BeatsState, LINK_DELTA_EPSILON, LINK_DELTA_INTERVAL, LinkTarget, LinkWrite,
 };
 use crate::module_registry::ModuleRegistry;
+use crate::ndi_runtime::NdiRuntime;
 use crate::windows::{NewWindow, WindowCommand, WindowRegistry, WindowSpec};
 
 /// Version stamped into the on-disk snapshot document.
@@ -174,6 +175,11 @@ pub struct Store {
     pub(crate) tweens: modv_engine::tweens::TweenSet,
     /// Tween frame rate (`fps/SET_FPS`; the JS `store.state.fps.fps`).
     pub(crate) fps: f64,
+    /// NDI send/receive (WS-11): configuration, sender thread and the receiver
+    /// registry. The window loop submits presented frames to it and drains its
+    /// receiver status changes into the mirror
+    /// ([`crate::ndi_runtime`]).
+    pub(crate) ndi: NdiRuntime,
     /// The current audio frame handed to modules and shader uniforms.
     ///
     /// Filled by `meyda/SET_BANDS` from the renderer's audio pump (see
@@ -310,6 +316,7 @@ impl Store {
             pending_transition_capture: None,
             tweens: modv_engine::tweens::TweenSet::new(),
             fps: 60.0,
+            ndi: NdiRuntime::new(),
             audio: AudioFrame::default(),
             engine_audio_active: false,
             engine_meter: EngineMeter::default(),
@@ -369,6 +376,48 @@ impl Store {
     /// [`crate::compositor::FrameInfo`]).
     pub fn audio(&self) -> &AudioFrame {
         &self.audio
+    }
+
+    /// The NDI runtime (read-only; the window loop's compositor uploads a
+    /// receiver's latest frame from it each frame).
+    pub fn ndi(&self) -> &NdiRuntime {
+        &self.ndi
+    }
+
+    /// The NDI runtime (mutable; the window loop submits presented frames).
+    pub(crate) fn ndi_mut(&mut self) -> &mut NdiRuntime {
+        &mut self.ndi
+    }
+
+    /// Drain completed NDI discovery runs and receiver status changes into the
+    /// mirror deltas. Called once per frame by the window loop.
+    pub fn poll_ndi(&mut self) {
+        if let Some(result) = self.ndi.take_discovery() {
+            match result {
+                Ok(sources) => {
+                    let sources: Vec<Value> = sources.iter().map(|s| s.to_json()).collect();
+                    self.deltas.push("ndi/SET_SOURCES", json!(sources));
+                }
+                Err(error) => {
+                    self.warn_once(
+                        "ndi:discovery".to_string(),
+                        &format!("engine: WARN NDI discovery failed: {error}"),
+                    );
+                    self.deltas.push("ndi/SET_SOURCES", json!([]));
+                }
+            }
+            self.deltas.push("ndi/SET_DISCOVERING", json!(false));
+        }
+
+        for info in self.ndi.take_updates() {
+            self.deltas
+                .push("ndi/UPDATE_RECIEVER", info.to_mirror_json());
+        }
+    }
+
+    /// Stop every NDI thread (window shutdown).
+    pub(crate) fn shutdown_ndi(&mut self) {
+        self.ndi.shutdown();
     }
 
     /// Revision of the Scene list and its row mapping.
@@ -467,6 +516,16 @@ impl Store {
             return Ok(Value::Null);
         }
 
+        // ————————————————— NDI (WS-11) —————————————————
+        //
+        // The JS `ndi` module's settings mutations take their value directly
+        // (`store.commit("ndi/SET_OUTPUT_ENABLED", true)`), not an object, so
+        // they are handled before the object-only `params` view below. Every
+        // arm records the same mirror delta the JS mutation produces.
+        if let Some(result) = self.dispatch_ndi_settings(action, &payload) {
+            return result;
+        }
+
         let empty = Map::new();
         let params = payload.as_object().unwrap_or(&empty);
 
@@ -518,6 +577,19 @@ impl Store {
             "midi/WRITE_DATA" => self.midi_write_data(params),
             "osc/createServer" => self.osc_create_server(params),
             "osc/removeServer" => self.osc_remove_server(params),
+            // ————————————————— NDI (WS-11) —————————————————
+            "ndi/discoverSources" => self.ndi_discover_sources(),
+            "ndi/setDiscoveryOptions" => self.ndi_set_discovery_options(params),
+            "ndi/createReceiver" => self.ndi_create_receiver(params),
+            "ndi/enableReceiver" => self.ndi_enable_receiver(params),
+            "ndi/disableReceiver" => self.ndi_disable_receiver(params),
+            "ndi/removeReceiver" => self.ndi_remove_receiver(params),
+            // Engine-only reads (the legacy panel drives `grandiose` itself).
+            "ndi/getAvailability" => Ok(json!({
+                "available": self.ndi.available(),
+                "libraryPath": self.ndi.library_path(),
+            })),
+            "ndi/getState" => Ok(self.ndi_state_json()),
             // ————————————————— Output Windows —————————————————
             // The engine owns the native windows now, so the legacy action is
             // the entry point in engine mode too (`window-handler.js` no
@@ -1168,6 +1240,269 @@ impl Store {
                 .push("osc/DELETE_SERVER", json!({ "id": id }));
         }
         Ok(Value::Null)
+    }
+
+    // ————————————————— NDI (WS-11) —————————————————
+
+    /// Applies the `ndi/SET_*` settings mutations.
+    ///
+    /// Returns `None` for every other action so [`Store::dispatch`] continues
+    /// to the object-payload match. The values are committed directly by the
+    /// JS store (`ndi.js:215-238`), so they arrive as raw JSON scalars; the
+    /// emitted delta carries exactly what the JS mutation would have written.
+    fn dispatch_ndi_settings(
+        &mut self,
+        action: &str,
+        payload: &Value,
+    ) -> Option<Result<Value, StoreError>> {
+        match action {
+            "ndi/SET_OUTPUT_ENABLED" => {
+                let enabled = payload.as_bool().unwrap_or(false);
+                self.ndi.set_output_enabled(enabled);
+                self.deltas.push("ndi/SET_OUTPUT_ENABLED", json!(enabled));
+            }
+            "ndi/SET_OUTPUT_NAME" => {
+                let name = payload.as_str().unwrap_or_default().trim();
+                let name = if name.is_empty() {
+                    crate::ndi_runtime::DEFAULT_OUTPUT_NAME
+                } else {
+                    name
+                };
+                self.ndi.set_output_name(name);
+                self.deltas.push("ndi/SET_OUTPUT_NAME", json!(name));
+            }
+            "ndi/SET_OUTPUT_SIZE" => {
+                let Some(params) = payload.as_object() else {
+                    return Some(Ok(Value::Null));
+                };
+                let width = params
+                    .get("width")
+                    .and_then(Value::as_u64)
+                    .and_then(|width| u32::try_from(width).ok());
+                let height = params
+                    .get("height")
+                    .and_then(Value::as_u64)
+                    .and_then(|height| u32::try_from(height).ok());
+                self.ndi.set_output_size(width, height);
+
+                // The JS mutation accepts a partial update (`?? state.x`), so
+                // mirror exactly the keys the caller supplied.
+                let mut delta = Map::new();
+                if let Some(width) = width {
+                    delta.insert("width".to_string(), json!(width));
+                }
+                if let Some(height) = height {
+                    delta.insert("height".to_string(), json!(height));
+                }
+                self.deltas
+                    .push("ndi/SET_OUTPUT_SIZE", Value::Object(delta));
+            }
+            "ndi/SET_FOLLOW_MODV_OUTPUT_SIZE" => {
+                let follow = payload.as_bool().unwrap_or(false);
+                self.ndi.set_follow_output_size(follow);
+                self.deltas
+                    .push("ndi/SET_FOLLOW_MODV_OUTPUT_SIZE", json!(follow));
+            }
+            "ndi/SET_FOLLOW_MODV_FPS" => {
+                let follow = payload.as_bool().unwrap_or(false);
+                self.ndi.set_follow_fps(follow);
+                self.deltas.push("ndi/SET_FOLLOW_MODV_FPS", json!(follow));
+            }
+            "ndi/SET_OUTPUT_TARGET_FPS" => {
+                let Some(fps) = payload.as_f64().filter(|fps| fps.is_finite() && *fps > 0.0) else {
+                    return Some(Ok(Value::Null));
+                };
+                self.ndi.set_target_fps(fps);
+                self.deltas.push("ndi/SET_OUTPUT_TARGET_FPS", json!(fps));
+            }
+            _ => return None,
+        }
+
+        Some(Ok(Value::Null))
+    }
+
+    /// `ndi/discoverSources` (`store/modules/ndi.js:90-110`).
+    ///
+    /// The finder runs on a helper thread, so this action returns immediately;
+    /// [`Store::poll_ndi`] emits `ndi/SET_SOURCES` + `ndi/SET_DISCOVERING`
+    /// when the run finishes. When libndi is missing the source list is
+    /// cleared and the UI is told NDI is unavailable (no thread, no stall).
+    fn ndi_discover_sources(&mut self) -> Result<Value, StoreError> {
+        if !self.ndi.available() {
+            self.deltas.push("ndi/SET_SOURCES", json!([]));
+            self.deltas.push("ndi/SET_DISCOVERING", json!(false));
+            return Ok(json!({ "available": false, "sources": [] }));
+        }
+
+        let started = self.ndi.start_discovery();
+        if started {
+            self.deltas.push("ndi/SET_DISCOVERING", json!(true));
+        }
+
+        // The reply carries the last completed list; a new run fills it in via
+        // `ndi/SET_SOURCES` once the finder returns.
+        let sources: Vec<Value> = self.ndi.sources().iter().map(|s| s.to_json()).collect();
+        Ok(json!({
+            "available": true,
+            "discovering": started,
+            "sources": sources,
+        }))
+    }
+
+    /// `ndi/setDiscoveryOptions` (`store/modules/ndi.js:112-114`).
+    fn ndi_set_discovery_options(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        if let Some(show_local) = params.get("showLocalSources").and_then(Value::as_bool) {
+            self.ndi.set_show_local_sources(show_local);
+        }
+        let options = json!({ "showLocalSources": self.ndi.show_local_sources() });
+        self.deltas
+            .push("ndi/SET_DISCOVERY_OPTIONS", options.clone());
+        Ok(options)
+    }
+
+    /// `ndi/createReceiver` (`store/modules/ndi.js:116-142`).
+    ///
+    /// The legacy action also allocates an auxiliary canvas for the receiver;
+    /// engine mode has no canvases, so the receiver's frame is exposed as the
+    /// `ndi:<receiverId>` texture source instead. The mirror still receives an
+    /// `outputs/ADD_AUXILLARY` record (group `NDI`) so the texture picker can
+    /// offer it, and `ndi/ADD_RECIEVER` carries the engine's status fields.
+    fn ndi_create_receiver(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "ndi/createReceiver";
+        let source = params.get("source").and_then(Value::as_object);
+        let Some(name) = source
+            .and_then(|source| source.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            return Err(invalid(action, "missing string \"source.name\""));
+        };
+        let url_address = source
+            .and_then(|source| source.get("urlAddress"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        let id = crate::ids::uuid_v4();
+        let info = self.ndi.create_receiver(&id, name, url_address);
+        let payload = info.to_mirror_json();
+
+        self.deltas.push(
+            "outputs/ADD_AUXILLARY",
+            json!({
+                "id": info.texture_id(),
+                "name": info.source_name,
+                "group": "NDI",
+                "reactToResize": false,
+            }),
+        );
+        self.deltas.push("ndi/ADD_RECIEVER", payload.clone());
+
+        Ok(payload)
+    }
+
+    /// `ndi/enableReceiver` (`store/modules/ndi.js:144-156`).
+    fn ndi_enable_receiver(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "ndi/enableReceiver";
+        let receiver_id = required_str(params, action, "receiverId")?.to_string();
+
+        let Some(info) = self.ndi.enable_receiver(&receiver_id) else {
+            self.warn_once(
+                format!("ndi:missing:{receiver_id}"),
+                &format!("engine: WARN {action}: no receiver with id {receiver_id}"),
+            );
+            return Ok(Value::Null);
+        };
+        let payload = info.to_mirror_json();
+        self.deltas.push("ndi/UPDATE_RECIEVER", payload.clone());
+        Ok(payload)
+    }
+
+    /// `ndi/disableReceiver` (`store/modules/ndi.js:158-168`).
+    fn ndi_disable_receiver(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "ndi/disableReceiver";
+        let receiver_id = required_str(params, action, "receiverId")?.to_string();
+
+        let Some(info) = self.ndi.disable_receiver(&receiver_id) else {
+            self.warn_once(
+                format!("ndi:missing:{receiver_id}"),
+                &format!("engine: WARN {action}: no receiver with id {receiver_id}"),
+            );
+            return Ok(Value::Null);
+        };
+        let payload = info.to_mirror_json();
+        self.deltas.push("ndi/UPDATE_RECIEVER", payload.clone());
+        Ok(payload)
+    }
+
+    /// `ndi/removeReceiver` (`store/modules/ndi.js:170-187`).
+    ///
+    /// Mirrors the legacy sequence: disable (`UPDATE_RECIEVER`), drop the
+    /// auxiliary output, then `DELETE_RECIEVER`.
+    fn ndi_remove_receiver(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "ndi/removeReceiver";
+        let receiver_id = required_str(params, action, "receiverId")?.to_string();
+
+        let Some(info) = self.ndi.remove_receiver(&receiver_id) else {
+            self.warn_once(
+                format!("ndi:missing:{receiver_id}"),
+                &format!("engine: WARN {action}: no receiver with id {receiver_id}"),
+            );
+            return Ok(Value::Null);
+        };
+        let payload = info.to_mirror_json();
+
+        self.deltas.push("ndi/UPDATE_RECIEVER", payload.clone());
+        self.deltas
+            .push("outputs/REMOVE_AUXILLARY", json!(info.texture_id()));
+        self.deltas.push("ndi/DELETE_RECIEVER", payload.clone());
+
+        Ok(payload)
+    }
+
+    /// `ndi/getState`: availability, sender status, config and receivers.
+    ///
+    /// Engine-only introspection for the NDI panel (the legacy path reads the
+    /// mirror's `ndi` state directly). It is a read, so it emits no delta.
+    fn ndi_state_json(&self) -> Value {
+        let config = self.ndi.config();
+        let sender = self.ndi.sender_status();
+
+        json!({
+            "available": self.ndi.available(),
+            "libraryPath": self.ndi.library_path(),
+            "config": {
+                "outputEnabled": config.output_enabled,
+                "outputName": config.output_name,
+                "outputWidth": config.output_width,
+                "outputHeight": config.output_height,
+                "followModVOutputSize": config.follow_modv_output_size,
+                "followModVFps": config.follow_modv_fps,
+                "outputTargetFps": config.output_target_fps,
+            },
+            "sender": {
+                "running": sender.running,
+                "unavailable": sender.unavailable,
+                "error": sender.error,
+                "framesSent": sender.frames_sent,
+            },
+            "discovering": self.ndi.discovering(),
+            "sources": self
+                .ndi
+                .sources()
+                .iter()
+                .map(modv_media::ndi::NdiSourceInfo::to_json)
+                .collect::<Vec<_>>(),
+            "receivers": self
+                .ndi
+                .receivers()
+                .iter()
+                .map(crate::ndi_runtime::ReceiverInfo::to_mirror_json)
+                .collect::<Vec<_>>(),
+        })
     }
 
     /// Drain coalesced OSC datagrams into `state.osc.data` and the mirror.
@@ -2445,6 +2780,9 @@ impl Store {
             return Ok(Value::Null);
         }
         self.fps = fps;
+        // The NDI sender advertises/follows the engine's frame rate; keep it
+        // in step with the renderer's FPS setting until a measurement arrives.
+        self.ndi.set_engine_fps(fps);
         let bpm = self.bpm();
         for (_, tween) in self.tweens.iter_mut() {
             tween.rebuild(fps, bpm);
@@ -7546,6 +7884,244 @@ mod tests {
             .find(|delta| delta.r#type == "midi/WRITE_DATA")
             .expect("write delta");
         assert_eq!(write.payload["id"], json!(key));
+    }
+
+    // ————————————————— NDI (WS-11) —————————————————
+
+    #[test]
+    fn ndi_settings_mirror_the_js_state_and_mutations() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        store
+            .dispatch("ndi/SET_OUTPUT_ENABLED", json!(true))
+            .expect("enable dispatches");
+        store
+            .dispatch("ndi/SET_OUTPUT_NAME", json!("Studio Output"))
+            .expect("name dispatches");
+        store
+            .dispatch("ndi/SET_OUTPUT_SIZE", json!({ "width": 1280 }))
+            .expect("size dispatches");
+        store
+            .dispatch("ndi/SET_FOLLOW_MODV_OUTPUT_SIZE", json!(false))
+            .expect("follow size dispatches");
+        store
+            .dispatch("ndi/SET_FOLLOW_MODV_FPS", json!(false))
+            .expect("follow fps dispatches");
+        store
+            .dispatch("ndi/SET_OUTPUT_TARGET_FPS", json!(30))
+            .expect("target fps dispatches");
+
+        let config = store.ndi().config();
+        assert!(config.output_enabled);
+        assert_eq!(config.output_name, "Studio Output");
+        assert_eq!((config.output_width, config.output_height), (1280, 1080));
+        assert!(!config.follow_modv_output_size);
+        assert!(!config.follow_modv_fps);
+        assert_eq!(config.output_target_fps, 30.0);
+
+        let deltas = store.drain_deltas();
+        let types: Vec<&str> = deltas.iter().map(|delta| delta.r#type.as_str()).collect();
+        assert_eq!(
+            types,
+            vec![
+                "ndi/SET_OUTPUT_ENABLED",
+                "ndi/SET_OUTPUT_NAME",
+                "ndi/SET_OUTPUT_SIZE",
+                "ndi/SET_FOLLOW_MODV_OUTPUT_SIZE",
+                "ndi/SET_FOLLOW_MODV_FPS",
+                "ndi/SET_OUTPUT_TARGET_FPS",
+            ]
+        );
+        assert_eq!(deltas[0].payload, json!(true));
+        assert_eq!(deltas[1].payload, json!("Studio Output"));
+        assert_eq!(deltas[2].payload, json!({ "width": 1280 }));
+        assert_eq!(deltas[5].payload, json!(30.0));
+    }
+
+    #[test]
+    fn ndi_output_settings_clamp_and_default_like_the_js_mutations() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        store
+            .dispatch("ndi/SET_OUTPUT_NAME", json!("   "))
+            .expect("blank names dispatch");
+        store
+            .dispatch(
+                "ndi/SET_OUTPUT_SIZE",
+                json!({ "width": 0, "height": 100_000 }),
+            )
+            .expect("out-of-range sizes dispatch");
+        store
+            .dispatch("ndi/SET_OUTPUT_TARGET_FPS", json!(0))
+            .expect("invalid fps is ignored");
+
+        let config = store.ndi().config();
+        assert_eq!(config.output_name, crate::ndi_runtime::DEFAULT_OUTPUT_NAME);
+        assert_eq!(config.output_width, 1);
+        assert_eq!(
+            config.output_height,
+            crate::ndi_runtime::MAX_OUTPUT_DIMENSION
+        );
+        assert_eq!(
+            config.output_target_fps,
+            crate::ndi_runtime::DEFAULT_OUTPUT_TARGET_FPS
+        );
+    }
+
+    #[test]
+    fn ndi_receiver_actions_emit_the_js_mirror_records() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        let created = store
+            .dispatch(
+                "ndi/createReceiver",
+                json!({
+                    "source": {
+                        "name": "STUDIO (Test Pattern)",
+                        "urlAddress": "10.0.0.2:5961",
+                    },
+                }),
+            )
+            .expect("createReceiver dispatches");
+        let id = created["id"].as_str().expect("receiver id").to_string();
+        assert_eq!(created["outputId"], json!(format!("ndi:{id}")));
+        assert_eq!(
+            created["receiver"]["source"]["name"],
+            json!("STUDIO (Test Pattern)")
+        );
+
+        let deltas = store.drain_deltas();
+        let types: Vec<&str> = deltas.iter().map(|delta| delta.r#type.as_str()).collect();
+        assert_eq!(types, vec!["outputs/ADD_AUXILLARY", "ndi/ADD_RECIEVER"]);
+        assert_eq!(deltas[0].payload["id"], json!(format!("ndi:{id}")));
+        assert_eq!(deltas[0].payload["group"], json!("NDI"));
+        assert_eq!(deltas[0].payload["reactToResize"], json!(false));
+        assert_eq!(deltas[1].payload["id"], json!(id));
+
+        let enabled = store
+            .dispatch("ndi/enableReceiver", json!({ "receiverId": id }))
+            .expect("enableReceiver dispatches");
+        assert_eq!(enabled["enabled"], json!(true));
+        // libndi is absent in CI, so enabling reports the unavailable error
+        // instead of spawning a receiver (the live path is manual).
+        assert_eq!(enabled["state"], json!("error"));
+        assert!(
+            enabled["error"]
+                .as_str()
+                .expect("error text")
+                .contains("libndi")
+        );
+
+        let disabled = store
+            .dispatch("ndi/disableReceiver", json!({ "receiverId": id }))
+            .expect("disableReceiver dispatches");
+        assert_eq!(disabled["enabled"], json!(false));
+        assert_eq!(disabled["state"], json!("idle"));
+
+        // The enable/disable deltas above are drained so the removal sequence
+        // can be asserted on its own.
+        store.drain_deltas();
+
+        store
+            .dispatch("ndi/removeReceiver", json!({ "receiverId": id }))
+            .expect("removeReceiver dispatches");
+        let deltas = store.drain_deltas();
+        let types: Vec<&str> = deltas.iter().map(|delta| delta.r#type.as_str()).collect();
+        assert_eq!(
+            types,
+            vec![
+                "ndi/UPDATE_RECIEVER",
+                "outputs/REMOVE_AUXILLARY",
+                "ndi/DELETE_RECIEVER",
+            ]
+        );
+        assert_eq!(deltas[1].payload, json!(format!("ndi:{id}")));
+
+        // An unknown id is ignored (the JS action throws; the engine logs once
+        // and returns null rather than failing the control request).
+        let missing = store
+            .dispatch("ndi/enableReceiver", json!({ "receiverId": "missing" }))
+            .expect("unknown receiver is a no-op");
+        assert_eq!(missing, Value::Null);
+    }
+
+    #[test]
+    fn ndi_discovery_reports_unavailability_without_spawning() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        let result = store
+            .dispatch("ndi/discoverSources", json!({}))
+            .expect("discoverSources dispatches");
+        assert_eq!(
+            result["available"],
+            json!(store.ndi().available()),
+            "the reply reports the real library state"
+        );
+
+        let deltas = store.drain_deltas();
+        if !store.ndi().available() {
+            let types: Vec<&str> = deltas.iter().map(|delta| delta.r#type.as_str()).collect();
+            assert_eq!(types, vec!["ndi/SET_SOURCES", "ndi/SET_DISCOVERING"]);
+            assert_eq!(deltas[0].payload, json!([]));
+            assert_eq!(deltas[1].payload, json!(false));
+        }
+
+        let availability = store
+            .dispatch("ndi/getAvailability", json!({}))
+            .expect("getAvailability dispatches");
+        assert_eq!(availability["available"], json!(store.ndi().available()));
+    }
+
+    #[test]
+    fn ndi_get_state_reports_availability_sender_and_sources() {
+        let mut store = Store::new();
+        let state = store
+            .dispatch("ndi/getState", json!({}))
+            .expect("getState dispatches");
+
+        let available = store.ndi().available();
+        assert_eq!(state["available"], json!(available));
+        assert!(state["sender"]["running"].is_boolean());
+        assert!(state["sender"]["unavailable"].is_boolean());
+        assert_eq!(state["config"]["outputName"], json!("VmodV"));
+        assert_eq!(state["config"]["outputWidth"], json!(1920));
+        assert_eq!(state["config"]["outputHeight"], json!(1080));
+        assert_eq!(state["config"]["followModVOutputSize"], json!(true));
+        assert!(state["sources"].is_array());
+        assert!(state["receivers"].is_array());
+        assert_eq!(state["discovering"], json!(false));
+    }
+
+    #[test]
+    fn ndi_poll_emits_receiver_status_updates() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        let created = store
+            .dispatch(
+                "ndi/createReceiver",
+                json!({ "source": { "name": "STUDIO (Test Pattern)" } }),
+            )
+            .expect("createReceiver dispatches");
+        let id = created["id"].as_str().expect("receiver id").to_string();
+        store
+            .dispatch("ndi/enableReceiver", json!({ "receiverId": id }))
+            .expect("enableReceiver dispatches");
+        store.drain_deltas();
+
+        // `poll_ndi` drains async status changes (an unavailable receiver
+        // reports its error from `create`/`enable`, the live receiver from its
+        // thread). Whatever is pending must be an UPDATE_RECIEVER for this id.
+        store.poll_ndi();
+        for delta in store.drain_deltas() {
+            if delta.r#type == "ndi/UPDATE_RECIEVER" {
+                assert_eq!(delta.payload["id"], json!(id));
+            }
+        }
     }
 
     #[test]

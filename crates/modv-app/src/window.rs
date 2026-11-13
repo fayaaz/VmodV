@@ -96,6 +96,10 @@ pub fn run(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Result<(), Stri
     // Release the engine-owned video sources (WS-10) on every exit path, even
     // when the renderer never sent `media/stop-source`.
     app.stop_media();
+    // Release the NDI threads (WS-11): a sender name and receiver connections
+    // must not outlive the engine (a leftover sender makes the next launch
+    // advertise "VmodV (2)").
+    app.store.shutdown_ndi();
     // Flush the snapshot on any exit path (window close, bench deadline,
     // engine/shutdown) so a supervisor restart restores the last state.
     if let Some(mut supervisor) = app.supervisor.take() {
@@ -143,6 +147,8 @@ struct WindowedApp {
     supervisor: Option<EngineSupervisor>,
     consecutive_timeouts: u32,
     preview_error_logged: bool,
+    /// One-shot guard for a failed NDI frame read-back (WS-11).
+    ndi_error_logged: bool,
     /// Engine-owned capture (WS-9): `Some` when `--audio-source` is not
     /// `renderer`. `None` means the renderer's pump owns the analysis (the
     /// default, and the fallback when capture could not start).
@@ -380,6 +386,7 @@ impl WindowedApp {
             supervisor,
             consecutive_timeouts: 0,
             preview_error_logged: false,
+            ndi_error_logged: false,
             audio_feed,
             audio_error_logged: false,
             double_click: HashMap::new(),
@@ -687,6 +694,15 @@ impl WindowedApp {
             compositor.sync_media(supervisor.media_mut());
         }
 
+        // 1b1. NDI (WS-11): drain receiver status/discovery changes into the
+        // mirror, then upload the newest receiver frame of every enabled
+        // receiver into its `ndi:<id>` texture. Like media sources these are
+        // user-level and survive Scene applies.
+        self.store.poll_ndi();
+        if let Some(compositor) = &mut self.compositor {
+            compositor.sync_ndi(self.store.ndi());
+        }
+
         // 1b2. Follow the renderer's project media root so ISF texture props
         // and library image paths resolve under it (set once at startup and on
         // a media-directory change).
@@ -922,6 +938,12 @@ impl WindowedApp {
         // read-back cost lands between frames.
         self.answer_previews();
 
+        // 2c. NDI output (WS-11): when the output is enabled and this frame is
+        // due, read the just-presented frame back and queue it for the sender
+        // thread. The read-back is the only cost, and it is skipped entirely
+        // while NDI output is off or the sender has not reached its cadence.
+        self.submit_ndi_frame();
+
         // 3. Publish a preview frame at the supervisor's cadence (≤ 30 fps).
         if let Some(supervisor) = &mut self.supervisor {
             if supervisor.preview_due() && self.compositor.is_some() {
@@ -958,6 +980,9 @@ impl WindowedApp {
             let fps = self.metric_frames as f64 / metric_elapsed.as_secs_f64();
             self.store
                 .push_delta("metrics/SET_FPS_MEASURE", serde_json::json!(fps));
+            // The NDI sender follows/advertises the measured render rate when
+            // `followModVFps` is on (WS-11).
+            self.store.ndi_mut().set_engine_fps(fps);
             let (width, height) = self.surface_size;
             if width > 0 && height > 0 {
                 self.store.push_delta(
@@ -993,6 +1018,37 @@ impl WindowedApp {
             self.finish_and_exit(event_loop);
         } else {
             self.request_redraw();
+        }
+    }
+
+    /// Submit the just-presented frame to the NDI sender when it is due.
+    ///
+    /// The legacy worker transferred the canvas to an `ImageBitmap` and sent it
+    /// to `ndi-worker.worker.js` on every frame; the engine reads the main
+    /// texture back instead. That read-back is synchronised and expensive, so
+    /// it only runs when [`crate::ndi_runtime::NdiRuntime::frame_due`] says the
+    /// sender can accept a frame (output enabled, sender running, rate
+    /// reached). No NDI code touches the normal path when output is off.
+    fn submit_ndi_frame(&mut self) {
+        if !self.store.ndi_mut().frame_due(Instant::now()) {
+            return;
+        }
+
+        let Some(compositor) = &mut self.compositor else {
+            return;
+        };
+        let size = compositor.size();
+        match compositor.read_main_rgba8() {
+            Ok(pixels) if !pixels.is_empty() => {
+                self.store.ndi_mut().submit_frame(size.0, size.1, &pixels);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                if !self.ndi_error_logged {
+                    self.ndi_error_logged = true;
+                    eprintln!("engine: WARN NDI frame read-back failed: {error}");
+                }
+            }
         }
     }
 

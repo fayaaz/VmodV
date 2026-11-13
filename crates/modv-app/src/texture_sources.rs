@@ -224,8 +224,9 @@ impl TextureRequest {
     ///
     /// The renderer names engine sources with a kind prefix
     /// (`camera:<deviceId>`, `video:<path>`, `screen:<nodeId>`) in
-    /// `engine-media.js`; a texture prop may carry either the bare key or the
-    /// prefixed source id, so both spellings are tried.
+    /// `engine-media.js`, and NDI receivers as `ndi:<receiverId>` (WS-11); a
+    /// texture prop may carry either the bare key or the prefixed source id, so
+    /// both spellings are tried.
     pub fn media_ids(&self) -> Vec<String> {
         let mut candidates: Vec<String> = Vec::with_capacity(self.ids.len() * 5);
         let mut push = |candidate: String| {
@@ -238,7 +239,7 @@ impl TextureRequest {
             if let Some((_kind, key)) = id.split_once(':').filter(|(_, key)| !key.is_empty()) {
                 push(key.to_string());
             }
-            for prefix in ["video:", "camera:", "screen:"] {
+            for prefix in ["video:", "camera:", "screen:", "ndi:"] {
                 if !id.starts_with(prefix) {
                     push(format!("{prefix}{id}"));
                 }

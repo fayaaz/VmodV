@@ -566,6 +566,131 @@ pub fn ndi_library_path() -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
+// Discovery
+// ---------------------------------------------------------------------------
+
+/// One NDI source advertised by the finder.
+///
+/// `name` is the NDI name the legacy renderer showed in its source list
+/// (`store/modules/ndi.js` `sources`); `url_address` is the opaque address the
+/// SDK uses to connect (`Processing.NDI.structs.h:182-201`), empty when the
+/// source does not advertise one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NdiSourceInfo {
+    /// The NDI name (`MACHINE (Source)`).
+    pub name: String,
+    /// The `urlAddress` the UI shows and the receiver connects with.
+    pub url_address: String,
+}
+
+impl NdiSourceInfo {
+    /// The `{ name, urlAddress }` shape the UI's `ndi.sources` holds.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({ "name": self.name, "urlAddress": self.url_address })
+    }
+}
+
+/// Picks the source a receiver should connect to.
+///
+/// `filter` is the source-name fragment the renderer passed to
+/// `createReceiver` (`receiverOptions.source.name`); `None` selects the first
+/// advertised source. Matching is a case-insensitive substring test, the same
+/// rule the pre-refactor `NdiReceiver::connect` used.
+pub fn select_source(sources: &[NdiSourceInfo], filter: Option<&str>) -> Option<usize> {
+    let filter = filter
+        .map(str::trim)
+        .filter(|filter| !filter.is_empty())
+        .map(str::to_lowercase);
+
+    sources.iter().position(|source| match &filter {
+        Some(filter) => source.name.to_lowercase().contains(filter.as_str()),
+        None => true,
+    })
+}
+
+impl NdiLibrary {
+    /// Enumerates the sources visible to the finder.
+    ///
+    /// `timeout_ms` bounds the wait for the first source list; `show_local`
+    /// keeps the engine's own sender in the list (the legacy
+    /// `discoveryOptions.showLocalSources` default is `true`). A missing SDK is
+    /// reported as [`NdiError::Unavailable`].
+    pub fn find_sources(
+        &self,
+        show_local: bool,
+        timeout_ms: u32,
+    ) -> Result<Vec<NdiSourceInfo>, NdiError> {
+        let settings = NdiFindCreate {
+            show_local_sources: u8::from(show_local),
+            p_groups: ptr::null(),
+            p_extra_ips: ptr::null(),
+        };
+
+        // SAFETY: `settings` is a valid `NDIlib_find_create_t`
+        // (Processing.NDI.Find.h:36-64); a null return means no finder.
+        let finder = unsafe { (self.api.find_create_v2)(&settings) };
+        if finder.is_null() {
+            return Err(NdiError::CreateFailed("finder"));
+        }
+
+        // SAFETY: `finder` is live. `find_wait_for_sources` blocks for at most
+        // `timeout_ms` and only reports whether the source list changed; we
+        // enumerate afterwards regardless (Processing.NDI.Find.h:76-79).
+        unsafe { (self.api.find_wait_for_sources)(finder, timeout_ms) };
+
+        let mut count: u32 = 0;
+        // SAFETY: `finder` is live; the returned array of `NDIlib_source_t`
+        // stays valid until the next `find_get_current_sources` or
+        // `find_destroy` (Processing.NDI.Find.h:70-75). Every string is copied
+        // out below, before the finder is destroyed.
+        let sources = unsafe { (self.api.find_get_current_sources)(finder, &mut count) };
+
+        let mut found = Vec::new();
+        if !sources.is_null() {
+            for index in 0..count as usize {
+                // SAFETY: `sources` points at `count` consecutive
+                // `NDIlib_source_t` values; `index < count`.
+                let source = unsafe { &*sources.add(index) };
+                if source.p_ndi_name.is_null() {
+                    continue;
+                }
+                // SAFETY: `p_ndi_name` is a NUL-terminated UTF-8 string owned by
+                // the finder, valid until `find_destroy`.
+                let name = unsafe { CStr::from_ptr(source.p_ndi_name) }
+                    .to_string_lossy()
+                    .into_owned();
+                let url_address = if source.p_url_address.is_null() {
+                    String::new()
+                } else {
+                    // SAFETY: as above, the union member is a NUL-terminated
+                    // string owned by the finder.
+                    unsafe { CStr::from_ptr(source.p_url_address) }
+                        .to_string_lossy()
+                        .into_owned()
+                };
+
+                found.push(NdiSourceInfo { name, url_address });
+            }
+        }
+
+        // SAFETY: `finder` was created above and has not been destroyed.
+        unsafe { (self.api.find_destroy)(finder) };
+
+        Ok(found)
+    }
+}
+
+/// Enumerates the NDI sources visible on the network.
+///
+/// Returns [`NdiError::Unavailable`] when libndi is not installed, so a caller
+/// reports "NDI unavailable" instead of panicking. This is the discovery half
+/// of `ndi/discoverSources` (`store/modules/ndi.js:90-110`).
+pub fn discover_sources(show_local: bool, timeout_ms: u32) -> Result<Vec<NdiSourceInfo>, NdiError> {
+    let library = ndi_library().ok_or(NdiError::Unavailable)?;
+    library.find_sources(show_local, timeout_ms)
+}
+
+// ---------------------------------------------------------------------------
 // Frame helpers (pure; unit tested)
 // ---------------------------------------------------------------------------
 
@@ -915,78 +1040,34 @@ impl NdiReceiver {
             return Err(NdiError::Destroyed);
         }
 
-        let settings = NdiFindCreate {
-            show_local_sources: 1,
-            p_groups: ptr::null(),
-            p_extra_ips: ptr::null(),
-        };
-
-        // SAFETY: `settings` is a valid `NDIlib_find_create_t`
-        // (Processing.NDI.Find.h:36-64); a null return means no finder.
-        let finder = unsafe { (self.library.api.find_create_v2)(&settings) };
-        if finder.is_null() {
-            return Err(NdiError::CreateFailed("finder"));
-        }
-
-        // SAFETY: `finder` is live. `find_wait_for_sources` blocks for at most
-        // `timeout_ms` and only reports whether the source list changed; we
-        // enumerate afterwards regardless (Processing.NDI.Find.h:76-79).
-        unsafe { (self.library.api.find_wait_for_sources)(finder, timeout_ms) };
-
-        let mut count: u32 = 0;
-        // SAFETY: `finder` is live; the returned array of `NDIlib_source_t`
-        // stays valid until the next `find_get_current_sources` or
-        // `find_destroy` (Processing.NDI.Find.h:70-75), both of which happen
-        // after the connection is made.
-        let sources = unsafe { (self.library.api.find_get_current_sources)(finder, &mut count) };
-
-        let filter = self.name_filter.as_ref().map(|name| name.to_lowercase());
-        let mut chosen: Option<(usize, String)> = None;
-
-        if !sources.is_null() {
-            for index in 0..count as usize {
-                // SAFETY: `sources` points at `count` consecutive
-                // `NDIlib_source_t` values; `index < count`.
-                let source = unsafe { &*sources.add(index) };
-                if source.p_ndi_name.is_null() {
-                    continue;
-                }
-                // SAFETY: `p_ndi_name` is a NUL-terminated UTF-8 string owned by
-                // the finder, valid until `find_destroy`.
-                let name = unsafe { CStr::from_ptr(source.p_ndi_name) }
-                    .to_string_lossy()
-                    .into_owned();
-
-                let matches = match &filter {
-                    Some(filter) => name.to_lowercase().contains(filter.as_str()),
-                    None => true,
-                };
-                if matches {
-                    chosen = Some((index, name));
-                    break;
-                }
-            }
-        }
-
-        let Some((index, name)) = chosen else {
-            // SAFETY: `finder` was created above and has not been destroyed.
-            unsafe { (self.library.api.find_destroy)(finder) };
+        let sources = self.library.find_sources(true, timeout_ms)?;
+        let Some(index) = select_source(&sources, self.name_filter.as_deref()) else {
             return Ok(None);
         };
 
-        // SAFETY: `sources.add(index)` is one of the finder's live source
-        // records and `self.instance` is a live receiver; `recv_connect`
-        // copies the source description (Processing.NDI.Recv.h:184-187). The
-        // finder is destroyed only after the call.
-        unsafe {
-            (self.library.api.recv_connect)(self.instance, sources.add(index));
-            // SAFETY: destroying the finder releases the source array; it is
-            // not used afterwards.
-            (self.library.api.find_destroy)(finder);
-        }
+        // Rebuild the source descriptor from the copied strings: the finder's
+        // array is already gone (`find_sources` destroys it), and
+        // `NDIlib_recv_connect` only reads the descriptor for the duration of
+        // the call (Processing.NDI.Recv.h:184-187).
+        let chosen = &sources[index];
+        let name = CString::new(chosen.name.as_str()).map_err(|_| NdiError::InvalidName)?;
+        let url = if chosen.url_address.is_empty() {
+            None
+        } else {
+            Some(CString::new(chosen.url_address.as_str()).map_err(|_| NdiError::InvalidName)?)
+        };
+        let source = NdiSource {
+            p_ndi_name: name.as_ptr(),
+            p_url_address: url.as_ref().map_or(ptr::null(), |url| url.as_ptr()),
+        };
 
-        self.connected_source = Some(name.clone());
-        Ok(Some(name))
+        // SAFETY: `source` is a valid `NDIlib_source_t` whose string pointers
+        // stay valid for the call, and `self.instance` is a live receiver;
+        // `recv_connect` copies the source description.
+        unsafe { (self.library.api.recv_connect)(self.instance, &source) };
+
+        self.connected_source = Some(chosen.name.clone());
+        Ok(Some(chosen.name.clone()))
     }
 
     /// Captures the next video frame, waiting up to `timeout_ms`.
@@ -1144,6 +1225,59 @@ mod tests {
         assert_eq!(
             NdiReceiver::create(None).expect_err("no library"),
             NdiError::Unavailable
+        );
+    }
+
+    #[test]
+    fn discovery_reports_unavailable_without_libndi() {
+        if ndi_available() {
+            eprintln!("skipping: libndi is available in this environment");
+            return;
+        }
+
+        assert_eq!(
+            discover_sources(true, 10).expect_err("no library"),
+            NdiError::Unavailable
+        );
+    }
+
+    #[test]
+    fn select_source_matches_a_case_insensitive_name_fragment() {
+        let sources = vec![
+            NdiSourceInfo {
+                name: "STUDIO (Test Pattern)".to_string(),
+                url_address: "10.0.0.2:5961".to_string(),
+            },
+            NdiSourceInfo {
+                name: "Laptop (Camera)".to_string(),
+                url_address: "10.0.0.3:5962".to_string(),
+            },
+        ];
+
+        // No filter (and an empty/whitespace filter) selects the first source.
+        assert_eq!(select_source(&sources, None), Some(0));
+        assert_eq!(select_source(&sources, Some("   ")), Some(0));
+        // A fragment matches any source whose name contains it.
+        assert_eq!(select_source(&sources, Some("camera")), Some(1));
+        assert_eq!(select_source(&sources, Some("STUDIO")), Some(0));
+        // No match is reported as None (the receiver stays unconnected).
+        assert_eq!(select_source(&sources, Some("missing")), None);
+        assert_eq!(select_source(&[], None), None);
+    }
+
+    #[test]
+    fn discovered_sources_serialise_to_the_ui_shape() {
+        let source = NdiSourceInfo {
+            name: "STUDIO (Test Pattern)".to_string(),
+            url_address: "10.0.0.2:5961".to_string(),
+        };
+
+        assert_eq!(
+            source.to_json(),
+            serde_json::json!({
+                "name": "STUDIO (Test Pattern)",
+                "urlAddress": "10.0.0.2:5961",
+            })
         );
     }
 

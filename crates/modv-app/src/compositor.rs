@@ -870,6 +870,18 @@ pub struct Compositor {
     /// 1-based `camera` prop indexes (`media-inputs.js:150-158`). Files are
     /// excluded; screen nodes count as cameras.
     media_camera_order: Vec<String>,
+    /// Enabled NDI receivers' uploaded frames, keyed by `ndi:<receiverId>`
+    /// (WS-11). Kept separate from [`Self::media_textures`] because media
+    /// sources are retained by [`Self::sync_media`] against `media_order`, while
+    /// NDI receivers are retained by [`Self::sync_ndi`] against `ndi_order`.
+    ndi_textures: HashMap<String, MediaTexture>,
+    /// Enabled NDI receiver ids in registry order. Appended after the cameras
+    /// when the Webcam module resolves its `camera` index, so a receiver can be
+    /// drawn by a camera slot without shifting any camera's index.
+    ndi_order: Vec<String>,
+    /// Last uploaded frame sequence per `ndi:<receiverId>`. One upload per new
+    /// frame, exactly like the media sources' `is_new` gate.
+    ndi_sequences: HashMap<String, u64>,
     /// One-shot log keys (unknown blend mode, skipped module type, ...).
     warned: HashSet<String>,
     /// Isolated gallery-thumbnail renderer (`preview/module`), created on the
@@ -1033,6 +1045,9 @@ impl Compositor {
             images: ImageTextures::new(),
             media_order: Vec::new(),
             media_camera_order: Vec::new(),
+            ndi_textures: HashMap::new(),
+            ndi_order: Vec::new(),
+            ndi_sequences: HashMap::new(),
             warned: HashSet::new(),
             previews: None,
             scene_previews: None,
@@ -1181,20 +1196,113 @@ impl Compositor {
         }
     }
 
+    /// Upload the latest frame of every enabled NDI receiver (WS-11).
+    ///
+    /// Mirrors [`Self::sync_media`] for the receivers
+    /// ([`crate::ndi_runtime::NdiRuntime`]): the newest frame of each enabled
+    /// receiver is uploaded into an `Rgba8Unorm` `InputFrame` texture keyed
+    /// `ndi:<receiverId>`, and only when its sequence is newer than the last
+    /// uploaded one (one upload per new frame). A disabled or removed receiver
+    /// loses its texture, so ISF/Texture2D props fall back exactly like a
+    /// stopped camera.
+    ///
+    /// NDI receiver frames are user-level like media sources: they survive
+    /// Scene applies, resizes and `engine/restore`.
+    pub fn sync_ndi(&mut self, ndi: &crate::ndi_runtime::NdiRuntime) {
+        let order = ndi.enabled_receiver_ids();
+        if self.ndi_order != order {
+            self.ndi_order = order;
+        }
+        {
+            let order = &self.ndi_order;
+            self.ndi_textures.retain(|key, _| {
+                key.strip_prefix("ndi:")
+                    .is_some_and(|id| order.iter().any(|receiver| receiver == id))
+            });
+            self.ndi_sequences
+                .retain(|key, _| self.ndi_textures.contains_key(key));
+        }
+
+        if self.ndi_order.is_empty() {
+            return;
+        }
+
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+
+        for receiver_id in self.ndi_order.clone() {
+            let Some(slot) = ndi.slot(&receiver_id) else {
+                continue;
+            };
+            let key = ndi_texture_id(&receiver_id);
+            let after = self.ndi_sequences.get(&key).copied().unwrap_or(0);
+            let Some(frame) = slot.latest_after(after) else {
+                continue;
+            };
+
+            let texture = self
+                .ndi_textures
+                .entry(key.clone())
+                .or_insert_with(|| MediaTexture::new(&device));
+            match texture.upload(&device, &queue, &frame) {
+                Ok(()) => {
+                    self.ndi_sequences.insert(key, frame.sequence);
+                }
+                Err(error) => {
+                    self.warn_once(
+                        format!("ndi-upload:{key}"),
+                        &format!(
+                            "engine: WARN could not upload the NDI frame for {key:?}: {error}"
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    /// The compositor's render size (`width`, `height`).
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
     /// The texture the Webcam module should draw this frame.
     ///
     /// `camera` indexes the camera-only start order
-    /// ([`MediaHub::camera_ids`] / [`MediaHub::select_source_id`]); an
-    /// index with no source falls back to the first, and no running source
-    /// yields `None` (the module then draws nothing, like `Webcam.js:40-47`).
+    /// ([`MediaHub::camera_ids`] / [`MediaHub::select_source_id`]), with enabled
+    /// NDI receivers appended after the cameras (WS-11) so an NDI source can
+    /// occupy a camera slot without renumbering the physical cameras. An index
+    /// with no source falls back to the first, and no running source yields
+    /// `None` (the module then draws nothing, like `Webcam.js:40-47`).
     fn media_input<'a>(
         media_order: &'a [String],
         media_textures: &'a HashMap<String, MediaTexture>,
+        ndi_order: &'a [String],
+        ndi_textures: &'a HashMap<String, MediaTexture>,
         props: &Value,
     ) -> Option<(&'a wgpu::TextureView, (u32, u32))> {
-        let index = MediaHub::camera_index(props);
-        let source_id = MediaHub::select_source_id(media_order, index)?;
-        let texture = media_textures.get(source_id)?;
+        let total = media_order.len() + ndi_order.len();
+        if total == 0 {
+            return None;
+        }
+
+        // `select_source_id` semantics: below 1 clamps to the first source and
+        // an out-of-range index falls back to the first.
+        let index = MediaHub::camera_index(props).max(1) as usize;
+        let position = if index > total { 0 } else { index - 1 };
+
+        let (source_id, textures) = if position < media_order.len() {
+            (&media_order[position], media_textures)
+        } else {
+            (&ndi_order[position - media_order.len()], ndi_textures)
+        };
+        // Media textures are keyed by the raw source id, NDI textures by their
+        // `ndi:<receiverId>` texture id.
+        let key = if position < media_order.len() {
+            source_id.clone()
+        } else {
+            ndi_texture_id(source_id)
+        };
+        let texture = textures.get(&key)?;
 
         Some((texture.view.as_ref()?, texture.size))
     }
@@ -1216,9 +1324,20 @@ impl Compositor {
 
     /// Resolve one texture id to a live surface view.
     ///
-    /// Tries every module-output kind and the group canvases, then the raw id
-    /// (which lets a prop name a registered surface directly).
+    /// Tries the NDI receiver textures first (their ids are namespaced
+    /// `ndi:<receiverId>`, WS-11), then every module-output kind and the group
+    /// canvases, then the raw id (which lets a prop name a registered surface
+    /// directly).
     fn surface_view(&self, id: &str) -> Option<wgpu::TextureView> {
+        self.surface_input(id).map(|(view, _)| view)
+    }
+
+    /// Resolve one texture id to a view and its pixel size.
+    fn surface_input(&self, id: &str) -> Option<(wgpu::TextureView, (u32, u32))> {
+        if let Some(input) = self.ndi_texture_input(id) {
+            return Some(input);
+        }
+
         let candidates = [
             isf_texture_id(id),
             two_d_texture_id(id),
@@ -1226,45 +1345,77 @@ impl Compositor {
             group_texture_id(id),
             TextureId::from(id),
         ];
-        candidates
+        let texture = candidates
             .iter()
-            .find_map(|candidate| self.surfaces.get(candidate))
-            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .find_map(|candidate| self.surfaces.get(candidate))?;
+
+        Some((
+            texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            (texture.width(), texture.height()),
+        ))
     }
 
-    /// View of a running media source, by exact source id.
-    fn media_texture_view(&self, source_id: &str) -> Option<wgpu::TextureView> {
-        self.media_textures
-            .get(source_id)
-            .and_then(|texture| texture.view.as_ref())
-            .cloned()
+    /// View of an NDI receiver's latest frame.
+    ///
+    /// Accepts the texture id (`ndi:<receiverId>`) or the bare receiver id, so
+    /// a prop saved against either spelling resolves.
+    fn ndi_texture_input(&self, id: &str) -> Option<(wgpu::TextureView, (u32, u32))> {
+        let key = if id.starts_with("ndi:") {
+            id.to_string()
+        } else {
+            ndi_texture_id(id)
+        };
+        let texture = self.ndi_textures.get(&key)?;
+
+        Some((texture.view.as_ref()?.clone(), texture.size))
+    }
+
+    /// A media source's (or NDI receiver's) view and size.
+    fn media_texture_input(&self, source_id: &str) -> Option<(wgpu::TextureView, (u32, u32))> {
+        if let Some(texture) = self.media_textures.get(source_id) {
+            if let Some(view) = texture.view.as_ref() {
+                return Some((view.clone(), texture.size));
+            }
+        }
+        self.ndi_texture_input(source_id)
     }
 
     /// Resolve a texture prop to a running media source.
     ///
     /// Accepts the engine source id verbatim (`camera:<deviceId>`,
-    /// `video:<path>`, `screen:<nodeId>`), a bare key, or a media-library video
-    /// path that a file source was started from (the renderer keys file sources
-    /// by the absolute path it resolved, e.g.
+    /// `video:<path>`, `screen:<nodeId>`, `ndi:<receiverId>`), a bare key, or a
+    /// media-library video path that a file source was started from (the
+    /// renderer keys file sources by the absolute path it resolved, e.g.
     /// `video:/home/u/VmodV/media/default/video/clip.mp4`).
-    fn media_view_for(&self, request: &TextureRequest) -> Option<wgpu::TextureView> {
+    fn media_source_input(
+        &self,
+        request: &TextureRequest,
+    ) -> Option<(wgpu::TextureView, (u32, u32))> {
         for candidate in request.media_ids() {
-            if let Some(view) = self.media_texture_view(&candidate) {
-                return Some(view);
+            if let Some(input) = self.media_texture_input(&candidate) {
+                return Some(input);
             }
         }
         self.media_order
             .iter()
             .find(|source_id| request.matches_video_path(source_id))
-            .and_then(|source_id| self.media_texture_view(source_id))
+            .and_then(|source_id| self.media_texture_input(source_id))
+    }
+
+    fn media_view_for(&self, request: &TextureRequest) -> Option<wgpu::TextureView> {
+        self.media_source_input(request).map(|(view, _)| view)
     }
 
     /// Decode an image prop path, warning once per path on failure.
-    fn image_view(&mut self, raw: &str, max_size: Option<(u32, u32)>) -> Option<wgpu::TextureView> {
+    fn image_input(
+        &mut self,
+        raw: &str,
+        max_size: Option<(u32, u32)>,
+    ) -> Option<crate::texture_sources::ResolvedImage> {
         let device = self.device.clone();
         let queue = self.queue.clone();
         match self.images.get(&device, &queue, raw, max_size) {
-            Ok(image) => Some(image.view),
+            Ok(image) => Some(image),
             Err(error) => {
                 self.warn_once(
                     format!("image:{raw}"),
@@ -1273,6 +1424,49 @@ impl Compositor {
                 None
             }
         }
+    }
+
+    /// Decode an image prop path into a sampled view.
+    fn image_view(&mut self, raw: &str, max_size: Option<(u32, u32)>) -> Option<wgpu::TextureView> {
+        self.image_input(raw, max_size).map(|image| image.view)
+    }
+
+    /// Resolve `Texture 2D`'s `texture` prop to an input texture.
+    ///
+    /// The legacy module draws `props.texture.value` (`Texture2d.js:92`); the
+    /// engine has no JS texture object, so the saved prop is parsed by
+    /// [`TextureRequest`] like an ISF image input: an image asset decodes, a
+    /// module/group/NDI/media id resolves to its live texture, and anything
+    /// unresolvable draws nothing (the module then no-ops, matching the JS).
+    fn two_d_texture_input(&mut self, props: &Value) -> Option<(wgpu::TextureView, (u32, u32))> {
+        let request = TextureRequest::from_value(props.get("texture"))?;
+
+        if request.wants_image() {
+            for path in request.image_paths() {
+                if let Some(image) = self.image_input(path, None) {
+                    return Some((image.view, image.size));
+                }
+            }
+        }
+
+        for id in &request.ids {
+            if let Some(input) = self.surface_input(id) {
+                return Some(input);
+            }
+        }
+        if let Some(input) = self.media_source_input(&request) {
+            return Some(input);
+        }
+
+        if !request.wants_image() {
+            for path in request.image_paths() {
+                if let Some(image) = self.image_input(path, None) {
+                    return Some((image.view, image.size));
+                }
+            }
+        }
+
+        None
     }
 
     /// Resolve one ISF image input's texture.
@@ -1790,6 +1984,14 @@ impl Compositor {
         // not a frame delta; `Bar.js:62` and `Concentrics.js:78` integrate it.
         let delta_ms = frame.time_seconds * 1000.0;
 
+        // WS-11: `Texture 2D` samples the texture its `texture` prop names
+        // (an image asset, a module/group canvas, or an NDI receiver). Resolve
+        // it before the module instance borrow: image decoding needs the
+        // image cache mutably.
+        let texture_input = (module.module_name == "Texture 2D")
+            .then(|| self.two_d_texture_input(props))
+            .flatten();
+
         let Some(instance) = self.two_d.get_mut(module_id) else {
             return Ok(());
         };
@@ -1871,12 +2073,26 @@ impl Compositor {
         }
         {
             // WS-10: a Webcam layer samples the captured source its `camera`
-            // prop selects. The borrows are field-level (source order and
-            // textures), so the module instance's canvas stays independently
-            // mutable.
+            // prop selects (cameras first, then enabled NDI receivers, WS-11).
+            // The borrows are field-level (source order and textures), so the
+            // module instance's canvas stays independently mutable.
             let webcam_source = (module.module_name == "Webcam")
-                .then(|| Self::media_input(&self.media_camera_order, &self.media_textures, props))
+                .then(|| {
+                    Self::media_input(
+                        &self.media_camera_order,
+                        &self.media_textures,
+                        &self.ndi_order,
+                        &self.ndi_textures,
+                        props,
+                    )
+                })
                 .flatten();
+            let input = match webcam_source {
+                Some((view, size)) => Some((view.clone(), size)),
+                None => texture_input,
+            };
+            let input_size = input.as_ref().map(|(_, size)| *size);
+            let input_texture = input.as_ref().map(|(view, _)| view);
             let mut draw = DrawContext {
                 canvas,
                 props,
@@ -1885,8 +2101,8 @@ impl Compositor {
                 frame: frame_index,
                 device: &device,
                 queue: &queue,
-                input_texture: webcam_source.map(|(view, _)| view),
-                input_size: webcam_source.map(|(_, size)| size),
+                input_texture,
+                input_size,
                 is_gallery: false,
             };
             instance.module.draw(&mut draw);
@@ -3601,6 +3817,14 @@ fn point10_texture_id(module_id: &str) -> TextureId {
 /// The frame-graph texture id of an ISF module's target.
 fn isf_texture_id(module_id: &str) -> TextureId {
     TextureId::from(format!("isf:{module_id}"))
+}
+
+/// The texture id of an NDI receiver's latest frame (`ndi:<receiverId>`).
+///
+/// This is also the id the mirror records as the receiver's `outputId`, so a
+/// texture prop saved from the picker resolves here verbatim.
+fn ndi_texture_id(receiver_id: &str) -> String {
+    format!("ndi:{receiver_id}")
 }
 
 /// Build the per-frame [`IsfValues`] from a module's prop bag.
@@ -6180,6 +6404,136 @@ void main(void) {
                 "unaligned upload pixel {index}"
             );
         }
+    }
+
+    // ————————————————— NDI receivers (WS-11) —————————————————
+
+    /// A receiver registered and connected without libndi, holding one frame.
+    fn ndi_with_frame(width: u32, height: u32, value: u8) -> crate::ndi_runtime::NdiRuntime {
+        let mut ndi = crate::ndi_runtime::NdiRuntime::new();
+        ndi.test_install_receiver_frame(
+            "receiver-1",
+            width,
+            height,
+            vec![value; width as usize * height as usize * 4],
+        );
+        ndi
+    }
+
+    #[test]
+    fn ndi_receiver_frames_resolve_as_texture_sources() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+        let ndi = ndi_with_frame(4, 4, 255);
+
+        compositor.sync_ndi(&ndi);
+
+        assert_eq!(compositor.ndi_order, vec!["receiver-1".to_string()]);
+        assert!(
+            compositor
+                .ndi_textures
+                .get("ndi:receiver-1")
+                .is_some_and(|texture| texture.view.is_some()),
+            "the receiver frame was uploaded under ndi:<id>"
+        );
+        assert!(compositor.surface_view("ndi:receiver-1").is_some());
+        assert!(compositor.surface_view("receiver-1").is_some());
+
+        // A saved canvas prop (the legacy aux-canvas shape) resolves too.
+        let request = TextureRequest::from_value(Some(&json!({
+            "type": "canvas",
+            "location": "outputs/auxillaryCanvas",
+            "options": { "id": "ndi:receiver-1" },
+        })))
+        .expect("texture request");
+        assert!(compositor.media_view_for(&request).is_some());
+    }
+
+    #[test]
+    fn texture_2d_draws_an_ndi_receiver_texture() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+        let ndi = ndi_with_frame(4, 4, 255);
+        compositor.sync_ndi(&ndi);
+
+        let mut state = EngineState::new();
+        state.groups.push(group_with(
+            "group-a",
+            "Effects",
+            &["module-a"],
+            GROUP_ENABLED,
+            1.0,
+            true,
+            true,
+            json!(-1),
+        ));
+        state.modules.insert(
+            "module-a".to_string(),
+            two_d_module(
+                "module-a",
+                "Texture 2D",
+                json!({
+                    "scale": 1.0,
+                    "texture": {
+                        "type": "canvas",
+                        "location": "outputs/auxillaryCanvas",
+                        "options": { "id": "ndi:receiver-1" },
+                    },
+                }),
+            ),
+        );
+
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert!(
+            lit_pixels(&pixels) > 0,
+            "Texture 2D samples the receiver's frame"
+        );
+    }
+
+    #[test]
+    fn webcam_selects_an_ndi_receiver_after_the_cameras() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+        let ndi = ndi_with_frame(4, 4, 255);
+        compositor.sync_ndi(&ndi);
+
+        // No cameras are running, so camera `1` is the first NDI receiver.
+        compositor
+            .render_frame(&webcam_state(1, 1.0), &frame_info())
+            .expect("frame renders");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert!(lit_pixels(&pixels) > 0, "Webcam draws the NDI frame");
+    }
+
+    #[test]
+    fn a_disabled_ndi_receiver_drops_its_texture() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+        let mut ndi = ndi_with_frame(4, 4, 255);
+        compositor.sync_ndi(&ndi);
+        assert!(!compositor.ndi_textures.is_empty());
+
+        ndi.disable_receiver("receiver-1").expect("receiver exists");
+        compositor.sync_ndi(&ndi);
+
+        assert!(compositor.ndi_textures.is_empty());
+        assert!(compositor.ndi_order.is_empty());
+        assert!(compositor.surface_view("ndi:receiver-1").is_none());
     }
 
     #[test]
