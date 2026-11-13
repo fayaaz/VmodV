@@ -470,3 +470,19 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   MIDI-clock BPM, explicit OSC listeners, `osc.data` Input Links.
 - `media/setMediaDirectoryPath` now reaches the engine's compositor, so ISF
   texture props resolve media-library image paths.
+- **NDI input and output are engine-owned.** The runtime keeps one lazy
+  sender on its own thread (drop-oldest queue, measured-FPS or target rate,
+  optional nearest-neighbour resize) and one capture thread per enabled
+  receiver; receiver frames upload to `ndi:<receiverId>` textures that ISF
+  texture props, Texture 2D and the Webcam source list resolve. Discovery is
+  asynchronous; the store implements the JS `ndi/*` mutations/actions with
+  their exact delta payloads and reports `available: false` (panel notice,
+  actions disabled) when libndi cannot be loaded. Live send/receive needs a
+  host with libndi (set `MODV_NDI_LIB` if it is not in the loader path).
+- **Input Link tween editor works in engine mode**: `dataTypes/createType`
+  forwards `tween` creation to the engine tween store and returns the
+  descriptor the editor links to. The A/B debug `groups/SWAP`/`modules/SWAP`
+  commits are acknowledged no-ops (the engine has no swap buffer).
+- **MediaStream selection state is UI-plane**: source/video-settings commits
+  go to the mirror only in engine mode, so the audio pump and device pickers
+  read the same state without engine warnings.
