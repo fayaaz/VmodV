@@ -5104,15 +5104,213 @@ mod tests {
                 json!({"blurAmount": 18.0, "intensity": 1.0}),
             ),
         ]);
-        compositor
-            .render_frame(&blurred_state, &frame_info())
-            .expect("Edge Blur frame renders");
-        let blurred = compositor.read_main_rgba8().expect("main reads back");
+        // The ISF pass chain preserves the WebGL renderer's one-frame lag per
+        // buffer (`ISFRenderer.draw` flips every buffer after all passes), so
+        // a freshly-added multi-pass shader needs `passes + 1` frames before
+        // the whole pyramid has content. One frame only proves it draws.
+        let mut blurred = Vec::new();
+        for frame in 0..10 {
+            let mut info = frame_info();
+            info.time_seconds = frame as f32 * 0.016;
+            compositor
+                .render_frame(&blurred_state, &info)
+                .expect("Edge Blur frame renders");
+            blurred = compositor.read_main_rgba8().expect("main reads back");
+        }
 
         assert!(lit_pixels(&blurred) > 0, "Edge Blur produced an empty frame");
         assert_ne!(
             sharp, blurred,
             "Edge Blur did not change the image (its vertex varyings were lost)"
+        );
+        assert!(
+            blurred.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            "Edge Blur punched holes in an opaque frame"
+        );
+    }
+
+    /// A sidecar `.vs` must emit `isf_FragNormCoord` with the same top-left
+    /// origin the rest of the engine samples with.
+    ///
+    /// WebGL flips textures on upload and writes `gl_FragCoord` bottom-left;
+    /// wgpu does neither. The generated skeleton used to keep the GL origin,
+    /// so every sidecar filter sampled the group canvas upside-down (31 of the
+    /// 36 corpus sidecars). This probe is a pass-through: the source is red on
+    /// top and blue on the bottom, and the filter must reproduce it exactly.
+    #[test]
+    fn isf_sidecar_varyings_use_the_top_left_origin() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "modv-isf-orientation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp ISF directory");
+        // Red above the half-way line, blue below it. `isf_FragCoord` is
+        // bottom-left for a texture-free generator, so the red half is the
+        // top of the rendered image.
+        std::fs::write(
+            dir.join("Orientation Source.fs"),
+            r#"/*{ "CATEGORIES": ["Test"], "INPUTS": [] }*/
+void main() {
+  gl_FragColor = isf_FragCoord.y > RENDERSIZE.y * 0.5
+    ? vec4(1.0, 0.0, 0.0, 1.0)
+    : vec4(0.0, 0.0, 1.0, 1.0);
+}"#,
+        )
+        .expect("write source shader");
+        std::fs::write(
+            dir.join("Orientation Probe.fs"),
+            r#"/*{
+  "CATEGORIES": ["Test"],
+  "INPUTS": [ { "NAME": "inputImage", "TYPE": "image" } ]
+}*/
+void main() {
+  gl_FragColor = IMG_NORM_PIXEL(inputImage, isf_FragNormCoord);
+}"#,
+        )
+        .expect("write probe fragment");
+        std::fs::write(
+            dir.join("Orientation Probe.vs"),
+            "void main(void) {\n  isf_vertShaderInit();\n}\n",
+        )
+        .expect("write probe vertex");
+
+        let registry = Arc::new(ModuleRegistry::build(Some(&dir)));
+        let mut compositor = isf_compositor(&engine, registry);
+
+        let source = isf_state(&[("module-a", "Orientation Source", json!({}))]);
+        compositor
+            .render_frame(&source, &frame_info())
+            .expect("source frame renders");
+        let unprobed = compositor.read_main_rgba8().expect("main reads back");
+
+        let probed_state = isf_state(&[
+            ("module-a", "Orientation Source", json!({})),
+            ("module-b", "Orientation Probe", json!({})),
+        ]);
+        compositor
+            .render_frame(&probed_state, &frame_info())
+            .expect("probe frame renders");
+        let probed = compositor.read_main_rgba8().expect("main reads back");
+
+        std::fs::remove_dir_all(&dir).ok();
+
+        let pixel = |pixels: &[u8], x: usize, y: usize| {
+            let index = (y * SIZE as usize + x) * 4;
+            [
+                pixels[index],
+                pixels[index + 1],
+                pixels[index + 2],
+                pixels[index + 3],
+            ]
+        };
+        let top = pixel(&unprobed, SIZE as usize / 2, 2);
+        let bottom = pixel(&unprobed, SIZE as usize / 2, SIZE as usize - 3);
+        assert!(
+            top[0] > 200 && top[2] < 50,
+            "the test source should be red at the top, got {top:?}"
+        );
+        assert!(
+            bottom[2] > 200 && bottom[0] < 50,
+            "the test source should be blue at the bottom, got {bottom:?}"
+        );
+        assert_eq!(
+            unprobed, probed,
+            "a pass-through sidecar flipped the image (bottom-origin isf_FragNormCoord)"
+        );
+    }
+
+    /// Vertex-stage maths in a `.vs` sidecar must run on the screen corners.
+    ///
+    /// ISF sidecars evaluate non-linear expressions (`clamp`ed blur offsets,
+    /// rotations) in the vertex stage from `isf_FragNormCoord`. Drawing the
+    /// legacy oversized triangle evaluates them at off-screen corners
+    /// (-1,-1)/(3,-1)/(-1,3) and interpolates the *saturated* values back
+    /// across the screen, which stretches and zooms the result (the Edge Blur
+    /// "extra zoom", anchored at the bottom-left). The WebGL renderer draws a
+    /// six-vertex quad with corners on the screen edge.
+    #[test]
+    fn isf_sidecar_vertex_math_runs_on_the_screen_quad() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "modv-isf-quad-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp ISF directory");
+        std::fs::write(
+            dir.join("Quad Probe.fs"),
+            r#"/*{ "CATEGORIES": ["Test"], "INPUTS": [] }*/
+void main() {
+  gl_FragColor = vec4(probe.x, probe.y, 0.0, 1.0);
+}"#,
+        )
+        .expect("write quad probe fragment");
+        std::fs::write(
+            dir.join("Quad Probe.vs"),
+            r#"out vec2 probe;
+void main(void) {
+  isf_vertShaderInit();
+  probe = clamp(vec2(isf_FragNormCoord.x + 0.5, isf_FragNormCoord.y - 0.25), 0.0, 1.0);
+}"#,
+        )
+        .expect("write quad probe vertex");
+
+        let registry = Arc::new(ModuleRegistry::build(Some(&dir)));
+        let mut compositor = isf_compositor(&engine, registry);
+        let state = isf_state(&[("module-a", "Quad Probe", json!({}))]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("quad probe frame renders");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        std::fs::remove_dir_all(&dir).ok();
+
+        let pixel = |x: usize, y: usize| {
+            let index = (y * SIZE as usize + x) * 4;
+            [
+                pixels[index],
+                pixels[index + 1],
+                pixels[index + 2],
+                pixels[index + 3],
+            ]
+        };
+        // `isf_FragNormCoord` is top-left here: at the right edge x+0.5
+        // clamps to 1; the oversized triangle would interpolate the clamped
+        // corner back to ~0.75 (a half-size stretch).
+        let right = pixel(SIZE as usize - 1, SIZE as usize / 2);
+        assert!(
+            right[0] >= 250,
+            "the right-edge varying is {right:?}, not the clamped 1.0; \
+             vertex maths ran off-screen"
+        );
+        // Top-left: x=0+0.5 -> 0.5, y=0-0.25 clamps to 0.
+        let top_left = pixel(1, 1);
+        assert!(
+            (top_left[0] as i32 - 128).abs() <= 4,
+            "top-left x varying is {top_left:?}, expected ~0.5"
+        );
+        assert!(
+            top_left[1] <= 4,
+            "top-left y varying is {top_left:?}, expected the 0 clamp"
+        );
+        // Bottom-left: y=1-0.25 -> 0.75.
+        let bottom_left = pixel(1, SIZE as usize - 1);
+        assert!(
+            (bottom_left[1] as i32 - 191).abs() <= 4,
+            "bottom-left y varying is {bottom_left:?}, expected ~0.75"
         );
     }
 

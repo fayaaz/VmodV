@@ -700,9 +700,9 @@ pub fn has_fragment_main(wgsl: &str) -> Result<bool, TranslateError> {
 
 /// Translate the vertex sidecar (a `.vs` file) with the ISF vertex skeleton.
 ///
-/// This is used by the corpus report. The runtime currently draws every pass
-/// with its built-in full-screen triangle (`runtime::DEFAULT_VERTEX_WGSL`) and
-/// does not consume translated sidecars; see the module docs.
+/// Used by [`translate_with_sidecar_vertex`] (and the corpus report): the
+/// runtime draws sidecar shaders with this module and the legacy six-vertex
+/// quad so vertex-stage maths runs on the screen corners.
 pub fn translate_vertex(doc: &IsfDocument) -> Result<TranslatedShader, TranslateError> {
     reject_rect_samplers(doc.vertex_source.as_deref().unwrap_or(""))?;
     let glsl = source::build_vertex_glsl(doc);
@@ -728,10 +728,10 @@ pub struct SidecarTranslation {
 
 /// Translate a document whose `.vs` sidecar computes inter-stage varyings.
 ///
-/// The fragment must declare exactly the vertex outputs; the locations come
-/// from naga's translated vertex module (the GLSL preprocessor resolves the
-/// `__VERSION__` branches, so parsing the raw `.vs` would number the wrong
-/// set). Used by the runtime; the corpus report keeps translating the two
+/// The fragment must declare exactly the vertex outputs. Locations come from
+/// [`source::sidecar_varyings`], which scans the same active `#if
+/// __VERSION__` branch that `assign_output_locations` numbers, so both stages
+/// agree. Used by the runtime; the corpus report keeps translating the two
 /// stages independently.
 pub fn translate_with_sidecar_vertex(
     doc: &IsfDocument,

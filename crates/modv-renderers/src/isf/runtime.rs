@@ -44,12 +44,13 @@
 //!
 //! # Vertex stage
 //!
-//! [`DEFAULT_VERTEX_WGSL`] draws the full-screen triangle and outputs
-//! `@location(0) isf_FragNormCoord` (top-left origin). Translated `.vs`
-//! sidecars are not consumed by the runtime yet (see
-//! [`super::translate::translate_vertex`]); the translated fragment never
-//! declares extra entry-point inputs (see [`super::source`]), so the built-in
-//! vertex always links.
+//! Shaders without a `.vs` sidecar use [`DEFAULT_VERTEX_WGSL`] (a full-screen
+//! triangle, `@location(0) isf_FragNormCoord` with a top-left origin) or
+//! [`BOTTOM_LEFT_VERTEX_WGSL`] for texture-free generators. A translated `.vs`
+//! sidecar replaces both stages (`translate_with_sidecar_vertex`) and is drawn
+//! with the legacy six-vertex quad ([`SIDECAR_VERTICES`]) so vertex-stage
+//! maths sees the screen corners. Outputs are given explicit locations from
+//! the same scan that numbers the fragment's inputs, so the two stages link.
 //!
 //! # Not in this module
 //!
@@ -69,6 +70,24 @@ use super::source::{
     uniform_layout, uniform_members,
 };
 use super::translate::{self, ShaderOrigin, TranslateError};
+
+/// The legacy six-vertex quad for sidecar vertex shaders
+/// (`ISFGLProgram.bindVertices`): two triangles, corners on the screen edge.
+///
+/// The oversized full-screen triangle is fine for shaders that only read
+/// interpolated inputs, but ISF `.vs` files evaluate non-linear math in the
+/// vertex stage from `isf_FragNormCoord` (`clamp`ed blur offsets, rotations).
+/// With the triangle those expressions run at off-screen corners and then
+/// interpolate, so `clamp` saturates before the visible area and the result is
+/// a compressed, zoomed coordinate (the Edge Blur "extra zoom").
+pub const SIDECAR_VERTICES: [[f32; 2]; 6] = [
+    [-1.0, -1.0],
+    [1.0, -1.0],
+    [-1.0, 1.0],
+    [-1.0, 1.0],
+    [1.0, -1.0],
+    [1.0, 1.0],
+];
 
 /// Uniform-buffer stride per pass. 256 bytes is
 /// `wgpu::Limits::default().min_uniform_buffer_offset_alignment`, so dynamic
@@ -631,7 +650,7 @@ pub struct IsfRuntime {
     nearest_sampler: wgpu::Sampler,
     dummy_texture: wgpu::Texture,
     dummy_view: wgpu::TextureView,
-    /// The full-screen triangle positions for sidecar vertex shaders.
+    /// The sidecar vertex buffer (see [`SIDECAR_VERTICES`]).
     vertex_buffer: wgpu::Buffer,
     blit_pipelines: BoundedCache<wgpu::TextureFormat, wgpu::RenderPipeline>,
     blit_layout: wgpu::BindGroupLayout,
@@ -703,16 +722,26 @@ impl IsfRuntime {
             },
         );
         let dummy_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Sidecar vertex shaders get the legacy six-vertex quad, not the
+        // shared full-screen triangle. ISF `.vs` files evaluate non-linear
+        // math in the vertex stage (`clamp`ed blur offsets, rotations,
+        // normalised offsets) from `isf_FragNormCoord`; with the oversized
+        // triangle those expressions are evaluated at off-screen corners
+        // (-1,-1)/(3,-1)/(-1,3) and *then* interpolated, so `clamp` saturates
+        // before the visible area and the result is a compressed, zoomed
+        // coordinate. The WebGL renderer draws the quad below
+        // (`ISFGLProgram.bindVertices`), so the values are evaluated on the
+        // screen corners and interpolate correctly.
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("modV ISF triangle vertices"),
-            size: (3 * 2 * std::mem::size_of::<f32>()) as u64,
+            label: Some("modV ISF sidecar quad vertices"),
+            size: (SIDECAR_VERTICES.len() * 2 * std::mem::size_of::<f32>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         queue.write_buffer(
             &vertex_buffer,
             0,
-            bytemuck::cast_slice(&[[-1.0_f32, -1.0], [3.0, -1.0], [-1.0, 3.0]]),
+            bytemuck::cast_slice(&SIDECAR_VERTICES),
         );
 
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1265,15 +1294,18 @@ impl IsfRuntime {
                 multiview_mask: None,
             });
             render_pass.set_pipeline(&compiled.pass_pipelines[index]);
-            if compiled.custom_vertex {
+            let vertex_count = if compiled.custom_vertex {
                 render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            }
+                SIDECAR_VERTICES.len() as u32
+            } else {
+                3
+            };
             render_pass.set_bind_group(
                 0,
                 &bind_group,
                 &[(index as u64 * compiled.uniform_stride) as u32],
             );
-            render_pass.draw(0..3, 0..1);
+            render_pass.draw(0..vertex_count, 0..1);
         }
 
         // 6. Flip *all* buffers, as ISFRenderer.draw does.

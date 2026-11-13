@@ -819,7 +819,13 @@ pub fn build_vertex_glsl(doc: &IsfDocument) -> String {
     out.push_str("void isf_vertShaderInit() {\n");
     out.push_str("  gl_Position = vec4(isf_position, 0.0, 1.0);\n");
     out.push_str(
-        "  isf_FragNormCoord = vec2((gl_Position.x + 1.0) / 2.0, (gl_Position.y + 1.0) / 2.0);\n",
+        // Top-left origin: wgpu samples texture v=0 from the first row and
+        // the engine's fragments use top-left `gl_FragCoord`. Legacy WebGL
+        // flips textures on upload (`UNPACK_FLIP_Y_WEBGL`), so its
+        // bottom-left varying produced the same upright result; emitting the
+        // GL origin here made every sidecar filter sample the window
+        // upside-down.
+        "  isf_FragNormCoord = vec2((gl_Position.x + 1.0) / 2.0, 1.0 - (gl_Position.y + 1.0) / 2.0);\n",
     );
     out.push_str("}\n\n");
     out.push_str(&assign_output_locations(&body.source, 1));
@@ -3112,6 +3118,10 @@ void main(void) {
         assert!(glsl.contains("out vec2 isf_FragNormCoord;"));
         assert!(glsl.contains("void isf_vertShaderInit()"));
         assert!(glsl.contains("gl_Position = vec4(isf_position, 0.0, 1.0);"));
+        assert!(
+            glsl.contains("1.0 - (gl_Position.y + 1.0) / 2.0"),
+            "the sidecar varying must use the engine's top-left texture origin: {glsl}"
+        );
         assert!(glsl.contains("  float blurAmount;"), "{glsl}");
         assert!(glsl.contains("out vec2 texOffsets[5];"), "{glsl}");
         assert!(!glsl.contains("varying"), "{glsl}");
