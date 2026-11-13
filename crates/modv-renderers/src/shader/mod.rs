@@ -22,7 +22,7 @@
 //! | Flavour | GLSL rule | WGSL port |
 //! |---------|-----------|-----------|
 //! | direct | writes `gl_FragColor` | module declares `fs_main` returning `@location(0) vec4<f32>` |
-//! | mainImage shim | no `gl_FragColor` → `fWrap` injection | module declares `mainImage(fragCoord) -> vec4<f32>`; [`default_shader::DEFAULT_MAINIMAGE_WRAP`] calls it and forces `image.a = 1.0` |
+//! | mainImage shim | no `gl_FragColor` → `fWrap` injection | module declares `mainImage(fragCoord) -> vec4<f32>`; [`default_shader::DEFAULT_MAINIMAGE_WRAP`] calls it and preserves its alpha |
 //!
 //! The JS rule lives in a comment at `index.js:140-144`
 //! (`frag.search("gl_FragColor") < 0`); the port hard-codes the decision

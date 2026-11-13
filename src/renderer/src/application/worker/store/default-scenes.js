@@ -34,9 +34,11 @@
 // installs that already saved the version 10 defaults before the edits landed.
 // Version 12 removes the Bands module from every default Scene, leaving the
 // rows empty where it was the only module, and rebuilds the affected Scenes in
-// place for installs that saved the version 11 defaults.
+// place for installs that saved the version 11 defaults. Version 13 removes
+// CMYK Halftone from Halftone Harbor (its only default Scene); the Effects row
+// stays empty, and the Scene is refreshed in place for version-12 installs.
 export const LEGACY_DEFAULTS_VERSION = 1;
-export const DEFAULTS_VERSION = 12;
+export const DEFAULTS_VERSION = 13;
 
 // The Cube Floor module was removed in version 7. Existing installs may still
 // hold default Scenes that reference it, so the migration below rebuilds those
@@ -3049,15 +3051,7 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
-        modules: [
-          {
-            name: "CMYK Halftone",
-            props: {
-              gridSize: 45,
-              smoothing: 0.15,
-            },
-          },
-        ],
+        modules: [],
       },
     ],
   },
@@ -3622,7 +3616,9 @@ const DEFAULT_SCENES = [
               fixedRad2: 2,
               foldingLimit: 1.1,
               minRad2: 0.6,
-              dhue: 0.25,
+              // Fixed hue: a BPM tween here made the fractal cycle hues
+              // constantly; the preset should keep one stable palette.
+              dhue: 0,
               // A constant, calmer speed: linking this to bass made the
               // fractal race through its detail and look twitchy.
               speed: 24,
@@ -3691,14 +3687,6 @@ const DEFAULT_SCENES = [
         feature: "bass",
         min: -2.6,
         max: -1,
-      },
-      {
-        group: "Background",
-        module: "MBOX3",
-        control: "dhue",
-        source: "tween",
-        min: 0.1,
-        max: 0.9,
       },
     ],
   },

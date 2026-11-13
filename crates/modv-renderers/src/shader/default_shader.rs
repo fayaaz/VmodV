@@ -22,10 +22,15 @@
 //!    Wobble).
 //! 2. **mainImage flavour** — the module's WGSL declares a
 //!    `mainImage(fragCoord: vec2<f32>) -> vec4<f32>` and
-//!    [`DEFAULT_MAINIMAGE_WRAP`]'s `fs_main` calls it and **forces
-//!    `image.a = 1.0`**, exactly as the GLSL wrapper does
-//!    (`fWrap`: `image.a = 1.;`). Used by every module without
-//!    `gl_FragColor`: all 31 Point10 effects and Chromatic Abberation.
+//!    [`DEFAULT_MAINIMAGE_WRAP`]'s `fs_main` calls it and forces
+//!    `image.a = 1.0`, exactly as the GLSL wrapper does (`fWrap`:
+//!    `image.a = 1.;`). Used by every module without `gl_FragColor`: all 31
+//!    Point10 effects and Chromatic Abberation.
+//!
+//!    Chromatic Abberation is the one exception: its shader returns the
+//!    canvas alpha so the layers below show through where the canvas is
+//!    transparent. It uses [`PRESERVE_ALPHA_MAINIMAGE_WRAP`] instead, because
+//!    forcing alpha 1 would paint transparent group areas opaque black.
 //!
 //! # Why strings are built by functions, not pure consts
 //!
@@ -126,6 +131,24 @@ pub const DEFAULT_MAINIMAGE_WRAP: &str = r#"%MAIN_IMAGE_INJECT%
 /// Mirrors `index.js:141-144`: `frag = fWrap.replace(/(%MAIN_IMAGE_INJECT%)/, frag)`.
 pub fn main_image_fragment(module_body: &str) -> String {
     let wrapped = DEFAULT_MAINIMAGE_WRAP.replace("%MAIN_IMAGE_INJECT%", module_body);
+    format!("{SHARED_UNIFORM_WGSL}\n{wrapped}")
+}
+
+/// The same wrapper, but preserving the module's alpha.
+///
+/// Chromatic Abberation returns the group canvas alpha; forcing it opaque
+/// would make every transparent canvas area black (the engine keeps a
+/// transparent canvas between rows, unlike the legacy 2D canvas).
+pub const PRESERVE_ALPHA_MAINIMAGE_WRAP: &str = r#"%MAIN_IMAGE_INJECT%
+
+@fragment fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+  return mainImage(position.xy);
+}
+"#;
+
+/// Build a mainImage-flavour shader that preserves the module's alpha.
+pub fn main_image_fragment_preserving_alpha(module_body: &str) -> String {
+    let wrapped = PRESERVE_ALPHA_MAINIMAGE_WRAP.replace("%MAIN_IMAGE_INJECT%", module_body);
     format!("{SHARED_UNIFORM_WGSL}\n{wrapped}")
 }
 

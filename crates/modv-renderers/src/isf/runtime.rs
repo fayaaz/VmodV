@@ -527,6 +527,8 @@ pub struct CompiledIsf {
     pass_pipelines: Vec<wgpu::RenderPipeline>,
     bind_group_layout: wgpu::BindGroupLayout,
     slots: Vec<TextureSlot>,
+    /// The passes use a translated `.vs` sidecar (and its vertex buffer).
+    custom_vertex: bool,
 }
 
 impl fmt::Debug for CompiledIsf {
@@ -629,6 +631,8 @@ pub struct IsfRuntime {
     nearest_sampler: wgpu::Sampler,
     dummy_texture: wgpu::Texture,
     dummy_view: wgpu::TextureView,
+    /// The full-screen triangle positions for sidecar vertex shaders.
+    vertex_buffer: wgpu::Buffer,
     blit_pipelines: BoundedCache<wgpu::TextureFormat, wgpu::RenderPipeline>,
     blit_layout: wgpu::BindGroupLayout,
 }
@@ -699,6 +703,17 @@ impl IsfRuntime {
             },
         );
         let dummy_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("modV ISF triangle vertices"),
+            size: (3 * 2 * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &vertex_buffer,
+            0,
+            bytemuck::cast_slice(&[[-1.0_f32, -1.0], [3.0, -1.0], [-1.0, 3.0]]),
+        );
 
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("modV ISF blit layout"),
@@ -730,6 +745,7 @@ impl IsfRuntime {
             nearest_sampler,
             dummy_texture,
             dummy_view,
+            vertex_buffer,
             blit_pipelines: BoundedCache::new(4),
             blit_layout,
         }
@@ -760,20 +776,35 @@ impl IsfRuntime {
         name: &str,
         target_format: wgpu::TextureFormat,
     ) -> Result<CompiledIsf, IsfRuntimeError> {
-        let translated = translate::translate_named_with_overrides(
-            name,
-            doc,
-            Some(&translate::default_overrides_dir()),
-            ShaderOrigin::External,
-        )?;
-        let wgsl = translated
-            .wgsl
-            .ok_or_else(|| IsfRuntimeError::MissingEntryPoint(name.to_string()))?;
-        // A real parse + entry-point lookup, not `wgsl.contains("fn main")`:
-        // a comment could satisfy a substring check (R-26).
-        if !translate::has_fragment_main(&wgsl)? {
-            return Err(IsfRuntimeError::MissingEntryPoint(name.to_string()));
-        }
+        // A `.vs` sidecar computes inter-stage varyings (blur offsets, edge
+        // taps). Translate both stages together so the fragment declares the
+        // vertex outputs at matching locations; without this the varyings were
+        // zero-initialised globals and shaders such as Edge Blur sampled one
+        // corner (behaviour differed from the legacy renderer).
+        let custom_vertex = doc.vertex_source.is_some();
+        let (wgsl, vertex_wgsl) = if custom_vertex {
+            let sidecar = translate::translate_with_sidecar_vertex(doc, 0)?;
+            if !translate::has_fragment_main(&sidecar.fragment_wgsl)? {
+                return Err(IsfRuntimeError::MissingEntryPoint(name.to_string()));
+            }
+            (sidecar.fragment_wgsl, Some(sidecar.vertex_wgsl))
+        } else {
+            let translated = translate::translate_named_with_overrides(
+                name,
+                doc,
+                Some(&translate::default_overrides_dir()),
+                ShaderOrigin::External,
+            )?;
+            let wgsl = translated
+                .wgsl
+                .ok_or_else(|| IsfRuntimeError::MissingEntryPoint(name.to_string()))?;
+            // A real parse + entry-point lookup, not `wgsl.contains("fn main")`:
+            // a comment could satisfy a substring check (R-26).
+            if !translate::has_fragment_main(&wgsl)? {
+                return Err(IsfRuntimeError::MissingEntryPoint(name.to_string()));
+            }
+            (wgsl, None)
+        };
 
         let members = uniform_members(doc);
         let layout = uniform_layout(&members);
@@ -819,7 +850,11 @@ impl IsfRuntime {
 
         let mut layout_entries = vec![wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: if custom_vertex {
+                wgpu::ShaderStages::VERTEX_FRAGMENT
+            } else {
+                wgpu::ShaderStages::FRAGMENT
+            },
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: true,
@@ -870,24 +905,35 @@ impl IsfRuntime {
         // legacy bottom-left coordinate system. Anything that samples a
         // texture keeps the wgpu-native top-left one, so input sampling stays
         // upright.
-        let bottom_left = slots.is_empty();
-        let vertex = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(if bottom_left {
-                    "modV ISF vertex (bottom-left)"
-                } else {
-                    "modV ISF vertex"
-                }),
-                source: wgpu::ShaderSource::Wgsl(
-                    if bottom_left {
-                        BOTTOM_LEFT_VERTEX_WGSL
+        let bottom_left = !custom_vertex && slots.is_empty();
+        let (vertex, vertex_entry) = if let Some(wgsl) = vertex_wgsl {
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("modV ISF vertex (sidecar)"),
+                    source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+                });
+            (module, "main")
+        } else {
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(if bottom_left {
+                        "modV ISF vertex (bottom-left)"
                     } else {
-                        DEFAULT_VERTEX_WGSL
-                    }
-                    .into(),
-                ),
-            });
+                        "modV ISF vertex"
+                    }),
+                    source: wgpu::ShaderSource::Wgsl(
+                        if bottom_left {
+                            BOTTOM_LEFT_VERTEX_WGSL
+                        } else {
+                            DEFAULT_VERTEX_WGSL
+                        }
+                        .into(),
+                    ),
+                });
+            (module, "vs_main")
+        };
         let fragment = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -968,7 +1014,9 @@ impl IsfRuntime {
                 format,
                 layout.size,
                 slots.len(),
-                bottom_left,
+                bottom_left || custom_vertex,
+                custom_vertex,
+                vertex_entry,
                 &pipeline_layout,
                 &vertex,
                 &fragment,
@@ -990,10 +1038,12 @@ impl IsfRuntime {
             pass_pipelines,
             bind_group_layout,
             slots,
+            custom_vertex,
         })
     }
 
     /// Get (or create) the fragment pipeline for one target format.
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn fragment_pipeline(
         &mut self,
@@ -1002,13 +1052,16 @@ impl IsfRuntime {
         uniform_size: usize,
         texture_slots: usize,
         bottom_left: bool,
+        custom_vertex: bool,
+        vertex_entry: &str,
         pipeline_layout: &wgpu::PipelineLayout,
         vertex: &wgpu::ShaderModule,
         fragment: &wgpu::ShaderModule,
     ) -> wgpu::RenderPipeline {
         let cache_key = format!(
-            "{name}|{format:?}|{uniform_size}|{texture_slots}|{}",
-            if bottom_left { "bl" } else { "tl" }
+            "{name}|{format:?}|{uniform_size}|{texture_slots}|{}|{}",
+            if bottom_left { "bl" } else { "tl" },
+            if custom_vertex { "vs" } else { "builtin" }
         );
         if let Some(pipeline) = self.pipelines.get(&cache_key) {
             return pipeline.clone();
@@ -1020,9 +1073,21 @@ impl IsfRuntime {
                 layout: Some(pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: vertex,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some(vertex_entry),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[],
+                    buffers: if custom_vertex {
+                        &[Some(wgpu::VertexBufferLayout {
+                            array_stride: (2 * std::mem::size_of::<f32>()) as u64,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &[wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x2,
+                                offset: 0,
+                                shader_location: 0,
+                            }],
+                        })]
+                    } else {
+                        &[]
+                    },
                 },
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -1200,6 +1265,9 @@ impl IsfRuntime {
                 multiview_mask: None,
             });
             render_pass.set_pipeline(&compiled.pass_pipelines[index]);
+            if compiled.custom_vertex {
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            }
             render_pass.set_bind_group(
                 0,
                 &bind_group,
@@ -1545,6 +1613,65 @@ mod tests {
 
     fn doc(source: &str) -> IsfDocument {
         parse_isf(source, None).expect("test shader parses")
+    }
+
+    #[test]
+    fn every_corpus_vertex_sidecar_compiles() {
+        let Some(mut runtime) = try_runtime() else {
+            return;
+        };
+        let corpus = std::path::Path::new(translate::DEFAULT_CORPUS_DIR);
+        let mut compiled = 0;
+
+        for entry in std::fs::read_dir(corpus).expect("the ISF corpus directory exists") {
+            let path = entry.expect("corpus entry").path();
+            if path.extension().and_then(|value| value.to_str()) != Some("fs") {
+                continue;
+            }
+            let vertex_path = path.with_extension("vs");
+            if !vertex_path.exists() {
+                continue;
+            }
+            let fragment = std::fs::read_to_string(&path).expect("fragment reads");
+            let vertex = std::fs::read_to_string(&vertex_path).expect("vertex reads");
+            let document = parse_isf(&fragment, Some(&vertex)).expect("document parses");
+            let name = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("sidecar");
+            runtime
+                .compile(&document, name, wgpu::TextureFormat::Rgba8Unorm)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            compiled += 1;
+        }
+
+        assert!(compiled >= 30, "only {compiled} vertex sidecars were compiled");
+    }
+
+    #[test]
+    fn sidecar_vertex_shaders_compile_with_matching_varyings() {
+        // Edge Blur & co. compute their sample coordinates in a `.vs` sidecar.
+        // The translated vertex outputs must become explicit-location fragment
+        // inputs; otherwise the pipeline fails to link (or the varyings are
+        // zero globals and the effect samples one corner).
+        let Some(mut runtime) = try_runtime() else {
+            return;
+        };
+        let fragment = r#"/*{ "PASSES": [] }*/
+        varying vec2 texOffsets[5];
+        void main() { gl_FragColor = vec4(texOffsets[0], 0.0, 1.0); }"#;
+        let vertex = r#"varying vec2 texOffsets[5];
+        void main() { isf_vertShaderInit(); texOffsets[0] = isf_FragNormCoord; }"#;
+        let document =
+            parse_isf(fragment, Some(vertex)).expect("the sidecar test shader parses");
+
+        runtime
+            .compile(
+                &document,
+                "sidecar-test",
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+            .expect("a sidecar vertex shader compiles with matching varyings");
     }
 
     #[test]

@@ -82,8 +82,18 @@ const getModulesInGroup = (scene, name) =>
   (getGroup(scene, name)?.modules || []).map((module) => module.name);
 
 describe("default scenes", () => {
-  it("bumps the defaults version to 12", () => {
-    expect(DEFAULTS_VERSION).toBe(12);
+  it("bumps the defaults version to 13", () => {
+    expect(DEFAULTS_VERSION).toBe(13);
+  });
+
+  it("does not use CMYK Halftone in any default Scene", () => {
+    // Version 13 removes the last preset use (Halftone Harbor); the module
+    // stays registered for the Gallery.
+    expect(
+      DEFAULT_SCENES.some((scene) =>
+        getModuleNames(scene).includes("CMYK Halftone"),
+      ),
+    ).toBe(false);
   });
 
   it("ships at least 54 default scenes with unique names", () => {
@@ -187,7 +197,7 @@ describe("default scenes", () => {
       ),
     );
 
-    expect(usedFilters.size).toBeGreaterThanOrEqual(8);
+    expect(usedFilters.size).toBeGreaterThanOrEqual(7);
     expect(usedFilters.has("ASCII Art")).toBe(true);
   });
 
@@ -234,7 +244,7 @@ describe("default scenes", () => {
     expect(alphaLink.min).toBeLessThan(alphaLink.max);
   });
 
-  it("drives the MBOX hue with a beat tween, scale with bass and a near-zero threshold", () => {
+  it("keeps the MBOX hue fixed at zero, scales with bass and uses a near-zero threshold", () => {
     const scene = DEFAULT_SCENES.find(
       (candidate) => candidate.name === "MBOX Light Tunnel",
     );
@@ -261,11 +271,11 @@ describe("default scenes", () => {
     expect(scaleLink.feature).toBe("bass");
     expect(scaleLink.min).toBeLessThan(scaleLink.max);
 
+    expect(Number(mbox.props.dhue)).toBe(0);
+
     const hueLink = mboxLinks.find((link) => link.control === "dhue");
 
-    expect(hueLink).toBeTruthy();
-    expect(hueLink.source).toBe("tween");
-    expect(hueLink.min).toBeLessThan(hueLink.max);
+    expect(hueLink, "the preset must not animate the MBOX hue").toBeUndefined();
 
     const speedLink = mboxLinks.find((link) => link.control === "speed");
 
@@ -1248,7 +1258,7 @@ describe("version 11 default scene refresh", () => {
       seededScene("Quiet Bloom"),
     ];
     const result = getDefaultScenesToReplace({
-      defaultsVersion: 11,
+      defaultsVersion: 12,
       scenes,
       removedModuleNames: [],
       seededNames: scenes.map((scene) => scene.name),
@@ -1355,7 +1365,7 @@ describe("version 12 default scene refresh", () => {
       seededScene("Quiet Bloom"),
     ];
     const result = getDefaultScenesToReplace({
-      defaultsVersion: 11,
+      defaultsVersion: 12,
       scenes,
       removedModuleNames: [],
       seededNames: scenes.map((scene) => scene.name),
@@ -1544,5 +1554,39 @@ describe("default scene rename migration", () => {
 
     expect(result.removals).toEqual([]);
     expect(result.additions).toEqual([]);
+  });
+});
+
+describe("version 13 default scene refresh", () => {
+  const seededScene = (name) => ({ id: `${name}-id`, name, modules: {} });
+
+  it("removes CMYK Halftone from Halftone Harbor in place", () => {
+    const scenes = [seededScene("Halftone Harbor")];
+    const result = getDefaultScenesToReplace({
+      defaultsVersion: 12,
+      scenes,
+      removedModuleNames: [],
+      seededNames: ["Halftone Harbor"],
+    });
+    const replacement = result.replacements.find(
+      (scene) => scene.name === "Halftone Harbor",
+    );
+
+    expect(replacement).toBeTruthy();
+    expect(replacement.id).toBe("Halftone Harbor-id");
+    expect(
+      replacement.definition.groups.flatMap((group) =>
+        group.modules.map((module) => module.name),
+      ),
+    ).not.toContain("CMYK Halftone");
+    expect(
+      replacement.definition.groups
+        .find((group) => group.name === "Effects")
+        .modules.map((module) => module.name),
+    ).toEqual([]);
+  });
+
+  it("lists Halftone Harbor as a refreshed default", () => {
+    expect(REFRESHED_DEFAULT_SCENES).toContain("Halftone Harbor");
   });
 });

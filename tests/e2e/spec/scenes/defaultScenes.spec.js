@@ -197,7 +197,7 @@ test("ships a version 3 batch of glitch scenes", async () => {
     (scene) => scene.introducedVersion === 3,
   );
 
-  expect(DEFAULTS_VERSION).toBe(12);
+  expect(DEFAULTS_VERSION).toBe(13);
   expect(newBatch.length).toBeGreaterThanOrEqual(9);
 
   for (const scene of newBatch) {
@@ -382,7 +382,7 @@ test("version 5 scenes use a varied filter batch with ASCII Art", () => {
     ),
   );
 
-  expect(usedFilters.size).toBeGreaterThanOrEqual(8);
+  expect(usedFilters.size).toBeGreaterThanOrEqual(7);
   expect(usedFilters.has("ASCII Art")).toBe(true);
 });
 
@@ -446,7 +446,7 @@ test("version 7 replaces Cube Floor and ships Circular Mountain", () => {
     (scene) => scene.name === "Circular Mountain",
   );
 
-  expect(DEFAULTS_VERSION).toBe(12);
+  expect(DEFAULTS_VERSION).toBe(13);
   expect(circularMountain).toBeTruthy();
   expect(getGroupModules(circularMountain, "Background")).toEqual([
     "fractal-mountain-tunnel",
@@ -497,7 +497,7 @@ test("version 9 adds single-Group and foreground-chained Scenes", () => {
   expect(chained.length).toBeGreaterThanOrEqual(1);
 });
 
-test("MBOX Light Tunnel seeds a BPM hue tween, bass scale and constant speed", async () => {
+test("MBOX Light Tunnel fixes the hue at zero, scales with bass and keeps speed constant", async () => {
   const scenes = await modVApp.evaluateWorkerState("scenes.scenes");
   const scene = scenes.find(
     (candidate) => candidate.name === "MBOX Light Tunnel",
@@ -520,11 +520,12 @@ test("MBOX Light Tunnel seeds a BPM hue tween, bass scale and constant speed", a
 
   const hueLink = links.find((link) => link.id === dhueId);
 
-  expect(hueLink?.source).toBe("tween");
+  expect(hueLink, "the preset must not animate the MBOX hue").toBeUndefined();
   expect(
-    tweens.find((tween) => tween.id === dhueId)?.useBpm,
-    "hue should be driven by a BPM tween",
-  ).toBe(true);
+    tweens.find((tween) => tween.id === dhueId),
+    "no hue tween should be seeded",
+  ).toBeUndefined();
+  expect(Number(mbox.props.dhue)).toBe(0);
 
   const scaleLink = links.find((link) => link.id === scaleId);
 

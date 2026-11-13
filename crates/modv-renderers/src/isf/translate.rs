@@ -714,6 +714,50 @@ pub fn translate_vertex(doc: &IsfDocument) -> Result<TranslatedShader, Translate
     })
 }
 
+/// A document with a `.vs` sidecar translated into both stages.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SidecarTranslation {
+    /// Fragment WGSL (sidecar outputs declared as explicit-location inputs).
+    pub fragment_wgsl: String,
+    /// Vertex WGSL from the sidecar.
+    pub vertex_wgsl: String,
+    /// `(location, GLSL type, declarator)` of the sidecar outputs used by the
+    /// fragment prelude.
+    pub varyings: Vec<source::SidecarVarying>,
+}
+
+/// Translate a document whose `.vs` sidecar computes inter-stage varyings.
+///
+/// The fragment must declare exactly the vertex outputs; the locations come
+/// from naga's translated vertex module (the GLSL preprocessor resolves the
+/// `__VERSION__` branches, so parsing the raw `.vs` would number the wrong
+/// set). Used by the runtime; the corpus report keeps translating the two
+/// stages independently.
+pub fn translate_with_sidecar_vertex(
+    doc: &IsfDocument,
+    pass_index: usize,
+) -> Result<SidecarTranslation, TranslateError> {
+    let vertex = translate_vertex(doc)?;
+    let vertex_wgsl = vertex.wgsl.ok_or_else(|| TranslateError::Wgsl {
+        message: "the vertex sidecar produced no WGSL".to_string(),
+    })?;
+    // Locations come from the GLSL sidecar's active output declarations, not
+    // from naga's WGSL output names: naga may mangle identifiers (e.g.
+    // `texcoord0` → `texcoord0_`), and the fragment body still uses the GLSL
+    // spelling.
+    let varyings = source::sidecar_varyings(doc);
+    let glsl = source::build_fragment_glsl_with_varyings(doc, pass_index, &varyings);
+    let fragment_wgsl = match glsl_to_wgsl(&glsl, naga::ShaderStage::Fragment) {
+        Ok(wgsl) => wgsl,
+        Err(error) => return Err(error),
+    };
+    Ok(SidecarTranslation {
+        fragment_wgsl,
+        vertex_wgsl,
+        varyings,
+    })
+}
+
 /// Outcome of translating one corpus file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CorpusOutcome {

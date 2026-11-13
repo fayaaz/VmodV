@@ -535,6 +535,10 @@ struct IsfInstance {
     /// The `audio`/`audioFFT` texture pair, allocated only when the compiled
     /// document declares audio inputs.
     audio: Option<IsfAudioTextures>,
+    /// Output copy with `alpha = module.a * group.a`, used for filters so a
+    /// transparent group canvas stays transparent (Vignette/Edge Blur and co.
+    /// write alpha 1 and would otherwise black out every group below).
+    masked: Option<OutputTexture>,
 }
 
 /// The two ISF audio input textures (`ISFAudio.js`).
@@ -832,6 +836,10 @@ pub struct Compositor {
     failed_point10: HashSet<String>,
     /// Live ISF instances keyed by module id.
     isf: HashMap<String, IsfInstance>,
+    /// Pipeline/layout for masking an ISF filter's output by the group
+    /// canvas alpha (filters must not turn transparent canvas areas opaque).
+    isf_mask_layout: wgpu::BindGroupLayout,
+    isf_mask_pipeline: wgpu::RenderPipeline,
     /// ISF module ids whose compile failed; skipped without retrying each
     /// frame.
     failed_isf: HashSet<String>,
@@ -954,6 +962,7 @@ impl Compositor {
             anisotropy_clamp: 1,
             border_color: None,
         });
+        let (isf_mask_layout, isf_mask_pipeline) = create_isf_mask_pipeline(device);
         let present_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("modv-present-bind-group-layout"),
             entries: &[
@@ -999,6 +1008,8 @@ impl Compositor {
             point10: HashMap::new(),
             failed_point10: HashSet::new(),
             isf: HashMap::new(),
+            isf_mask_layout,
+            isf_mask_pipeline,
             failed_isf: HashSet::new(),
             media_textures: HashMap::new(),
             media_order: Vec::new(),
@@ -1972,6 +1983,7 @@ impl Compositor {
                 size: None,
                 last_time: None,
                 audio: None,
+                masked: None,
             });
 
         // The module target is output-sized and rebuilt when the output
@@ -1979,7 +1991,11 @@ impl Compositor {
         let needs_target = self
             .isf
             .get(module_id)
-            .map(|instance| instance.target.is_none() || instance.size != Some((width, height)))
+            .map(|instance| {
+                instance.target.is_none()
+                    || instance.masked.is_none()
+                    || instance.size != Some((width, height))
+            })
             .unwrap_or(false);
         let new_target = if needs_target {
             let texture =
@@ -1987,7 +2003,10 @@ impl Compositor {
             // The runtime blits the final pass with a clearing load, so this is
             // only a guard against undefined memory if the shader never draws.
             self.clear_texture(&texture.texture, "isf-allocate");
-            Some(texture)
+            let masked =
+                self.create_output_texture(&format!("modv-isf-masked-{module_id}"), width, height);
+            self.clear_texture(&masked.texture, "isf-masked-allocate");
+            Some((texture, masked))
         } else {
             None
         };
@@ -1995,7 +2014,7 @@ impl Compositor {
         // Register whichever texture the shader draws into so the frame-graph
         // composite can sample it.
         let target_texture = match &new_target {
-            Some(texture) => Some(texture.texture.clone()),
+            Some((texture, _)) => Some(texture.texture.clone()),
             None => self
                 .isf
                 .get(module_id)
@@ -2005,7 +2024,6 @@ impl Compositor {
         let Some(target_texture) = target_texture else {
             return Ok(());
         };
-        self.surfaces.insert(texture_id.clone(), target_texture);
 
         // Input images sample the group canvas — the JS default when no
         // texture prop resolves (`renderers/isf/index.js:84-91`). There is no
@@ -2090,8 +2108,9 @@ impl Compositor {
             let Some(instance) = isf.get_mut(module_id) else {
                 return Ok(());
             };
-            if let Some(texture) = new_target {
+            if let Some((texture, masked)) = new_target {
                 instance.target = Some(texture);
+                instance.masked = Some(masked);
                 instance.size = Some((width, height));
             }
 
@@ -2165,6 +2184,30 @@ impl Compositor {
             return Ok(());
         }
 
+        // Filters sample the group canvas and usually return alpha 1. Mask
+        // their output by the canvas alpha so transparent canvas areas stay
+        // transparent instead of blacking out the groups below (Vignette over
+        // Point10 layers was the reported case). Generators have no image
+        // input and keep their own alpha.
+        let final_texture = if image_inputs.is_empty() {
+            target_texture.clone()
+        } else {
+            let masked = self
+                .isf
+                .get(module_id)
+                .and_then(|instance| instance.masked.as_ref())
+                .map(|texture| texture.texture.clone());
+
+            match masked {
+                Some(masked_texture) => {
+                    self.mask_isf_filter(&target_texture, &group_texture, &masked_texture);
+                    masked_texture
+                }
+                None => target_texture.clone(),
+            }
+        };
+
+        self.surfaces.insert(texture_id.clone(), final_texture);
         self.composite(texture_id, target.clone(), alpha, blend)
     }
 
@@ -2422,6 +2465,59 @@ impl Compositor {
                 None
             }
         }
+    }
+
+    /// Copy an ISF filter's output into `masked` with the group canvas alpha.
+    fn mask_isf_filter(&self, module: &wgpu::Texture, canvas: &wgpu::Texture, masked: &wgpu::Texture) {
+        let module_view = module.create_view(&wgpu::TextureViewDescriptor::default());
+        let canvas_view = canvas.create_view(&wgpu::TextureViewDescriptor::default());
+        let masked_view = masked.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("modv-isf-mask-bind-group"),
+            layout: &self.isf_mask_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&module_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&canvas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.group_sampler),
+                },
+            ],
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("modv-isf-mask"),
+            });
+        {
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &masked_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("modv-isf-mask-pass"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.isf_mask_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
     }
 
     fn copy_texture(&self, from: &wgpu::Texture, to: &wgpu::Texture) {
@@ -2955,6 +3051,101 @@ const PRESENT_WGSL: &str = r#"// modV present blit — main texture to the swapc
   return textureSample(main_texture, main_sampler, position.xy / size);
 }
 "#;
+
+/// Mask an ISF filter's output by the group canvas alpha.
+///
+/// ISF filters sample the group canvas as `inputImage` but commonly write
+/// `vec4(colour, 1.0)`. The engine keeps a transparent group canvas between
+/// rows, so an opaque filter output would black out every group before it
+/// (Vignette over point10 layers was the reported case). The mask keeps the
+/// filter's colour and uses the *canvas* alpha, so transparent input stays
+/// transparent while the effect still applies where there is content.
+const ISF_MASK_WGSL: &str = r#"// modV ISF filter alpha mask.
+@group(0) @binding(0) var module_texture: texture_2d<f32>;
+@group(0) @binding(1) var canvas_texture: texture_2d<f32>;
+@group(0) @binding(2) var mask_sampler: sampler;
+
+@vertex fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
+  var positions = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(3.0, -1.0),
+    vec2<f32>(-1.0, 3.0),
+  );
+  return vec4<f32>(positions[vertex_index], 0.0, 1.0);
+}
+
+@fragment fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+  let size = vec2<f32>(textureDimensions(module_texture));
+  let uv = position.xy / size;
+  let filtered = textureSample(module_texture, mask_sampler, uv);
+  let canvas = textureSample(canvas_texture, mask_sampler, uv);
+  return vec4<f32>(filtered.rgb, filtered.a * canvas.a);
+}
+"#;
+
+/// Build the filter-mask pipeline (fixed `Rgba8Unorm` group format).
+fn create_isf_mask_pipeline(
+    device: &wgpu::Device,
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("modv-isf-mask-shader"),
+        source: wgpu::ShaderSource::Wgsl(ISF_MASK_WGSL.into()),
+    });
+    let texture = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("modv-isf-mask-layout"),
+        entries: &[
+            texture(0),
+            texture(1),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("modv-isf-mask-pipeline-layout"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("modv-isf-mask-pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    (layout, pipeline)
+}
 
 type RenderBlendMode = modv_render::blend::BlendMode;
 
@@ -4517,6 +4708,10 @@ mod tests {
         let corner = &pixels[0..4];
         assert_eq!(corner, background, "the live output is not behind the preview");
         assert!(
+            pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            "withOutput previews must be flattened over opaque black"
+        );
+        assert!(
             pixels
                 .chunks_exact(4)
                 .any(|pixel| pixel[0..4] != background),
@@ -4818,6 +5013,87 @@ mod tests {
         assert_ne!(
             checkerboard, inverted,
             "Color Invert did not sample the group canvas"
+        );
+    }
+
+    #[test]
+    fn isf_filter_preserves_the_transparent_group_canvas() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(&engine, registry);
+
+        // Vignette is a filter with an `inputImage` input: it samples the
+        // (empty, transparent) group canvas and writes alpha 1. Without the
+        // alpha mask the whole group becomes opaque black, hiding every group
+        // below it.
+        let state = isf_state(&[("module-a", "Vignette", json!({}))]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("filter frame renders");
+
+        let group_id = group_texture_id("group-a");
+        let texture = compositor
+            .surfaces
+            .get(&group_id)
+            .cloned()
+            .expect("the rendered group texture is registered");
+        let (width, height) = compositor.size;
+        let pixels = read_back_texture(
+            &compositor.device,
+            &compositor.queue,
+            &texture,
+            width,
+            height,
+        )
+        .expect("group texture reads back");
+
+        assert!(
+            pixels.chunks_exact(4).all(|pixel| pixel[3] == 0),
+            "an ISF filter turned the transparent group canvas opaque"
+        );
+    }
+
+    #[test]
+    fn isf_sidecar_vertex_filter_renders_through_the_runtime() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(&engine, registry);
+
+        // Edge Blur computes its blur offsets and Sobel taps in `Edge Blur.vs`.
+        // The runtime must translate that sidecar and link its outputs as
+        // fragment inputs; before that support the varyings were zero globals
+        // and the effect looked nothing like the legacy renderer.
+        let state = isf_state(&[("module-a", "Checkerboard", json!({}))]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("checkerboard frame renders");
+        let sharp = compositor.read_main_rgba8().expect("main reads back");
+
+        let blurred_state = isf_state(&[
+            ("module-a", "Checkerboard", json!({})),
+            (
+                "module-b",
+                "Edge Blur",
+                json!({"blurAmount": 18.0, "intensity": 1.0}),
+            ),
+        ]);
+        compositor
+            .render_frame(&blurred_state, &frame_info())
+            .expect("Edge Blur frame renders");
+        let blurred = compositor.read_main_rgba8().expect("main reads back");
+
+        assert!(lit_pixels(&blurred) > 0, "Edge Blur produced an empty frame");
+        assert_ne!(
+            sharp, blurred,
+            "Edge Blur did not change the image (its vertex varyings were lost)"
         );
     }
 

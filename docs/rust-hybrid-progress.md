@@ -318,6 +318,15 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   sampled triplanar in the surface shader; the base tint is now the sRGB →
   linear conversion of the JS `0x3a4358` (using the raw bytes made the metal
   ~5x too bright).
+- **ISF filters preserve group transparency.** Filters with an `inputImage`
+  sample the group canvas but usually return alpha 1. The engine keeps a
+  transparent canvas between rows, so Vignette/Edge Blur and co. painted the
+  whole group opaque black and hid every row below. The compositor now masks a
+  filter's output alpha by the canvas alpha (generators, which have no image
+  input, are unchanged). Chromatic Abberation uses the alpha-preserving
+  mainImage wrapper for the same reason. Default Scenes: version 13 drops
+  CMYK Halftone from Halftone Harbor and fixes MBOX Light Tunnel's `dhue` at 0
+  (no hue tween).
 - **Review round-20 fixes.** Hover previews flatten over opaque black on
   read-back (`putImageData` is straight alpha; the live frame is
   premultiplied and presented over black), so translucent tiles no longer

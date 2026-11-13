@@ -7,10 +7,14 @@
 //!
 //! GLSL source anchors: the `.frag` body, `chromaticAbberation.frag:1-28`.
 //! The JS meta keeps the misspelled registration name "Chromatic Abberation".
+//!
+//! Unlike the other mainImage modules this one uses the alpha-preserving
+//! wrapper: it returns the canvas alpha so transparent group areas (and the
+//! rows below) stay visible instead of being painted opaque black.
 
 #![forbid(unsafe_code)]
 
-use crate::shader::default_shader::main_image_fragment;
+use crate::shader::default_shader::main_image_fragment_preserving_alpha;
 use crate::shader::modules::{ShaderModule, fragment_with_props};
 use crate::shader::uniforms::{PropKind, ShaderProp};
 
@@ -71,7 +75,7 @@ pub(crate) fn module() -> ShaderModule {
     ];
     ShaderModule {
         name: "Chromatic Abberation",
-        fragment_wgsl: main_image_fragment(&fragment_with_props(BODY, &props)),
+        fragment_wgsl: main_image_fragment_preserving_alpha(&fragment_with_props(BODY, &props)),
         meta_author: "2xAA",
         meta_version: "1.0.0",
         category: None,

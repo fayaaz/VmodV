@@ -575,7 +575,37 @@ fn round_up(value: usize, align: usize) -> usize {
 /// is identical for every pass (as in the vendored renderer, which compiles
 /// one program for all passes and uploads `PASSINDEX` per pass).
 pub fn build_fragment_glsl(doc: &IsfDocument, pass_index: usize) -> String {
-    let body = rewrite_fragment_body(doc);
+    build_fragment_glsl_inner(doc, pass_index, None)
+}
+
+/// A sidecar vertex output: `(location, GLSL type, name)`.
+pub type SidecarVarying = (u32, String, String);
+
+/// Build the fragment GLSL for a document with a `.vs` sidecar.
+///
+/// The sidecar's outputs are declared as matching `layout(location = …) in`
+/// varyings (locations taken from the translated vertex shader), and the
+/// shader's own `in`/`varying` declarations are removed so the two stages
+/// link. Without this the sidecar coordinates (`texOffsets`, `left_coord`, …)
+/// were zero-initialised private globals, which made blur/edge shaders sample
+/// one corner only (Edge Blur was visibly different from the legacy renderer).
+pub fn build_fragment_glsl_with_varyings(
+    doc: &IsfDocument,
+    pass_index: usize,
+    varyings: &[SidecarVarying],
+) -> String {
+    build_fragment_glsl_inner(doc, pass_index, Some(varyings))
+}
+
+fn build_fragment_glsl_inner(
+    doc: &IsfDocument,
+    pass_index: usize,
+    sidecar_varyings: Option<&[SidecarVarying]>,
+) -> String {
+    let body = match sidecar_varyings {
+        Some(_) => rewrite_fragment_body_with_sidecar_vertex(doc),
+        None => rewrite_fragment_body(doc),
+    };
     let members = uniform_members(doc);
     let bindings = texture_bindings(doc);
 
@@ -597,6 +627,13 @@ pub fn build_fragment_glsl(doc: &IsfDocument, pass_index: usize) -> String {
     out.push_str("};\n\n");
 
     out.push_str("in vec2 isf_FragNormCoord;\n");
+    if let Some(varyings) = sidecar_varyings {
+        for (location, glsl_type, name) in varyings {
+            out.push_str(&format!(
+                "layout(location = {location}) in {glsl_type} {name};\n"
+            ));
+        }
+    }
     if bindings.is_empty() {
         // A texture-free ISF shader is a generator written for WebGL, where
         // `gl_FragCoord` is bottom-left. The runtime draws it with the
@@ -882,6 +919,66 @@ struct RewrittenBody {
 
 /// Full fragment body rewrite: macro expansion, ES-isms, sampler call-site
 /// substitution and qualifier stripping.
+/// Rewrite the fragment for a custom vertex shader: drop its own interface
+/// declarations so the prelude's `layout(location = …) in` declarations are the
+/// only ones, then run the normal rewrite.
+fn rewrite_fragment_body_with_sidecar_vertex(doc: &IsfDocument) -> RewrittenBody {
+    // Run the normal rewrite first so matrix varyings are split into columns
+    // and reconstructed at their use sites, then drop the declarations that
+    // are now provided by the prelude's explicit-location inputs.
+    let mut body = rewrite_fragment_source(&doc.fragment_source, &texture_inputs(doc));
+    let names: Vec<String> = sidecar_varyings(doc)
+        .into_iter()
+        .map(|(_, _, declarator)| {
+            declarator
+                .split('[')
+                .next()
+                .unwrap_or(&declarator)
+                .to_string()
+        })
+        .collect();
+    body = remove_declaration_lines(&body, &names);
+    for (original, sanitised) in body_input_renames(doc) {
+        body = replace_ident(&body, &original, &sanitised);
+    }
+    let (mut source, global_initialisers) = hoist_global_initialisers(&body);
+    if has_bool_inputs(doc) || !global_initialisers.is_empty() {
+        source = rename_main(&source);
+    }
+    RewrittenBody {
+        source,
+        global_initialisers,
+    }
+}
+
+/// Remove declaration lines for the sidecar varyings (now prelude inputs).
+fn remove_declaration_lines(source: &str, names: &[String]) -> String {
+    let mut out = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        let trimmed = line.trim();
+        // Only plain declarations: a local initialiser such as
+        // `vec2 loc = translated_coord;` must stay in the body.
+        let declaration =
+            trimmed.ends_with(';') && !trimmed.contains('(') && !trimmed.contains('=');
+        if declaration {
+            let base = trimmed
+                .trim_end_matches(';')
+                .split_whitespace()
+                .last()
+                .unwrap_or("")
+                .split('[')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if names.iter().any(|name| *name == base) {
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 fn rewrite_fragment_body(doc: &IsfDocument) -> RewrittenBody {
     let mut body = rewrite_fragment_source(&doc.fragment_source, &texture_inputs(doc));
     if texture_bindings(doc).is_empty() {
@@ -915,10 +1012,136 @@ pub fn rewrite_fragment_source(source: &str, textures: &[String]) -> String {
     strip_qualifiers(&rewritten, &["in", "varying", "uniform"])
 }
 
+/// Evaluate the `#if __VERSION__ <= 120` guards the ISF corpus uses.
+///
+/// The generated shaders are desktop GLSL 450, so that branch is dead. Keeping
+/// it would make the explicit output-location pass number both branches.
+fn strip_version_120_branch(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    // None → top level, Some(true) → inside a live-branch guard, Some(false)
+    // → skipping the dead branch.
+    let mut guard: Option<bool> = None;
+    for line in source.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if let Some(condition) = trimmed.strip_prefix("#if") {
+            let condition = condition.trim();
+            if condition.contains("__VERSION__") {
+                let legacy = condition.contains("<=")
+                    || condition.contains('<')
+                    || condition.contains("==");
+                // `__VERSION__ <= 120` / `< 300` is false for 450; `>=`/`>`
+                // guards keep the first branch.
+                let keep_first = !legacy;
+                guard = Some(keep_first);
+                if keep_first {
+                    continue;
+                } else {
+                    continue;
+                }
+            }
+        } else if guard.is_some() && trimmed.starts_with("#else") {
+            let keep_first = guard == Some(true);
+            guard = Some(!keep_first);
+            continue;
+        } else if guard.is_some() && trimmed.starts_with("#endif") {
+            guard = None;
+            continue;
+        }
+
+        if guard == Some(false) {
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// The sidecar's inter-stage outputs with the locations the vertex builder
+/// assigns (starting after the skeleton's `isf_FragNormCoord` at 0).
+///
+/// Reads the **active** `#if __VERSION__` branch, so the dead declarations do
+/// not consume locations. Arrays consume one location per element, matching
+/// [`assign_output_locations`].
+pub fn sidecar_varyings(doc: &IsfDocument) -> Vec<SidecarVarying> {
+    let source = strip_version_120_branch(doc.vertex_source.as_deref().unwrap_or(""));
+    let mut location = 1u32;
+    let mut seen = std::collections::HashSet::new();
+    let mut varyings = Vec::new();
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = strip_keyword(trimmed, "varying")
+            .or_else(|| strip_keyword(trimmed, "out"))
+            .or_else(|| strip_keyword(trimmed, "in"))
+        else {
+            continue;
+        };
+        let Some(declaration) = rest.trim_end().strip_suffix(';') else {
+            continue;
+        };
+        let Some((type_name, declarators)) = declaration.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let type_name = type_name.trim();
+        if type_name.is_empty() {
+            continue;
+        }
+        for declarator in split_args(declarators) {
+            let declarator = declarator.trim();
+            if declarator.is_empty() {
+                continue;
+            }
+            let name = declarator
+                .split('[')
+                .next()
+                .unwrap_or(declarator)
+                .trim()
+                .to_string();
+            if name.is_empty() || name == "isf_FragNormCoord" || !seen.insert(name.clone()) {
+                continue;
+            }
+            let count = count_declarators(&format!("{type_name} {declarator};")).max(1);
+            let columns = match type_name {
+                "mat2" => 2,
+                "mat3" => 3,
+                "mat4" => 4,
+                _ => 0,
+            };
+            let array_suffix = declarator
+                .find('[')
+                .map(|open| declarator[open..].to_string())
+                .unwrap_or_default();
+            if columns > 0 {
+                // The fragment rewrite splits matrix varyings into columns and
+                // reconstructs `matN(name_0, …)` at use sites.
+                let column_type = format!("vec{columns}");
+                for column in 0..columns {
+                    varyings.push((
+                        location + column as u32,
+                        column_type.clone(),
+                        format!("{name}_{column}{array_suffix}"),
+                    ));
+                }
+            } else {
+                varyings.push((location, type_name.to_string(), declarator.to_string()));
+            }
+            location = location.saturating_add(count);
+        }
+    }
+
+    varyings
+}
+
 /// Vertex body rewrite: qualifiers → desktop 450 spellings.
 fn rewrite_vertex_body(doc: &IsfDocument) -> RewrittenBody {
+    // The corpus sidecars declare their varyings twice, guarded by
+    // `#if __VERSION__ <= 120`. `assign_output_locations` numbers the source
+    // before naga preprocesses it, so both branches would consume locations
+    // and push the live outputs past the pipeline's 15-variable limit (Edge
+    // Blur). Drop the branch the 450 front-end will not compile.
+    let legacy = strip_version_120_branch(doc.vertex_source.as_deref().unwrap_or(DEFAULT_VERTEX_BODY));
     let mut body = rewrite_vertex_source(
-        doc.vertex_source.as_deref().unwrap_or(DEFAULT_VERTEX_BODY),
+        &legacy,
         &texture_inputs(doc),
     );
     for (original, sanitised) in body_input_renames(doc) {
