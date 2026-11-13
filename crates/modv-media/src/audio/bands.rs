@@ -44,6 +44,14 @@
 //!    (`toBe(1)`, `toBe(0)`, `toBe(-1)`) remain exact in Rust because they
 //!    flow through `clamp01` / the zero branches; the inequality assertions
 //!    carry over unchanged. No relative-tolerance comparisons were needed.
+//! 8. The near-silence gate (`SILENCE_TIME_PEAK` / `SILENCE_FFT_MAGNITUDE`,
+//!    audio-bands.js:35-39, 257-274) is ported with the same constants and the
+//!    same placement: the raw linear FFT peak is measured over the converted
+//!    magnitudes *before* `FFT_GAIN`/AGC gain are applied, and when both
+//!    thresholds trip the frame's `freq_mag` is filled with 0 so the grid and
+//!    lanes decay instead of amplifying dither. `last_peak` mirrors the JS
+//!    `lastPeak`, which the no-data branch leaves at the previous frame's
+//!    value (it is set inside `agc`).
 //!
 //! Line citations (`audio-bands.js:NNN`) refer to
 //! `src/renderer/src/application/audio-bands.js` at the time of the port.
@@ -91,6 +99,16 @@ pub const AGC_DECAY_MID: f32 = 0.00765625;
 pub const AGC_DECAY_LOW: f32 = 0.000765625;
 /// AGC maxLevel floor — the decay tiers stop here (audio-bands.js:105).
 pub const AGC_MAX_LEVEL_FLOOR: f32 = 0.0001;
+
+/// Near-silence gate, time-domain half: frames whose AGC time-domain peak is
+/// below this (AND whose FFT peak is below [`SILENCE_FFT_MAGNITUDE`]) are
+/// treated as silence (audio-bands.js:35-39).
+pub const SILENCE_TIME_PEAK: f32 = 0.01;
+
+/// Near-silence gate, frequency half: the raw linear FFT peak (before AGC
+/// gain and FFT_GAIN) must also be below this for the gate to trip
+/// (audio-bands.js:35-39).
+pub const SILENCE_FFT_MAGNITUDE: f32 = 0.001;
 
 /// Clamp to `0..=1`; NaN maps to 0 like the JS `clamp01` (audio-bands.js:33).
 fn clamp01(x: f32) -> f32 {
@@ -216,6 +234,11 @@ pub struct AudioBands {
     /// Session max time-domain level (JS `maxLevel`, initial
     /// [`AGC_INITIAL_MAX_LEVEL`], audio-bands.js:57).
     max_level: f32,
+    /// The time-domain chunk peak of the last analysed frame (JS `lastPeak`,
+    /// audio-bands.js:98). Set by [`AudioBands::agc`], which the no-data
+    /// branch skips, so it keeps the previous frame's value there — exactly
+    /// like the JS.
+    last_peak: f32,
     /// Linear FFT magnitudes, resized to the FFT length (JS `freqMag`,
     /// audio-bands.js:58, 242-244).
     freq_mag: Vec<f32>,
@@ -258,6 +281,7 @@ impl AudioBands {
     pub fn new() -> Self {
         Self {
             max_level: AGC_INITIAL_MAX_LEVEL,
+            last_peak: 0.0,
             freq_mag: Vec::new(),
             grid: [0.0; 16],
             bands: [0.0; 3],
@@ -279,7 +303,8 @@ impl AudioBands {
     /// to the linear FFT magnitudes, so a loud spike stops re-normalizing
     /// everything and quiet material gets boosted. The peak is the
     /// TIME-DOMAIN level, not the FFT peak — measuring it from FFT bins pegs
-    /// every bass read to ~1.0 (audio-bands.js:73-109).
+    /// every bass read to ~1.0 (audio-bands.js:73-109). Also records the peak
+    /// in `last_peak` for the near-silence gate (audio-bands.js:98).
     fn agc(&mut self, dt: f32, byte_time_domain_data: &[u8]) -> f32 {
         let mut peak = 0.0f32;
 
@@ -292,6 +317,7 @@ impl AudioBands {
             }
         }
 
+        self.last_peak = peak;
         let ml = self.max_level;
 
         if peak >= ml {
@@ -482,8 +508,23 @@ impl AudioBands {
         // getFloatFrequencyData is the same FFT in true dB per bin; convert
         // each bin to a linear magnitude (the byte API is dB-scaled and
         // unusable here) (audio-bands.js:248-253).
+        let mut fft_peak = 0.0f32;
+
         for (i, &db) in input.float_frequency_data.iter().enumerate() {
-            self.freq_mag[i] = 10.0f32.powf(db / 20.0) * FFT_GAIN * gain;
+            let magnitude = 10.0f32.powf(db / 20.0);
+
+            if magnitude > fft_peak {
+                fft_peak = magnitude;
+            }
+
+            self.freq_mag[i] = magnitude * FFT_GAIN * gain;
+        }
+
+        if self.last_peak < SILENCE_TIME_PEAK && fft_peak < SILENCE_FFT_MAGNITUDE {
+            // Near-silence floor: do not let the AGC turn dither into a
+            // full-scale bass reading. The grid/lanes then decay to zero
+            // naturally (audio-bands.js:257-274).
+            self.freq_mag.fill(0.0);
         }
 
         let cells = self.band_cells(n, input.sample_rate).to_vec();
@@ -601,6 +642,18 @@ mod tests {
 
     fn loud_time_domain() -> [u8; FFT_SIZE] {
         [230; FFT_SIZE]
+    }
+
+    /// ~-42 dBFS time-domain dither (bytes 127/129, peak 1/128) used by the
+    /// near-silence gate test (audio-bands.test.js:172-175).
+    fn dither_time_domain() -> [u8; FFT_SIZE] {
+        let mut data = [128u8; FFT_SIZE];
+
+        for (i, byte) in data.iter_mut().enumerate().step_by(2) {
+            *byte = if i % 4 == 0 { 127 } else { 129 };
+        }
+
+        data
     }
 
     fn input<'a>(
@@ -730,6 +783,62 @@ mod tests {
         assert_eq!(payload.bass, 0.0);
         assert_eq!(payload.mid, 0.0);
         assert_eq!(payload.treble, 0.0);
+    }
+
+    // JS: audio-bands.test.js:167-191 "does not amplify a near-silent noise floor into a bass reading"
+    #[test]
+    fn does_not_amplify_a_near_silent_noise_floor_into_a_bass_reading() {
+        let mut bands = AudioBands::new();
+        let dither = dither_time_domain();
+        // -70 dB per bin is a 3.16e-4 linear magnitude, below
+        // SILENCE_FFT_MAGNITUDE (0.001); the dither peak is 1/128 (~-42 dBFS),
+        // below SILENCE_TIME_PEAK (0.01). Both thresholds must trip.
+        let quiet_fft = vec![-70.0f32; FFT_SIZE];
+
+        // 12 frames of 0.05 s: the JS test's mocked `advance(0.05)` timeline,
+        // whose first call still has dt = 0 (the `lastT || now` case).
+        let payload = settle(&mut bands, &input(&quiet_fft, &dither, &[]), 0.6, 0.05);
+
+        assert!(payload.bass < 0.05);
+        assert!(payload.bands[0] < 0.05);
+        assert!(payload.cells[0] < 0.05);
+        // The gate zeroes the frame's linear magnitudes outright; without it
+        // the AGC leak is small at 12 frames but climbs to full scale as the
+        // session max level decays. Assert the gated state directly so the
+        // test pins the gate rather than the (still tiny) 12-frame leak.
+        assert!(bands.freq_mag.iter().all(|&magnitude| magnitude == 0.0));
+        assert!(payload.freq_mag.iter().all(|&magnitude| magnitude == 0.0));
+        assert!(payload.raw.cells.iter().all(|&cell| cell == 0.0));
+    }
+
+    // Port-only control for the silence gate: a genuine quiet tone must not be
+    // gated (its FFT peak is far above SILENCE_FFT_MAGNITUDE).
+    #[test]
+    fn does_not_gate_a_genuine_quiet_tone() {
+        let mut bands = AudioBands::new();
+        let frequency = tone(30.0, 300.0, -30.0);
+        let quiet = quiet_time_domain();
+
+        let payload = settle(&mut bands, &input(&frequency, &quiet, &[]), 0.6, 0.05);
+
+        assert!(payload.bass > 0.1);
+        assert!(payload.bands[0] > 0.1);
+        assert!(payload.cells[0] > 0.1);
+        assert!(payload.freq_mag.iter().any(|&magnitude| magnitude > 0.0));
+    }
+
+    // The gate requires BOTH conditions (JS `&&`): a loud time-domain chunk
+    // keeps a quiet FFT alive even though its peak is below the magnitude
+    // threshold.
+    #[test]
+    fn does_not_gate_when_only_the_fft_is_quiet() {
+        let mut bands = AudioBands::new();
+        let loud = loud_time_domain();
+        let quiet_fft = vec![-70.0f32; FFT_SIZE];
+
+        let payload = settle(&mut bands, &input(&quiet_fft, &loud, &[]), 0.6, 0.05);
+
+        assert!(payload.freq_mag.iter().any(|&magnitude| magnitude > 0.0));
     }
 
     // JS: audio-bands.test.js:167-179 "keeps a full-scale tone at ~1 in its band"
