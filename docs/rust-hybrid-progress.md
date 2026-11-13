@@ -284,9 +284,11 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   AppImage relies on the host providing it (standard on current distros). The
   `.deb` depends on the distro's package set; `MODV_ENGINE=0` (the default)
   never launches the engine, so the legacy renderer still runs without it.
-- Engine-mode UI marks Output Window, MIDI and OSC as unavailable; plugins and
-  local-font panels only get the boot warning, and the BPM panel's MIDI source
-  remains selectable (it cannot work without MIDI).
+- Engine-mode UI marks MIDI and OSC as unavailable; plugins and local-font
+  panels only get the boot warning, and the BPM panel's MIDI source remains
+  selectable (it cannot work without MIDI). Output Windows are native engine
+  windows now (see "Post-review parity fixes"), so the View menu item and the
+  `windows/createWindow` action stay enabled in both modes.
 - Shader transitions freeze the outgoing frame and render at full output size
   (the JS re-renders the outgoing groups and caps the transition target at
   1920×1080): behaviour parity, not pixel parity.
@@ -306,6 +308,24 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
 
 ## Post-review parity fixes
 
+- **Engine-mode Output Windows.** The engine opens extra native winit windows
+  that present the same composited frame: `windows/createWindow { id?, name?,
+  width?, height?, x?, y?, monitor?, fullscreen? }` records a spec in
+  `crates/modv-app/src/windows.rs`, queues a native Open and emits the same
+  `windows/ADD_WINDOW` mirror record the legacy action built;
+  `windows/removeWindow { id }` queues Close and emits
+  `windows/REMOVE_WINDOW` (also emitted when the window manager closes a
+  window). The frame loop drains the commands once per frame, creates one
+  `winit::Window` + `wgpu::Surface` per output on the shared device/queue with
+  `AutoNoVsync`, and blits the shared main texture into every output surface in
+  the primary frame's command encoder — no second render. Sizes are clamped to
+  64..=8192 logical pixels; `F`/double-click toggles each window's fullscreen
+  and Escape leaves it. `window-handler.js` dispatches the engine actions
+  instead of `window.open`, the View → New Output Window menu item is enabled in
+  engine mode, `state/sync` carries the open windows, and the renderer replays
+  them through `windows/SET_WINDOWS`. The multi-surface path has an env-gated
+  host smoke test (`MODV_ENGINE_WINDOW_SMOKE=1`); the action/registry semantics
+  are plain `modv-app` unit tests.
 - **Output-window fullscreen.** `F` (without Ctrl/Meta/Alt) and a left
   double click toggle borderless fullscreen on the engine's native window
   (winit `set_fullscreen`, Escape leaves it); the legacy Output Window popup
@@ -420,11 +440,33 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   are implemented, as are `beats/SET_BPM_SOURCE` (tap/MIDI BPM only applies
   from the selected source) and `fonts/SET_LOCAL_FONTS`. Still hitting the
   wildcard: `groups/SWAP`/`modules/SWAP`, `dataTypes/createType`, `media/*`,
-  `midi/learn`, `ndi/*`, `osc/createServer`, `scenePreview/*`,
-  `windows/createWindow` and the `outputs/*` auxiliary-canvas actions.
+  `midi/learn`, `ndi/*`, `osc/createServer`, `scenePreview/*` and the
+  `outputs/*` auxiliary-canvas actions (`windows/createWindow` is implemented
+  natively now).
 - **Point10 Old Movie retired.** The sepia/scratch shader effect is removed from
   both catalogues (`Point10Effects.js` and the Rust WGSL port), leaving 30
   Point10 effects / 36 shader modules. Its only shipped preset use — Boxy
   Arcade's Effects row — now references the `Sepia Tone` ISF filter, and the
   defaults moved to version 14 so installs on version 13 receive the edit in
   place. A removal guard and engine-side tests pin the absence.
+- **ISF image inputs sample real textures.** A saved texture prop resolves to
+  a GPU texture instead of always binding the group canvas: image assets
+  (decoded, cached LRU, media-root relative), live module/row outputs
+  (`isf:`/`two-d:`/`point10:`/`group:`) and running media sources
+  (`camera:`/`video:`/`screen:`). Unassigned props keep the canvas, and
+  filters are alpha-masked only when they actually sample it, so an assigned
+  photo filter is no longer erased over a transparent group.
+- **Engine-owned Output Windows.** `windows/createWindow`/`removeWindow` open
+  extra native winit/wgpu windows that blit the primary composited frame;
+  closing one (window manager or action) drops its surface and updates the
+  mirror. The renderer no longer calls `window.open` in engine mode, and the
+  View menu / Output Windows controls work.
+- **Engine-owned screen capture.** `media/pick-screen` opens the desktop
+  portal's own ScreenCast picker on a worker thread, defers the reply until
+  the user answers, starts the returned PipeWire node and keeps the portal
+  session alive until `media/stop-source`; `media/unavailable` / `cancelled`
+  are reported distinctly. The Screen Capture panel uses it in engine mode.
+- **MIDI and OSC are wired** (see the earlier entry): device/channel state,
+  MIDI-clock BPM, explicit OSC listeners, `osc.data` Input Links.
+- `media/setMediaDirectoryPath` now reaches the engine's compositor, so ISF
+  texture props resolve media-library image paths.

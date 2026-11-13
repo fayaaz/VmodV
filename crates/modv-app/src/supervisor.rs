@@ -511,12 +511,26 @@ impl EngineSupervisor {
     fn queue_portal_pick(&mut self, request: Request, client: usize) -> Reply {
         let source_id = media_source_id(&request.params)
             .unwrap_or_else(|| format!("screen-{}", crate::ids::uuid_v4()));
-        let selection = request
-            .params
-            .get("sourceType")
-            .and_then(Value::as_str)
-            .and_then(SourceSelection::from_arg)
-            .unwrap_or(SourceSelection::MonitorOrWindow);
+        let selection = match request.params.get("sourceType") {
+            None | Some(Value::Null) => SourceSelection::MonitorOrWindow,
+            Some(Value::String(value)) => match SourceSelection::from_arg(value) {
+                Some(selection) => selection,
+                None => {
+                    return Reply::Now(Response::err(
+                        request.id,
+                        "invalid_params",
+                        "sourceType must be \"monitor\", \"window\" or \"both\"",
+                    ));
+                }
+            },
+            Some(_) => {
+                return Reply::Now(Response::err(
+                    request.id,
+                    "invalid_params",
+                    "sourceType must be a string",
+                ));
+            }
+        };
 
         let (tx, rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
@@ -2050,6 +2064,30 @@ mod tests {
                 "{method}"
             );
         }
+    }
+
+    #[test]
+    fn pick_screen_rejects_an_invalid_source_type_without_opening_the_portal() {
+        let (socket_path, state_path) = temp_paths("pick-screen-invalid");
+        let mut store = Store::new();
+        let mut supervisor =
+            EngineSupervisor::new(socket_path.clone(), Some(state_path)).expect("supervisor binds");
+        let mut stream = connect(&socket_path);
+
+        let (response, _) = request(
+            &mut supervisor,
+            &mut store,
+            &mut stream,
+            90,
+            "media/pick-screen",
+            json!({ "sourceType": "printer" }),
+        );
+
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.map(|error| error.code).as_deref(),
+            Some("invalid_params")
+        );
     }
 
     #[test]
