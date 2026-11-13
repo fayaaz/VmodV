@@ -4,7 +4,15 @@
   "DESCRIPTION": "A volumetric Kaliset fractal flow striking a planet. CC BY-NC-SA 3.0, see source header and THIRD_PARTY_NOTICES.md.",
   "MODV_CATEGORY": "3D Scenes",
   "CATEGORIES": ["GENERATOR"],
-  "INPUTS": []
+  "INPUTS": [
+    { "NAME": "sphsize", "LABEL": "Planet Size", "TYPE": "float", "MIN": 0.3, "MAX": 0.95, "DEFAULT": 0.7 },
+    { "NAME": "perturb", "LABEL": "Flow Distortion", "TYPE": "float", "MIN": 0.0, "MAX": 0.6, "DEFAULT": 0.3 },
+    { "NAME": "displacement", "LABEL": "Hot Air", "TYPE": "float", "MIN": 0.0, "MAX": 0.06, "DEFAULT": 0.015 },
+    { "NAME": "windspeed", "LABEL": "Wind Speed", "TYPE": "float", "MIN": 0.0, "MAX": 1.5, "DEFAULT": 0.4 },
+    { "NAME": "glow", "LABEL": "Glow", "TYPE": "float", "MIN": 0.0, "MAX": 8.0, "DEFAULT": 3.5 },
+    { "NAME": "brightness", "LABEL": "Brightness", "TYPE": "float", "MIN": 0.0, "MAX": 1.5, "DEFAULT": 0.43 },
+    { "NAME": "fractparam", "LABEL": "Fractal Shape", "TYPE": "float", "MIN": 0.3, "MAX": 1.0, "DEFAULT": 0.7 }
+  ]
 }*/
 
 // Hot Shower — port of "Hot Shower" by Kali
@@ -23,23 +31,16 @@
 // hot air, and a ridged fbm with lichen blotches and bark striations for
 // the planet's surface. Otherwise the port is faithful.
 
-// rendering params
-const float sphsize=.7; // planet size
+// rendering params (uniforms are declared by the ISF INPUTS above)
 const float dist=.27; // distance for glow and distortion
-const float perturb=.3; // distortion amount of the flow around the planet
-const float displacement=.015; // hot air effect
-const float windspeed=.4; // speed of wind flow
+const float fade=.005; //fade by distance
 const float steps=110.; // number of steps for the volumetric rendering
 const float stepsize=.025;
-const float brightness=.43;
 const vec3 planetcolor=vec3(0.55,0.4,0.3);
-const float fade=.005; //fade by distance
-const float glow=3.5; // glow amount, mainly on hit side
 
 
 // fractal params
 const int iterations=13;
-const float fractparam=.7;
 const vec3 offset=vec3(1.5,2.,-1.5);
 
 // vec2 to float hash (value noise basis)

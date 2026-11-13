@@ -4,7 +4,13 @@
   "DESCRIPTION": "A raymarched helix — an homage to Tool's Fear Inoculum album cover. CC BY-NC-SA 3.0, see source header and THIRD_PARTY_NOTICES.md.",
   "MODV_CATEGORY": "3D Scenes",
   "CATEGORIES": ["GENERATOR"],
-  "INPUTS": [],
+  "INPUTS": [
+    { "NAME": "speed", "LABEL": "Speed", "TYPE": "float", "MIN": 0.0, "MAX": 2.0, "DEFAULT": 1.0 },
+    { "NAME": "coil", "LABEL": "Helix Coils", "TYPE": "float", "MIN": 5.0, "MAX": 150.0, "DEFAULT": 60.0 },
+    { "NAME": "radius", "LABEL": "Helix Radius", "TYPE": "float", "MIN": 5.0, "MAX": 40.0, "DEFAULT": 20.0 },
+    { "NAME": "cameraTilt", "LABEL": "Camera Tilt", "TYPE": "float", "MIN": -1.2, "MAX": 0.6, "DEFAULT": -0.4 },
+    { "NAME": "eyePulse", "LABEL": "Eye Pulse", "TYPE": "float", "MIN": 0.0, "MAX": 0.3, "DEFAULT": 0.1 }
+  ],
   "PASSES": [
     { "TARGET": "helixRender", "DESCRIPTION": "Helix raymarch" },
     { "TARGET": "lensRender", "DESCRIPTION": "Chromatic lens distortion and grain" },
@@ -55,11 +61,11 @@ bool pupil;
 // 2D heightmap with input theta: angle around the helix-arm and psi: angle around y-axle
 float radial_offset( in float theta, in float psi )
 {
-    float eye_ridge = 0.7 + 0.1*sin(TIME);
-    float eye_crater = 0.6 + 0.1*sin(TIME);
+    float eye_ridge = 0.7 + eyePulse*sin(TIME*speed);
+    float eye_crater = 0.6 + eyePulse*sin(TIME*speed);
     float eye_pupil = 0.7;
 
-    float x = theta+psi+TIME/10.0;
+    float x = theta+psi+TIME*speed/10.0;
     float y = psi;
 
     float sx = sin(10.0*x);
@@ -133,9 +139,7 @@ void main()
         o = vec3(uv,0.0);
 
         // rotate camera
-        float xtilt = -0.4;
-
-        mat4 xrot = rotationMatrix(vec3(1.0,0.0,0.0), xtilt);
+        mat4 xrot = rotationMatrix(vec3(1.0,0.0,0.0), cameraTilt);
         o = (xrot * vec4(o,1.0)).xyz;
         d = (xrot * vec4(d,1.0)).xyz;
 
@@ -143,8 +147,7 @@ void main()
         o += vec3(-7.0,-0.0,-25.0);
 
         // helix settings
-        float coil = 60.0;
-        float rad = 20.0;
+        // coil and radius are uniforms (see INPUTS)
 
         // raymarch https://iquilezles.org/articles/raymarchingdf/
         float dist = 0.0;
@@ -162,7 +165,7 @@ void main()
             iris = false;
             pupil = false;
 
-            h = helix_sdf(o,rad,coil);
+            h = helix_sdf(o,radius,coil);
             if (h < 0.001)
             {
                 hit = true;
@@ -176,8 +179,8 @@ void main()
         if (hit)
         {
             // approximate surface normal
-            float dDdx = (helix_sdf(o + vec3(0.001, 0.0, 0.0), rad, coil) - h)/0.001;
-            float dDdy = (helix_sdf(o + vec3(0.0, 0.001, 0.0), rad, coil) - h)/0.001;
+            float dDdx = (helix_sdf(o + vec3(0.001, 0.0, 0.0), radius, coil) - h)/0.001;
+            float dDdy = (helix_sdf(o + vec3(0.0, 0.001, 0.0), radius, coil) - h)/0.001;
             vec3 n = normalize(vec3(dDdx, dDdy, 1));
 
             // primary smooth-shading

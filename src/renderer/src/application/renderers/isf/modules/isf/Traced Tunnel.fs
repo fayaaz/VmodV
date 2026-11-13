@@ -4,7 +4,13 @@
   "DESCRIPTION": "Reflective ray-scattered square tunnel. CC BY-NC-SA 3.0, see source header and THIRD_PARTY_NOTICES.md.",
   "MODV_CATEGORY": "3D Scenes",
   "CATEGORIES": ["GENERATOR"],
-  "INPUTS": []
+  "INPUTS": [
+    { "NAME": "speed", "LABEL": "Speed", "TYPE": "float", "MIN": 0.0, "MAX": 3.0, "DEFAULT": 1.0 },
+    { "NAME": "gridScale", "LABEL": "Grid Scale", "TYPE": "float", "MIN": 4.0, "MAX": 24.0, "DEFAULT": 12.0 },
+    { "NAME": "dof", "LABEL": "Depth of Field", "TYPE": "float", "MIN": 0.0, "MAX": 0.3, "DEFAULT": 0.05 },
+    { "NAME": "swing", "LABEL": "Camera Swing", "TYPE": "float", "MIN": 0.0, "MAX": 2.5, "DEFAULT": 1.0 },
+    { "NAME": "fogDensity", "LABEL": "Fog Density", "TYPE": "float", "MIN": 0.2, "MAX": 3.0, "DEFAULT": 1.0 }
+  ]
 }*/
 
 // Traced Tunnel — port of Shane's "Traced Tunnel"
@@ -122,8 +128,8 @@ void cam(inout vec3 p, float tm, float tTime) {
     #endif
 
     #ifdef CAM_SWING
-  	p.xz *= r2(sin(tTime*.3)*.4);
-  	p.xy *= r2(sin(tTime*.1)*2.);
+  	p.xz *= r2(sin(tTime*.3)*.4*swing);
+  	p.xy *= r2(sin(tTime*.1)*2.*swing);
     #endif
 
 }
@@ -183,12 +189,12 @@ void main(){
     // Depth of field (DOF) amount, and the DOF distance. In this
     // case, a figure of 3 will bring everything into focus three units
     // down the tunnel, but camera blur things around it.
-    const float DOF = .05, DOFDist = 3.;
+    const float DOFDist = 3.;
 
     // Global time, and tick time, which in this case is regular time, with
     // a lurching tick on it. I think it's great, but it might not be for
     // those who are prone to motion sickness.
-    float tm = TIME;
+    float tm = TIME*speed;
     float tickTm = tickTime(tm);
 
     // Initial camera position. The tick time variable gives the camera a
@@ -215,15 +221,15 @@ void main(){
         // obvious, you're advancing global time a little with each sample, which results
         // in frames further in time being blended with the present. You could go
         // backwards instead, if the idea of looking into the future bothers you. :D
-        tm = TIME + float(j)*.05/float(sampleNum);
+        tm = TIME*speed + float(j)*.05/float(sampleNum);
         tickTm = tickTime(tm);
         #endif
 
         vec3 ro = vec3(0);
         #ifdef DEPTH_OF_FIELD
         // Depth of field. Spreading out the sample, according to screen depth.
-        ro.xy += offs*DOF;
-        vec3 r = normalize(vec3(uv - offs*DOF/DOFDist, 1));
+        ro.xy += offs*dof;
+        vec3 r = normalize(vec3(uv - offs*dof/DOFDist, 1));
         #else
         vec3 r = normalize(vec3(uv - offs/RENDERSIZE.y, 1));
         #endif
@@ -281,8 +287,7 @@ void main(){
             }
 
             // Texture scaling for texturing.
-            const float sc = 12.;
-            tuv *= sc;
+            tuv *= gridScale;
 
 
             // Sample color.
@@ -309,13 +314,13 @@ void main(){
             //
             // Quantized squarish polar mapping.
             const vec2 txSc = vec2(2, 1./2.); // scale for the squarish polar mapping.
-            vec3 ip3 = (floor(p*sc) + .0)/sc; // Quantizing... as opposed to continuous values.
+            vec3 ip3 = (floor(p*gridScale) + .0)/gridScale; // Quantizing... as opposed to continuous values.
             float ang = atan(ip3.x, ip3.y)/6.2831; // Angle of grid cell from the tube center.
             vec2 tnuv = vec2(uvShape(ip3.xy)*ang*txSc.x, ip3.z*txSc.y); // Square polar UVs.
             //
             // Smooth squarish polar mapping.
             const vec2 txSc2 = vec2(1, 1./4.); // scale for the squarish polar mapping.
-    		vec3 p3 = mix(p, (floor(p*sc) + .0)/sc, .8); // Slightly smooth quantized values.
+    		vec3 p3 = mix(p, (floor(p*gridScale) + .0)/gridScale, .8); // Slightly smooth quantized values.
             float ang2 = atan(p3.x, p3.y)/6.2831; // Angle of grid cell from the tube center.
             vec2 tnuv2 = vec2(uvShape(p3.xy)*ang2*txSc2.x + p3.z*.075, p3.z*txSc2.y);  // Square polar UVs.
 
@@ -351,7 +356,7 @@ void main(){
             */
 
             // Applying some fog.
-            sampleCol *= 1.35/(1. + fogD*fogD*.05);
+            sampleCol *= 1.35/(1. + fogD*fogD*.05*fogDensity);
 
 
 

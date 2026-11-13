@@ -76,7 +76,6 @@ describe("Helix Eye.fs", () => {
     expect(metadata.PASSES[0].TARGET).toBe("helixRender");
     expect(metadata.PASSES[1].TARGET).toBe("lensRender");
     expect(metadata.PASSES[2].TARGET).toBeUndefined();
-    expect(metadata.INPUTS).toEqual([]);
   });
 
   it("renders opaque black where the ray misses", () => {
@@ -93,9 +92,6 @@ describe("Traced Tunnel.fs", () => {
     const { metadata, source } = readIsf("Traced Tunnel.fs");
 
     expect(metadata.PASSES).toBeUndefined();
-    // the interactive-shader-format JS parser dereferences INPUTS without a
-    // default, so generators must declare it explicitly
-    expect(metadata.INPUTS).toEqual([]);
     // the procedural replacement must not reference any image inputs
     expect(source).not.toContain("iChannel0");
     expect(source).not.toContain("iChannel1");
@@ -103,14 +99,51 @@ describe("Traced Tunnel.fs", () => {
   });
 });
 
+describe("NC-SA scene inputs", () => {
+  const expectedInputs = {
+    "Helix Eye.fs": ["speed", "coil", "radius", "cameraTilt", "eyePulse"],
+    "Traced Tunnel.fs": ["speed", "gridScale", "dof", "swing", "fogDensity"],
+    "Hot Shower.fs": [
+      "sphsize",
+      "perturb",
+      "displacement",
+      "windspeed",
+      "glow",
+      "brightness",
+      "fractparam",
+    ],
+  };
+
+  for (const [fileName, names] of Object.entries(expectedInputs)) {
+    it(`${fileName} declares linkable float inputs`, () => {
+      const { metadata, source } = readIsf(fileName);
+
+      expect(Array.isArray(metadata.INPUTS)).toBe(true);
+      expect(metadata.INPUTS.length).toBeGreaterThan(0);
+
+      const inputNames = metadata.INPUTS.map((input) => input.NAME);
+      for (const name of names) {
+        expect(inputNames, name).toContain(name);
+        // uniform is actually referenced by the shader
+        expect(source, name).toContain(name);
+      }
+
+      for (const input of metadata.INPUTS) {
+        expect(input.TYPE, input.NAME).toBe("float");
+        expect(input.MIN, input.NAME).toBeLessThan(input.MAX);
+        expect(input.DEFAULT, input.NAME).toBeGreaterThanOrEqual(input.MIN);
+        expect(input.DEFAULT, input.NAME).toBeLessThanOrEqual(input.MAX);
+        expect(typeof input.LABEL, input.NAME).toBe("string");
+      }
+    });
+  }
+});
+
 describe("Hot Shower.fs", () => {
   it("ports the single-pass image pass without texture inputs", () => {
     const { metadata, source } = readIsf("Hot Shower.fs");
 
     expect(metadata.PASSES).toBeUndefined();
-    // the interactive-shader-format JS parser dereferences INPUTS without a
-    // default, so generators must declare it explicitly
-    expect(metadata.INPUTS).toEqual([]);
     // the procedural replacement must not reference any image inputs
     expect(source).not.toContain("iChannel0");
     expect(source).not.toContain("iChannel1");
