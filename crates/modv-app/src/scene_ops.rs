@@ -105,6 +105,8 @@ use modv_engine::inputs::{Input, InputLink};
 use modv_engine::props::coerce_prop_value;
 use modv_engine::preset::create_preset_from_state;
 use modv_engine::scene_capture::{capture_live_state, collect_scene_groups, scene_has_groups};
+use modv_engine::scene_cells::{clear_scene_cell_modules, merge_scene_cell};
+use modv_engine::scene_rows::get_row_label;
 use modv_engine::scene_link_defaults::{
     LinkMode, default_link_for_input, default_link_tween, get_bass_link_range, get_bpm_link_range,
     is_auto_link_excluded,
@@ -1099,6 +1101,236 @@ impl Store {
         self.find_live_row_group(index)
             .map(|group| InheritFrom::Group(group.id))
             .unwrap_or(InheritFrom::Previous(-1))
+    }
+
+    /// `scenes/clearSceneCell` (`scenes.js:3371-3430`).
+    ///
+    /// Empties the Group saved in a performance-grid cell, prunes its Module
+    /// snapshots and removes those Modules from the live Group when the cell
+    /// is the active row for this Scene.
+    pub fn clear_scene_cell(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(row) = params
+            .get("rowIndex")
+            .and_then(Value::as_i64)
+            .filter(|row| *row >= 0)
+            .map(|row| row as usize)
+        else {
+            return Ok(Value::Null);
+        };
+        let Some(index) =
+            self.scenes.scenes.iter().position(|scene| {
+                scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str())
+            })
+        else {
+            return Ok(Value::Null);
+        };
+
+        let row_names = self.row_names();
+        let scene = self.scenes.scenes[index].clone();
+        let Some(cleared) = clear_scene_cell_modules(&scene, row, &row_names) else {
+            return Ok(Value::Null);
+        };
+
+        let live_group = self
+            .state
+            .groups
+            .iter()
+            .find(|group| {
+                group.scene_id.as_deref() == Some(scene_id.as_str())
+                    && group.scene_row == Some(row)
+                    && group.transition_ghost != Some(true)
+            })
+            .cloned();
+
+        let mut updated = scene;
+        if let Value::Object(object) = &mut updated {
+            object.insert(
+                "groups".to_string(),
+                Value::Array(cleared.groups.clone()),
+            );
+            object.insert("modules".to_string(), Value::Object(cleared.modules.clone()));
+        }
+        self.scenes.scenes[index] = updated.clone();
+
+        if let Some(group) = live_group {
+            for module_id in &cleared.module_ids {
+                if !group.modules.iter().any(|id| id == module_id) {
+                    continue;
+                }
+                self.dispatch(
+                    "modules/removeActiveModule",
+                    json!({ "moduleId": module_id }),
+                )?;
+            }
+            self.deltas.push("scenes/SET_ACTIVE_ROWS", self.live_scene_rows());
+        }
+
+        self.touch_scene_list();
+        self.deltas.push("scenes/ADD_SCENE", updated.clone());
+        self.persist_best_effort();
+        Ok(updated)
+    }
+
+    /// `scenes/createSceneCellGroup` (`scenes.js:3432-3485`).
+    ///
+    /// Replaces the live Group in a performance row with a fresh empty Group
+    /// stamped for the Scene, so an empty Scene cell can be filled by editing
+    /// the live stack. Returns `{ groupId }` like the JS action.
+    pub fn create_scene_cell_group(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        if self.performance_enabled() {
+            return Ok(Value::Null);
+        }
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(row) = params
+            .get("rowIndex")
+            .and_then(Value::as_i64)
+            .filter(|row| *row >= 0)
+            .map(|row| row as usize)
+        else {
+            return Ok(Value::Null);
+        };
+        if !self.scenes.scenes.iter().any(|scene| {
+            scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str())
+        }) {
+            return Ok(Value::Null);
+        }
+
+        self.complete_whole_scene_transition();
+        self.complete_row_transition(row);
+
+        if let Some(old_group) = self
+            .find_live_row_group(row)
+            .filter(|group| group.name != GALLERY_GROUP_NAME)
+        {
+            self.remove_live_group(&old_group.id);
+        }
+
+        let row_names = self.row_names();
+        let name = get_row_label(&self.scenes.scenes, row, &row_names);
+        let group_params = json!({
+            "name": name,
+            "enabled": GROUP_ENABLED,
+            "sceneId": scene_id,
+            "sceneRow": row,
+        });
+        let group = self.create_group(
+            group_params
+                .as_object()
+                .expect("group params are an object"),
+        )?;
+
+        if row == 0 {
+            self.set_current_scene(&scene_id);
+        }
+        self.emit_group_order();
+        self.deltas
+            .push("scenes/SET_ACTIVE_ROWS", self.live_scene_rows());
+        self.persist_best_effort();
+        Ok(json!({ "groupId": group["id"] }))
+    }
+
+    /// `scenes/captureSceneRowToScene` (`scenes.js:3487-3567`).
+    ///
+    /// Writes the live Group of one row back into its Scene cell, merging the
+    /// Module snapshots, inputs, input links, expressions and tweens.
+    pub fn capture_scene_row_to_scene(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        if self.performance_enabled() {
+            return Ok(Value::Null);
+        }
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(row) = params
+            .get("rowIndex")
+            .and_then(Value::as_i64)
+            .filter(|row| *row >= 0)
+            .map(|row| row as usize)
+        else {
+            return Ok(Value::Null);
+        };
+        let Some(index) =
+            self.scenes.scenes.iter().position(|scene| {
+                scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str())
+            })
+        else {
+            return Ok(Value::Null);
+        };
+
+        self.complete_whole_scene_transition();
+        self.complete_row_transition(row);
+
+        let Some(group) = self
+            .state
+            .groups
+            .iter()
+            .find(|group| {
+                group.scene_id.as_deref() == Some(scene_id.as_str())
+                    && group.scene_row == Some(row)
+                    && group.transition_ghost != Some(true)
+            })
+            .cloned()
+            .or_else(|| self.find_live_row_group(row))
+        else {
+            return Ok(Value::Null);
+        };
+
+        let group_value = group.for_preset_save();
+        let mut modules = Map::new();
+        for module_id in &group.modules {
+            let Some(module) = self.state.modules.get(module_id) else {
+                continue;
+            };
+            modules.insert(module_id.clone(), module.for_preset_save());
+        }
+
+        let row_names = self.row_names();
+        let scene = self.scenes.scenes[index].clone();
+        let scoped = collect_scoped_scene_data(&[Some(group_value.clone())], &modules, &self.state);
+        let cell = json!({
+            "group": group_value,
+            "modules": Value::Object(modules),
+            "inputs": scoped.get("inputs").cloned().unwrap_or(Value::Null),
+            "expressions": scoped.get("expressions").cloned().unwrap_or(Value::Null),
+            "tweens": scoped.get("tweens").cloned().unwrap_or(Value::Null),
+        });
+
+        let Some(data) = merge_scene_cell(&scene, row, &row_names, &cell) else {
+            return Ok(Value::Null);
+        };
+
+        let mut updated = scene;
+        if let (Value::Object(object), Value::Object(data)) = (&mut updated, &data) {
+            for key in ["groups", "modules", "inputs", "expressions", "tweens"] {
+                if let Some(value) = data.get(key) {
+                    object.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+        self.scenes.scenes[index] = updated.clone();
+        self.touch_scene_list();
+        self.deltas.push("scenes/ADD_SCENE", updated.clone());
+        self.persist_best_effort();
+        Ok(updated)
     }
 
     /// `scenes/captureLiveStateToScene` (`scenes.js:1956-2057`).
@@ -4764,5 +4996,194 @@ mod tests {
                 .expect("no-op move dispatches"),
             json!(false)
         );
+    }
+
+    #[test]
+    fn scene_cell_actions_create_capture_and_clear_rows() {
+        let mut store = Store::new();
+        for (id, name) in [("scene-a", "Alpha"), ("scene-b", "Beta")] {
+            let mut scene = two_row_scene(id);
+            scene["name"] = json!(name);
+            seed_scene(&mut store, scene);
+        }
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-a" }))
+            .expect("applyScene dispatches");
+
+        // captureSceneRowToScene saves the live row's Group + Module snapshots.
+        let captured = store
+            .dispatch(
+                "scenes/captureSceneRowToScene",
+                json!({ "sceneId": "scene-a", "rowIndex": 1 }),
+            )
+            .expect("captureSceneRowToScene dispatches");
+        let row_modules = captured["groups"][1]["modules"]
+            .as_array()
+            .expect("row 1 modules");
+        assert!(!row_modules.is_empty(), "the live row was captured: {captured}");
+        let snapshots = captured["modules"].as_object().expect("modules");
+        assert!(
+            row_modules
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|id| snapshots.contains_key(id)),
+            "the captured Modules have snapshots: {captured}"
+        );
+
+        // createSceneCellGroup replaces that live row with a fresh Group.
+        let created = store
+            .dispatch(
+                "scenes/createSceneCellGroup",
+                json!({ "sceneId": "scene-b", "rowIndex": 0 }),
+            )
+            .expect("createSceneCellGroup dispatches");
+        let group_id = created["groupId"].as_str().expect("groupId").to_string();
+        let live = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .expect("the row Group exists");
+        assert_eq!(live.scene_id.as_deref(), Some("scene-b"));
+        assert_eq!(live.scene_row, Some(0));
+        assert_eq!(live.name, "Background");
+
+        // clearSceneCell empties the saved row and prunes its snapshots.
+        let cleared = store
+            .dispatch(
+                "scenes/clearSceneCell",
+                json!({ "sceneId": "scene-a", "rowIndex": 1 }),
+            )
+            .expect("clearSceneCell dispatches");
+        assert_eq!(cleared["groups"][1]["modules"], json!([]));
+    }
+
+    #[test]
+    fn disable_gallery_item_modules_turns_off_enabled_gallery_modules() {
+        let mut store = Store::new();
+        let gallery = store
+            .dispatch(
+                "groups/createGroup",
+                json!({ "name": GALLERY_GROUP_NAME }),
+            )
+            .expect("gallery group");
+        let group_id = gallery["id"].as_str().expect("id").to_string();
+        let mut module_ids = Vec::new();
+        for _ in 0..2 {
+            let module = store
+                .dispatch(
+                    "modules/makeActiveModule",
+                    json!({ "moduleName": "Ball", "moduleMeta": { "isGallery": true } }),
+                )
+                .expect("module");
+            let module_id = module["$id"].as_str().expect("module id").to_string();
+            store
+                .dispatch(
+                    "groups/ADD_MODULE_TO_GROUP",
+                    json!({ "groupId": group_id, "moduleId": module_id }),
+                )
+                .expect("add module");
+            store
+                .dispatch(
+                    "modules/UPDATE_ACTIVE_MODULE_META",
+                    json!({ "id": module_id, "metaKey": "enabled", "data": true }),
+                )
+                .expect("enable module");
+            module_ids.push(module_id);
+        }
+        assert!(
+            module_ids
+                .iter()
+                .all(|id| store.state().modules[id].meta["enabled"] == json!(true)),
+            "both modules start enabled: {:?}",
+            module_ids
+                .iter()
+                .map(|id| store.state().modules[id].meta.clone())
+                .collect::<Vec<_>>()
+        );
+
+        store
+            .dispatch("groups/disableGalleryItemModules", json!({}))
+            .expect("disableGalleryItemModules dispatches");
+        assert!(
+            module_ids
+                .iter()
+                .all(|id| store.state().modules[id].meta["enabled"] == json!(false)),
+            "every enabled Gallery module is disabled"
+        );
+    }
+
+    #[test]
+    fn gallery_and_group_order_actions_apply_in_the_engine() {
+        let mut store = Store::new();
+        let first = store
+            .dispatch("groups/createGroup", json!({ "name": "First" }))
+            .expect("first group");
+        let second = store
+            .dispatch("groups/createGroup", json!({ "name": "Second" }))
+            .expect("second group");
+        let first_id = first["id"].as_str().unwrap().to_string();
+        let second_id = second["id"].as_str().unwrap().to_string();
+
+        // groups/orderByIds reorders the live layer stack.
+        store
+            .dispatch(
+                "groups/orderByIds",
+                json!({ "ids": [second_id, first_id] }),
+            )
+            .expect("orderByIds dispatches");
+        assert_eq!(store.state().groups[0].id, second_id);
+        assert_eq!(store.state().groups[1].id, first_id);
+
+        // groups/focusGalleryItem keeps the focused Gallery module enabled.
+        let gallery = store
+            .dispatch(
+                "groups/createGroup",
+                json!({ "name": GALLERY_GROUP_NAME }),
+            )
+            .expect("gallery group");
+        let gallery_id = gallery["id"].as_str().unwrap().to_string();
+        let mut module_ids = Vec::new();
+        for _ in 0..3 {
+            let module = store
+                .dispatch(
+                    "modules/makeActiveModule",
+                    json!({ "moduleName": "Ball", "moduleMeta": { "isGallery": true } }),
+                )
+                .expect("module");
+            let module_id = module["$id"].as_str().unwrap().to_string();
+            store
+                .dispatch(
+                    "groups/ADD_MODULE_TO_GROUP",
+                    json!({ "groupId": gallery_id, "moduleId": module_id }),
+                )
+                .expect("add module");
+            store
+                .dispatch(
+                    "modules/UPDATE_ACTIVE_MODULE_META",
+                    json!({ "id": module_id, "metaKey": "enabled", "data": true }),
+                )
+                .expect("enable module");
+            module_ids.push(module_id);
+        }
+
+        store
+            .dispatch(
+                "groups/focusGalleryItem",
+                json!({ "groupId": gallery_id, "moduleId": module_ids[1] }),
+            )
+            .expect("focusGalleryItem dispatches");
+        assert_eq!(
+            store.state().modules[&module_ids[1]].meta["enabled"],
+            json!(true),
+            "the focused module stays enabled"
+        );
+        for id in [&module_ids[0], &module_ids[2]] {
+            assert_eq!(
+                store.state().modules[id].meta["enabled"],
+                json!(false),
+                "the other gallery modules are disabled"
+            );
+        }
     }
 }

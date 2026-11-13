@@ -380,6 +380,9 @@ impl Store {
             "groups/UPDATE_GROUP_BY_KEY" => self.update_group_by_key(params),
             "groups/REMOVE_GROUP" => self.remove_group_mutation(params),
             "groups/REPLACE_GROUP_MODULES" => self.replace_group_modules(params),
+            "groups/disableGalleryItemModules" => self.disable_gallery_item_modules(params),
+            "groups/focusGalleryItem" => self.focus_gallery_item(params),
+            "groups/orderByIds" => self.order_groups_by_ids(params),
             "groups/ADD_MODULE_TO_GROUP" => self.add_module_to_group(params),
             "groups/REMOVE_MODULE_FROM_GROUP" => self.remove_module_from_group(params),
             "groups/REPLACE_GROUPS" => self.replace_groups(params),
@@ -451,6 +454,9 @@ impl Store {
             "scenes/updateSceneName" => self.update_scene_name(params),
             "scenes/updateSceneTiming" => self.update_scene_timing(params),
             "scenes/resetSceneTiming" => self.reset_scene_timing(params),
+            "scenes/clearSceneCell" => self.clear_scene_cell(params),
+            "scenes/captureSceneRowToScene" => self.capture_scene_row_to_scene(params),
+            "scenes/createSceneCellGroup" => self.create_scene_cell_group(params),
             // ————————————————— Performance runtime (WS-8 / M5c) ————————
             "scenes/startPerformance" => self.start_performance(),
             "scenes/stopPerformance" => self.stop_performance(),
@@ -510,7 +516,10 @@ impl Store {
     // ————————————————— Groups —————————————————
 
     /// `groups/createGroup` (`groups.js:131-202`).
-    fn create_group(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+    pub(crate) fn create_group(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
         // `groups.js:143-149`: creating a Group with an id that already exists
         // returns the existing record instead of duplicating it.
         if let Some(id) = params.get("id").and_then(Value::as_str) {
@@ -658,6 +667,97 @@ impl Store {
             action,
             json!({ "moduleId": module_id, "groupId": group_id, "position": index }),
         );
+        Ok(Value::Null)
+    }
+
+    /// `groups/disableGalleryItemModules` (`groups.js:338-360`).
+    ///
+    /// Turns off every enabled Module in the Gallery group; the Gallery clears
+    /// its focus when a Scene is applied or the user leaves the Gallery.
+    fn disable_gallery_item_modules(
+        &mut self,
+        _params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        self.set_gallery_item_focus(None)
+    }
+
+    /// `groups/focusGalleryItem` (`groups.js:297-336`).
+    ///
+    /// Keeps the focused Gallery Module enabled and turns the rest off. The
+    /// JS action also resizes its auxiliary canvas; in the engine the Gallery
+    /// preview target is sized by the preview request, so only the focus
+    /// part applies.
+    fn focus_gallery_item(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let focused = params.get("moduleId").and_then(Value::as_str);
+        self.set_gallery_item_focus(focused)
+    }
+
+    /// Disable every enabled Gallery Module except `keep` (all of them when
+    /// `keep` is `None`), matching `getOtherEnabledGalleryModuleIds`.
+    fn set_gallery_item_focus(&mut self, keep: Option<&str>) -> Result<Value, StoreError> {
+        let Some(gallery) = self
+            .state
+            .groups
+            .iter()
+            .find(|group| group.name == modv_engine::engine_state::GALLERY_GROUP_NAME)
+        else {
+            return Ok(Value::Null);
+        };
+        let module_ids = gallery.modules.clone();
+
+        for module_id in module_ids {
+            if keep == Some(module_id.as_str()) {
+                continue;
+            }
+            let enabled = self
+                .state
+                .modules
+                .get(&module_id)
+                .and_then(|module| module.meta.get("enabled"))
+                .is_some_and(|value| match value {
+                    Value::Bool(flag) => *flag,
+                    Value::Number(number) => {
+                        number.as_f64().is_some_and(|number| number != 0.0)
+                    }
+                    _ => false,
+                });
+            if !enabled {
+                continue;
+            }
+            let params = json!({
+                "id": module_id,
+                "metaKey": "enabled",
+                "data": false,
+            });
+            self.update_meta(
+                params
+                    .as_object()
+                    .expect("meta params are an object"),
+            )?;
+        }
+
+        Ok(Value::Null)
+    }
+
+    /// `groups/orderByIds` (`groups.js:248-254`): reorder the live Groups.
+    fn order_groups_by_ids(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let Some(ids) = params.get("ids").and_then(Value::as_array) else {
+            return Ok(Value::Null);
+        };
+        let mut reordered = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(id) = id.as_str() else {
+                continue;
+            };
+            if let Some(group) = self.state.groups.iter().find(|group| group.id == id) {
+                reordered.push(group.clone());
+            }
+        }
+
+        self.state.groups = reordered;
+        let value = Value::Array(self.state.groups.iter().map(json_value).collect());
+        self.deltas
+            .push("groups/REPLACE_GROUPS", json!({ "groups": value }));
         Ok(Value::Null)
     }
 

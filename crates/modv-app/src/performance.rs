@@ -383,7 +383,7 @@ impl Store {
     }
 
     /// Row names from the performance config.
-    fn row_names(&self) -> Vec<String> {
+    pub(crate) fn row_names(&self) -> Vec<String> {
         normalize_row_names(self.scenes.performance.get("rowNames"))
     }
 
