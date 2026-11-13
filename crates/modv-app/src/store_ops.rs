@@ -604,6 +604,11 @@ impl Store {
             "tweens/ADD_TWEEN" => self.add_tween(params),
             "tweens/REMOVE_TWEEN" => self.remove_tween_action(params),
             "tweens/createTween" => self.create_tween(params),
+            "dataTypes/createType" => self.create_data_type(params),
+            // A/B debug swap (`ABSwap.vue`): the engine preset loader replaces
+            // state directly and keeps no swap buffer, so the legacy worker
+            // swapper has nothing to swap here.
+            "groups/SWAP" | "modules/SWAP" => Ok(Value::Null),
             // ————————————————— Expressions (WS-12) —————————————————
             "expressions/create" => self.create_expression(params),
             "expressions/update" => self.update_expression(params),
@@ -2828,6 +2833,27 @@ impl Store {
     /// when a link switches to a tween source. Builds the same descriptor the
     /// JS stores (minus the pre-recorded `frames`, which stay in the runtime)
     /// and returns it.
+    /// `dataTypes/createType` (`dataTypes.js:139-141`).
+    ///
+    /// The Input Link editors call this to mint a `tween`; the engine's tween
+    /// store is authoritative, so a `{ type: "tween", args }` call forwards to
+    /// [`Self::create_tween`] and returns the descriptor the editor links to.
+    /// Other types are UI-only and unknown ones return `null`.
+    fn create_data_type(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "dataTypes/createType";
+        let type_ = required_str(params, action, "type")?;
+        if type_ != "tween" {
+            return Ok(Value::Null);
+        }
+
+        let args = params
+            .get("args")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        self.create_tween(&args)
+    }
+
     fn create_tween(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
         let id = params
             .get("id")
@@ -8147,5 +8173,43 @@ mod tests {
             .expect("osc write delta");
         assert_eq!(write.payload["id"], json!("server-1"));
         assert_eq!(write.payload["msg"], json!(["/modv/bass", 0.5]));
+    }
+
+    #[test]
+    fn data_types_create_type_mints_a_tween() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        let tween = store
+            .dispatch(
+                "dataTypes/createType",
+                json!({
+                    "type": "tween",
+                    "args": {
+                        "id": "in-1",
+                        "data": [[0], [1]],
+                        "duration": 400,
+                        "easing": "easeInOutSine",
+                    },
+                }),
+            )
+            .expect("createType dispatches");
+
+        assert_eq!(tween["id"], json!("in-1"));
+        assert!(store.tweens.contains("in-1"));
+        assert!(
+            store
+                .drain_deltas()
+                .iter()
+                .any(|delta| delta.r#type == "tweens/ADD_TWEEN")
+        );
+
+        // Types the engine does not own are UI-only.
+        assert_eq!(
+            store
+                .dispatch("dataTypes/createType", json!({ "type": "nope", "args": {} }))
+                .expect("unknown type dispatches"),
+            Value::Null
+        );
     }
 }
