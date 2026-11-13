@@ -79,6 +79,18 @@ use crate::compositor::{
 };
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
 
+/// Read one Point10 scene prop for a preview.
+///
+/// Shares [`scene_prop_number`](crate::compositor::scene_prop_number) with the
+/// live compositor: the Inspector's checkboxes (`useAgc`) send JSON booleans,
+/// which `Value::as_f64` drops, so the preview silently kept the `true`
+/// default while the live scene honoured the toggle.
+fn preview_scene_prop(props: &Value, key: &str) -> Option<f32> {
+    props
+        .get(key)
+        .and_then(crate::compositor::scene_prop_number)
+}
+
 /// Largest edge a preview may request (mirrors the main process'
 /// `MODULE_PREVIEW_MAX_SIZE`).
 pub const MAX_PREVIEW_DIMENSION: u32 = 512;
@@ -976,13 +988,7 @@ impl ModulePreviews {
                 context.resize(width, height);
 
                 // `adapter.js:797-804`: scene props, then the bridge levers.
-                let mut get = |key: &str| {
-                    props
-                        .get(key)
-                        .and_then(Value::as_f64)
-                        .filter(|value| value.is_finite())
-                        .map(|value| value as f32)
-                };
+                let mut get = |key: &str| preview_scene_prop(props, key);
                 scene.apply_props(&mut get);
                 let levers = ResponsivenessLevers::from_getter(|key| get(key));
                 let payload = interim_band_payload(audio);
@@ -1443,6 +1449,14 @@ mod tests {
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
         ];
         assert_eq!(base64_encode(&pixels), "/wAA/wD/AP8AAP///////w==");
+    }
+
+    #[test]
+    fn preview_scene_props_read_boolean_levers() {
+        let props = json!({ "useAgc": false, "gain": 1.5, "missing": null });
+        assert_eq!(preview_scene_prop(&props, "useAgc"), Some(0.0));
+        assert_eq!(preview_scene_prop(&props, "gain"), Some(1.5));
+        assert_eq!(preview_scene_prop(&props, "missing"), None);
     }
 
     #[test]

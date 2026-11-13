@@ -369,3 +369,27 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   `meyda/SET_BANDS` and every audio-reactive scene (the DVD logo's beat pulse
   included). The main window now sets `backgroundThrottling: false`, asserted
   by `engineSkeleton.spec.js`.
+- **ISF sidecar filters render with the WebGL vertex conventions.**
+  Two defects made every `.vs` filter look wrong next to the legacy renderer.
+  (1) The runtime drew sidecar shaders with the shared oversized full-screen
+  triangle. Those shaders evaluate non-linear vertex maths from
+  `isf_FragNormCoord` (`clamp`ed blur offsets, Sobel taps); at the triangle's
+  off-screen corners the clamp saturates before the visible area, so
+  interpolating back across the screen stretched the coordinates — Edge Blur
+  sampled about half the frame, anchored at the bottom-left (the reported
+  "extra zoom" / diffuse overlay). Sidecars now draw the six-vertex quad the
+  WebGL renderer uses, evaluated on the screen corners. (2) The generated
+  skeleton emitted the GL bottom-left `isf_FragNormCoord` while wgpu samples
+  textures from the top-left, so sidecar filters sampled the group canvas
+  vertically mirrored; it now matches `DEFAULT_VERTEX_WGSL`. New GPU tests:
+  a pass-through sidecar over a red-top/blue-bottom source must not flip, and
+  a `clamp`ed varying must read the clamped edge value (its absence was the
+  triangle's half-size stretch). The Edge Blur test now runs the pass chain
+  long enough to fill its one-frame-lagged buffers.
+- **Input Link smoothing works end to end.** `meyda/getSmoothingId` and
+  `meyda/removeSmoothingId` are implemented in the engine (the slider used to
+  hit the dispatch wildcard, receive `null` and drop its args). The component
+  captures the id before clearing its field, restores it from the saved link
+  args on reopen, and the near-silence gate in `audio-bands.js` stops the AGC
+  turning dither into a full-scale bass reading. Input Links read the
+  `AudioBands` grid means again, matching pre-Rust levels.

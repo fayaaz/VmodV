@@ -129,8 +129,12 @@ export default {
           this.smoothingValue,
         ]);
       } else if (!value && this.smoothingId) {
+        // Capture the id first: `meyda/removeSmoothingId` takes the id as its
+        // payload, so clearing the field before dispatching handed the engine
+        // `null` and the smoothing entry leaked.
+        const smoothingId = this.smoothingId;
         this.smoothingId = null;
-        this.$modV.store.dispatch("meyda/removeSmoothingId", this.smoothingId);
+        this.$modV.store.dispatch("meyda/removeSmoothingId", smoothingId);
         this.updateInputLinkArgs([this.feature]);
       }
     },
@@ -155,6 +159,9 @@ export default {
       if (this.inputLink && this.inputLink.source === "meyda") {
         if (this.inputLink.args.length > 2) {
           this.smoothingValue = this.inputLink.args[2];
+          // The id was minted when the link was created; keep it so turning
+          // smoothing back down releases it instead of leaking the entry.
+          this.smoothingId = this.inputLink.args[1] ?? null;
         }
 
         this.feature = this.inputLink.args[0];
