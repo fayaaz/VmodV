@@ -47,6 +47,14 @@
 //! [`get_default_scene_migrations_with`]/[`ensure_default_scene_migrations_with`],
 //! which accept an explicit rule table.
 //!
+//! Version 13 is the first bump whose edits are refresh-only (no Scene was
+//! renamed or retired): `Halftone Harbor` loses CMYK Halftone and `MBOX Light
+//! Tunnel` fixes its `MBOX3` hue, both handled by
+//! [`crate::default_scenes::get_default_scenes_to_replace`] through
+//! [`crate::default_scenes::REFRESHED_DEFAULT_SCENES`]. It adds no row here.
+//! The `the_version_13_bump_refreshes_the_edited_scenes_without_a_rename_rule`
+//! test pins that split.
+//!
 //! ## Semantics
 //!
 //! A "Scene" here is a serialised Scene document ([`serde_json::Value`]); the
@@ -1023,5 +1031,68 @@ mod tests {
         assert!(plan.report.skipped.is_empty());
         assert_eq!(scenes.len(), 1);
         assert_eq!(seeded, vec!["Smoke Room".to_string()]);
+    }
+
+    #[test]
+    fn the_version_13_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
+        // Version 13 only edits two definitions in place — CMYK Halftone leaves
+        // Halftone Harbor and MBOX3's hue is fixed — so no rename/removal rule
+        // ships and the version-keyed table stays empty. Installs on version 12
+        // receive the edits through `get_default_scenes_to_replace`.
+        assert!(get_default_scene_migrations(12, DEFAULTS_VERSION).is_empty());
+
+        let names = ["Halftone Harbor", "MBOX Light Tunnel"];
+        let scenes: Vec<Value> = names
+            .iter()
+            .map(|name| scene(name, &format!("{name}-id")))
+            .collect();
+        let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+
+        let plan = crate::default_scenes::get_default_scenes_to_replace(
+            12,
+            &scenes,
+            None,
+            Some(&seeded_names),
+        );
+        let replaced: Vec<&str> = plan
+            .replacements
+            .iter()
+            .map(|replacement| replacement.name.as_str())
+            .collect();
+
+        for name in names {
+            assert!(replaced.contains(&name), "missing refresh {name}");
+        }
+
+        let halftone = plan
+            .replacements
+            .iter()
+            .find(|replacement| replacement.name == "Halftone Harbor")
+            .expect("Halftone Harbor refresh");
+        assert_eq!(halftone.id, json!("Halftone Harbor-id"));
+        assert!(
+            !halftone
+                .definition
+                .module_names()
+                .contains(&"CMYK Halftone"),
+            "Halftone Harbor still uses CMYK Halftone"
+        );
+        assert!(halftone.definition.modules_in_group("Effects").is_empty());
+
+        let mbox = plan
+            .replacements
+            .iter()
+            .find(|replacement| replacement.name == "MBOX Light Tunnel")
+            .expect("MBOX Light Tunnel refresh");
+        assert_eq!(mbox.id, json!("MBOX Light Tunnel-id"));
+        assert_eq!(
+            mbox.definition
+                .group("Background")
+                .and_then(|group| group.modules.iter().find(|module| module.name == "MBOX3"))
+                .and_then(|module| module.props.as_ref())
+                .and_then(|props| props.get("dhue")),
+            Some(&json!(0))
+        );
+        assert!(mbox.definition.link("MBOX3", "dhue").is_none());
     }
 }

@@ -41,7 +41,13 @@ use serde_json::{Map, Value};
 
 /// Bumped when a new batch of default Scenes ships
 /// (`default-scenes.js:39`; `tests/unit/default-scenes.test.js:85-87` pins it).
-pub const DEFAULTS_VERSION: i64 = 12;
+///
+/// Version 13 removes CMYK Halftone from `Halftone Harbor` (its Effects row
+/// stays empty) and fixes `MBOX3`'s hue in `MBOX Light Tunnel` at 0, dropping
+/// the BPM tween that animated it. Both Scenes are refreshed in place for
+/// version-12 installs (they are in [`REFRESHED_DEFAULT_SCENES`]); no
+/// rename/removal rule ships with the bump.
+pub const DEFAULTS_VERSION: i64 = 13;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
@@ -65,6 +71,10 @@ pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
 /// Scenes whose definitions changed in the current defaults version and are
 /// rebuilt in place for installs on the previous version
 /// (`default-scenes.js:109-159`).
+///
+/// Version 13 edited `Halftone Harbor` (CMYK Halftone removed) and `MBOX Light
+/// Tunnel` (fixed `dhue`); both are already members, so the list itself did
+/// not change with the bump.
 pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Mycelium Bloom",
     "Chromatic Waveform",
@@ -771,9 +781,9 @@ mod tests {
     // ————————————————— data integrity —————————————————
 
     #[test]
-    fn bumps_the_defaults_version_to_12() {
+    fn bumps_the_defaults_version_to_13() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 12);
+        assert_eq!(DEFAULTS_VERSION, 13);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
     }
 
@@ -961,6 +971,29 @@ mod tests {
     }
 
     #[test]
+    fn does_not_use_cmyk_halftone_in_any_default_scene() {
+        // default-scenes.test.js:89-96: version 13 removed the last preset use
+        // (Halftone Harbor); the Module stays registered for the Gallery.
+        let offenders: Vec<&str> = default_scenes()
+            .iter()
+            .filter(|scene| scene.module_names().contains(&"CMYK Halftone"))
+            .map(|scene| scene.name.as_str())
+            .collect();
+
+        assert!(offenders.is_empty(), "CMYK Halftone used by {offenders:?}");
+    }
+
+    #[test]
+    fn removes_cmyk_halftone_from_halftone_harbor() {
+        // default-scenes.test.js:1563-1587
+        let scene = scene_by_name("Halftone Harbor");
+
+        assert_eq!(scene.introduced_version, 5);
+        assert!(!scene.module_names().contains(&"CMYK Halftone"));
+        assert!(scene.modules_in_group("Effects").is_empty());
+    }
+
+    #[test]
     fn pins_some_version_4_alpha_controls_to_bass() {
         // default-scenes.test.js:146-173
         let with_alpha_links: Vec<&SceneDocument> = batch(4)
@@ -1028,7 +1061,8 @@ mod tests {
             .flat_map(|scene| scene.module_names())
             .filter(|name| filters.contains(name))
             .collect();
-        assert!(used.len() >= 8);
+        // Version 13 removed CMYK Halftone from its only Scene, leaving seven.
+        assert!(used.len() >= 7);
         assert!(used.contains("ASCII Art"));
     }
 
@@ -1083,8 +1117,8 @@ mod tests {
     }
 
     #[test]
-    fn drives_the_mbox_hue_with_a_beat_tween_and_scale_with_bass() {
-        // default-scenes.test.js:237-282
+    fn keeps_the_mbox_hue_fixed_at_zero_and_scales_with_bass() {
+        // default-scenes.test.js:247-291
         let scene = scene_by_name("MBOX Light Tunnel");
         let mbox = scene
             .group("Background")
@@ -1094,6 +1128,7 @@ mod tests {
         let props = mbox.props.as_ref().expect("MBOX3 props");
         assert!(props["dthresh"].as_f64().unwrap() <= 0.1);
         assert!(props["speed"].as_f64().unwrap() <= 30.0);
+        assert_eq!(props["dhue"], json!(0));
 
         let links: Vec<&SceneInputLink> = scene
             .input_links
@@ -1109,12 +1144,13 @@ mod tests {
         assert_eq!(scale.feature.as_deref(), Some("bass"));
         assert!(scale.min.unwrap() < scale.max.unwrap());
 
-        let hue = links
-            .iter()
-            .find(|link| link.control == "dhue")
-            .expect("dhue link");
-        assert_eq!(hue.source.as_deref(), Some("tween"));
-        assert!(hue.min.unwrap() < hue.max.unwrap());
+        // Version 13 fixed the hue instead of animating it, so no BPM tween
+        // (and no audio link) drives `dhue` any more.
+        assert!(
+            links.iter().all(|link| link.control != "dhue"),
+            "the preset must not animate the MBOX hue"
+        );
+        assert!(scene.link("MBOX3", "dhue").is_none());
 
         assert!(links.iter().all(|link| link.control != "speed"));
     }
@@ -1837,8 +1873,8 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_the_trimmed_seeded_defaults_for_installs_on_version_11() {
-        // default-scenes.test.js:1243-1310
+    fn refreshes_the_trimmed_seeded_defaults_for_installs_on_version_12() {
+        // default-scenes.test.js:1253-1310
         let names = [
             "Circuit Ritual",
             "Burning Mycelium Circle",
@@ -1848,7 +1884,7 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(11, &scenes, None, Some(&seeded_names));
+        let plan = get_default_scenes_to_replace(12, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()
@@ -1927,7 +1963,7 @@ mod tests {
         let scenes = vec![seeded("Soft Bands"), seeded("Quiet Bloom")];
         let seeded_names = vec!["Soft Bands".to_string(), "Quiet Bloom".to_string()];
 
-        let plan = get_default_scenes_to_replace(10, &scenes, None, Some(&seeded_names));
+        let plan = get_default_scenes_to_replace(11, &scenes, None, Some(&seeded_names));
 
         assert!(plan.replacements.is_empty());
     }
@@ -1936,7 +1972,7 @@ mod tests {
     fn does_not_overwrite_user_scenes_that_were_not_seeded() {
         // default-scenes.test.js:1321-1331, 1431-1442
         let scenes = vec![seeded("Circuit Ritual"), seeded("Soft Bands")];
-        let plan = get_default_scenes_to_replace(11, &scenes, None, Some(&Vec::new()));
+        let plan = get_default_scenes_to_replace(12, &scenes, None, Some(&Vec::new()));
 
         assert!(plan.replacements.is_empty());
     }
@@ -1947,7 +1983,7 @@ mod tests {
         let scenes = vec![seeded("Quiet Bloom")];
         let removed: &[&str] = &[];
         let plan = get_default_scenes_to_replace(
-            11,
+            12,
             &scenes,
             Some(removed),
             Some(&["Quiet Bloom".to_string()]),
@@ -1959,8 +1995,60 @@ mod tests {
     }
 
     #[test]
-    fn rebuilds_the_bands_using_defaults_for_installs_on_version_11() {
-        // default-scenes.test.js:1349-1397
+    fn refreshes_halftone_harbor_and_the_mbox_hue_for_installs_on_version_12() {
+        // default-scenes.test.js:1560-1595
+        for name in ["Halftone Harbor", "MBOX Light Tunnel"] {
+            assert!(REFRESHED_DEFAULT_SCENES.contains(&name), "{name}");
+        }
+
+        let names = ["Halftone Harbor", "MBOX Light Tunnel"];
+        let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
+        let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+
+        let plan = get_default_scenes_to_replace(12, &scenes, None, Some(&seeded_names));
+        let replaced: Vec<&str> = plan
+            .replacements
+            .iter()
+            .map(|replacement| replacement.name.as_str())
+            .collect();
+
+        for name in names {
+            assert!(replaced.contains(&name), "missing refresh {name}");
+        }
+
+        let halftone = plan
+            .replacements
+            .iter()
+            .find(|replacement| replacement.name == "Halftone Harbor")
+            .unwrap();
+        assert_eq!(halftone.id, json!("Halftone Harbor-id"));
+        assert!(
+            !halftone
+                .definition
+                .module_names()
+                .contains(&"CMYK Halftone")
+        );
+        assert!(halftone.definition.modules_in_group("Effects").is_empty());
+
+        let mbox = plan
+            .replacements
+            .iter()
+            .find(|replacement| replacement.name == "MBOX Light Tunnel")
+            .unwrap();
+        assert_eq!(mbox.id, json!("MBOX Light Tunnel-id"));
+
+        let mbox3 = mbox
+            .definition
+            .group("Background")
+            .and_then(|group| group.modules.iter().find(|module| module.name == "MBOX3"))
+            .expect("MBOX3");
+        assert_eq!(mbox3.props.as_ref().unwrap()["dhue"], json!(0));
+        assert!(mbox.definition.link("MBOX3", "dhue").is_none());
+    }
+
+    #[test]
+    fn rebuilds_the_bands_using_defaults_for_installs_on_version_12() {
+        // default-scenes.test.js:1359-1397
         let names = [
             "Rolling Fire Bloom",
             "Around Water Garden",
@@ -1971,7 +2059,7 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(11, &scenes, None, Some(&seeded_names));
+        let plan = get_default_scenes_to_replace(12, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()

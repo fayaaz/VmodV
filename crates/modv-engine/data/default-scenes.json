@@ -2696,15 +2696,7 @@
         "clearing": true,
         "alpha": 1,
         "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "CMYK Halftone",
-            "props": {
-              "gridSize": 45,
-              "smoothing": 0.15
-            }
-          }
-        ]
+        "modules": []
       }
     ]
   },
@@ -3275,7 +3267,7 @@
               "fixedRad2": 2,
               "foldingLimit": 1.1,
               "minRad2": 0.6,
-              "dhue": 0.25,
+              "dhue": 0,
               "speed": 24,
               "rotation": 0,
               "e0": 3.2,
@@ -3345,14 +3337,6 @@
         "feature": "bass",
         "min": -2.6,
         "max": -1
-      },
-      {
-        "group": "Background",
-        "module": "MBOX3",
-        "control": "dhue",
-        "source": "tween",
-        "min": 0.1,
-        "max": 0.9
       }
     ]
   },

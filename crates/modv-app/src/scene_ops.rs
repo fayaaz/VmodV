@@ -437,6 +437,58 @@ impl Store {
         let current_version = self.scenes.defaults_version.max(0);
         let mut seeded = normalize_default_scene_name_list(&self.scenes.seeded_default_scenes);
 
+        // Rebuild the Scenes whose default definitions changed in this
+        // version (`getDefaultScenesToReplace` → `ADD_SCENE`,
+        // `scenes.js:2918-2951`). Only the payload keys are swapped; the
+        // existing Scene keeps its id, name, timing and enabled flag, so the
+        // active Scene and user metadata survive. Renames/removals stay with
+        // `ensure_default_scene_migration` below, so only `replacements` are
+        // consumed here.
+        let refresh = modv_engine::default_scenes::get_default_scenes_to_replace(
+            current_version,
+            &self.scenes.scenes,
+            None,
+            Some(&seeded),
+        );
+        let mut refreshed = 0usize;
+
+        for replacement in refresh.replacements {
+            let mut skipped = 0usize;
+            let built = build_default_scene_document(
+                &self.registry,
+                replacement.definition,
+                &self.state.midi,
+                &mut skipped,
+            );
+            let Some(existing) = self
+                .scenes
+                .scenes
+                .iter_mut()
+                .find(|scene| scene.get("id") == Some(&replacement.id))
+            else {
+                continue;
+            };
+            let (Some(existing_object), Some(built_object)) =
+                (existing.as_object_mut(), built.as_object())
+            else {
+                continue;
+            };
+
+            for key in ["groups", "modules", "inputs", "expressions", "tweens"] {
+                if let Some(value) = built_object.get(key) {
+                    existing_object.insert(key.to_string(), value.clone());
+                }
+            }
+
+            refreshed += 1;
+        }
+
+        if refreshed > 0 {
+            eprintln!(
+                "engine: INFO refreshed {refreshed} default Scene(s) to version {DEFAULTS_VERSION}"
+            );
+        }
+
         // Rename/remove seeded Scenes that the defaults retired between the
         // persisted version and this one *before* seeding, so the new
         // definitions neither duplicate a renamed Scene nor resurrect a
@@ -3218,6 +3270,15 @@ mod tests {
         })
     }
 
+    fn find_default_scene<'a>(store: &'a Store, name: &str) -> &'a Value {
+        store
+            .scenes_state()
+            .scenes
+            .iter()
+            .find(|scene| scene["name"] == json!(name))
+            .unwrap_or_else(|| panic!("{name} still exists"))
+    }
+
     fn seed_scene(store: &mut Store, scene: Value) {
         store
             .dispatch(
@@ -3829,6 +3890,151 @@ mod tests {
         assert!(expected > 0, "the default data has a version-9 batch");
         assert_eq!(store.scenes_state().scenes.len(), expected);
         assert_eq!(store.scenes_state().defaults_version, DEFAULTS_VERSION);
+    }
+
+    #[test]
+    fn default_seeding_refreshes_the_version_13_scenes_in_place() {
+        // The defaults version bump is refresh-only: an install on v12 keeps
+        // its Scene ids/timing but receives the edited payload (no CMYK
+        // Halftone in Halftone Harbor, MBOX3 hue fixed at 0 with its tween
+        // gone). Mirrors `getDefaultScenesToReplace` + `ADD_SCENE` in
+        // `scenes.js`.
+        let mut store = Store::new();
+        let cmyk = json!({
+            "id": "scene-halftone",
+            "name": "Halftone Harbor",
+            "enabled": true,
+            "minSeconds": 8,
+            "maxSeconds": 21,
+            "groups": [
+                {
+                    "id": "doc-effects",
+                    "name": "Effects",
+                    "hidden": false,
+                    "modules": ["doc-cmyk"],
+                    "enabled": 1,
+                    "alpha": 1,
+                    "inherit": true,
+                    "inheritFrom": -1,
+                    "pipeline": false,
+                    "clearing": true,
+                    "compositeOperation": "normal",
+                }
+            ],
+            "modules": {
+                "doc-cmyk": {
+                    "$id": "doc-cmyk",
+                    "$moduleName": "CMYK Halftone",
+                    "meta": { "name": "CMYK Halftone", "enabled": true },
+                    "props": { "gridSize": 45 },
+                    "data": {},
+                    "$props": {},
+                }
+            },
+            "inputs": { "inputs": {}, "inputLinks": {} },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+        });
+        let mbox = json!({
+            "id": "scene-mbox",
+            "name": "MBOX Light Tunnel",
+            "enabled": true,
+            "minSeconds": 10,
+            "maxSeconds": 28,
+            "groups": [
+                {
+                    "id": "doc-bg",
+                    "name": "Background",
+                    "hidden": false,
+                    "modules": ["doc-mbox"],
+                    "enabled": 1,
+                    "alpha": 1,
+                    "inherit": false,
+                    "inheritFrom": -1,
+                    "pipeline": false,
+                    "clearing": true,
+                    "compositeOperation": "normal",
+                }
+            ],
+            "modules": {
+                "doc-mbox": {
+                    "$id": "doc-mbox",
+                    "$moduleName": "MBOX3",
+                    "meta": { "name": "MBOX3", "enabled": true },
+                    "props": { "dhue": 0.25 },
+                    "data": {},
+                    "$props": {},
+                }
+            },
+            "inputs": {
+                "inputs": {},
+                "inputLinks": { "link-dhue": { "control": "dhue" } }
+            },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+        });
+        store.scenes.scenes = vec![cmyk, mbox];
+        store.scenes.defaults_version = DEFAULTS_VERSION - 1;
+        store.scenes.seeded_default_scenes =
+            vec!["Halftone Harbor".to_string(), "MBOX Light Tunnel".to_string()];
+
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("seeding");
+
+        let halftone = find_default_scene(&store, "Halftone Harbor");
+        assert_eq!(halftone["id"], json!("scene-halftone"), "id preserved");
+        assert_eq!(halftone["minSeconds"], json!(8), "timing preserved");
+        // The stale payload is gone: the saved CMYK Halftone module id no
+        // longer exists and the rebuilt groups carry fresh ids. (The test
+        // registry has no ISF corpus, so the definition's own modules are
+        // skipped here; the v13 payload itself is pinned in the engine
+        // crate's `default_scenes` tests.)
+        assert!(
+            !halftone["modules"]
+                .as_object()
+                .expect("modules")
+                .contains_key("doc-cmyk"),
+            "the saved CMYK Halftone payload survived: {}",
+            halftone["modules"]
+        );
+        assert!(
+            !halftone["groups"]
+                .as_array()
+                .expect("groups")
+                .iter()
+                .any(|group| group["id"] == json!("doc-effects")),
+            "the saved groups were not rebuilt: {}",
+            halftone["groups"]
+        );
+
+        let mbox = find_default_scene(&store, "MBOX Light Tunnel");
+        assert_eq!(mbox["id"], json!("scene-mbox"), "id preserved");
+        assert!(
+            !mbox["modules"]
+                .as_object()
+                .expect("modules")
+                .contains_key("doc-mbox"),
+            "the saved MBOX3 payload survived: {}",
+            mbox["modules"]
+        );
+        assert!(
+            !mbox["inputs"]["inputLinks"]
+                .as_object()
+                .expect("links")
+                .contains_key("link-dhue"),
+            "the stale dhue link survived: {}",
+            mbox["inputs"]["inputLinks"]
+        );
+
+        // A second pass must not re-refresh (the version is already current).
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("second seeding");
+        assert_eq!(
+            find_default_scene(&store, "Halftone Harbor")["id"],
+            json!("scene-halftone")
+        );
     }
 
     // ————————————————— persistence —————————————————
