@@ -31,6 +31,17 @@ const CHANNELS = new Map([
     "engine/media-start-screen",
     { command: "media/start-screen", timeoutMs: 15000, build: screenPayload },
   ],
+  // The portal's screen picker is a modal system dialog: it stays open until
+  // the user answers, so the engine defers the reply. The timeout only guards
+  // a wedged engine, not a slow pick.
+  [
+    "engine/media-pick-screen",
+    {
+      command: "media/pick-screen",
+      timeoutMs: 300_000,
+      build: pickScreenPayload,
+    },
+  ],
   [
     "engine/media-stop",
     { command: "media/stop-source", timeoutMs: 8000, build: stopPayload },
@@ -105,6 +116,23 @@ function screenPayload(message = {}) {
   };
 }
 
+function pickScreenPayload(message = {}) {
+  const payload = {};
+
+  if (typeof message?.sourceId === "string" && message.sourceId.trim()) {
+    payload.sourceId = message.sourceId.trim();
+  }
+
+  const sourceType = String(message?.sourceType || "both").toLowerCase();
+  if (["monitor", "window", "both"].includes(sourceType)) {
+    payload.sourceType = sourceType;
+  } else {
+    throw new Error('sourceType must be "monitor", "window" or "both"');
+  }
+
+  return payload;
+}
+
 function stopPayload(message = {}) {
   return { sourceId: requiredString(message, "sourceId") };
 }
@@ -145,6 +173,8 @@ const MEDIA_ERROR_CODES = new Set([
   "media_unavailable",
   "media_plugin_missing",
   "media_start_failed",
+  "cancelled",
+  "engine_shutting_down",
 ]);
 
 /**

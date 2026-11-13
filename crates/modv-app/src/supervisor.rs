@@ -29,10 +29,11 @@
 //! `engine/shutdown` is still the only request with side effects beyond the
 //! store: persist the snapshot, then signal the event loop to exit.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -41,6 +42,7 @@ use modv_ipc::frame::{KIND_EVENT, KIND_REQUEST};
 use modv_ipc::message::{Event, Incoming, Request, Response, from_frame};
 use modv_ipc::preview::{PreviewFrame, PreviewRing};
 use modv_ipc::socket::SocketServer;
+use modv_media::video::portal::{PortalStream, SourceSelection, request_screencast};
 use modv_media::video::{
     DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH, TestPattern, VideoSourceConfig,
 };
@@ -122,6 +124,23 @@ pub enum Reply {
     Deferred,
 }
 
+/// A `media/pick-screen` request waiting for the portal's system dialog.
+///
+/// The dialog blocks until the user answers, so the request is handled on a
+/// worker thread and the reply is sent from [`EngineSupervisor::poll`] once
+/// the result arrives. The `PortalStream` it returns owns the portal session,
+/// which must outlive the PipeWire source.
+struct PendingPortalPick {
+    /// Request id the response carries.
+    id: u64,
+    /// Client that asked, for `SocketServer::send_response`.
+    client: usize,
+    /// Media source id the picked stream will run as.
+    source_id: String,
+    /// Result channel from the picker thread.
+    rx: Receiver<Result<PortalStream, modv_media::video::portal::PortalError>>,
+}
+
 /// The engine-side supervision state. Created before the window exists and
 /// polled from the frame loop.
 pub struct EngineSupervisor {
@@ -150,6 +169,11 @@ pub struct EngineSupervisor {
     /// it into GPU textures ([`crate::compositor::Compositor::sync_media`]);
     /// the request handlers here own the start/stop/status lifecycle.
     media: MediaHub,
+    /// Portal screen picks whose dialog is still open.
+    pending_portal: VecDeque<PendingPortalPick>,
+    /// Live portal sessions, keyed by media source id. Dropping an entry tears
+    /// down its PipeWire node, so these outlive the `media` source.
+    portal_sessions: HashMap<String, PortalStream>,
 }
 
 impl EngineSupervisor {
@@ -181,6 +205,8 @@ impl EngineSupervisor {
             pending_previews: VecDeque::new(),
             unknown_dispatches_warned: HashSet::new(),
             media: MediaHub::new(),
+            pending_portal: VecDeque::new(),
+            portal_sessions: HashMap::new(),
         })
     }
 
@@ -286,6 +312,7 @@ impl EngineSupervisor {
             }
         }
 
+        self.drain_portal_picks();
         self.maybe_heartbeat();
         // WS-10: once a second, check every media source and restart the ones
         // that errored, ended or disappeared. A restart reuses the source's
@@ -315,6 +342,7 @@ impl EngineSupervisor {
     /// ([`Reply::Now`]).
     fn handle_request(&mut self, request: Request, store: &mut Store, client: usize) -> Reply {
         match request.method.as_str() {
+            "media/pick-screen" => self.queue_portal_pick(request, client),
             "preview/module" => self.queue_module_preview(request, client),
             "preview/scene" => self.queue_scene_preview(request, client),
             _ => Reply::Now(self.handle_request_now(request, store)),
@@ -478,6 +506,135 @@ impl EngineSupervisor {
     /// `preview/module` and `preview/scene`. A failure is the renderer-facing
     /// error code (`module_not_found`, `scene_not_found`, `scene_row_empty`,
     /// `preview_failed`).
+    /// Validate a `media/pick-screen` request and start the portal dialog on
+    /// a worker thread. The reply is deferred to [`Self::drain_portal_picks`].
+    fn queue_portal_pick(&mut self, request: Request, client: usize) -> Reply {
+        let source_id = media_source_id(&request.params)
+            .unwrap_or_else(|| format!("screen-{}", crate::ids::uuid_v4()));
+        let selection = request
+            .params
+            .get("sourceType")
+            .and_then(Value::as_str)
+            .and_then(SourceSelection::from_arg)
+            .unwrap_or(SourceSelection::MonitorOrWindow);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("modv-portal-pick".to_string())
+            .spawn(move || {
+                // `request_screencast` blocks until the user answers the
+                // system dialog; the window loop must never wait on it.
+                let _ = tx.send(request_screencast(selection));
+            });
+        if let Err(error) = spawned {
+            return Reply::Now(Response::err(
+                request.id,
+                "media_unavailable",
+                format!("could not start the screen picker: {error}"),
+            ));
+        }
+
+        self.pending_portal.push_back(PendingPortalPick {
+            id: request.id,
+            client,
+            source_id,
+            rx,
+        });
+        Reply::Deferred
+    }
+
+    /// Send the responses of portal picks that finished since the last frame.
+    fn drain_portal_picks(&mut self) {
+        if self.pending_portal.is_empty() {
+            return;
+        }
+
+        let mut remaining = VecDeque::with_capacity(self.pending_portal.len());
+        while let Some(pick) = self.pending_portal.pop_front() {
+            match pick.rx.try_recv() {
+                Ok(Ok(stream)) => {
+                    let response = self.start_picked_screen(
+                        pick.id,
+                        &pick.source_id,
+                        stream,
+                    );
+                    if let Err(error) = self.server.send_response(pick.client, &response) {
+                        eprintln!("engine: WARN could not send screen-pick response: {error}");
+                    }
+                }
+                Ok(Err(error)) => {
+                    let code = if error.is_cancelled() {
+                        "cancelled"
+                    } else if error.is_unavailable() {
+                        "media_unavailable"
+                    } else {
+                        "media_start_failed"
+                    };
+                    let response = Response::err(pick.id, code, error.to_string());
+                    if let Err(error) = self.server.send_response(pick.client, &response) {
+                        eprintln!("engine: WARN could not send screen-pick response: {error}");
+                    }
+                }
+                Err(TryRecvError::Empty) => remaining.push_back(pick),
+                Err(TryRecvError::Disconnected) => {
+                    let response = Response::err(
+                        pick.id,
+                        "media_unavailable",
+                        "the screen picker thread stopped without an answer",
+                    );
+                    let _ = self.server.send_response(pick.client, &response);
+                }
+            }
+        }
+        self.pending_portal = remaining;
+    }
+
+    /// Start the picked PipeWire node as `source_id` and answer the request.
+    fn start_picked_screen(
+        &mut self,
+        request_id: u64,
+        source_id: &str,
+        stream: PortalStream,
+    ) -> Response {
+        let config = stream.video_config();
+        let index = match self.media.start(source_id, config) {
+            Ok(index) => index,
+            Err(error) => {
+                return Response::err(request_id, "media_start_failed", error.to_string());
+            }
+        };
+
+        let response = Response::ok(
+            request_id,
+            json!({
+                "sourceId": source_id,
+                "index": index,
+                "nodeId": stream.node_id(),
+                "width": stream.width(),
+                "height": stream.height(),
+                "sourceType": stream.source_type().as_str(),
+                "restoreToken": stream.restore_token(),
+            }),
+        );
+        // Keep the session (and therefore the node) alive for as long as the
+        // source runs; `media/stop-source` drops it.
+        self.portal_sessions.insert(source_id.to_string(), stream);
+        response
+    }
+
+    /// Answer every dialog still open at shutdown instead of letting the
+    /// caller time out.
+    fn reject_pending_portal_picks(&mut self) {
+        while let Some(pick) = self.pending_portal.pop_front() {
+            let response = Response::err(
+                pick.id,
+                "engine_shutting_down",
+                "the engine is shutting down",
+            );
+            let _ = self.server.send_response(pick.client, &response);
+        }
+    }
+
     pub fn complete_preview(
         &mut self,
         request: PreviewRequest,
@@ -645,6 +802,10 @@ impl EngineSupervisor {
                 };
 
                 self.media.stop(&source_id);
+                // Dropping the portal session destroys the PipeWire node, so a
+                // stopped screen source does not linger in the desktop's
+                // sharing indicator.
+                self.portal_sessions.remove(&source_id);
 
                 Response::ok(request.id, json!({ "sourceId": source_id }))
             }
@@ -668,6 +829,8 @@ impl EngineSupervisor {
                 // Release every camera/screen/file pipeline before the process
                 // exits (a busy V4L2 device would otherwise stay locked).
                 self.media.stop_all();
+                self.portal_sessions.clear();
+                self.reject_pending_portal_picks();
                 self.shutdown_requested = true;
                 // Nothing will render another frame: answer the queued
                 // thumbnails instead of leaving their callers to time out.

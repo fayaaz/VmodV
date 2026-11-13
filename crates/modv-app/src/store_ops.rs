@@ -75,7 +75,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -202,6 +202,9 @@ pub struct Store {
     /// The renderer's local font list (`fonts.localFonts`) forwarded for the
     /// Text module and the mirror.
     local_fonts: Value,
+    /// The project media root (`media/setMediaDirectoryPath`). The compositor
+    /// resolves ISF texture props and library image paths against it.
+    media_path: Option<PathBuf>,
     /// OSC listeners created through `osc/createServer`, keyed by their id.
     ///
     /// Dropping a `Store` drops the servers, which joins their reader threads.
@@ -313,6 +316,7 @@ impl Store {
             beats: BeatsState::default(),
             bpm_source: "beatdetektor".to_string(),
             local_fonts: json!([]),
+            media_path: None,
             osc_servers: HashMap::new(),
             osc_tx: None,
             osc_rx: None,
@@ -328,6 +332,32 @@ impl Store {
     /// same module definitions (including the scanned ISF corpus).
     pub fn registry_arc(&self) -> Arc<ModuleRegistry> {
         Arc::clone(&self.registry)
+    }
+
+    /// The project media root sent by the renderer, if any.
+    pub fn media_root(&self) -> Option<&Path> {
+        self.media_path.as_deref()
+    }
+
+    /// `media/setMediaDirectoryPath` (`media.js:SET_MEDIA_DIRECTORY_PATH`):
+    /// store the media root the renderer's media manager watches.
+    fn set_media_directory_path(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        let action = "media/setMediaDirectoryPath";
+        let Some(path) = params
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        else {
+            return Err(invalid(action, "missing string \"path\""));
+        };
+        self.media_path = Some(PathBuf::from(path));
+        self.deltas
+            .push("media/SET_MEDIA_DIRECTORY_PATH", json!({ "path": path }));
+        Ok(Value::Null)
     }
 
     /// The current state (read-only; the compositor renders from this).
@@ -519,6 +549,11 @@ impl Store {
             "inputs/setFocusedInput" => self.set_focused_input(params),
             "inputs/clearFocusedInput" => self.clear_focused_input(),
             // ————————————————— Scenes (WS-8 / M5b) —————————————————
+            // The media library is UI-plane (`application/media-mirror.js`
+            // replays it into the mirror in engine mode); the engine only
+            // needs the media root for image/texture path resolution.
+            "media/setState" | "media/addMedia" => Ok(Value::Null),
+            "media/setMediaDirectoryPath" => self.set_media_directory_path(params),
             "scenes/hydrateScenes" => self.hydrate_scenes(),
             "scenes/ensureDefaultScenes" => self.ensure_default_scenes(),
             "scenes/loadScenesFromDisk" => self.load_scenes_from_disk(),

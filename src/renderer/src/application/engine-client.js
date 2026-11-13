@@ -29,6 +29,9 @@ const MEDIA_REQUEST_TIMEOUT_MS = 20_000;
 const MEDIA_LIST_TIMEOUT_MS = 10_000;
 const MEDIA_STATUS_TIMEOUT_MS = 5_000;
 const MEDIA_STOP_TIMEOUT_MS = 8_000;
+// The portal picker is a modal system dialog; the engine defers the reply, so
+// this only guards a wedged engine.
+const MEDIA_PICK_TIMEOUT_MS = 300_000;
 
 /**
  * Scene hover previews poll at the legacy worker's cadence
@@ -623,6 +626,20 @@ export default class EngineClient {
   startEngineScreen(request) {
     return this._mediaCall("startEngineScreen", request, {
       label: "starting the screen capture",
+    });
+  }
+
+  /**
+   * `media/pick-screen` — the engine opens the desktop portal's picker.
+   *
+   * Resolves with `{ sourceId, index, nodeId, width, height, sourceType }`; a
+   * dismissed dialog rejects with a `cancelled` code.
+   */
+  pickEngineScreen(request) {
+    return this._mediaCall("pickEngineScreen", request, {
+      timeoutMs: MEDIA_PICK_TIMEOUT_MS,
+      code: "media_unavailable",
+      label: "picking a screen",
     });
   }
 

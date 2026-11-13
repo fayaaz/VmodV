@@ -99,6 +99,18 @@ const engineApi = {
       nodeId,
     });
   },
+  /**
+   * Ask the engine to open the desktop portal's screen picker.
+   *
+   * Resolves with `{ sourceId, nodeId, width, height, sourceType }` once the
+   * user answers, or rejects with `cancelled` when they dismiss it.
+   */
+  pickEngineScreen({ sourceId, sourceType } = {}) {
+    return ipcRenderer.invoke("engine/media-pick-screen", {
+      sourceId,
+      sourceType,
+    });
+  },
   stopEngineSource(sourceId) {
     return ipcRenderer.invoke("engine/media-stop", { sourceId });
   },

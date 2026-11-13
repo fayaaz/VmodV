@@ -1167,6 +1167,35 @@ export function createEngineMediaController({
     }
   }
 
+  /**
+   * Ask the engine to open the desktop portal's screen picker.
+   *
+   * Engine mode has no renderer-side `getDisplayMedia` capture: the portal
+   * dialog chooses the source and the engine starts it as a `screen:` source.
+   * A dismissed dialog rejects with a `cancelled` code; the caller can ignore
+   * it.
+   */
+  async function pickScreen({ sourceType = "both", sourceId } = {}) {
+    if (!enabled || typeof surface?.pickEngineScreen !== "function") {
+      return null;
+    }
+
+    const response = await surface.pickEngineScreen({ sourceType, sourceId });
+
+    if (!response || typeof response !== "object" || !response.sourceId) {
+      return null;
+    }
+
+    tracked.set(response.sourceId, {
+      kind: KIND_SCREEN,
+      deviceId: null,
+      request: { sourceId: response.sourceId },
+    });
+    notices.delete(response.sourceId);
+
+    return response;
+  }
+
   async function stopAll() {
     for (const sourceId of [...tracked.keys()]) {
       await stopSource(sourceId);
@@ -1324,6 +1353,7 @@ export function createEngineMediaController({
     ensureCameras,
     startVideoFile,
     startScreen,
+    pickScreen,
     stopSource,
     stopAll,
     status,

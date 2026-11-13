@@ -170,6 +170,7 @@ describe("buildEngineMediaRequest", () => {
       "engine/media-start-camera",
       "engine/media-start-file",
       "engine/media-start-screen",
+      "engine/media-pick-screen",
       "engine/media-stop",
       "engine/media-status",
     ]);
@@ -179,6 +180,7 @@ describe("buildEngineMediaRequest", () => {
     expect(mediaRequestTimeoutMs("engine/media-start-camera")).toBe(15000);
     expect(mediaRequestTimeoutMs("engine/media-status")).toBe(4000);
     expect(mediaRequestTimeoutMs("engine/media-list")).toBe(8000);
+    expect(mediaRequestTimeoutMs("engine/media-pick-screen")).toBe(300000);
   });
 });
 

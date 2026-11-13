@@ -10,14 +10,17 @@
   >
     <grid class="borders">
       <c v-if="engineMode" span="1..">
-        <div class="engine-screen-notice">{{ engineScreenHint }}</div>
+        <div class="engine-screen-notice">
+          The desktop's own picker chooses the screen or window; the engine
+          captures it directly.
+        </div>
       </c>
 
       <c span="1..">
         <grid columns="6">
           <c span="1">Screen Capture</c>
           <c span="5">
-            <Button class="light" @click="openPickerDialog">
+            <Button class="light" @click="pickScreen">
               Pick Screen/Window…
             </Button>
           </c>
@@ -38,14 +41,23 @@
                   >
                 </div>
                 <div class="capture-actions">
+                  <span v-if="engineMode && cap.state" class="muted">{{
+                    cap.state
+                  }}</span>
                   <Button
-                    v-if="cap.disconnected"
+                    v-if="
+                      cap.disconnected || (engineMode && cap.state === 'error')
+                    "
                     class="light"
-                    @click="reconnectCapture(cap)"
+                    @click="pickScreen"
                   >
                     Reconnect
                   </Button>
-                  <Button class="light" @click="createTextureModule(cap)">
+                  <Button
+                    v-if="!engineMode"
+                    class="light"
+                    @click="createTextureModule(cap)"
+                  >
                     Create Texture Module
                   </Button>
                   <Button class="light" @click="stopCapture(cap.id)">
@@ -63,10 +75,6 @@
 
 <script>
 import { v4 as uuidv4 } from "uuid";
-import {
-  ENGINE_SCREEN_CAPTURE_UNAVAILABLE,
-  engineUnsupportedMessage,
-} from "../../application/engine-unsupported";
 
 export default {
   data() {
@@ -75,6 +83,8 @@ export default {
       iVBody:
         "Capture one or more windows/screens using the Screen Capture API. Captures persist in presets, and missing sources will show a warning upon loading.",
       screenStreams: {},
+      engineCaptures: [],
+      enginePollTimer: null,
     };
   },
   computed: {
@@ -82,27 +92,82 @@ export default {
       return this.$modV?.engineMode === true;
     },
 
-    engineScreenHint() {
-      return ENGINE_SCREEN_CAPTURE_UNAVAILABLE;
-    },
-
     captures() {
+      if (this.engineMode) {
+        return this.engineCaptures;
+      }
+
       const aux = this.$modV.store.state.outputs.auxillary;
       return Object.values(aux).filter((o) => o.group === "screen");
     },
   },
+  created() {
+    if (!this.engineMode) {
+      return;
+    }
+
+    this.refreshEngineCaptures();
+    this.enginePollTimer = setInterval(
+      () => this.refreshEngineCaptures(),
+      2000,
+    );
+  },
+
+  beforeUnmount() {
+    if (this.enginePollTimer) {
+      clearInterval(this.enginePollTimer);
+      this.enginePollTimer = null;
+    }
+  },
+
   methods: {
-    openPickerDialog() {
-      // Open global screen picker dialog component mounted in App.vue
-      this.$store.commit("dialogs/ADD_OPEN", "screenPicker");
+    async pickScreen() {
+      if (!this.engineMode) {
+        // Open global screen picker dialog component mounted in App.vue
+        this.$store.commit("dialogs/ADD_OPEN", "screenPicker");
+        return;
+      }
+
+      try {
+        await this.$modV.engineMedia?.pickScreen?.({ sourceType: "both" });
+      } catch (error) {
+        // A dismissed system dialog is a normal outcome, not an error.
+        if (!String(error?.message || error).includes("cancelled")) {
+          console.error("Screen pick failed", error);
+        }
+      } finally {
+        await this.refreshEngineCaptures();
+      }
+    },
+
+    async refreshEngineCaptures() {
+      if (!this.engineMode || !this.$modV.engineMedia?.status) {
+        return;
+      }
+
+      const status = await this.$modV.engineMedia.status();
+
+      this.engineCaptures = (status?.sources || [])
+        .filter((source) => source.kind === "screen")
+        .map((source) => ({
+          id: source.sourceId,
+          name: source.sourceId,
+          label:
+            source.width && source.height
+              ? `${source.width}×${source.height}`
+              : "",
+          state: source.state,
+          lastError: source.lastError,
+          disconnected: source.state === "error",
+        }));
     },
 
     async reconnectCapture(cap) {
       if (this.engineMode) {
-        // The engine captures screens through a PipeWire node id, which the
-        // Electron desktopCapturer path does not expose; reconnect stays a
-        // legacy-only action.
-        console.warn(engineUnsupportedMessage("Screen capture"));
+        // The portal node dies with its session, so reconnect means picking a
+        // screen again (the old node id must not be reused).
+        await this.stopCapture(cap.id);
+        await this.pickScreen();
         return;
       }
 
@@ -145,7 +210,7 @@ export default {
 
     async startCapture() {
       if (this.engineMode) {
-        console.warn(engineUnsupportedMessage("Screen capture"));
+        await this.pickScreen();
         return;
       }
 
@@ -245,7 +310,13 @@ export default {
       };
     },
 
-    stopCapture(id) {
+    async stopCapture(id) {
+      if (this.engineMode) {
+        await this.$modV.engineMedia?.stopSource?.(id);
+        await this.refreshEngineCaptures();
+        return;
+      }
+
       const aux = this.$modV.store.state.outputs.auxillary[id];
       const ref = this.screenStreams[id];
       if (ref && ref.stream) {
@@ -261,6 +332,11 @@ export default {
     },
 
     async createTextureModule(cap) {
+      if (this.engineMode) {
+        // Texture 2D does not yet consume the engine's image/media registry.
+        return;
+      }
+
       try {
         // Get the current focused group
         const focusedGroupId = this.$store.state.uiGroups.lastFocused;

@@ -45,6 +45,7 @@
 //! pure presentation targets, so they follow the primary frame exactly.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -155,6 +156,9 @@ struct WindowedApp {
     /// Live keyboard modifiers per window, so `Ctrl+F`/`Alt+F` are not treated
     /// as the fullscreen shortcut.
     modifiers: HashMap<WindowId, ModifiersState>,
+    /// The media root currently applied to the compositor, so a
+    /// `media/setMediaDirectoryPath` change is picked up on the next frame.
+    applied_media_root: Option<PathBuf>,
 }
 
 /// A secondary native window presenting the primary composited frame.
@@ -380,6 +384,7 @@ impl WindowedApp {
             audio_error_logged: false,
             double_click: HashMap::new(),
             modifiers: HashMap::new(),
+            applied_media_root: None,
         }
         .with_socket_failure(socket_failed)
     }
@@ -680,6 +685,18 @@ impl WindowedApp {
         // Field-level borrows keep the `engine` handle above usable.
         if let (Some(supervisor), Some(compositor)) = (&mut self.supervisor, &mut self.compositor) {
             compositor.sync_media(supervisor.media_mut());
+        }
+
+        // 1b2. Follow the renderer's project media root so ISF texture props
+        // and library image paths resolve under it (set once at startup and on
+        // a media-directory change).
+        let media_root = self.store.media_root().map(std::path::Path::to_path_buf);
+        if media_root != self.applied_media_root {
+            if let (Some(compositor), Some(root)) = (self.compositor.as_mut(), media_root.as_deref())
+            {
+                compositor.set_media_root(root);
+            }
+            self.applied_media_root = media_root;
         }
 
         // 1c. A whole-scene shader transition composites the outgoing Scene
