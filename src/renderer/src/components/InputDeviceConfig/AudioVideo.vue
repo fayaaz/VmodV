@@ -542,10 +542,12 @@ export default {
     commitSelectedVideoSources(videoIds) {
       const payload = { videoIds: [...videoIds] };
 
-      this.$modV.store.commit(
-        "mediaStream/SET_SELECTED_VIDEO_SOURCES",
-        payload,
-      );
+      if (!this.$modV.engineMode) {
+        this.$modV.store.commit(
+          "mediaStream/SET_SELECTED_VIDEO_SOURCES",
+          payload,
+        );
+      }
       this.$modV._store.commit(
         "mediaStream/SET_SELECTED_VIDEO_SOURCES",
         payload,
@@ -554,9 +556,11 @@ export default {
 
     revertAudioSource(previous) {
       if (this.$modV.store.state.mediaStream.currentAudioSource !== previous) {
-        this.$modV.store.commit("mediaStream/SET_CURRENT_AUDIO_SOURCE", {
-          audioId: previous,
-        });
+        if (!this.$modV.engineMode) {
+          this.$modV.store.commit("mediaStream/SET_CURRENT_AUDIO_SOURCE", {
+            audioId: previous,
+          });
+        }
         this.$modV._store.commit("mediaStream/SET_CURRENT_AUDIO_SOURCE", {
           audioId: previous,
         });
@@ -728,7 +732,9 @@ export default {
 
       const payload = { deviceId, ...patch };
 
-      this.$modV.store.commit("mediaStream/SET_VIDEO_SETTINGS", payload);
+      if (!this.$modV.engineMode) {
+        this.$modV.store.commit("mediaStream/SET_VIDEO_SETTINGS", payload);
+      }
       this.$modV._store.commit("mediaStream/SET_VIDEO_SETTINGS", payload);
 
       try {
@@ -744,10 +750,12 @@ export default {
       ];
       const payload = { videoIds };
 
-      this.$modV.store.commit(
-        "mediaStream/SET_SELECTED_VIDEO_SOURCES",
-        payload,
-      );
+      if (!this.$modV.engineMode) {
+        this.$modV.store.commit(
+          "mediaStream/SET_SELECTED_VIDEO_SOURCES",
+          payload,
+        );
+      }
       this.$modV._store.commit(
         "mediaStream/SET_SELECTED_VIDEO_SOURCES",
         payload,
@@ -813,9 +821,14 @@ export default {
           this.$modV.store.dispatch("outputs/removeWebcamOutputForDevice", {
             deviceId,
           });
-          this.$modV.store.commit("mediaStream/REMOVE_SELECTED_VIDEO_SOURCE", {
-            videoId: deviceId,
-          });
+          if (!this.$modV.engineMode) {
+            this.$modV.store.commit(
+              "mediaStream/REMOVE_SELECTED_VIDEO_SOURCE",
+              {
+                videoId: deviceId,
+              },
+            );
+          }
           this.$modV._store.commit("mediaStream/REMOVE_SELECTED_VIDEO_SOURCE", {
             videoId: deviceId,
           });

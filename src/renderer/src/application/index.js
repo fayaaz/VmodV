@@ -580,7 +580,12 @@ class ModV {
       const selected = restoreVideoSources(savedSelection, enumerated.video);
       const videoPayload = { videoIds: savedSelection };
 
-      this.store.commit("mediaStream/SET_SELECTED_VIDEO_SOURCES", videoPayload);
+      if (!this.engineMode) {
+        this.store.commit(
+          "mediaStream/SET_SELECTED_VIDEO_SOURCES",
+          videoPayload,
+        );
+      }
       this._store.commit(
         "mediaStream/SET_SELECTED_VIDEO_SOURCES",
         videoPayload,
