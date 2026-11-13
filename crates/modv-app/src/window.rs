@@ -529,6 +529,10 @@ impl WindowedApp {
             }
         }
 
+        // 1c2. Apply OSC datagrams that arrived since the last frame, before
+        // the Input Links read `osc.data` (`node-osc` delivers asynchronously).
+        self.store.drain_osc();
+
         // 1d. Evaluate Input Links against the frame the engine's feed (or the
         // renderer's pump) produced, then render with the updated props
         // (`worker/loop.js` runs the link loop before the renderers). `now` is

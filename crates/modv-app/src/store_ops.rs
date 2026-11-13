@@ -91,6 +91,8 @@ use modv_engine::preset::{
 };
 use modv_engine::props::{PropSchema, coerce_prop_value};
 use modv_media::audio::analyser::AudioSnapshot;
+use modv_media::midi::device_key;
+use modv_media::osc::{OscServer, OscValue, apply_osc_message};
 use modv_renderers::two_d::AudioFrame;
 
 use crate::expressions::{ExpressionCache, ExpressionFailure, resolve_input_value};
@@ -199,6 +201,15 @@ pub struct Store {
     /// The renderer's local font list (`fonts.localFonts`) forwarded for the
     /// Text module and the mirror.
     local_fonts: Value,
+    /// OSC listeners created through `osc/createServer`, keyed by their id.
+    ///
+    /// Dropping a `Store` drops the servers, which joins their reader threads.
+    osc_servers: HashMap<String, OscServer>,
+    /// Sender clones handed to the OSC reader threads.
+    osc_tx: Option<std::sync::mpsc::Sender<(String, String, Vec<OscValue>)>>,
+    /// One coalesced message per datagram, drained into `state.osc.data` at
+    /// the start of every frame.
+    osc_rx: Option<std::sync::mpsc::Receiver<(String, String, Vec<OscValue>)>>,
     /// Per-smoothing-id state for `meyda/getFeature` smoothing links
     /// (`audio-features.js` `smoothedFeatures`), keyed by `args[1]`.
     link_smoothing: HashMap<String, f64>,
@@ -296,6 +307,9 @@ impl Store {
             beats: BeatsState::default(),
             bpm_source: "beatdetektor".to_string(),
             local_fonts: json!([]),
+            osc_servers: HashMap::new(),
+            osc_tx: None,
+            osc_rx: None,
             link_smoothing: HashMap::new(),
             link_deltas: HashMap::new(),
             expression_cache: ExpressionCache::new(),
@@ -432,6 +446,11 @@ impl Store {
             "beats/setBpm" => self.set_bpm_action(params),
             "beats/SET_KICK" => self.set_kick(params),
             "beats/SET_BPM_SOURCE" => self.set_bpm_source(params),
+            "midi/ADD_DEVICE" => self.midi_add_device(params),
+            "midi/UPDATE_DEVICE" => self.midi_update_device(params),
+            "midi/WRITE_DATA" => self.midi_write_data(params),
+            "osc/createServer" => self.osc_create_server(params),
+            "osc/removeServer" => self.osc_remove_server(params),
             // ————————————————— FPS / tweens (WS-12) —————————————————
             "fps/SET_FPS" => self.set_fps(params),
             "tweens/ADD_TWEEN" => self.add_tween(params),
@@ -891,6 +910,226 @@ impl Store {
         }
 
         Ok(duplicate)
+    }
+
+    // ————————————————— MIDI / OSC transport (WS-11) —————————————————
+
+    /// Ensure `state.midi` is a `{ devices: { ... } }` object and return the
+    /// device map. The engine keeps the raw JSON shape so the mirror and
+    /// Input Links see exactly what the JS store stores.
+    fn midi_devices_mut(&mut self) -> &mut Map<String, Value> {
+        if !self.state.midi.is_object() {
+            self.state.midi = json!({ "devices": {} });
+        }
+        let root = self
+            .state
+            .midi
+            .as_object_mut()
+            .expect("midi state is an object");
+        if !root.get("devices").is_some_and(Value::is_object) {
+            root.insert("devices".to_string(), json!({}));
+        }
+        root.get_mut("devices")
+            .and_then(Value::as_object_mut)
+            .expect("devices is an object")
+    }
+
+    /// One device record with the store defaults (`midi.js:31-42`).
+    fn midi_device_record(id: &str, name: &str, manufacturer: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "manufacturer": manufacturer,
+            "channelData": {},
+            "listenForInput": true,
+            "listenForClock": false,
+            "ccLatch": false,
+            "noteOnLatch": false,
+        })
+    }
+
+    /// `midi/ADD_DEVICE` (`midi.js:31-42`).
+    fn midi_add_device(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "midi/ADD_DEVICE";
+        let id = required_str(params, action, "id")?.to_string();
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let manufacturer = params
+            .get("manufacturer")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let key = device_key(&id, &name, &manufacturer);
+
+        self.midi_devices_mut().insert(
+            key,
+            Self::midi_device_record(&id, &name, &manufacturer),
+        );
+        self.deltas.push(
+            action,
+            json!({ "id": id, "name": name, "manufacturer": manufacturer }),
+        );
+        Ok(Value::Null)
+    }
+
+    /// `midi/UPDATE_DEVICE` (`midi.js:44-46`).
+    fn midi_update_device(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "midi/UPDATE_DEVICE";
+        let id = required_str(params, action, "id")?.to_string();
+        let key = required_str(params, action, "key")?.to_string();
+        let value = params.get("value").cloned().unwrap_or(Value::Null);
+
+        let devices = self.midi_devices_mut();
+        let device = devices
+            .entry(id.clone())
+            .or_insert_with(|| Self::midi_device_record(&id, "", ""));
+        if let Some(object) = device.as_object_mut() {
+            object.insert(key.clone(), value.clone());
+        }
+
+        self.deltas
+            .push(action, json!({ "id": id, "key": key, "value": value }));
+        Ok(Value::Null)
+    }
+
+    /// `midi/WRITE_DATA` (`midi.js:48-54`). This is the mutation Input Links
+    /// subscribe to; the mirror replays the same payload.
+    fn midi_write_data(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "midi/WRITE_DATA";
+        let id = required_str(params, action, "id")?.to_string();
+        let channel = params.get("channel").and_then(Value::as_i64).unwrap_or(0);
+        let type_ = params.get("type").and_then(Value::as_i64).unwrap_or(0);
+        let data = params.get("data").cloned().unwrap_or(Value::Null);
+
+        let devices = self.midi_devices_mut();
+        let device = devices
+            .entry(id.clone())
+            .or_insert_with(|| Self::midi_device_record(&id, "", ""));
+        let Some(object) = device.as_object_mut() else {
+            return Ok(Value::Null);
+        };
+        if !object.get("channelData").is_some_and(Value::is_object) {
+            object.insert("channelData".to_string(), json!({}));
+        }
+        let Some(channel_data) = object.get_mut("channelData").and_then(Value::as_object_mut) else {
+            return Ok(Value::Null);
+        };
+        let channel_key = channel.to_string();
+        let channel_entry = channel_data
+            .entry(channel_key)
+            .or_insert_with(|| json!({}));
+        if let Some(types) = channel_entry.as_object_mut() {
+            types.insert(type_.to_string(), data.clone());
+        }
+
+        self.deltas.push(
+            action,
+            json!({ "id": id, "channel": channel, "type": type_, "data": data }),
+        );
+        Ok(Value::Null)
+    }
+
+    /// `osc/createServer` (`osc.js:26-48`): bind a real UDP listener.
+    fn osc_create_server(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "osc/createServer";
+        let host = params
+            .get("host")
+            .and_then(Value::as_str)
+            .unwrap_or("0.0.0.0")
+            .to_string();
+        let port = params
+            .get("port")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::from(modv_media::osc::DEFAULT_OSC_PORT))
+            .min(u64::from(u16::MAX)) as u16;
+
+        if self.osc_tx.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.osc_tx = Some(tx);
+            self.osc_rx = Some(rx);
+        }
+        let tx = self.osc_tx.clone().expect("osc channel exists");
+        let id = crate::ids::uuid_v4();
+        let thread_id = id.clone();
+
+        let server = OscServer::start_messages(&host, port, move |address, values| {
+            let _ = tx.send((thread_id.clone(), address.to_string(), values.to_vec()));
+        })
+        .map_err(|error| invalid(action, error.to_string()))?;
+        let local = server.local_addr();
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{host}:{port}"));
+
+        self.osc_servers.insert(id.clone(), server);
+        let payload = json!({
+            "id": id,
+            "name": name,
+            "host": local.ip().to_string(),
+            "port": local.port(),
+        });
+        self.deltas.push("osc/ADD_SERVER", payload.clone());
+        Ok(payload)
+    }
+
+    /// `osc/removeServer` (`osc.js:50-58`).
+    fn osc_remove_server(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let Some(id) = params.get("id").and_then(Value::as_str) else {
+            return Ok(Value::Null);
+        };
+        if self.osc_servers.remove(id).is_some() {
+            self.deltas
+                .push("osc/DELETE_SERVER", json!({ "id": id }));
+        }
+        Ok(Value::Null)
+    }
+
+    /// Drain coalesced OSC datagrams into `state.osc.data` and the mirror.
+    ///
+    /// The window loop calls this once per frame before Input Links, so a
+    /// value that arrived since the last frame is visible to the renderer.
+    pub fn drain_osc(&mut self) {
+        let Some(receiver) = &self.osc_rx else {
+            return;
+        };
+        let mut messages = Vec::new();
+        while let Ok(message) = receiver.try_recv() {
+            messages.push(message);
+        }
+        for (server_id, address, values) in messages {
+            self.apply_osc_datagram(&server_id, &address, &values);
+        }
+    }
+
+    fn apply_osc_datagram(&mut self, server_id: &str, address: &str, values: &[OscValue]) {
+        if !self.state.osc.is_object() {
+            self.state.osc = json!({ "data": {} });
+        }
+        let root = self
+            .state
+            .osc
+            .as_object_mut()
+            .expect("osc state is an object");
+        if !root.get("data").is_some_and(Value::is_object) {
+            root.insert("data".to_string(), json!({}));
+        }
+        let Some(data) = root.get_mut("data") else {
+            return;
+        };
+        apply_osc_message(data, address, values);
+
+        let mut msg = Vec::with_capacity(values.len() + 1);
+        msg.push(json!(address));
+        msg.extend(values.iter().map(OscValue::to_json));
+        self.deltas.push(
+            "osc/WRITE_DATA",
+            json!({ "id": server_id, "msg": Value::Array(msg) }),
+        );
     }
 
     /// `groups/REMOVE_MODULE_FROM_GROUP` (`groups.js:528-542`).
@@ -6906,5 +7145,87 @@ mod tests {
                     && assignment.expression == "value * 2"),
             "the expression rides along"
         );
+    }
+
+    #[test]
+    fn midi_actions_store_the_mirror_shape() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        store
+            .dispatch(
+                "midi/ADD_DEVICE",
+                json!({ "id": "dev-1", "name": "Pad", "manufacturer": "Acme" }),
+            )
+            .expect("add device");
+        let key = "dev-1-Pad-Acme";
+        assert_eq!(
+            store.state().midi["devices"][key]["listenForInput"],
+            json!(true)
+        );
+        assert_eq!(
+            store.state().midi["devices"][key]["listenForClock"],
+            json!(false)
+        );
+
+        store
+            .dispatch(
+                "midi/UPDATE_DEVICE",
+                json!({ "id": key, "key": "listenForClock", "value": true }),
+            )
+            .expect("update device");
+        assert_eq!(
+            store.state().midi["devices"][key]["listenForClock"],
+            json!(true)
+        );
+
+        store
+            .dispatch(
+                "midi/WRITE_DATA",
+                json!({ "id": key, "channel": 1, "type": 144, "data": 1 }),
+            )
+            .expect("write data");
+        assert_eq!(
+            store.state().midi["devices"][key]["channelData"]["1"]["144"],
+            json!(1)
+        );
+
+        let deltas = store.drain_deltas();
+        assert!(deltas.iter().any(|delta| delta.r#type == "midi/ADD_DEVICE"));
+        assert!(
+            deltas
+                .iter()
+                .any(|delta| delta.r#type == "midi/UPDATE_DEVICE")
+        );
+        let write = deltas
+            .iter()
+            .find(|delta| delta.r#type == "midi/WRITE_DATA")
+            .expect("write delta");
+        assert_eq!(write.payload["id"], json!(key));
+    }
+
+    #[test]
+    fn osc_datagrams_apply_to_state_and_mirror() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        store.apply_osc_datagram(
+            "server-1",
+            "/modv/bass",
+            &[modv_media::osc::OscValue::Float(0.5)],
+        );
+        assert_eq!(
+            store.state().osc["data"]["modv"]["bass"],
+            json!([0.5]),
+            "the OSC address is written as an array like msg.slice(1)"
+        );
+
+        let deltas = store.drain_deltas();
+        let write = deltas
+            .iter()
+            .find(|delta| delta.r#type == "osc/WRITE_DATA")
+            .expect("osc write delta");
+        assert_eq!(write.payload["id"], json!("server-1"));
+        assert_eq!(write.payload["msg"], json!(["/modv/bass", 0.5]));
     }
 }

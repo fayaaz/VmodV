@@ -9,7 +9,7 @@ export const ENGINE_UNSUPPORTED_TITLE =
 
 /** One-line boot warning, also useful when a shortcut is attempted. */
 export const ENGINE_UNSUPPORTED_BOOT_MESSAGE =
-  "Rust engine mode: Output Windows, MIDI input, OSC, plugins and local fonts are not supported yet; unavailable controls are disabled";
+  "Rust engine mode: Output Windows and JavaScript plugins are not supported yet; unavailable controls are disabled";
 
 /** Console/renderer warning for a feature the user tried to use anyway. */
 export function engineUnsupportedMessage(feature) {

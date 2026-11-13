@@ -359,12 +359,15 @@ pub struct EngineState {
     /// MIDI state object, verbatim. The UI owns the device model;
     /// porting lands with WS-11.
     pub midi: Value,
+    /// OSC receive state (`{ data: { ... } }`) written by the engine's OSC
+    /// listeners; Input Links read `osc.data.<address>`.
+    pub osc: Value,
 }
 
 impl EngineState {
-    /// An empty state with empty opaque slots: tweens default to `[]` and
-    /// midi to `{}` (not `{"devices": {}, "learning": false}`), matching the
-    /// preset loader's missing-key defaults.
+    /// An empty state with empty opaque slots: tweens default to `[]`, midi to
+    /// `{}` (not `{"devices": {}, "learning": false}`) and OSC to
+    /// `{"data": {}}`, matching the preset loader's missing-key defaults.
     pub fn new() -> Self {
         Self {
             groups: Vec::new(),
@@ -375,6 +378,11 @@ impl EngineState {
             focused_input: Value::Null,
             tweens: Value::Array(Vec::new()),
             midi: Value::Object(Map::new()),
+            osc: {
+                let mut osc = Map::new();
+                osc.insert("data".to_string(), Value::Object(Map::new()));
+                Value::Object(osc)
+            },
         }
     }
 

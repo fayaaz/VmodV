@@ -286,6 +286,61 @@ impl OscServer {
         })
     }
 
+    /// Like [`OscServer::start`], but calls back once per OSC message with the
+    /// whole argument list (the engine's bridge stores that array).
+    pub fn start_messages<F>(host: &str, port: u16, on_message: F) -> Result<Self, OscError>
+    where
+        F: FnMut(&str, &[OscValue]) + Send + 'static,
+    {
+        let socket = UdpSocket::bind((host, port)).map_err(OscError::Bind)?;
+        socket
+            .set_read_timeout(Some(POLL_INTERVAL))
+            .map_err(OscError::Bind)?;
+        let local_addr = socket.local_addr().map_err(OscError::Bind)?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let enabled = Arc::new(AtomicBool::new(true));
+
+        let thread_running = Arc::clone(&running);
+        let thread_enabled = Arc::clone(&enabled);
+        let mut on_message = on_message;
+
+        let thread = thread::Builder::new()
+            .name("modv-osc".to_string())
+            .spawn(move || {
+                let mut buffer = [0u8; MAX_DATAGRAM];
+
+                while thread_running.load(Ordering::Acquire) {
+                    let (len, _from) = match socket.recv_from(&mut buffer) {
+                        Ok(received) => received,
+                        Err(err)
+                            if err.kind() == io::ErrorKind::WouldBlock
+                                || err.kind() == io::ErrorKind::TimedOut =>
+                        {
+                            continue;
+                        }
+                        Err(_) => break,
+                    };
+
+                    if !thread_enabled.load(Ordering::Acquire) {
+                        continue;
+                    }
+
+                    if let Ok((_, packet)) = rosc::decoder::decode_udp(&buffer[..len]) {
+                        dispatch_packet_messages(&packet, &mut on_message);
+                    }
+                }
+            })
+            .map_err(OscError::Spawn)?;
+
+        Ok(Self {
+            local_addr,
+            running,
+            enabled,
+            thread: Some(thread),
+        })
+    }
+
     /// The bound address (`port` 0 reports the ephemeral port the kernel chose).
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
@@ -343,6 +398,44 @@ impl fmt::Debug for OscServer {
 /// positional array shape is available through [`apply_osc_message`]).
 pub fn dispatch_packet(packet: &rosc::OscPacket, on_value: &mut dyn FnMut(&str, OscValue)) {
     dispatch_packet_at_depth(packet, 0, on_value);
+}
+
+/// [`dispatch_packet`] with one callback per **message**, carrying all of its
+/// arguments (`msg.slice(1)` in the JS store). The engine's OSC bridge uses
+/// this shape so a multi-argument message stores its array exactly like
+/// `node-osc` does.
+pub fn dispatch_packet_messages(
+    packet: &rosc::OscPacket,
+    on_message: &mut dyn FnMut(&str, &[OscValue]),
+) {
+    dispatch_packet_messages_at_depth(packet, 0, on_message);
+}
+
+fn dispatch_packet_messages_at_depth(
+    packet: &rosc::OscPacket,
+    depth: usize,
+    on_message: &mut dyn FnMut(&str, &[OscValue]),
+) {
+    match packet {
+        rosc::OscPacket::Message(message) => {
+            let values: Vec<OscValue> = message
+                .args
+                .iter()
+                .filter_map(OscValue::from_osc_type)
+                .collect();
+            if !values.is_empty() {
+                on_message(&message.addr, &values);
+            }
+        }
+        rosc::OscPacket::Bundle(bundle) => {
+            if depth >= MAX_BUNDLE_DEPTH {
+                return;
+            }
+            for packet in &bundle.content {
+                dispatch_packet_messages_at_depth(packet, depth + 1, on_message);
+            }
+        }
+    }
 }
 
 fn dispatch_packet_at_depth(
@@ -1020,6 +1113,28 @@ mod tests {
         );
         assert_eq!(OscValue::from_osc_type(&OscType::Nil), None);
         assert_eq!(OscValue::from_osc_type(&OscType::Inf), None);
+    }
+
+    #[test]
+    fn messages_coalesce_their_argument_list() {
+        use rosc::{OscMessage, OscPacket, OscType};
+
+        let packet = OscPacket::Message(OscMessage {
+            addr: "/modv/mix".into(),
+            args: vec![OscType::Float(0.25), OscType::Int(2)],
+        });
+        let mut calls: Vec<(String, Vec<OscValue>)> = Vec::new();
+        dispatch_packet_messages(&packet, &mut |address, values| {
+            calls.push((address.to_string(), values.to_vec()));
+        });
+
+        assert_eq!(
+            calls,
+            vec![(
+                "/modv/mix".to_string(),
+                vec![OscValue::Float(0.25), OscValue::Int(2)]
+            )]
+        );
     }
 
     #[test]

@@ -482,8 +482,8 @@ fn parse_path(path: &str) -> Vec<PathSegment> {
 
 /// Resolve a store path against the engine's link-visible state.
 ///
-/// Only `beats`, `tweens` and `midi` exist engine-side; a path into any other
-/// root is missing (the JS store has more roots, but nothing the engine
+/// Only `beats`, `tweens`, `midi` and `osc` exist engine-side; a path into any
+/// other root is missing (the JS store has more roots, but nothing the engine
 /// mirrors today produces them).
 fn resolve_state_path(state: &EngineState, beats: &BeatsState, path: &str) -> Option<f64> {
     let segments = parse_path(path);
@@ -500,10 +500,7 @@ fn resolve_state_path(state: &EngineState, beats: &BeatsState, path: &str) -> Op
         },
         "tweens" => resolve_tween(&state.tweens, rest),
         "midi" => resolve_value(&state.midi, rest).and_then(value_as_f64),
-        // No engine `osc` state yet (WS-9 deviation): the renderer forwards
-        // MIDI but not the OSC receive buffer, so the link stays at its saved
-        // value until that state lands.
-        "osc" => None,
+        "osc" => resolve_value(&state.osc, rest).and_then(value_as_f64),
         _ => None,
     }
 }
@@ -963,15 +960,21 @@ mod tests {
     }
 
     #[test]
-    fn osc_state_links_are_skipped_until_their_state_exists() {
-        let (state, _) = state_with_link(
+    fn osc_state_links_read_the_listener_buffer() {
+        let (mut state, _) = state_with_link(
             "osc",
             "m1",
             "amount",
             None,
-            json!({ "type": "state", "location": "osc.data.foo" }),
+            json!({ "type": "state", "location": "osc.data.foo[0]" }),
         );
-        assert!(evaluate(&state).is_empty());
+        // The JS store writes `msg.slice(1)`, i.e. an array even for one
+        // argument, so a link targets an index.
+        state.osc = json!({ "data": { "foo": [0.75] } });
+
+        let writes = evaluate(&state);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].value, 0.75);
     }
 
     #[test]

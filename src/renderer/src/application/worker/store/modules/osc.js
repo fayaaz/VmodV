@@ -62,7 +62,7 @@ const mutations = {
     state.servers[serverContext.id] = serverContext;
   },
 
-  DELETE_RECIEVER(state, id) {
+  DELETE_SERVER(state, id) {
     delete state.servers[id];
   },
 

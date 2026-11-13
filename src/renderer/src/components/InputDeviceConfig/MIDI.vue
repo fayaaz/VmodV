@@ -9,11 +9,6 @@
     columns="4"
     class="device-config"
   >
-    <c v-if="engineMode" span="1..">
-      <div class="device-config__notice" :title="engineUnsupportedTitle">
-        {{ engineUnsupportedTitle }} — MIDI inputs cannot be listed or used.
-      </div>
-    </c>
     <c span="1">MIDI Inputs</c>
     <c span="1..">
       <grid columns="5">
@@ -30,8 +25,6 @@
         <c>
           <Button
             class="light"
-            :disabled="engineMode"
-            :title="engineMode ? engineUnsupportedTitle : null"
             @click="toggleInput(deviceId, !device.listenForInput)"
           >
             {{ device.listenForInput ? "On" : "Off" }}
@@ -40,8 +33,6 @@
         <c>
           <Button
             class="light"
-            :disabled="engineMode"
-            :title="engineMode ? engineUnsupportedTitle : null"
             @click="toggleClock(deviceId, !device.listenForClock)"
           >
             {{ device.listenForClock ? "On" : "Off" }}
@@ -50,8 +41,6 @@
         <c>
           <Button
             class="light"
-            :disabled="engineMode"
-            :title="engineMode ? engineUnsupportedTitle : null"
             @click="toggleCcLatch(deviceId, !device.ccLatch)"
           >
             {{ device.ccLatch ? "On" : "Off" }}
@@ -60,8 +49,6 @@
         <c>
           <Button
             class="light"
-            :disabled="engineMode"
-            :title="engineMode ? engineUnsupportedTitle : null"
             @click="toggleNoteOnLatch(deviceId, !device.noteOnLatch)"
           >
             {{ device.noteOnLatch ? "On" : "Off" }}
@@ -73,8 +60,6 @@
 </template>
 
 <script>
-import { ENGINE_UNSUPPORTED_TITLE } from "../../application/engine-unsupported";
-
 export default {
   data() {
     return {
@@ -85,14 +70,6 @@ export default {
   },
 
   computed: {
-    engineMode() {
-      return this.$modV?.engineMode === true;
-    },
-
-    engineUnsupportedTitle() {
-      return ENGINE_UNSUPPORTED_TITLE;
-    },
-
     devices() {
       return this.$modV.store.state.midi.devices;
     },
