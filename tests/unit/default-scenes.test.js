@@ -1614,33 +1614,28 @@ describe("version 15 default scenes", () => {
     (scene) => scene.introducedVersion === 15,
   );
 
+  // Version 15 follows the version 9 sparse-Scene precedent: a single
+  // generator, one effect chained inline, and at most one heavily-smoothed
+  // bass-linked control per Scene — a slow swell on the beat, not a
+  // beat-throb.
   const expected = [
     {
       name: "Ember Storm",
       generator: "Hot Shower",
       effects: ["Bloom"],
-      links: [
-        ["Hot Shower", "windspeed", "bass"],
-        ["Bloom", "intensity", "mid"],
-      ],
+      links: [["Hot Shower", "windspeed", "bass", 0.25, 0.55]],
     },
     {
       name: "Prism Tunnel",
       generator: "Traced Tunnel",
-      effects: ["Bloom", "Chromatic Abberation"],
-      links: [
-        ["Traced Tunnel", "speed", "bass"],
-        ["Traced Tunnel", "dof", "mid"],
-      ],
+      effects: ["Bloom"],
+      links: [["Traced Tunnel", "speed", "bass", 0.8, 1.15]],
     },
     {
       name: "Sentinel",
       generator: "Helix Eye",
-      effects: ["Glow", "Bloom"],
-      links: [
-        ["Helix Eye", "eyePulse", "bass"],
-        ["Helix Eye", "speed", "mid"],
-      ],
+      effects: ["Bloom"],
+      links: [["Helix Eye", "eyePulse", "bass", 0.05, 0.15]],
     },
   ];
 
@@ -1681,19 +1676,22 @@ describe("version 15 default scenes", () => {
       const moduleNames = new Set(getModuleNames(scene));
       const groupNames = new Set(scene.groups.map((group) => group.name));
 
-      expect((scene.inputLinks || []).length).toBeGreaterThanOrEqual(2);
+      expect((scene.inputLinks || []).length).toBeGreaterThanOrEqual(1);
 
-      for (const [module, control, feature] of links) {
-        expect(
-          (scene.inputLinks || []).some(
-            (link) =>
-              link.module === module &&
-              link.control === control &&
-              link.feature === feature &&
-              groupNames.has(link.group),
-          ),
-          `${module}.${control} from ${feature}`,
-        ).toBe(true);
+      for (const [module, control, feature, min, max] of links) {
+        const link = (scene.inputLinks || []).find(
+          (candidate) =>
+            candidate.module === module &&
+            candidate.control === control &&
+            candidate.feature === feature &&
+            groupNames.has(candidate.group),
+        );
+
+        expect(link, `${module}.${control} from ${feature}`).toBeTruthy();
+        expect(Number(link.min)).toBeCloseTo(min, 5);
+        expect(Number(link.max)).toBeCloseTo(max, 5);
+        // the link must breathe, not jump: smoothing keeps it slow
+        expect(Number(link.smoothing ?? 0)).toBeGreaterThanOrEqual(0.5);
       }
 
       for (const link of scene.inputLinks || []) {
