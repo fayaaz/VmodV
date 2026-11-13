@@ -193,6 +193,12 @@ pub struct Store {
     /// The tempo/kick state the Input Link evaluator reads (`beats.bpm`,
     /// `beats.kick`).
     beats: BeatsState,
+    /// Which tempo source may write BPM (`beats.bpmSource`): the tap tempo
+    /// and MIDI clock are ignored unless they are the selected source.
+    bpm_source: String,
+    /// The renderer's local font list (`fonts.localFonts`) forwarded for the
+    /// Text module and the mirror.
+    local_fonts: Value,
     /// Per-smoothing-id state for `meyda/getFeature` smoothing links
     /// (`audio-features.js` `smoothedFeatures`), keyed by `args[1]`.
     link_smoothing: HashMap<String, f64>,
@@ -288,6 +294,8 @@ impl Store {
             engine_audio_active: false,
             engine_meter: EngineMeter::default(),
             beats: BeatsState::default(),
+            bpm_source: "beatdetektor".to_string(),
+            local_fonts: json!([]),
             link_smoothing: HashMap::new(),
             link_deltas: HashMap::new(),
             expression_cache: ExpressionCache::new(),
@@ -369,6 +377,15 @@ impl Store {
             return Ok(Value::Null);
         }
 
+        // `fonts/SET_LOCAL_FONTS` is committed with the font array itself, not
+        // an object payload (`application/index.js` after
+        // `queryLocalFonts`), so it cannot go through the `params` view.
+        if action == "fonts/SET_LOCAL_FONTS" {
+            self.local_fonts = payload.clone();
+            self.deltas.push("fonts/SET_LOCAL_FONTS", payload);
+            return Ok(Value::Null);
+        }
+
         let empty = Map::new();
         let params = payload.as_object().unwrap_or(&empty);
 
@@ -381,6 +398,7 @@ impl Store {
             "groups/REMOVE_GROUP" => self.remove_group_mutation(params),
             "groups/REPLACE_GROUP_MODULES" => self.replace_group_modules(params),
             "groups/disableGalleryItemModules" => self.disable_gallery_item_modules(params),
+            "groups/duplicateModule" => self.duplicate_module(params),
             "groups/focusGalleryItem" => self.focus_gallery_item(params),
             "groups/orderByIds" => self.order_groups_by_ids(params),
             "groups/ADD_MODULE_TO_GROUP" => self.add_module_to_group(params),
@@ -413,6 +431,7 @@ impl Store {
             "beats/SET_BPM" => self.set_bpm(params),
             "beats/setBpm" => self.set_bpm_action(params),
             "beats/SET_KICK" => self.set_kick(params),
+            "beats/SET_BPM_SOURCE" => self.set_bpm_source(params),
             // ————————————————— FPS / tweens (WS-12) —————————————————
             "fps/SET_FPS" => self.set_fps(params),
             "tweens/ADD_TWEEN" => self.add_tween(params),
@@ -762,6 +781,118 @@ impl Store {
         Ok(Value::Null)
     }
 
+    /// `groups/duplicateModule` (`groups.js:403-458`).
+    ///
+    /// Duplicates an active Module in place (immediately after the source),
+    /// copies its live prop values, then re-creates the input links and
+    /// expression assignments on the new inputs.
+    fn duplicate_module(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "groups/duplicateModule";
+        let group_id = required_str(params, action, "groupId")?.to_string();
+        let module_id = required_str(params, action, "moduleId")?.to_string();
+
+        let Some((position, module_name, existing, pairs)) = (|| {
+            let group = self
+                .state
+                .groups
+                .iter()
+                .find(|group| group.id == group_id)?;
+            let position = group.modules.iter().position(|id| id == &module_id)?;
+            let existing = self.state.modules.get(&module_id)?;
+            let existing_value = json_value(existing);
+
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            for key in ["alphaInputId", "enabledInputId", "compositeOperationInputId"] {
+                if let Some(input_id) = existing.meta.get(key).and_then(Value::as_str) {
+                    pairs.push((key.to_string(), input_id.to_string()));
+                }
+            }
+            if let Some(props) = existing_value.get("$props").and_then(Value::as_object) {
+                for (prop, descriptor) in props {
+                    if let Some(input_id) = descriptor.get("id").and_then(Value::as_str) {
+                        pairs.push((format!("prop:{prop}"), input_id.to_string()));
+                    }
+                }
+            }
+
+            Some((position, existing.module_name.clone(), existing_value, pairs))
+        })() else {
+            return Ok(Value::Null);
+        };
+
+        let mut make = Map::new();
+        make.insert("moduleName".to_string(), json!(module_name));
+        make.insert("existingModule".to_string(), existing);
+        make.insert("generateNewIds".to_string(), json!(true));
+        let duplicate = self.make_active_module(&make)?;
+        let duplicate_id = duplicate
+            .get("$id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if duplicate_id.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        if let Some(group) = self.state.find_group_mut(&group_id) {
+            let at = (position + 1).min(group.modules.len());
+            group.modules.insert(at, duplicate_id.clone());
+        }
+        self.deltas.push(
+            "groups/ADD_MODULE_TO_GROUP",
+            json!({ "moduleId": duplicate_id, "groupId": group_id }),
+        );
+
+        for (key, old_input) in pairs {
+            let new_input = match key.strip_prefix("prop:") {
+                Some(prop) => duplicate
+                    .get("$props")
+                    .and_then(|props| props.get(prop))
+                    .and_then(|descriptor| descriptor.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                None => duplicate
+                    .get("meta")
+                    .and_then(|meta| meta.get(&key))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            };
+            let Some(new_input) = new_input else {
+                continue;
+            };
+
+            if let Some(link) = self.state.input_links.get(&old_input) {
+                let mut value = serde_json::to_value(link).unwrap_or(Value::Null);
+                if let Value::Object(map) = &mut value {
+                    map.insert("inputId".to_string(), json!(new_input));
+                }
+                if let Some(map) = value.as_object() {
+                    self.create_input_link(map)?;
+                }
+            }
+
+            let expression = self
+                .state
+                .expressions
+                .values()
+                .find(|assignment| assignment.input_id == old_input)
+                .cloned();
+            if let Some(assignment) = expression {
+                let mut value = serde_json::to_value(&assignment).unwrap_or(Value::Null);
+                if let Value::Object(map) = &mut value {
+                    map.remove("id");
+                    map.insert("inputId".to_string(), json!(new_input));
+                    map.insert("expression".to_string(), json!(assignment.expression));
+                }
+                if let Some(map) = value.as_object() {
+                    self.create_expression(map)?;
+                }
+            }
+        }
+
+        Ok(duplicate)
+    }
+
     /// `groups/REMOVE_MODULE_FROM_GROUP` (`groups.js:528-542`).
     fn remove_module_from_group(
         &mut self,
@@ -1017,7 +1148,7 @@ impl Store {
             .unwrap_or(false);
         let id = crate::ids::uuid_v4();
 
-        let (mut meta, props, status, registered) = match self.registry.meta_fields(&module_name) {
+        let (mut meta, mut props, status, registered) = match self.registry.meta_fields(&module_name) {
             Some(registry_meta) => {
                 let props = self
                     .registry
@@ -1057,6 +1188,27 @@ impl Store {
                 (Value::Object(meta), json!({}), status, false)
             }
         };
+
+        // `modules.js:24-27`: a duplication passes the source module so the
+        // copy starts from its live props/meta; the new `$props` ids are
+        // generated below and the caller remaps the links/expressions.
+        if let Some(existing) = params.get("existingModule").filter(|value| value.is_object()) {
+            if let (Value::Object(meta_map), Some(existing_meta)) = (
+                &mut meta,
+                existing.get("meta").and_then(Value::as_object),
+            ) {
+                for (key, value) in existing_meta {
+                    meta_map.insert(key.clone(), value.clone());
+                }
+            }
+            if let Some(existing_props) = existing.get("props").and_then(Value::as_object) {
+                let mut merged = props.as_object().cloned().unwrap_or_default();
+                for (key, value) in existing_props {
+                    merged.insert(key.clone(), value.clone());
+                }
+                props = Value::Object(merged);
+            }
+        }
 
         // `modules.js:284-318` + `initialiseModuleProperties`: a real active
         // Module owns one Input per prop and three meta Inputs (alpha/enabled/
@@ -1510,15 +1662,37 @@ impl Store {
     }
 
     /// `beats/setBpm` (`beats.js:9-19`): only the active source may set BPM.
-    ///
-    /// The engine keeps `beatdetektor` as the default source; the renderer
-    /// only dispatches this action from that detector today.
     fn set_bpm_action(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
         let source = params.get("source").and_then(Value::as_str);
-        if source.is_some_and(|source| source != "beatdetektor") {
+        if source != Some(self.bpm_source.as_str()) {
             return Ok(Value::Null);
         }
         self.set_bpm(params)
+    }
+
+    /// `beats/SET_BPM_SOURCE` (`beats.js:35-44`): select the tempo source.
+    ///
+    /// Unknown sources are ignored with a warning, exactly like the JS
+    /// mutation. The default is `beatdetektor`, so tap/MIDI BPM only applies
+    /// once the picker selects it.
+    fn set_bpm_source(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        const SOURCES: [&str; 3] = ["beatdetektor", "midi", "tap"];
+        let Some(source) = params.get("source").and_then(Value::as_str) else {
+            return Ok(Value::Null);
+        };
+        if !SOURCES.contains(&source) {
+            self.warn_once(
+                format!("bpm-source:{source}"),
+                &format!(
+                    "engine: WARN beats/SET_BPM_SOURCE: \"{source}\" is not a valid bpm source"
+                ),
+            );
+            return Ok(Value::Null);
+        }
+        self.bpm_source = source.to_string();
+        self.deltas
+            .push("beats/SET_BPM_SOURCE", json!({ "source": source }));
+        Ok(Value::Null)
     }
 
     /// `beats/SET_KICK`: store the kick flag (echoed to the mirror).
@@ -6584,5 +6758,153 @@ mod tests {
             )
             .expect("updateProp dispatches");
         assert!((amount(&store) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bpm_source_selects_which_tempo_writes_apply() {
+        let mut store = Store::new();
+        // The engine defaults to the beat detector; a tap write is ignored.
+        store
+            .dispatch("beats/setBpm", json!({ "bpm": 90, "source": "tap" }))
+            .expect("tap bpm dispatches");
+        assert_eq!(store.beats().bpm, 0.0);
+
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "tap" }))
+            .expect("bpm source dispatches");
+        store
+            .dispatch("beats/setBpm", json!({ "bpm": 90, "source": "tap" }))
+            .expect("tap bpm dispatches");
+        assert_eq!(store.beats().bpm, 90.0);
+
+        // Another source can no longer write the tempo.
+        store
+            .dispatch("beats/setBpm", json!({ "bpm": 120, "source": "midi" }))
+            .expect("midi bpm dispatches");
+        assert_eq!(store.beats().bpm, 90.0);
+
+        // An unknown source is ignored, leaving tap selected.
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "nope" }))
+            .expect("invalid source dispatches");
+        store
+            .dispatch("beats/setBpm", json!({ "bpm": 140, "source": "tap" }))
+            .expect("tap bpm dispatches");
+        assert_eq!(store.beats().bpm, 140.0);
+    }
+
+    #[test]
+    fn local_fonts_are_stored_and_echoed_to_the_mirror() {
+        let mut store = Store::new();
+        store.drain_deltas();
+        let fonts = json!([{ "family": "Inter", "style": "Regular" }]);
+
+        store
+            .dispatch("fonts/SET_LOCAL_FONTS", fonts.clone())
+            .expect("local fonts dispatch");
+
+        let deltas = store.drain_deltas();
+        let echoed = deltas
+            .iter()
+            .find(|delta| delta.r#type == "fonts/SET_LOCAL_FONTS")
+            .expect("the mirror receives the font list");
+        assert_eq!(echoed.payload, fonts);
+    }
+
+    #[test]
+    fn duplicate_module_copies_props_links_and_expressions() {
+        let mut store = Store::new();
+        let group = store
+            .dispatch("groups/createGroup", json!({ "name": "Layer" }))
+            .expect("group");
+        let group_id = group["id"].as_str().unwrap().to_string();
+        let module = store
+            .dispatch("modules/makeActiveModule", json!({ "moduleName": "Bands" }))
+            .expect("module");
+        let module_id = module["$id"].as_str().unwrap().to_string();
+        store
+            .dispatch(
+                "groups/ADD_MODULE_TO_GROUP",
+                json!({ "groupId": group_id, "moduleId": module_id }),
+            )
+            .expect("add module");
+
+        let prop = module["$props"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .find(|(_, descriptor)| descriptor.get("id").is_some())
+            .map(|(prop, _)| prop.clone())
+            .expect("Bands has a prop input");
+        let prop_input = module["$props"][&prop]["id"].as_str().unwrap().to_string();
+
+        store
+            .dispatch(
+                "modules/updateProp",
+                json!({ "moduleId": module_id, "prop": prop, "data": { "value": 0.7 } }),
+            )
+            .expect("updateProp");
+        store
+            .dispatch(
+                "inputs/createInputLink",
+                json!({
+                    "inputId": prop_input,
+                    "type": "getter",
+                    "location": "meyda/getFeature",
+                    "args": ["bass"],
+                    "source": "meyda",
+                }),
+            )
+            .expect("link");
+        store
+            .dispatch(
+                "expressions/create",
+                json!({ "inputId": prop_input, "expression": "value * 2" }),
+            )
+            .expect("expression");
+
+        let duplicate = store
+            .dispatch(
+                "groups/duplicateModule",
+                json!({ "groupId": group_id, "moduleId": module_id }),
+            )
+            .expect("duplicateModule dispatches");
+        let duplicate_id = duplicate["$id"].as_str().unwrap().to_string();
+        assert_ne!(duplicate_id, module_id);
+        assert_eq!(duplicate["meta"]["name"], json!("Bands"));
+        assert_eq!(
+            duplicate["props"][&prop],
+            json!(0.7),
+            "duplicate props: {}",
+            duplicate["props"]
+        );
+
+        let group = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .expect("group");
+        assert_eq!(group.modules, vec![module_id.clone(), duplicate_id.clone()]);
+
+        let duplicate_input = duplicate["$props"][&prop]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let link = store
+            .state()
+            .input_links
+            .get(&duplicate_input)
+            .expect("the duplicated prop input has its link");
+        assert_eq!(link.source.as_deref(), Some("meyda"));
+        assert!(
+            store
+                .state()
+                .expressions
+                .values()
+                .any(|assignment| assignment.input_id == duplicate_input
+                    && assignment.expression == "value * 2"),
+            "the expression rides along"
+        );
     }
 }

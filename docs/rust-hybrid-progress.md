@@ -415,8 +415,10 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   too. The grid cell actions (`createSceneCellGroup`,
   `captureSceneRowToScene`, `clearSceneCell`, `copySceneCellToScene`) and the
   Gallery focus lifecycle (`groups/disableGalleryItemModules`,
-  `groups/focusGalleryItem`) plus `groups/orderByIds` are implemented. Still
-  hitting the wildcard: `groups/duplicateModule`, `groups/SWAP`/`modules/SWAP`,
-  `beats/SET_BPM_SOURCE`, `fonts/SET_LOCAL_FONTS`, `dataTypes/createType`,
-  `media/*`, `midi/learn`, `ndi/*`, `osc/createServer`, `scenePreview/*`,
+  `groups/focusGalleryItem`), `groups/orderByIds` and
+  `groups/duplicateModule` (fresh inputs, links and expressions carried over)
+  are implemented, as are `beats/SET_BPM_SOURCE` (tap/MIDI BPM only applies
+  from the selected source) and `fonts/SET_LOCAL_FONTS`. Still hitting the
+  wildcard: `groups/SWAP`/`modules/SWAP`, `dataTypes/createType`, `media/*`,
+  `midi/learn`, `ndi/*`, `osc/createServer`, `scenePreview/*`,
   `windows/createWindow` and the `outputs/*` auxiliary-canvas actions.
