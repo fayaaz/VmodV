@@ -164,6 +164,32 @@ describe("AudioBands", () => {
     expect(payload.treble).toBe(0);
   });
 
+  it("does not amplify a near-silent noise floor into a bass reading", () => {
+    const bands = new AudioBands();
+    // ~-40 dBFS time-domain dither plus a -70 dB FFT: both below the silence
+    // thresholds. Without the gate the AGC boosts this to full scale and the
+    // bass slider flickers between 0 and 1.
+    const dither = new Uint8Array(FFT_SIZE).fill(128);
+    for (let i = 0; i < dither.length; i += 2) {
+      dither[i] = i % 4 === 0 ? 127 : 129;
+    }
+    const quietFft = new Float32Array(FFT_SIZE).fill(-70);
+
+    let payload;
+    for (let frame = 0; frame < 12; frame += 1) {
+      advance(0.05);
+      payload = bands.update({
+        floatFrequencyData: quietFft,
+        byteTimeDomainData: dither,
+        sampleRate: SAMPLE_RATE,
+      });
+    }
+
+    expect(payload.bass).toBeLessThan(0.05);
+    expect(payload.bands[0]).toBeLessThan(0.05);
+    expect(payload.cells[0]).toBeLessThan(0.05);
+  });
+
   it("keeps a full-scale tone at ~1 in its band", () => {
     const bands = new AudioBands();
     const payload = settle(bands, {

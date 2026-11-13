@@ -1894,13 +1894,7 @@ impl Compositor {
             // `adapter.js:797-804`: scene props, then the bridge levers, then
             // `update`. Both read the live prop bag; the schema supplies the
             // defaults and the clamps.
-            let mut get = |key: &str| {
-                props
-                    .get(key)
-                    .and_then(Value::as_f64)
-                    .filter(|value| value.is_finite())
-                    .map(|value| value as f32)
-            };
+            let mut get = |key: &str| props.get(key).and_then(scene_prop_number);
             instance.scene.apply_props(&mut get);
             let levers = ResponsivenessLevers::from_getter(|key| get(key));
             instance.bridge.update(dt, Some(&payload), &levers);
@@ -3149,6 +3143,20 @@ fn create_isf_mask_pipeline(
 
 type RenderBlendMode = modv_render::blend::BlendMode;
 
+/// Numeric Point10 scene prop, including the boolean levers.
+///
+/// `Value::as_f64` returns `None` for JSON booleans, so `useAgc: false` (the
+/// Inspector's checkbox value) was silently read as the default `true` and the
+/// AGC toggle did nothing in engine mode.
+pub(crate) fn scene_prop_number(value: &Value) -> Option<f32> {
+    match value {
+        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
+        Value::Number(number) => number.as_f64().map(|value| value as f32),
+        _ => None,
+    }
+    .filter(|value| value.is_finite())
+}
+
 /// Allocate an `Rgba8Unorm` texture usable as a render target, a sampled
 /// source and a read-back copy source — the format every module target uses.
 ///
@@ -3684,6 +3692,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn point10_props_read_boolean_levers() {
+        // The Inspector's `useAgc` checkbox sends `false`/`true`; the old
+        // getter used `Value::as_f64`, which returns `None` for booleans, so
+        // AGC could not be turned off.
+        assert_eq!(scene_prop_number(&json!(true)), Some(1.0));
+        assert_eq!(scene_prop_number(&json!(false)), Some(0.0));
+        assert_eq!(scene_prop_number(&json!(0.25)), Some(0.25));
+        assert_eq!(scene_prop_number(&json!("1.0")), None);
     }
 
     #[test]

@@ -359,6 +359,16 @@ impl Store {
     /// Unknown actions log once and return `Ok(null)` — the renderer
     /// legitimately fires boot actions the engine does not implement yet.
     pub fn dispatch(&mut self, action: &str, payload: Value) -> Result<Value, StoreError> {
+        // `meyda/removeSmoothingId` is dispatched with the id itself (the JS
+        // action takes a string), so it cannot go through the object-only
+        // `params` view.
+        if action == "meyda/removeSmoothingId" {
+            if let Some(id) = payload.as_str() {
+                self.link_smoothing.remove(id);
+            }
+            return Ok(Value::Null);
+        }
+
         let empty = Map::new();
         let params = payload.as_object().unwrap_or(&empty);
 
@@ -391,6 +401,11 @@ impl Store {
             "modules/UPDATE_ACTIVE_MODULE_PROP" => self.update_prop(params),
             "modules/removeActiveModule" => self.remove_active_module(params),
             "meyda/SET_BANDS" => self.set_bands(params),
+            // The Input Config smoothing slider mints an id through the engine
+            // and stores it in the link's args. Without this arm the dispatch
+            // wildcard returned Null, the UI dropped the smoothing arguments,
+            // and the smoothing slider did nothing.
+            "meyda/getSmoothingId" => Ok(Value::String(crate::ids::uuid_v4())),
             // ————————————————— Beats (WS-9) —————————————————
             "beats/SET_BPM" => self.set_bpm(params),
             "beats/setBpm" => self.set_bpm_action(params),
@@ -3764,6 +3779,29 @@ mod tests {
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].r#type, "groups/UPDATE_GROUP");
         assert_eq!(deltas[0].payload["groupId"], json!(id));
+    }
+
+    #[test]
+    fn meyda_smoothing_ids_are_minted_and_removable() {
+        // The Input Config smoothing slider dispatches this action and stores
+        // the returned id in the link args. It used to hit the wildcard and
+        // return Null, which dropped the smoothing arguments (the slider did
+        // nothing in engine mode).
+        let mut store = Store::new();
+        let first = store
+            .dispatch("meyda/getSmoothingId", json!({}))
+            .expect("getSmoothingId dispatches");
+        let second = store
+            .dispatch("meyda/getSmoothingId", json!({}))
+            .expect("getSmoothingId dispatches");
+        let first = first.as_str().expect("id is a string").to_string();
+        let second = second.as_str().expect("id is a string").to_string();
+        assert_eq!(first.len(), 36);
+        assert_ne!(first, second);
+
+        store
+            .dispatch("meyda/removeSmoothingId", json!(first))
+            .expect("removeSmoothingId accepts the id string");
     }
 
     #[test]

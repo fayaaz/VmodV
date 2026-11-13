@@ -32,6 +32,12 @@ const BAND_FEATURES = ["bass", "mid", "treble"];
 
 const clamp01 = (x) => (x > 1 ? 1 : x > 0 ? x : 0);
 
+// Below both thresholds a frame is treated as silence: the AGC would otherwise
+// boost a near-silent noise floor to full scale (bass flickering 0..1 with no
+// music). A real quiet passage still has a strong FFT peak and is not gated.
+const SILENCE_TIME_PEAK = 0.01;
+const SILENCE_FFT_MAGNITUDE = 0.001;
+
 // The exposed features use a perceptual dB scale (-60 dB .. 0 dB -> 0..1) so
 // musically-present treble is not dwarfed by bass under a pink-ish spectrum.
 // Only bass/mid/treble go through this; the raw linear grid/lanes stay as-is
@@ -89,6 +95,7 @@ class AudioBands {
       }
     }
 
+    this.lastPeak = peak;
     const ml = this.maxLevel;
 
     if (peak >= ml) {
@@ -247,9 +254,23 @@ class AudioBands {
 
     // getFloatFrequencyData is the same FFT in true dB per bin; convert each
     // bin to a linear magnitude (the byte API is dB-scaled and unusable here).
+    let fftPeak = 0;
+
     for (let i = 0; i < n; i++) {
-      this.freqMag[i] =
-        Math.pow(10, floatFrequencyData[i] / 20) * FFT_GAIN * gain;
+      const magnitude = Math.pow(10, floatFrequencyData[i] / 20);
+      if (magnitude > fftPeak) {
+        fftPeak = magnitude;
+      }
+      this.freqMag[i] = magnitude * FFT_GAIN * gain;
+    }
+
+    if (
+      (this.lastPeak ?? 0) < SILENCE_TIME_PEAK &&
+      fftPeak < SILENCE_FFT_MAGNITUDE
+    ) {
+      // Near-silence floor: do not let the AGC turn dither into a full-scale
+      // bass reading. The grid/lanes then decay to zero naturally.
+      this.freqMag.fill(0);
     }
 
     const cells = this._bandCells(n, sampleRate);
