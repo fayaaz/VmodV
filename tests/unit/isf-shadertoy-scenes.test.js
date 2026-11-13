@@ -21,6 +21,7 @@ function readIsf(fileName) {
 const shadertoyScenes = [
   ["Helix Eye.fs", "RagePly", "https://www.shadertoy.com/view/cdSGRw"],
   ["Traced Tunnel.fs", "Shane", "https://www.shadertoy.com/view/tdjfDR"],
+  ["Hot Shower.fs", "Kali", "https://www.shadertoy.com/view/4lf3Rj"],
 ];
 
 describe("Shadertoy NC-SA scene ISF modules", () => {
@@ -90,6 +91,21 @@ describe("Helix Eye.fs", () => {
 describe("Traced Tunnel.fs", () => {
   it("ports the single-pass image pass without texture inputs", () => {
     const { metadata, source } = readIsf("Traced Tunnel.fs");
+
+    expect(metadata.PASSES).toBeUndefined();
+    // the interactive-shader-format JS parser dereferences INPUTS without a
+    // default, so generators must declare it explicitly
+    expect(metadata.INPUTS).toEqual([]);
+    // the procedural replacement must not reference any image inputs
+    expect(source).not.toContain("iChannel0");
+    expect(source).not.toContain("iChannel1");
+    expect(source).not.toContain("IMG_NORM_PIXEL");
+  });
+});
+
+describe("Hot Shower.fs", () => {
+  it("ports the single-pass image pass without texture inputs", () => {
+    const { metadata, source } = readIsf("Hot Shower.fs");
 
     expect(metadata.PASSES).toBeUndefined();
     // the interactive-shader-format JS parser dereferences INPUTS without a

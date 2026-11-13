@@ -18,7 +18,7 @@ test("tunnel ISF modules are registered as 3D Scenes", async () => {
   }
 });
 
-const ncSaSceneModules = ["Helix Eye", "Traced Tunnel"];
+const ncSaSceneModules = ["Helix Eye", "Traced Tunnel", "Hot Shower"];
 
 test("NC-SA scene ISF modules are registered as 3D Scenes", async () => {
   const registered = await modVApp.evaluateWorkerState("modules.registered");

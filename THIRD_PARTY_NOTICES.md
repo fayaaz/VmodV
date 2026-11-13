@@ -33,6 +33,7 @@ modified versions must remain under the same license ("share-alike").
 | `src/renderer/src/application/renderers/isf/modules/isf/Perlin Transition.fs` | [gl-transitions perlin.glsl](https://github.com/gl-transitions/gl-transitions/tree/master/perlin.glsl); the noise function credits [4dS3Wd](https://www.shadertoy.com/view/4dS3Wd) | Rich Harris (module); noise by Morgan McGuire | MIT (stated in file) |
 | `src/renderer/src/application/renderers/isf/modules/isf/Helix Eye.fs` | [cdSGRw](https://www.shadertoy.com/view/cdSGRw) ("Fear Inoculum"); `helix_sdf` adapted from [ttB3DV](https://www.shadertoy.com/view/ttB3DV) | RagePly (module); ttB3DV author not stated | not stated → Shadertoy default CC BY-NC-SA 3.0 |
 | `src/renderer/src/application/renderers/isf/modules/isf/Traced Tunnel.fs` | [tdjfDR](https://www.shadertoy.com/view/tdjfDR); the source's two photo inputs are not redistributed (licenses unknown, replaced by procedural patterns) | Shane | not stated → Shadertoy default CC BY-NC-SA 3.0 |
+| `src/renderer/src/application/renderers/isf/modules/isf/Hot Shower.fs` | [4lf3Rj](https://www.shadertoy.com/view/4lf3Rj); the source's noise and bark/rock textures are not redistributed (licenses unknown, replaced by procedural value noise) | Kali | not stated → Shadertoy default CC BY-NC-SA 3.0 |
 
 All of the above are bundled **as-is or as modified ports**; the ports remain
 under the licenses listed for them and are not relicensed under the MIT

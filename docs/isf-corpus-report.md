@@ -3,11 +3,11 @@
 The corpus gate is the checked-in baseline `crates/modv-renderers/data/isf-corpus-baseline.json` (asserted by `cargo test -p modv-renderers`; the test no longer rewrites this file). The corpus is the vendored `src/renderer/src/application/renderers/isf/modules/isf`.
 
 - Corpus directory: `src/renderer/src/application/renderers/isf/modules/isf`
-- Fragment shaders (`.fs`): **353**
-- Translated without an override: **353** (100.0 %)
+- Fragment shaders (`.fs`): **354**
+- Translated without an override: **354** (100.0 %)
 - Translated via an override: **0**
 - Failed: **0**
-- Total passes across the corpus: 511
+- Total passes across the corpus: 512
 - Shaders with a `PERSISTENT` buffer: 46; with a `FLOAT` buffer: 15
 - Vertex sidecars (`.vs`): 36 — translated 36, failed 0
 

@@ -2,7 +2,7 @@
   "_comment": "Checked-in ISF corpus baseline (crates/modv-renderers/src/isf/translate.rs, CorpusBaseline). `translated`/`overridden`/`failed` are fragment shader file stems; `vertex_failed` lists .vs sidecars. The corpus test asserts exact equality plus the >=95% pass rate, so a naga upgrade or preprocessor change that moves any shader fails loudly instead of silently rewriting docs/isf-corpus-report.md. Regenerate with CorpusBaseline::from_report after reviewing a real change (and update the markdown report by hand).",
   "failed": [],
   "overridden": [],
-  "total": 353,
+  "total": 354,
   "translated": [
     "ASCII Art",
     "Angular",
@@ -125,6 +125,7 @@
     "Hexagonalize",
     "Histogram Viewer",
     "HorizVertHold",
+    "Hot Shower",
     "Hue-Saturation",
     "Hyperspace",
     "Interlace",
