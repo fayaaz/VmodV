@@ -28,11 +28,32 @@ const mutations = {
     state[window.id] = window;
   },
 
+  /**
+   * Replace the whole window list.
+   *
+   * Engine mode replays the engine's `state/sync` payload here: the engine owns
+   * the native windows, so a late-joining mirror (or a mirror rebuilt after an
+   * engine restart) must show exactly the windows the engine has open.
+   */
+  SET_WINDOWS(state, windows) {
+    for (const id of Object.keys(state)) {
+      delete state[id];
+    }
+
+    for (const window of windows || []) {
+      if (window && typeof window.id === "string") {
+        state[window.id] = window;
+      }
+    }
+  },
+
+  REMOVE_WINDOW(state, id) {
+    delete state[id];
+  },
+
   UPDATE_WINDOW(state, { id, key, value }) {
     state[id][key] = value;
   },
-
-  // REMOVE_WINDOW(state, id) {}
 };
 
 export default {

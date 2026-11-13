@@ -100,6 +100,7 @@ use crate::input_links::{
     BeatsState, LINK_DELTA_EPSILON, LINK_DELTA_INTERVAL, LinkTarget, LinkWrite,
 };
 use crate::module_registry::ModuleRegistry;
+use crate::windows::{NewWindow, WindowCommand, WindowRegistry, WindowSpec};
 
 /// Version stamped into the on-disk snapshot document.
 pub const SNAPSHOT_VERSION: i64 = 1;
@@ -218,6 +219,11 @@ pub struct Store {
     /// Compiled JS expressions (WS-12), one per input, rebuilt when the
     /// preset/Scene or the `expressions/*` actions change the assignments.
     expression_cache: ExpressionCache,
+    /// Engine-owned Output Windows (`windows/createWindow` /
+    /// `windows/removeWindow`, see [`crate::windows`]). The registry is the
+    /// mirror-visible list plus the native-window operations the event loop
+    /// drains.
+    pub(crate) windows: WindowRegistry,
     pub(crate) warned: HashSet<String>,
 }
 
@@ -313,6 +319,7 @@ impl Store {
             link_smoothing: HashMap::new(),
             link_deltas: HashMap::new(),
             expression_cache: ExpressionCache::new(),
+            windows: WindowRegistry::default(),
             warned: HashSet::new(),
         }
     }
@@ -347,6 +354,36 @@ impl Store {
     /// Push one delta to the UI mirror (status metrics, resize events).
     pub(crate) fn push_delta(&mut self, type_: &str, payload: Value) {
         self.deltas.push(type_, payload);
+    }
+
+    /// Take the native-window operations queued by `windows/createWindow` /
+    /// `windows/removeWindow`, in issue order.
+    ///
+    /// The window loop applies them between frames (it owns the winit windows
+    /// and surfaces); the store only records the request.
+    pub(crate) fn take_window_commands(&mut self) -> Vec<WindowCommand> {
+        self.windows.take_commands()
+    }
+
+    /// Forget an Output Window that no longer exists natively.
+    ///
+    /// Used when a window closes through the window manager (not through
+    /// `windows/removeWindow`) or when the loop could not create its surface:
+    /// the spec is already gone from the registry, so no Close command is
+    /// queued, and the mirror gets the `REMOVE_WINDOW` delta it would have
+    /// received from the action. Returns whether a spec was removed.
+    pub(crate) fn window_closed_natively(&mut self, id: &str) -> bool {
+        if self.windows.forget(id).is_none() {
+            return false;
+        }
+        self.deltas.push("windows/REMOVE_WINDOW", json!(id));
+        true
+    }
+
+    /// The Output Windows the engine has open (tests / diagnostics).
+    #[cfg(test)]
+    pub fn window_registry(&self) -> &WindowRegistry {
+        &self.windows
     }
 
     /// Mark the Scene list (or the row-name mapping that selects its rows) as
@@ -451,6 +488,15 @@ impl Store {
             "midi/WRITE_DATA" => self.midi_write_data(params),
             "osc/createServer" => self.osc_create_server(params),
             "osc/removeServer" => self.osc_remove_server(params),
+            // ————————————————— Output Windows —————————————————
+            // The engine owns the native windows now, so the legacy action is
+            // the entry point in engine mode too (`window-handler.js` no
+            // longer calls `window.open`). `windows/ADD_WINDOW` is aliased: the
+            // delta carries the same fields, so a replayed mirror payload
+            // registers the same window.
+            "windows/createWindow" => self.create_window(params),
+            "windows/ADD_WINDOW" => self.create_window(params),
+            "windows/removeWindow" => self.remove_window(params),
             // ————————————————— FPS / tweens (WS-12) —————————————————
             "fps/SET_FPS" => self.set_fps(params),
             "tweens/ADD_TWEEN" => self.add_tween(params),
@@ -1130,6 +1176,47 @@ impl Store {
             "osc/WRITE_DATA",
             json!({ "id": server_id, "msg": Value::Array(msg) }),
         );
+    }
+
+    // ————————————————— Output Windows —————————————————
+
+    /// `windows/createWindow` (`windows.js:6-23`).
+    ///
+    /// The JS action mints the id, commits `ADD_WINDOW` and returns the id; the
+    /// engine does the same and queues the native window for the event loop.
+    /// An optional `id` lets a replayed `windows/ADD_WINDOW` payload (which
+    /// carries one) register the same window instead of a new one.
+    pub(crate) fn create_window(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        let action = "windows/createWindow";
+        let id = params
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(crate::ids::uuid_v4);
+        let spec = WindowSpec::from_request(id.clone(), NewWindow::from_params(params));
+
+        self.windows
+            .create(spec.clone())
+            .map_err(|error| invalid(action, error.to_string()))?;
+        self.deltas
+            .push("windows/ADD_WINDOW", spec.to_mirror_json());
+        Ok(Value::String(id))
+    }
+
+    /// `windows/removeWindow` — the mirror's `REMOVE_WINDOW` mutation plus a
+    /// native Close. Unknown ids are a no-op (a stale UI list must not fail).
+    pub(crate) fn remove_window(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        let id = required_str(params, "windows/removeWindow", "id")?;
+        if self.windows.remove(id) {
+            self.deltas.push("windows/REMOVE_WINDOW", json!(id));
+        }
+        Ok(Value::Null)
     }
 
     /// `groups/REMOVE_MODULE_FROM_GROUP` (`groups.js:528-542`).
@@ -3443,6 +3530,9 @@ impl Store {
                 json!(self.scenes.seeded_default_scenes),
             );
             map.insert("appliedSceneId".into(), json!(self.applied_scene_id));
+            // Engine-owned Output Windows are runtime state, like the Scene
+            // list: a late joiner sees the windows that are actually open.
+            map.insert("windows".into(), self.windows.specs_json());
         }
         snapshot
     }
@@ -6221,6 +6311,225 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    // ————————————————— Output Windows —————————————————
+
+    #[test]
+    fn create_window_mints_an_id_emits_the_mirror_record_and_queues_the_native_window() {
+        let mut store = Store::new();
+        let id = store
+            .dispatch("windows/createWindow", json!({}))
+            .expect("createWindow dispatches");
+        let id = id.as_str().expect("the action returns the window id");
+        assert_eq!(id.len(), 36, "UUID v4 length");
+
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].r#type, "windows/ADD_WINDOW");
+        assert_eq!(deltas[0].payload["id"], json!(id));
+        assert_eq!(deltas[0].payload["width"], json!(300));
+        assert_eq!(deltas[0].payload["height"], json!(300));
+        assert_eq!(deltas[0].payload["title"], json!("VmodV Output"));
+        assert_eq!(deltas[0].payload["fullscreen"], json!(false));
+        assert_eq!(deltas[0].payload["outputId"], json!(""));
+
+        assert_eq!(store.window_registry().len(), 1);
+        let commands = store.take_window_commands();
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            WindowCommand::Open(spec) => {
+                assert_eq!(spec.id, id);
+                assert_eq!((spec.width, spec.height), (300, 300));
+                assert_eq!(spec.x, None);
+            }
+            other => panic!("expected Open, got {other:?}"),
+        }
+        // The loop applies each command exactly once.
+        assert!(store.take_window_commands().is_empty());
+    }
+
+    #[test]
+    fn create_window_applies_requested_fields_with_clamping() {
+        let mut store = Store::new();
+        let result = store
+            .dispatch(
+                "windows/createWindow",
+                json!({
+                    "id": "window-left",
+                    "name": "Left Screen",
+                    "width": 4,
+                    "height": 40000,
+                    "x": -1200,
+                    "y": 30,
+                    "monitor": 1,
+                    "fullscreen": true,
+                }),
+            )
+            .expect("createWindow dispatches");
+        assert_eq!(result, json!("window-left"));
+
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas[0].r#type, "windows/ADD_WINDOW");
+        assert_eq!(deltas[0].payload["title"], json!("Left Screen"));
+        assert_eq!(deltas[0].payload["width"], json!(64));
+        assert_eq!(deltas[0].payload["height"], json!(8192));
+        assert_eq!(deltas[0].payload["x"], json!(-1200));
+        assert_eq!(deltas[0].payload["y"], json!(30));
+        assert_eq!(deltas[0].payload["fullscreen"], json!(true));
+
+        match &store.take_window_commands()[0] {
+            WindowCommand::Open(spec) => {
+                assert_eq!(spec.monitor, Some(1));
+                assert!(spec.fullscreen);
+            }
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_window_rejects_a_duplicate_id_without_a_delta_or_command() {
+        let mut store = Store::new();
+        store
+            .dispatch("windows/createWindow", json!({"id": "dup"}))
+            .expect("first create");
+        let _ = store.drain_deltas();
+        let _ = store.take_window_commands();
+
+        let error = store
+            .dispatch("windows/createWindow", json!({"id": "dup"}))
+            .expect_err("a duplicate id must not silently replace the window");
+        match error {
+            StoreError::InvalidPayload { action, detail } => {
+                assert_eq!(action, "windows/createWindow");
+                assert!(detail.contains("dup"), "detail: {detail}");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        assert!(store.drain_deltas().is_empty());
+        assert!(store.take_window_commands().is_empty());
+        assert_eq!(store.window_registry().len(), 1);
+    }
+
+    #[test]
+    fn add_window_replay_registers_the_same_mirror_record() {
+        let mut store = Store::new();
+        store
+            .dispatch(
+                "windows/ADD_WINDOW",
+                json!({
+                    "id": "replayed",
+                    "title": "Replayed",
+                    "width": 1280,
+                    "height": 720,
+                    "pixelRatio": 1,
+                    "x": 0,
+                    "y": 0,
+                    "fullscreen": false,
+                    "backgroundColor": "#000",
+                    "outputId": "",
+                }),
+            )
+            .expect("ADD_WINDOW registers");
+
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas[0].payload["title"], json!("Replayed"));
+        assert_eq!(deltas[0].payload["width"], json!(1280));
+        assert!(store.window_registry().spec("replayed").is_some());
+        match &store.take_window_commands()[0] {
+            WindowCommand::Open(spec) => {
+                assert_eq!(spec.title, "Replayed");
+                assert_eq!((spec.width, spec.height), (1280, 720));
+            }
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_window_emits_the_mirror_delta_and_queues_close() {
+        let mut store = Store::new();
+        store
+            .dispatch("windows/createWindow", json!({"id": "a"}))
+            .expect("create");
+        let _ = store.drain_deltas();
+        let _ = store.take_window_commands();
+
+        let result = store
+            .dispatch("windows/removeWindow", json!({"id": "a"}))
+            .expect("removeWindow dispatches");
+        assert_eq!(result, Value::Null);
+
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].r#type, "windows/REMOVE_WINDOW");
+        assert_eq!(deltas[0].payload, json!("a"));
+        assert!(store.window_registry().is_empty());
+        assert_eq!(
+            store.take_window_commands(),
+            vec![WindowCommand::Close("a".to_string())]
+        );
+    }
+
+    #[test]
+    fn removing_an_unknown_window_is_a_silent_noop() {
+        let mut store = Store::new();
+        let result = store
+            .dispatch("windows/removeWindow", json!({"id": "missing"}))
+            .expect("removeWindow dispatches");
+        assert_eq!(result, Value::Null);
+        assert!(store.drain_deltas().is_empty());
+        assert!(store.take_window_commands().is_empty());
+
+        let error = store
+            .dispatch("windows/removeWindow", json!({}))
+            .expect_err("the id is required");
+        assert!(matches!(
+            error,
+            StoreError::InvalidPayload { action, .. } if action == "windows/removeWindow"
+        ));
+    }
+
+    #[test]
+    fn a_natively_closed_window_emits_remove_without_a_close_command() {
+        let mut store = Store::new();
+        store
+            .dispatch("windows/createWindow", json!({"id": "native"}))
+            .expect("create");
+        let _ = store.drain_deltas();
+        let _ = store.take_window_commands();
+
+        assert!(store.window_closed_natively("native"));
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas[0].r#type, "windows/REMOVE_WINDOW");
+        assert_eq!(deltas[0].payload, json!("native"));
+        assert!(store.window_registry().is_empty());
+        assert!(
+            store.take_window_commands().is_empty(),
+            "the window is already gone; the loop must not close it again"
+        );
+        assert!(!store.window_closed_natively("native"));
+    }
+
+    #[test]
+    fn sync_state_lists_the_open_output_windows() {
+        let mut store = Store::new();
+        store
+            .dispatch(
+                "windows/createWindow",
+                json!({"id": "sync-a", "name": "A", "width": 800}),
+            )
+            .expect("create");
+        store
+            .dispatch("windows/createWindow", json!({"id": "sync-b"}))
+            .expect("create");
+
+        let sync = store.sync_state();
+        let windows = sync["windows"].as_array().expect("windows array");
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0]["id"], json!("sync-a"));
+        assert_eq!(windows[0]["title"], json!("A"));
+        assert_eq!(windows[0]["width"], json!(800));
+        assert_eq!(windows[1]["id"], json!("sync-b"));
     }
 
     #[test]

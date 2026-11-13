@@ -6,6 +6,10 @@ import {
   isFullscreenToggleEvent,
   toggleFullscreen,
 } from "./output-window-controls.js";
+import {
+  closeEngineOutputWindow,
+  engineOutputWindowIds,
+} from "./engine-output-windows.js";
 
 export default function windowHandler() {
   const windows = {};
@@ -72,8 +76,10 @@ export default function windowHandler() {
 
   this._store.subscribe(async ({ type, payload }) => {
     if (type === "windows/ADD_WINDOW") {
-      // R-23: the Rust engine has no Output Windows; never open a bare window
-      // from a replayed/unsupported mutation.
+      // Engine mode: the Rust engine owns the native window and created it
+      // when `windows/createWindow` was dispatched (see
+      // engine-output-windows.js). The ADD_WINDOW delta is its mirror record,
+      // so there is nothing to open here and no canvas to transfer.
       if (that.engineMode) return;
 
       const { width, height, backgroundColor, title, id } = payload;
@@ -169,6 +175,17 @@ export default function windowHandler() {
   });
 
   window.addEventListener("unload", () => {
+    if (that.engineMode) {
+      // The engine's native windows die with its process, but dispatching the
+      // removals keeps the mirror (and a reloaded renderer) from listing ghost
+      // windows.
+      for (const id of engineOutputWindowIds(that._store.state)) {
+        closeEngineOutputWindow(that.store, id);
+      }
+
+      return;
+    }
+
     const windowIds = Object.keys(windows);
     for (let i = 0, len = windowIds.length; i < len; i++) {
       windows[windowIds[i]].close();

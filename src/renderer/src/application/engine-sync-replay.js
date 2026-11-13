@@ -110,6 +110,13 @@ export function applyEngineSync(store, snapshot) {
     }
   }
 
+  // Engine-owned Output Windows (native winit windows). The engine ships the
+  // windows it actually has open; replacing the list keeps a late-joining
+  // mirror (or one rebuilt after an engine restart) from listing ghosts.
+  if (Array.isArray(snapshot.windows)) {
+    store.commit("windows/SET_WINDOWS", snapshot.windows);
+  }
+
   if (Array.isArray(snapshot.scenes)) {
     store.commit("scenes/REPLACE_SCENES", snapshot.scenes);
   }

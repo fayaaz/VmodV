@@ -39,10 +39,7 @@ import constants, { GROUP_ENABLED } from "./constants";
 import ModVWorker from "./worker/index.worker.js?worker";
 import EngineClient from "./engine-client";
 import { applyEngineSync } from "./engine-sync-replay";
-import {
-  ENGINE_UNSUPPORTED_BOOT_MESSAGE,
-  engineUnsupportedMessage,
-} from "./engine-unsupported";
+import { ENGINE_UNSUPPORTED_BOOT_MESSAGE } from "./engine-unsupported";
 import { createPresetData } from "./worker/preset-serializer";
 import {
   applyMediaPathToMirror,
@@ -638,9 +635,10 @@ class ModV {
       );
     }
 
-    // R-23: Output Windows are not implemented by the engine yet, so do not
-    // dispatch a command it will silently discard. The View menu item is
-    // disabled in engine mode too.
+    // The engine opens its own primary output window, which is the engine-mode
+    // equivalent of the legacy boot Output Window, so do not open a second
+    // one at startup. Additional windows come from View → New Output Window
+    // (`create-output-window`), which dispatches the engine action below.
     if (!this.engineMode) {
       this.store.dispatch("windows/createWindow");
     }
@@ -689,11 +687,10 @@ class ModV {
     });
 
     ipcRenderer.on("create-output-window", () => {
-      if (this.engineMode) {
-        logger.warn(engineUnsupportedMessage("Output Windows"));
-        return;
-      }
-
+      // Both modes go through the same action: the legacy worker action commits
+      // `ADD_WINDOW`, which `window-handler.js` opens as a popup; engine mode
+      // forwards it to the Rust engine, which opens a native winit window and
+      // emits the same mirror delta.
       this.store.dispatch("windows/createWindow");
     });
 

@@ -22,6 +22,20 @@ pub struct SurfaceTarget {
 /// docs/rust-hybrid.md. The initial configuration size is taken from
 /// [`Window::inner_size`], clamped to a non-zero size.
 pub fn create_surface(engine: &Engine, window: Arc<Window>) -> Result<SurfaceTarget, EngineError> {
+    create_surface_with_present_mode(engine, window, wgpu::PresentMode::Fifo)
+}
+
+/// [`create_surface`] with an explicit present mode.
+///
+/// Secondary Output Windows pass [`wgpu::PresentMode::AutoNoVsync`]: the
+/// primary window's Fifo acquire paces the frame loop, and a secondary surface
+/// must never throttle it to its own (possibly slower) display. An
+/// unsupported mode falls back to Fifo, which every surface supports.
+pub fn create_surface_with_present_mode(
+    engine: &Engine,
+    window: Arc<Window>,
+    present_mode: wgpu::PresentMode,
+) -> Result<SurfaceTarget, EngineError> {
     let size = window.inner_size();
     let width = size.width.max(1);
     let height = size.height.max(1);
@@ -39,13 +53,18 @@ pub fn create_surface(engine: &Engine, window: Arc<Window>) -> Result<SurfaceTar
         .copied()
         .find(wgpu::TextureFormat::is_srgb)
         .unwrap_or(caps.formats[0]);
+    let present_mode = if caps.present_modes.contains(&present_mode) {
+        present_mode
+    } else {
+        wgpu::PresentMode::Fifo
+    };
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
         color_space: wgpu::SurfaceColorSpace::Auto,
         width,
         height,
-        present_mode: wgpu::PresentMode::Fifo,
+        present_mode,
         desired_maximum_frame_latency: 2,
         alpha_mode: caps.alpha_modes[0],
         view_formats: vec![],

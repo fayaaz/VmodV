@@ -1,7 +1,11 @@
-// R-23 — the Rust engine accepts unknown commands with a catch-all, so
-// Output Windows, MIDI, OSC, plugins and local fonts are silently dropped in
-// engine mode. The UI uses these strings to say so instead of pretending the
-// feature works. Legacy (worker) mode never reads them.
+// R-23 — the Rust engine accepts unknown commands with a catch-all, so MIDI,
+// OSC, plugins and local fonts are silently dropped in engine mode. The UI uses
+// these strings to say so instead of pretending the feature works. Legacy
+// (worker) mode never reads them.
+//
+// Output Windows are no longer in this list: the engine opens native winit
+// windows itself (`crates/modv-app/src/windows.rs`) and the renderer dispatches
+// `windows/createWindow` rather than calling `window.open`.
 
 /** Short label/tooltip for a control that the engine cannot drive yet. */
 export const ENGINE_UNSUPPORTED_TITLE =
@@ -9,7 +13,7 @@ export const ENGINE_UNSUPPORTED_TITLE =
 
 /** One-line boot warning, also useful when a shortcut is attempted. */
 export const ENGINE_UNSUPPORTED_BOOT_MESSAGE =
-  "Rust engine mode: Output Windows and JavaScript plugins are not supported yet; unavailable controls are disabled";
+  "Rust engine mode: MIDI, OSC and JavaScript plugins are not supported yet; unavailable controls are disabled";
 
 /** Console/renderer warning for a feature the user tried to use anyway. */
 export function engineUnsupportedMessage(feature) {

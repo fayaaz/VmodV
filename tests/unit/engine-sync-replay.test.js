@@ -101,6 +101,20 @@ function syncPayload() {
     defaultsVersion: 12,
     seededDefaultScenes: ["Scene"],
     appliedSceneId: "scene-1",
+    windows: [
+      {
+        id: "window-1",
+        width: 300,
+        height: 300,
+        title: "VmodV Output",
+        pixelRatio: 1,
+        x: 0,
+        y: 0,
+        fullscreen: false,
+        backgroundColor: "#000",
+        outputId: "",
+      },
+    ],
     registered: {
       Ball: { meta: { name: "Ball", type: "2d" }, props: {} },
     },
@@ -120,6 +134,7 @@ function mirrorState() {
     expressions: Object.keys(state.expressions.assignments).sort(),
     scenes: state.scenes.scenes.map((scene) => scene.id),
     currentSceneId: state.scenes.performance.currentSceneId,
+    windows: Object.keys(state.windows).sort(),
   };
 }
 
@@ -166,6 +181,7 @@ describe("applyEngineSync", () => {
       expressions: ["expression-1"],
       scenes: ["scene-1"],
       currentSceneId: "scene-1",
+      windows: ["window-1"],
     });
   });
 
@@ -180,6 +196,7 @@ describe("applyEngineSync", () => {
     next.expressions = { assignments: {} };
     next.scenes = [];
     next.appliedSceneId = null;
+    next.windows = [];
     applyEngineSync(store, next);
 
     expect(mirrorState()).toMatchObject({
@@ -191,6 +208,7 @@ describe("applyEngineSync", () => {
       expressions: [],
       scenes: [],
       currentSceneId: null,
+      windows: [],
     });
 
     // Registering is append-only for an engine session.
