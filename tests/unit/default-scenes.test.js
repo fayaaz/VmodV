@@ -82,8 +82,10 @@ const getModulesInGroup = (scene, name) =>
   (getGroup(scene, name)?.modules || []).map((module) => module.name);
 
 describe("default scenes", () => {
-  it("bumps the defaults version to 14", () => {
-    expect(DEFAULTS_VERSION).toBe(14);
+  it("bumps the defaults version to 15", () => {
+    // Version 15 adds the three NC-SA Shadertoy ports (Ember Storm,
+    // Prism Tunnel, Sentinel) as sparse single-Group Scenes.
+    expect(DEFAULTS_VERSION).toBe(15);
   });
 
   it("does not use CMYK Halftone in any default Scene", () => {
@@ -1604,5 +1606,112 @@ describe("version 13 default scene refresh", () => {
 
   it("lists Halftone Harbor as a refreshed default", () => {
     expect(REFRESHED_DEFAULT_SCENES).toContain("Halftone Harbor");
+  });
+});
+
+describe("version 15 default scenes", () => {
+  const version15 = DEFAULT_SCENES.filter(
+    (scene) => scene.introducedVersion === 15,
+  );
+
+  const expected = [
+    {
+      name: "Ember Storm",
+      generator: "Hot Shower",
+      effects: ["Bloom"],
+      links: [
+        ["Hot Shower", "windspeed", "bass"],
+        ["Bloom", "intensity", "mid"],
+      ],
+    },
+    {
+      name: "Prism Tunnel",
+      generator: "Traced Tunnel",
+      effects: ["Bloom", "Chromatic Abberation"],
+      links: [
+        ["Traced Tunnel", "speed", "bass"],
+        ["Traced Tunnel", "dof", "mid"],
+      ],
+    },
+    {
+      name: "Sentinel",
+      generator: "Helix Eye",
+      effects: ["Glow", "Bloom"],
+      links: [
+        ["Helix Eye", "eyePulse", "bass"],
+        ["Helix Eye", "speed", "mid"],
+      ],
+    },
+  ];
+
+  it("ships exactly the three version 15 Shadertoy scenes", () => {
+    expect(version15.map((scene) => scene.name)).toEqual(
+      expected.map((scene) => scene.name),
+    );
+  });
+
+  it.each(expected)(
+    "$name is a single sparse Effects group with the generator and effects inline",
+    ({ name, generator, effects }) => {
+      const scene = DEFAULT_SCENES.find((candidate) => candidate.name === name);
+
+      expect(scene).toBeTruthy();
+      expect(scene.introducedVersion).toBe(15);
+      expect(scene.groups.map((group) => group.name)).toEqual(["Effects"]);
+
+      const [group] = scene.groups;
+      expect(group.inherit).toBe(false);
+      expect(group.clearing).toBe(true);
+      expect(group.alpha).toBe(1);
+
+      expect(getModulesInGroup(scene, "Effects")).toEqual([
+        generator,
+        ...effects,
+      ]);
+      expect(getGroup(scene, "Background")).toBeUndefined();
+      expect(getGroup(scene, "Foreground")).toBeUndefined();
+      expect(Number(scene.minSeconds)).toBeLessThan(Number(scene.maxSeconds));
+    },
+  );
+
+  it.each(expected)(
+    "$name links its audio reactively without dangling references",
+    ({ name, links }) => {
+      const scene = DEFAULT_SCENES.find((candidate) => candidate.name === name);
+      const moduleNames = new Set(getModuleNames(scene));
+      const groupNames = new Set(scene.groups.map((group) => group.name));
+
+      expect((scene.inputLinks || []).length).toBeGreaterThanOrEqual(2);
+
+      for (const [module, control, feature] of links) {
+        expect(
+          (scene.inputLinks || []).some(
+            (link) =>
+              link.module === module &&
+              link.control === control &&
+              link.feature === feature &&
+              groupNames.has(link.group),
+          ),
+          `${module}.${control} from ${feature}`,
+        ).toBe(true);
+      }
+
+      for (const link of scene.inputLinks || []) {
+        expect(moduleNames.has(link.module)).toBe(true);
+        expect(Number(link.min)).toBeLessThan(Number(link.max));
+      }
+    },
+  );
+
+  it("seeds the version 15 batch for installs on version 14", () => {
+    const selected = getScenesToSeed({
+      defaultsVersion: 14,
+      seededNames: getDefaultSceneNamesUpTo(14),
+      existingNames: [],
+    });
+
+    expect(selected.map((scene) => scene.name)).toEqual(
+      version15.map((scene) => scene.name),
+    );
   });
 });

@@ -52,7 +52,7 @@
 //! Tunnel` fixes its `MBOX3` hue, both handled by
 //! [`crate::default_scenes::get_default_scenes_to_replace`] through
 //! [`crate::default_scenes::REFRESHED_DEFAULT_SCENES`]. It adds no row here.
-//! The `the_version_13_bump_refreshes_the_edited_scenes_without_a_rename_rule`
+//! The `the_previous_version_bump_refreshes_the_edited_scenes_without_a_rename_rule`
 //! test pins that split.
 //!
 //! ## Semantics
@@ -1034,7 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn the_version_14_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
+    fn the_previous_version_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
         // Versions 13/14 only edit definitions in place — CMYK Halftone leaves
         // Halftone Harbor, MBOX3's hue is fixed and Point10 Old Movie becomes
         // Sepia Tone — so no rename/removal rule ships and the version-keyed
@@ -1050,7 +1050,7 @@ mod tests {
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
         let plan = crate::default_scenes::get_default_scenes_to_replace(
-            13,
+            crate::default_scenes::DEFAULTS_VERSION - 1,
             &scenes,
             None,
             Some(&seeded_names),

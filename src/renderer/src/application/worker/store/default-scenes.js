@@ -37,8 +37,12 @@
 // place for installs that saved the version 11 defaults. Version 13 removes
 // CMYK Halftone from Halftone Harbor (its only default Scene); the Effects row
 // stays empty, and the Scene is refreshed in place for version-12 installs.
+// Version 14 retires the Old Movie 2D effect and swaps Boxy Arcade's
+// Effects row to Sepia Tone (refreshed in place for version-13 installs), and
+// version 15 adds three sparse Scenes built around the NC-SA Shadertoy ports
+// (Hot Shower, Traced Tunnel, Helix Eye) with the effects chained inline.
 export const LEGACY_DEFAULTS_VERSION = 1;
-export const DEFAULTS_VERSION = 14;
+export const DEFAULTS_VERSION = 15;
 
 // The Cube Floor module was removed in version 7. Existing installs may still
 // hold default Scenes that reference it, so the migration below rebuilds those
@@ -4047,6 +4051,167 @@ const DEFAULT_SCENES = [
             },
           },
         ],
+      },
+    ],
+  },
+
+  // Version 15 adds three sparse Scenes built around the NC-SA Shadertoy
+  // ports (Helix Eye, Traced Tunnel, Hot Shower). Each is a single Effects
+  // Group with the effects chained inline, so there is no Background or
+  // Foreground row — the generator and its filters composite as one layer.
+  {
+    name: "Ember Storm",
+    introducedVersion: 15,
+    minSeconds: 12,
+    maxSeconds: 28,
+    groups: [
+      {
+        name: "Effects",
+        inherit: false,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "normal",
+        modules: [
+          {
+            name: "Hot Shower",
+            props: {
+              glow: 4.0,
+              brightness: 0.45,
+            },
+          },
+          {
+            name: "Bloom",
+            props: {
+              blurAmount: 5,
+              intensity: 0.5,
+            },
+          },
+        ],
+      },
+    ],
+    inputLinks: [
+      {
+        group: "Effects",
+        module: "Hot Shower",
+        control: "windspeed",
+        feature: "bass",
+        min: 0.15,
+        max: 1.2,
+      },
+      {
+        group: "Effects",
+        module: "Bloom",
+        control: "intensity",
+        feature: "mid",
+        min: 0.2,
+        max: 1.0,
+      },
+    ],
+  },
+
+  {
+    name: "Prism Tunnel",
+    introducedVersion: 15,
+    minSeconds: 10,
+    maxSeconds: 26,
+    groups: [
+      {
+        name: "Effects",
+        inherit: false,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "normal",
+        modules: [
+          {
+            name: "Traced Tunnel",
+            props: {
+              gridScale: 13,
+              fogDensity: 1.15,
+            },
+          },
+          {
+            name: "Bloom",
+            props: {
+              blurAmount: 4,
+              intensity: 0.4,
+            },
+          },
+          {
+            name: "Chromatic Abberation",
+            props: {},
+          },
+        ],
+      },
+    ],
+    inputLinks: [
+      {
+        group: "Effects",
+        module: "Traced Tunnel",
+        control: "speed",
+        feature: "bass",
+        min: 0.6,
+        max: 1.8,
+      },
+      {
+        group: "Effects",
+        module: "Traced Tunnel",
+        control: "dof",
+        feature: "mid",
+        min: 0,
+        max: 0.16,
+      },
+    ],
+  },
+
+  {
+    name: "Sentinel",
+    introducedVersion: 15,
+    minSeconds: 12,
+    maxSeconds: 30,
+    groups: [
+      {
+        name: "Effects",
+        inherit: false,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "normal",
+        modules: [
+          {
+            name: "Helix Eye",
+            props: {
+              eyePulse: 0.14,
+            },
+          },
+          {
+            name: "Glow",
+            props: {},
+          },
+          {
+            name: "Bloom",
+            props: {
+              blurAmount: 3,
+              intensity: 0.3,
+            },
+          },
+        ],
+      },
+    ],
+    inputLinks: [
+      {
+        group: "Effects",
+        module: "Helix Eye",
+        control: "eyePulse",
+        feature: "bass",
+        min: 0.02,
+        max: 0.25,
+      },
+      {
+        group: "Effects",
+        module: "Helix Eye",
+        control: "speed",
+        feature: "mid",
+        min: 0.6,
+        max: 1.6,
       },
     ],
   },

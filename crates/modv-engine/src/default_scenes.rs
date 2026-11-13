@@ -51,7 +51,11 @@ use serde_json::{Map, Value};
 /// use (`Boxy Arcade`'s Effects row) to the `Sepia Tone` ISF filter. No
 /// rename/removal rule ships with either bump; the Scenes are refreshed in
 /// place for installs on the previous version.
-pub const DEFAULTS_VERSION: i64 = 14;
+///
+/// Version 15 adds three sparse Scenes built around the NC-SA Shadertoy ports
+/// (`Hot Shower`, `Traced Tunnel`, `Helix Eye`) — a single Effects Group with
+/// the effects chained inline, so there is no Background or Foreground row.
+pub const DEFAULTS_VERSION: i64 = 15;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
@@ -785,9 +789,9 @@ mod tests {
     // ————————————————— data integrity —————————————————
 
     #[test]
-    fn bumps_the_defaults_version_to_14() {
+    fn bumps_the_defaults_version_to_15() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 14);
+        assert_eq!(DEFAULTS_VERSION, 15);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
     }
 
@@ -1895,7 +1899,7 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_the_trimmed_seeded_defaults_for_installs_on_version_13() {
+    fn refreshes_the_trimmed_seeded_defaults_for_installs_on_the_previous_version() {
         // default-scenes.test.js:1253-1310
         let names = [
             "Circuit Ritual",
@@ -1906,7 +1910,7 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(13, &scenes, None, Some(&seeded_names));
+        let plan = get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()
@@ -2028,7 +2032,7 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_halftone_harbor_and_the_mbox_hue_for_installs_on_version_13() {
+    fn refreshes_halftone_harbor_and_the_mbox_hue_for_installs_on_the_previous_version() {
         // default-scenes.test.js:1560-1595
         for name in ["Halftone Harbor", "MBOX Light Tunnel"] {
             assert!(REFRESHED_DEFAULT_SCENES.contains(&name), "{name}");
@@ -2038,7 +2042,7 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(13, &scenes, None, Some(&seeded_names));
+        let plan = get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()
@@ -2080,7 +2084,7 @@ mod tests {
     }
 
     #[test]
-    fn rebuilds_the_bands_using_defaults_for_installs_on_version_13() {
+    fn rebuilds_the_bands_using_defaults_for_installs_on_the_previous_version() {
         // default-scenes.test.js:1359-1397
         let names = [
             "Rolling Fire Bloom",
@@ -2092,7 +2096,7 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(13, &scenes, None, Some(&seeded_names));
+        let plan = get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()
