@@ -497,3 +497,12 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   GPU tests cover classification, a red→blue mix, the uncompilable fallback
   and an end-to-end frame; the performance tests cover the shader path and a
   filter falling back to Fade.
+- **The `three` renderer and `Cube` are removed from both runtimes.** The
+  engine never registered `Cube` (no `three` module type, the last Gallery
+  gap); the legacy worker's `renderers/three/` tree is deleted along with the
+  worker glob, the ThreeJS Gallery category and the `three` aliases in
+  `module-category.js`. `renderersAreRegistered` now expects
+  `["2d", "isf", "shader"]`. `tests/unit/cube-removed.test.js` guards against
+  reintroduction (files gone, no source/test references, seeded default
+  Scenes do not reference `Cube`). The `three` npm package stays — Point10
+  scenes import it directly.

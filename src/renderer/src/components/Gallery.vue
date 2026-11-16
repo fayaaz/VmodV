@@ -77,13 +77,12 @@ import constants from "../application/constants";
 import { normalizeModuleCategory } from "../application/module-category";
 import GalleryItem from "./GalleryItem.vue";
 
-const CATEGORY_ORDER = ["effects", "2d-scenes", "3d-scenes", "three"];
+const CATEGORY_ORDER = ["effects", "2d-scenes", "3d-scenes"];
 
 const CATEGORY_LABELS = {
   effects: "Effects",
   "2d-scenes": "2D Scenes",
   "3d-scenes": "3D Scenes",
-  three: "ThreeJS",
 };
 
 const DEFAULT_CATEGORY_BY_TYPE = {
@@ -91,7 +90,6 @@ const DEFAULT_CATEGORY_BY_TYPE = {
   "3d": "3d-scenes",
   shader: "effects",
   isf: "effects",
-  three: "three",
 };
 
 function getModuleCategory(meta) {

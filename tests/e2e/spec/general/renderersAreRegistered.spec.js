@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { modVApp } from "../../pageObjectModel";
 
 test("renderers are registered", async () => {
-  const expectedRenderers = ["2d", "isf", "shader", "three"];
+  const expectedRenderers = ["2d", "isf", "shader"];
 
   const { renderers } = await modVApp.evaluateMainState();
 

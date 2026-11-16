@@ -215,13 +215,6 @@ async function start() {
     modulesToRegister.push(mod.default);
   }
 
-  // Import three.js modules
-  const threeModules = import.meta.glob("../renderers/three/modules/*.js");
-  for (const pathKey in threeModules) {
-    const mod = await threeModules[pathKey]();
-    modulesToRegister.push(mod.default);
-  }
-
   // Import shader modules
   const shaderModules = import.meta.glob("../renderers/shader/modules/*.js");
   for (const pathKey in shaderModules) {

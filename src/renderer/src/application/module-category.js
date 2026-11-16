@@ -7,9 +7,6 @@ export const CATEGORY_ALIASES = {
   "3d": "3d-scenes",
   "3d-scene": "3d-scenes",
   "3d-scenes": "3d-scenes",
-  three: "three",
-  "three-js": "three",
-  threejs: "three",
 };
 
 export function normalizeModuleCategory(category) {
