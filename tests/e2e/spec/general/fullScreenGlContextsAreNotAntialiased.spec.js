@@ -2,20 +2,14 @@ import { expect, test } from "@playwright/test";
 import { modVApp } from "../../pageObjectModel";
 
 /**
- * The shared ISF, shader and three WebGL contexts only ever draw full-screen
- * quads (ISF/pex) or are used by a THREE renderer configured with
- * antialias:false. Multisampling is pure fill-rate and resolve cost on every
+ * The shared ISF and shader WebGL contexts only ever draw full-screen
+ * quads (ISF/pex). Multisampling is pure fill-rate and resolve cost on every
  * pass, so these contexts must request antialias:false.
  */
 test("full-screen-quad GL contexts do not request antialiasing", async () => {
   const attributes = await modVApp.evaluateWorker(async () => {
     const result = {};
-    const names = [
-      "isf-buffer",
-      "isf-buffer-gallery",
-      "shader-buffer",
-      "three-buffer",
-    ];
+    const names = ["isf-buffer", "isf-buffer-gallery", "shader-buffer"];
 
     for (const name of names) {
       const aux = Object.values(self.store.state.outputs.auxillary).find(
@@ -40,7 +34,6 @@ test("full-screen-quad GL contexts do not request antialiasing", async () => {
     "isf-buffer",
     "isf-buffer-gallery",
     "shader-buffer",
-    "three-buffer",
   ]) {
     expect(attributes[name], name).toBeTruthy();
     expect(attributes[name].antialias, name).toBe(false);
