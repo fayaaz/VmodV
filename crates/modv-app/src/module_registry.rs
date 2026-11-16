@@ -108,6 +108,7 @@ use modv_renderers::point10::scenes::around_plus::AroundPlus;
 use modv_renderers::point10::scenes::attractor_particles::AttractorParticles;
 use modv_renderers::point10::scenes::boxy::Boxy;
 use modv_renderers::point10::scenes::color_cube::ColorCube;
+use modv_renderers::point10::scenes::earth::Earth;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
 use modv_renderers::point10::scenes::geometric_tunnel::GeometricTunnel;
 use modv_renderers::point10::scenes::glass_lens::GlassLens;
@@ -123,6 +124,7 @@ use modv_renderers::point10::scenes::smoke_room::SmokeRoom;
 use modv_renderers::point10::scenes::sound_cube::SoundCube;
 use modv_renderers::point10::scenes::spiral_particles::SpiralParticles;
 use modv_renderers::point10::scenes::square_tunnel::SquareTunnel;
+use modv_renderers::point10::scenes::sun::Sun;
 use modv_renderers::point10::scenes::ultra_hdr::UltraHdr;
 use modv_renderers::point10::scenes::water_ripple::WaterRipple;
 use modv_renderers::point10::scenes::waveform::Waveform;
@@ -281,6 +283,10 @@ pub enum Point10SceneKind {
     SmokeRoom(SmokeRoom),
     /// `Point10 Latent Backrooms` (`scenes/latent_backrooms.rs`).
     LatentBackrooms(LatentBackrooms),
+    /// `Point10 Sun` (`scenes/sun.rs`).
+    Sun(Sun),
+    /// `Point10 Earth` (`scenes/earth.rs`).
+    Earth(Earth),
 }
 
 impl Point10SceneKind {
@@ -339,6 +345,8 @@ impl Point10SceneKind {
             "Point10 Ball Of Fire" => Self::BallOfFire(BallOfFire::new()),
             "Point10 Smoke Room" => Self::SmokeRoom(SmokeRoom::new()),
             "Point10 Latent Backrooms" => Self::LatentBackrooms(LatentBackrooms::new()),
+            "Point10 Sun" => Self::Sun(Sun::new()),
+            "Point10 Earth" => Self::Earth(Earth::new()),
             _ => return None,
         })
     }
@@ -357,6 +365,8 @@ impl Point10SceneKind {
             Self::RollingFire(scene) => scene.apply_props(|key| get(key)),
             Self::SmokeRoom(scene) => scene.apply_props(|key| get(key)),
             Self::LatentBackrooms(scene) => scene.apply_props(|key| get(key)),
+            Self::Sun(scene) => scene.apply_props(|key| get(key)),
+            Self::Earth(scene) => scene.apply_props(|key| get(key)),
             Self::HollowCube(scene) => scene.apply_props(|key| get(key)),
             Self::AttractorParticles(scene) => scene.apply_props(|key| get(key)),
             Self::DvdRoom(scene) => scene.apply_props(|key| get(key)),
@@ -391,6 +401,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.name(),
             Self::SmokeRoom(scene) => scene.name(),
             Self::LatentBackrooms(scene) => scene.name(),
+            Self::Sun(scene) => scene.name(),
+            Self::Earth(scene) => scene.name(),
             Self::HollowCube(scene) => scene.name(),
             Self::AttractorParticles(scene) => scene.name(),
             Self::DvdRoom(scene) => scene.name(),
@@ -422,6 +434,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.init(ctx),
             Self::SmokeRoom(scene) => scene.init(ctx),
             Self::LatentBackrooms(scene) => scene.init(ctx),
+            Self::Sun(scene) => scene.init(ctx),
+            Self::Earth(scene) => scene.init(ctx),
             Self::HollowCube(scene) => scene.init(ctx),
             Self::AttractorParticles(scene) => scene.init(ctx),
             Self::DvdRoom(scene) => scene.init(ctx),
@@ -453,6 +467,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.resize(width, height),
             Self::SmokeRoom(scene) => scene.resize(width, height),
             Self::LatentBackrooms(scene) => scene.resize(width, height),
+            Self::Sun(scene) => scene.resize(width, height),
+            Self::Earth(scene) => scene.resize(width, height),
             Self::HollowCube(scene) => scene.resize(width, height),
             Self::AttractorParticles(scene) => scene.resize(width, height),
             Self::DvdRoom(scene) => scene.resize(width, height),
@@ -484,6 +500,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.update(dt, audio),
             Self::SmokeRoom(scene) => scene.update(dt, audio),
             Self::LatentBackrooms(scene) => scene.update(dt, audio),
+            Self::Sun(scene) => scene.update(dt, audio),
+            Self::Earth(scene) => scene.update(dt, audio),
             Self::HollowCube(scene) => scene.update(dt, audio),
             Self::AttractorParticles(scene) => scene.update(dt, audio),
             Self::DvdRoom(scene) => scene.update(dt, audio),
@@ -519,6 +537,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.render(encoder, target),
             Self::SmokeRoom(scene) => scene.render(encoder, target),
             Self::LatentBackrooms(scene) => scene.render(encoder, target),
+            Self::Sun(scene) => scene.render(encoder, target),
+            Self::Earth(scene) => scene.render(encoder, target),
             Self::HollowCube(scene) => scene.render(encoder, target),
             Self::AttractorParticles(scene) => scene.render(encoder, target),
             Self::DvdRoom(scene) => scene.render(encoder, target),
@@ -550,6 +570,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.dispose(),
             Self::SmokeRoom(scene) => scene.dispose(),
             Self::LatentBackrooms(scene) => scene.dispose(),
+            Self::Sun(scene) => scene.dispose(),
+            Self::Earth(scene) => scene.dispose(),
             Self::HollowCube(scene) => scene.dispose(),
             Self::AttractorParticles(scene) => scene.dispose(),
             Self::DvdRoom(scene) => scene.dispose(),
@@ -581,6 +603,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.props(),
             Self::SmokeRoom(scene) => scene.props(),
             Self::LatentBackrooms(scene) => scene.props(),
+            Self::Sun(scene) => scene.props(),
+            Self::Earth(scene) => scene.props(),
             Self::HollowCube(scene) => scene.props(),
             Self::AttractorParticles(scene) => scene.props(),
             Self::DvdRoom(scene) => scene.props(),
@@ -612,6 +636,8 @@ impl Point10Scene for Point10SceneKind {
             Self::RollingFire(scene) => scene.meta(),
             Self::SmokeRoom(scene) => scene.meta(),
             Self::LatentBackrooms(scene) => scene.meta(),
+            Self::Sun(scene) => scene.meta(),
+            Self::Earth(scene) => scene.meta(),
             Self::HollowCube(scene) => scene.meta(),
             Self::AttractorParticles(scene) => scene.meta(),
             Self::DvdRoom(scene) => scene.meta(),
@@ -1531,7 +1557,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 26);
+        assert_eq!(registry.point10_definitions().len(), 28);
     }
 
     #[test]
@@ -1571,6 +1597,8 @@ mod tests {
                 "Point10 Ball Of Fire",
                 "Point10 Smoke Room",
                 "Point10 Latent Backrooms",
+                "Point10 Sun",
+                "Point10 Earth",
             ]
         );
 

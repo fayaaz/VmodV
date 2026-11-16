@@ -585,7 +585,8 @@ impl UnitQuad {
 /// ColorCube, Boxy, SoundCube` (inventory order 12, 14, 15, 16, 19) and the
 /// batch-5a scenes `HollowCube, AttractorParticles, DvdRoom`, and the batch-5b
 /// scenes `GeometricTunnel, RollingFire, SmokeRoom, LatentBackrooms`, plus
-/// `BallOfFire` (the frozen RollingFire variant) — the complete 26-scene set.
+/// `BallOfFire` (the frozen RollingFire variant), `Sun` and `Earth` (the
+/// Planet9 scene batch) — the complete 28-scene set.
 pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
     vec![
         Box::new(chromatic::line::ChromaticLine::new()),
@@ -614,6 +615,8 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::rolling_fire::BallOfFire::new()),
         Box::new(scenes::smoke_room::SmokeRoom::new()),
         Box::new(scenes::latent_backrooms::LatentBackrooms::new()),
+        Box::new(scenes::sun::Sun::new()),
+        Box::new(scenes::earth::Earth::new()),
     ]
 }
 
@@ -624,7 +627,7 @@ mod tests {
     #[test]
     fn registry_has_the_port_order_scenes() {
         let scenes = all_scenes();
-        assert_eq!(scenes.len(), 26);
+        assert_eq!(scenes.len(), 28);
 
         assert_eq!(scenes[0].name(), "Point10 Chromatic Line");
         assert_eq!(scenes[1].name(), "Point10 Chromatic Wave");
@@ -658,6 +661,8 @@ mod tests {
         assert_eq!(scenes[23].name(), "Point10 Ball Of Fire");
         assert_eq!(scenes[24].name(), "Point10 Smoke Room");
         assert_eq!(scenes[25].name(), "Point10 Latent Backrooms");
+        assert_eq!(scenes[26].name(), "Point10 Sun");
+        assert_eq!(scenes[27].name(), "Point10 Earth");
     }
 
     #[test]
