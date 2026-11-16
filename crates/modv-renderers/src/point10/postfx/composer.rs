@@ -316,7 +316,7 @@ impl Composer {
     }
 
     /// Enable bloom with three's parameters (`UnrealBloomPass(size, strength,
-    /// radius, threshold)` — e.g. `Mycelium.js:414`, `GeometricTunnel.js:510`).
+    /// radius, threshold)` — e.g. `Mycelium.js:414`).
     pub fn enable_bloom(&mut self, strength: f32, radius: f32, threshold: f32) {
         let mut bloom = UnrealBloomPass::new(&self.device, &self.queue, self.width, self.height);
         bloom.set_strength(strength);

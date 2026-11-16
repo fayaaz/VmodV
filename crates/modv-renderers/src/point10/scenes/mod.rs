@@ -22,7 +22,6 @@
 //! | [`color_cube`] | Color Cube | `scenes/ColorCube.js` |
 //! | [`boxy`] | Boxy | `scenes/Boxy.js` |
 //! | [`sound_cube`] | Sound Cube | `scenes/SoundCube.js` |
-//! | [`geometric_tunnel`] | Geometric Tunnel | `scenes/GeometricTunnel.js` |
 //! | [`rolling_fire`] | Rolling Fire / Ball Of Fire | `scenes/RollingFire.js` |
 //! | [`smoke_room`] | Smoke Room | `scenes/SmokeRoom.js` |
 //! | [`latent_backrooms`] | Latent Backrooms | `scenes/LatentBackrooms.js` |
@@ -51,7 +50,6 @@ pub mod dvd_logo;
 pub mod dvd_room;
 pub mod earth;
 pub mod fire_common;
-pub mod geometric_tunnel;
 pub mod glass_lens;
 pub mod hollow_cube;
 pub mod it_is_coming_for_you;

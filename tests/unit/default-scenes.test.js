@@ -82,10 +82,10 @@ const getModulesInGroup = (scene, name) =>
   (getGroup(scene, name)?.modules || []).map((module) => module.name);
 
 describe("default scenes", () => {
-  it("bumps the defaults version to 15", () => {
-    // Version 15 adds the three NC-SA Shadertoy ports (Ember Storm,
-    // Prism Tunnel, Sentinel) as sparse single-Group Scenes.
-    expect(DEFAULTS_VERSION).toBe(15);
+  it("bumps the defaults version to 16", () => {
+    // Version 16 removes the Geometric Tunnel hero module and retunes the
+    // five default Scenes that carried it.
+    expect(DEFAULTS_VERSION).toBe(16);
   });
 
   it("does not use CMYK Halftone in any default Scene", () => {
@@ -1099,7 +1099,7 @@ describe("version 8 default scenes", () => {
     expect(names).toContain("LogTransWarpSpiral");
     expect(names).toContain("Hue-Saturation");
     expect(getModulesInGroup(scene, "Background")).toEqual([
-      "Point10 Geometric Tunnel",
+      "Point10 Light Tunnel",
     ]);
   });
 
@@ -1711,5 +1711,120 @@ describe("version 15 default scenes", () => {
     expect(selected.map((scene) => scene.name)).toEqual(
       version15.map((scene) => scene.name),
     );
+  });
+});
+
+describe("version 16 default scenes", () => {
+  const REMOVED_HERO = ["Point10", "Geometric", "Tunnel"].join(" ");
+  const retuned = [
+    {
+      name: "Geometric Tunnel",
+      hero: "Point10 Square Tunnel",
+      group: "Background",
+    },
+    {
+      name: "Golden Spiral Tunnel",
+      hero: "Point10 Light Tunnel",
+      group: "Background",
+    },
+    { name: "Reactor Glow", hero: "Point10 Color Cube", group: "Background" },
+    {
+      name: "Crosshatch Cipher",
+      hero: "Point10 Wormhole",
+      group: "Background",
+    },
+    {
+      name: "Digital Crystal Tunnel",
+      hero: "Point10 Spiral Particles",
+      group: "Foreground",
+    },
+  ];
+
+  it("removes the Geometric Tunnel hero from every seeded Scene", () => {
+    const names = new Set(DEFAULT_SCENES.flatMap(getModuleNames));
+
+    expect(DEFAULTS_VERSION).toBe(16);
+    expect(names.has(REMOVED_HERO)).toBe(false);
+  });
+
+  it.each(retuned)(
+    "$name carries its $hero hero and no dangling link",
+    ({ name, hero, group }) => {
+      const scene = DEFAULT_SCENES.find((candidate) => candidate.name === name);
+      const moduleNames = new Set(getModuleNames(scene));
+
+      expect(scene).toBeTruthy();
+      expect(getModulesInGroup(scene, group)).toContain(hero);
+      expect(moduleNames.has(REMOVED_HERO)).toBe(false);
+
+      for (const link of scene.inputLinks || []) {
+        expect(moduleNames.has(link.module)).toBe(true);
+      }
+    },
+  );
+
+  it.each(retuned.slice(0, 4))(
+    "$name pulses its hero with bass-driven alpha",
+    ({ name, hero, group }) => {
+      const scene = DEFAULT_SCENES.find((candidate) => candidate.name === name);
+      const link = (scene.inputLinks || []).find(
+        (candidate) =>
+          candidate.module === hero &&
+          candidate.control === "alpha" &&
+          candidate.feature === "bass",
+      );
+
+      expect(link).toBeTruthy();
+      expect(link.group).toBe(group);
+      expect(Number(link.min)).toBeCloseTo(0.45, 5);
+      expect(Number(link.max)).toBeCloseTo(1, 5);
+    },
+  );
+
+  it("keeps Digital Crystal Tunnel breathing on treble", () => {
+    const scene = DEFAULT_SCENES.find(
+      (candidate) => candidate.name === "Digital Crystal Tunnel",
+    );
+    const link = (scene.inputLinks || []).find(
+      (candidate) =>
+        candidate.control === "alpha" && candidate.feature === "treble",
+    );
+
+    expect(link).toBeTruthy();
+    expect(link.module).toBe("Point10 Spiral Particles");
+  });
+
+  it("refreshes the five retuned Scenes in place for installs on version 15", () => {
+    const seeded = retuned.map(({ name }) => ({
+      id: `${name}-id`,
+      name,
+      modules: {},
+    }));
+    const result = getDefaultScenesToReplace({
+      defaultsVersion: DEFAULTS_VERSION - 1,
+      scenes: seeded,
+      removedModuleNames: [],
+      seededNames: seeded.map((scene) => scene.name),
+    });
+
+    expect(result.replacements.map((scene) => scene.name).sort()).toEqual(
+      seeded.map((scene) => scene.name).sort(),
+    );
+
+    for (const replacement of result.replacements) {
+      expect(replacement.id).toBe(`${replacement.name}-id`);
+
+      const names = replacement.definition.groups.flatMap((group) =>
+        group.modules.map((module) => module.name),
+      );
+
+      expect(names).not.toContain(REMOVED_HERO);
+    }
+  });
+
+  it("lists all five retuned Scenes as refreshed defaults", () => {
+    for (const { name } of retuned) {
+      expect(REFRESHED_DEFAULT_SCENES).toContain(name);
+    }
   });
 });

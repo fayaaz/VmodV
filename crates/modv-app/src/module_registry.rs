@@ -110,7 +110,6 @@ use modv_renderers::point10::scenes::boxy::Boxy;
 use modv_renderers::point10::scenes::color_cube::ColorCube;
 use modv_renderers::point10::scenes::earth::Earth;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
-use modv_renderers::point10::scenes::geometric_tunnel::GeometricTunnel;
 use modv_renderers::point10::scenes::glass_lens::GlassLens;
 use modv_renderers::point10::scenes::hollow_cube::HollowCube;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
@@ -273,8 +272,6 @@ pub enum Point10SceneKind {
     AttractorParticles(AttractorParticles),
     /// `Point10 DVD Room` (`scenes/dvd_room.rs`).
     DvdRoom(DvdRoom),
-    /// `Point10 Geometric Tunnel` (`scenes/geometric_tunnel.rs`).
-    GeometricTunnel(GeometricTunnel),
     /// `Point10 Rolling Fire` (`scenes/rolling_fire.rs`).
     RollingFire(RollingFire),
     /// `Point10 Ball Of Fire` (`scenes/rolling_fire.rs`).
@@ -340,7 +337,6 @@ impl Point10SceneKind {
             "Point10 Hollow Cube" => Self::HollowCube(HollowCube::new()),
             "Point10 Attractor Particles" => Self::AttractorParticles(AttractorParticles::new()),
             "Point10 DVD Room" => Self::DvdRoom(DvdRoom::new()),
-            "Point10 Geometric Tunnel" => Self::GeometricTunnel(GeometricTunnel::new()),
             "Point10 Rolling Fire" => Self::RollingFire(RollingFire::new()),
             "Point10 Ball Of Fire" => Self::BallOfFire(BallOfFire::new()),
             "Point10 Smoke Room" => Self::SmokeRoom(SmokeRoom::new()),
@@ -361,7 +357,6 @@ impl Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.apply_props(|key| get(key)),
             Self::BallOfFire(scene) => scene.apply_props(|key| get(key)),
-            Self::GeometricTunnel(scene) => scene.apply_props(|key| get(key)),
             Self::RollingFire(scene) => scene.apply_props(|key| get(key)),
             Self::SmokeRoom(scene) => scene.apply_props(|key| get(key)),
             Self::LatentBackrooms(scene) => scene.apply_props(|key| get(key)),
@@ -397,7 +392,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.name(),
             Self::BallOfFire(scene) => scene.name(),
-            Self::GeometricTunnel(scene) => scene.name(),
             Self::RollingFire(scene) => scene.name(),
             Self::SmokeRoom(scene) => scene.name(),
             Self::LatentBackrooms(scene) => scene.name(),
@@ -430,7 +424,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.init(ctx),
             Self::BallOfFire(scene) => scene.init(ctx),
-            Self::GeometricTunnel(scene) => scene.init(ctx),
             Self::RollingFire(scene) => scene.init(ctx),
             Self::SmokeRoom(scene) => scene.init(ctx),
             Self::LatentBackrooms(scene) => scene.init(ctx),
@@ -463,7 +456,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.resize(width, height),
             Self::BallOfFire(scene) => scene.resize(width, height),
-            Self::GeometricTunnel(scene) => scene.resize(width, height),
             Self::RollingFire(scene) => scene.resize(width, height),
             Self::SmokeRoom(scene) => scene.resize(width, height),
             Self::LatentBackrooms(scene) => scene.resize(width, height),
@@ -496,7 +488,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.update(dt, audio),
             Self::BallOfFire(scene) => scene.update(dt, audio),
-            Self::GeometricTunnel(scene) => scene.update(dt, audio),
             Self::RollingFire(scene) => scene.update(dt, audio),
             Self::SmokeRoom(scene) => scene.update(dt, audio),
             Self::LatentBackrooms(scene) => scene.update(dt, audio),
@@ -533,7 +524,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.render(encoder, target),
             Self::BallOfFire(scene) => scene.render(encoder, target),
-            Self::GeometricTunnel(scene) => scene.render(encoder, target),
             Self::RollingFire(scene) => scene.render(encoder, target),
             Self::SmokeRoom(scene) => scene.render(encoder, target),
             Self::LatentBackrooms(scene) => scene.render(encoder, target),
@@ -566,7 +556,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.dispose(),
             Self::BallOfFire(scene) => scene.dispose(),
-            Self::GeometricTunnel(scene) => scene.dispose(),
             Self::RollingFire(scene) => scene.dispose(),
             Self::SmokeRoom(scene) => scene.dispose(),
             Self::LatentBackrooms(scene) => scene.dispose(),
@@ -599,7 +588,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.props(),
             Self::BallOfFire(scene) => scene.props(),
-            Self::GeometricTunnel(scene) => scene.props(),
             Self::RollingFire(scene) => scene.props(),
             Self::SmokeRoom(scene) => scene.props(),
             Self::LatentBackrooms(scene) => scene.props(),
@@ -632,7 +620,6 @@ impl Point10Scene for Point10SceneKind {
         match self {
             Self::ChromaticLine(scene) => scene.meta(),
             Self::BallOfFire(scene) => scene.meta(),
-            Self::GeometricTunnel(scene) => scene.meta(),
             Self::RollingFire(scene) => scene.meta(),
             Self::SmokeRoom(scene) => scene.meta(),
             Self::LatentBackrooms(scene) => scene.meta(),
@@ -1557,7 +1544,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 28);
+        assert_eq!(registry.point10_definitions().len(), 27);
     }
 
     #[test]
@@ -1592,7 +1579,6 @@ mod tests {
                 "Point10 Hollow Cube",
                 "Point10 Attractor Particles",
                 "Point10 DVD Room",
-                "Point10 Geometric Tunnel",
                 "Point10 Rolling Fire",
                 "Point10 Ball Of Fire",
                 "Point10 Smoke Room",

@@ -197,7 +197,7 @@ test("ships a version 3 batch of glitch scenes", async () => {
     (scene) => scene.introducedVersion === 3,
   );
 
-  expect(DEFAULTS_VERSION).toBe(15);
+  expect(DEFAULTS_VERSION).toBe(16);
   expect(newBatch.length).toBeGreaterThanOrEqual(9);
 
   for (const scene of newBatch) {
@@ -446,7 +446,7 @@ test("version 7 replaces Cube Floor and ships Circular Mountain", () => {
     (scene) => scene.name === "Circular Mountain",
   );
 
-  expect(DEFAULTS_VERSION).toBe(15);
+  expect(DEFAULTS_VERSION).toBe(16);
   expect(circularMountain).toBeTruthy();
   expect(getGroupModules(circularMountain, "Background")).toEqual([
     "fractal-mountain-tunnel",

@@ -55,14 +55,24 @@ use serde_json::{Map, Value};
 /// Version 15 adds three sparse Scenes built around the NC-SA Shadertoy ports
 /// (`Hot Shower`, `Traced Tunnel`, `Helix Eye`) — a single Effects Group with
 /// the effects chained inline, so there is no Background or Foreground row.
-pub const DEFAULTS_VERSION: i64 = 15;
+///
+/// Version 16 removes the Geometric Tunnel hero module and retunes the five default
+/// Scenes whose hero was it (the names stay; Square Tunnel / Light Tunnel /
+/// Color Cube / Wormhole / Spiral Particles replace it). The Background heroes
+/// gain a bass-driven alpha swell, and the two renamed Scenes the old refresh
+/// list did not cover (`Golden Spiral Tunnel`, `Reactor Glow`) are members now,
+/// like `Geometric Tunnel`, `Crosshatch Cipher` and `Digital Crystal Tunnel`.
+pub const DEFAULTS_VERSION: i64 = 16;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
 
 /// Modules removed from the defaults whose Scenes must be rebuilt
 /// (`default-scenes.js:44`).
-pub const REMOVED_DEFAULT_SCENE_MODULES: &[&str] = &["Point10 Cube Floor"];
+pub const REMOVED_DEFAULT_SCENE_MODULES: &[&str] = &[
+    "Point10 Cube Floor",
+    "Point10 Geometric Tunnel",
+];
 
 /// Default Scenes retired without a replacement (`default-scenes.js:49-58`).
 pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
@@ -118,6 +128,8 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Square Tunnel Signal",
     "Wormhole Descent",
     "Wormhole Cathedral",
+    "Golden Spiral Tunnel",
+    "Reactor Glow",
     "ASCII Sunbeam",
     "Terminal Bloom",
     "Halftone Harbor",
@@ -791,7 +803,7 @@ mod tests {
     #[test]
     fn bumps_the_defaults_version_to_15() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 15);
+        assert_eq!(DEFAULTS_VERSION, 16);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
     }
 

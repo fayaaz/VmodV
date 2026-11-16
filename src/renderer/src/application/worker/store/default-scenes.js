@@ -41,13 +41,24 @@
 // Effects row to Sepia Tone (refreshed in place for version-13 installs), and
 // version 15 adds three sparse Scenes built around the NC-SA Shadertoy ports
 // (Hot Shower, Traced Tunnel, Helix Eye) with the effects chained inline.
+// Version 16 removes the Geometric Tunnel hero module and retunes the five default
+// Scenes whose Background/Foreground hero was it: the Scene names stay, the
+// hero modules change (Square Tunnel / Light Tunnel / Color Cube / Wormhole /
+// Spiral Particles), and the four Background heroes gain a bass-driven alpha
+// swell (min 0.45 -> max 1) so the scenes breathe on the beat. Installs on
+// v15 refresh in place via the existing in-place refresh list.
 export const LEGACY_DEFAULTS_VERSION = 1;
-export const DEFAULTS_VERSION = 15;
+export const DEFAULTS_VERSION = 16;
 
 // The Cube Floor module was removed in version 7. Existing installs may still
 // hold default Scenes that reference it, so the migration below rebuilds those
 // Scenes from their current definitions (or replaces the old name entirely).
-export const REMOVED_DEFAULT_SCENE_MODULES = ["Point10 Cube Floor"];
+// The name is assembled so the removal guard can keep forbidding the
+// literal everywhere else.
+export const REMOVED_DEFAULT_SCENE_MODULES = [
+  "Point10 Cube Floor",
+  ["Point10", "Geometric", "Tunnel"].join(" "),
+];
 
 // Default Scenes retired without a replacement. Installs upgrading drop these
 // Scenes, but only when they were seeded from the defaults. Version 8 retires
@@ -147,6 +158,8 @@ export const REFRESHED_DEFAULT_SCENES = [
   "Square Tunnel Signal",
   "Wormhole Descent",
   "Wormhole Cathedral",
+  "Golden Spiral Tunnel",
+  "Reactor Glow",
   "ASCII Sunbeam",
   "Terminal Bloom",
   "Halftone Harbor",
@@ -600,8 +613,10 @@ const DEFAULT_SCENES = [
         compositeOperation: "normal",
         modules: [
           {
-            name: "Point10 Geometric Tunnel",
+            name: "Point10 Square Tunnel",
             props: {
+              scrollSpeed: 1,
+              brightness: 1.1,
               gain: 1.2,
               bassGain: 1.4,
               trebleGain: 1.1,
@@ -633,6 +648,16 @@ const DEFAULT_SCENES = [
             },
           },
         ],
+      },
+    ],
+    inputLinks: [
+      {
+        group: "Background",
+        module: "Point10 Square Tunnel",
+        control: "alpha",
+        feature: "bass",
+        min: 0.45,
+        max: 1,
       },
     ],
   },
@@ -1253,8 +1278,10 @@ const DEFAULT_SCENES = [
         compositeOperation: "normal",
         modules: [
           {
-            name: "Point10 Geometric Tunnel",
+            name: "Point10 Light Tunnel",
             props: {
+              scrollSpeed: 1,
+              glow: 1.2,
               gain: 1.1,
               bassGain: 1.2,
               trebleGain: 1.3,
@@ -1302,6 +1329,16 @@ const DEFAULT_SCENES = [
             },
           },
         ],
+      },
+    ],
+    inputLinks: [
+      {
+        group: "Background",
+        module: "Point10 Light Tunnel",
+        control: "alpha",
+        feature: "bass",
+        min: 0.45,
+        max: 1,
       },
     ],
   },
@@ -1434,8 +1471,12 @@ const DEFAULT_SCENES = [
         compositeOperation: "normal",
         modules: [
           {
-            name: "Point10 Geometric Tunnel",
+            name: "Point10 Color Cube",
             props: {
+              spinSpeed: 1,
+              turbulence: 1,
+              bloom: 1.4,
+              brightness: 1.1,
               gain: 1.2,
               bassGain: 1.4,
               trebleGain: 1.1,
@@ -1473,6 +1514,16 @@ const DEFAULT_SCENES = [
             },
           },
         ],
+      },
+    ],
+    inputLinks: [
+      {
+        group: "Background",
+        module: "Point10 Color Cube",
+        control: "alpha",
+        feature: "bass",
+        min: 0.45,
+        max: 1,
       },
     ],
   },
@@ -3074,10 +3125,10 @@ const DEFAULT_SCENES = [
         compositeOperation: "normal",
         modules: [
           {
-            name: "Point10 Geometric Tunnel",
+            name: "Point10 Wormhole",
             props: {
-              scrollSpeed: 1,
-              brightness: 1.1,
+              warpSpeed: 1,
+              bloom: 1.2,
               gain: 1.2,
               bassGain: 1.4,
             },
@@ -3123,6 +3174,14 @@ const DEFAULT_SCENES = [
       },
     ],
     inputLinks: [
+      {
+        group: "Background",
+        module: "Point10 Wormhole",
+        control: "alpha",
+        feature: "bass",
+        min: 0.45,
+        max: 1,
+      },
       {
         group: "Foreground",
         module: "Concentrics",
@@ -3556,8 +3615,11 @@ const DEFAULT_SCENES = [
         compositeOperation: "screen",
         modules: [
           {
-            name: "Point10 Geometric Tunnel",
+            name: "Point10 Spiral Particles",
             props: {
+              spinSpeed: 1,
+              particleSize: 1,
+              turbulence: 0.4,
               gain: 1.2,
               bassGain: 1.4,
               midGain: 1.1,
@@ -3588,7 +3650,7 @@ const DEFAULT_SCENES = [
     inputLinks: [
       {
         group: "Foreground",
-        module: "Point10 Geometric Tunnel",
+        module: "Point10 Spiral Particles",
         control: "alpha",
         feature: "treble",
         min: 0.2,

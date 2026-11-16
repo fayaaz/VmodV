@@ -13,6 +13,12 @@ const REMOVED_FILES = [
   "src/renderer/src/application/point10/scenes/Ferrofluid.js",
   "src/renderer/src/application/renderers/2d/modules/Point10SpectrumBars.js",
   "src/renderer/src/application/renderers/2d/modules/Point10Ferrofluid.js",
+  "src/renderer/src/application/point10/scenes/GeometricTunnel.js",
+  "src/renderer/src/application/renderers/2d/modules/Point10GeometricTunnel.js",
+  // The Rust port and its exclusive SSAO pass are removed with it.
+  "crates/modv-renderers/src/point10/scenes/geometric_tunnel.rs",
+  "crates/modv-renderers/src/point10/postfx/ssao.rs",
+  "crates/modv-renderers/src/point10/postfx/ssao.wgsl",
 ];
 
 const FORBIDDEN = [
@@ -22,6 +28,11 @@ const FORBIDDEN = [
   "SpectrumBars",
   "scenes/Ferrofluid",
   "Point10Ferrofluid",
+  // Geometric Tunnel was removed in DEFAULTS_VERSION 16.
+  "Point10 Geometric Tunnel",
+  "Point10GeometricTunnel",
+  "GeometricTunnel",
+  "geometric_tunnel",
 ];
 
 function walk(dir) {
@@ -37,6 +48,16 @@ describe("removed Point10 effects and scenes", () => {
     for (const relativePath of REMOVED_FILES) {
       expect(existsSync(join(ROOT, relativePath)), relativePath).toBe(false);
     }
+  });
+
+  it("the seeded default Scenes do not reference it", () => {
+    const contents = readFileSync(
+      join(ROOT, "crates/modv-engine/data/default-scenes.json"),
+      "utf8",
+    );
+
+    expect(contents).not.toContain("Point10 Geometric Tunnel");
+    expect(contents).not.toContain("GeometricTunnel");
   });
 
   it("leaves no source or test reference behind", () => {

@@ -506,3 +506,22 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   reintroduction (files gone, no source/test references, seeded default
   Scenes do not reference `Cube`). The `three` npm package stays — Point10
   scenes import it directly.
+- **`Point10 Geometric Tunnel` is removed from both runtimes** (module,
+  wrapper, Rust port and its exclusive SSAO pass). The five default Scenes
+  whose Background/Foreground hero was it were retuned, not deleted:
+  Geometric Tunnel -> Square Tunnel, Golden Spiral Tunnel -> Light Tunnel,
+  Reactor Glow -> Color Cube, Crosshatch Cipher -> Wormhole, Digital Crystal
+  Tunnel's screen overlay -> Spiral Particles (keeping its treble alpha
+  link). The four Background heroes gained a bass-driven alpha swell
+  (0.45 -> 1) so they breathe on the beat. DEFAULTS_VERSION is 16 in JS and
+  Rust; the two renamed Scenes the refresh list missed (Golden Spiral
+  Tunnel, Reactor Glow) joined it, and the module joined
+  REMOVED_DEFAULT_SCENE_MODULES, so installs on any previous version rebuild
+  the five in place (ids/timing/enabled kept). The seeded-name refresh path
+  and the long-neglected-library path both cover them. Unit coverage pins
+  the new heroes, the bass alpha links and the in-place refresh;
+  point10-removed-effects.test.js guards the removal.
+- **Screen blend mode implemented** (see the earlier blend commit): the
+  engine now renders `screen` correctly, which every default Scene's
+  Foreground group (and HOTSHOWERRAVE) already used — it used to degrade to
+  `normal` with a warning.

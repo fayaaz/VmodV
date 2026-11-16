@@ -83,12 +83,6 @@ export const CHROMATIC_LINE_PROPS = {
   glow: float("Glow", 1, 0, 3),
 };
 
-export const GEOMETRIC_TUNNEL_PROPS = {
-  scrollSpeed: float("Scroll Speed", 1, 0, 4),
-  brightness: float("Brightness", 1, 0, 3),
-  bloom: float("Bloom", 1, 0, 3),
-};
-
 export const IT_IS_COMING_PROPS = {
   speed: float("Cloud Speed", 1, 0, 4),
   glow: float("Glow", 1, 0, 3),
@@ -377,14 +371,6 @@ export const SCENE_PROP_CONFIGS = {
     scene.glowScale = v.glow;
   }),
   "Point10 DVD Room": defineScene(DVD_ROOM_PROPS, bindSmoke),
-  "Point10 Geometric Tunnel": defineScene(
-    GEOMETRIC_TUNNEL_PROPS,
-    (scene, v) => {
-      scene.speedScale = v.scrollSpeed;
-      scene.brightnessScale = v.brightness;
-      scene.bloomScale = v.bloom;
-    },
-  ),
   "Point10 It Is Coming For You": defineScene(
     IT_IS_COMING_PROPS,
     (scene, v) => {
