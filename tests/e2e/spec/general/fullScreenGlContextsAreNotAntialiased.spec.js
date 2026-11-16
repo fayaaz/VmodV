@@ -30,11 +30,7 @@ test("full-screen-quad GL contexts do not request antialiasing", async () => {
     return result;
   });
 
-  for (const name of [
-    "isf-buffer",
-    "isf-buffer-gallery",
-    "shader-buffer",
-  ]) {
+  for (const name of ["isf-buffer", "isf-buffer-gallery", "shader-buffer"]) {
     expect(attributes[name], name).toBeTruthy();
     expect(attributes[name].antialias, name).toBe(false);
   }
