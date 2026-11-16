@@ -43,7 +43,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One of the 28 blend/composite tokens from `composite-operations.js`.
+/// One of the 29 blend/composite tokens (the JS menu plus `screen`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
@@ -78,6 +78,10 @@ pub enum BlendMode {
     Color,
     /// `luminosity` — non-separable W3C blend mode; needs `blend.wgsl`.
     Luminosity,
+    /// `screen` — separable W3C blend mode (`1 - (1-cb)(1-cs)`). Valid canvas
+    /// `globalCompositeOperation` and used by the presets, but not offered by
+    /// the JS menu.
+    Screen,
     // —— Porter-Duff composite modes ("Composite Modes" section) ——
     /// `clear` — src `Zero`, dst `Zero`.
     Clear,
@@ -107,7 +111,7 @@ pub enum BlendMode {
     Lighter,
 }
 
-/// Every blend mode token, in the order `composite-operations.js` lists them.
+/// Every blend mode token, in JS menu order, with `screen` appended after the\n/// 15 blend modes (it is a separable blend mode).
 pub const ALL_BLEND_MODES: &[BlendMode] = &[
     BlendMode::Normal,
     BlendMode::Multiply,
@@ -124,6 +128,7 @@ pub const ALL_BLEND_MODES: &[BlendMode] = &[
     BlendMode::Saturation,
     BlendMode::Color,
     BlendMode::Luminosity,
+    BlendMode::Screen,
     BlendMode::Clear,
     BlendMode::Copy,
     BlendMode::Destination,
@@ -163,6 +168,7 @@ impl BlendMode {
             "saturation" => Ok(BlendMode::Saturation),
             "color" => Ok(BlendMode::Color),
             "luminosity" => Ok(BlendMode::Luminosity),
+            "screen" => Ok(BlendMode::Screen),
             "clear" => Ok(BlendMode::Clear),
             "copy" => Ok(BlendMode::Copy),
             "destination" => Ok(BlendMode::Destination),
@@ -199,6 +205,7 @@ impl BlendMode {
             BlendMode::Saturation => "saturation",
             BlendMode::Color => "color",
             BlendMode::Luminosity => "luminosity",
+            BlendMode::Screen => "screen",
             BlendMode::Clear => "clear",
             BlendMode::Copy => "copy",
             BlendMode::Destination => "destination",
@@ -226,6 +233,7 @@ impl BlendMode {
                 | BlendMode::Overlay
                 | BlendMode::Darken
                 | BlendMode::Lighten
+                | BlendMode::Screen
                 | BlendMode::ColorDodge
                 | BlendMode::ColorBurn
                 | BlendMode::HardLight
@@ -302,7 +310,7 @@ mod tests {
     use super::*;
 
     /// The exact tokens from composite-operations.js, in order.
-    const SEPARABLE_TOKENS: [&str; 15] = [
+    const SEPARABLE_TOKENS: [&str; 16] = [
         "normal",
         "multiply",
         "overlay",
@@ -318,6 +326,7 @@ mod tests {
         "saturation",
         "color",
         "luminosity",
+        "screen",
     ];
 
     const PORTER_DUFF_TOKENS: [&str; 13] = [
@@ -337,8 +346,8 @@ mod tests {
     ];
 
     #[test]
-    fn all_28_tokens_parse_and_round_trip() {
-        assert_eq!(ALL_BLEND_MODES.len(), 28);
+    fn all_29_tokens_parse_and_round_trip() {
+        assert_eq!(ALL_BLEND_MODES.len(), 29);
 
         for token in SEPARABLE_TOKENS.iter().chain(PORTER_DUFF_TOKENS.iter()) {
             let mode = BlendMode::from_str(token)
@@ -357,9 +366,12 @@ mod tests {
 
     #[test]
     fn unknown_token_errors_with_the_token() {
-        let err = BlendMode::from_str("screen").unwrap_err();
-        assert_eq!(err.0, "screen");
-        assert_eq!(err.to_string(), "unknown blend mode: \"screen\"");
+        let err = BlendMode::from_str("plus-lighter").unwrap_err();
+        assert_eq!(err.0, "plus-lighter");
+        assert_eq!(
+            err.to_string(),
+            "unknown blend mode: \"plus-lighter\""
+        );
 
         assert!(BlendMode::from_str("").is_err());
         assert!(BlendMode::from_str("NORMAL").is_err());
@@ -367,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn separable_set_is_the_15_blend_mode_tokens() {
+    fn separable_set_is_the_16_blend_mode_tokens() {
         let separable: Vec<&str> = ALL_BLEND_MODES
             .iter()
             .filter(|m| m.is_separable())
@@ -396,6 +408,7 @@ mod tests {
 
         for token in [
             "multiply",
+            "screen",
             "overlay",
             "darken",
             "lighten",

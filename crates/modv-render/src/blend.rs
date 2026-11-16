@@ -112,11 +112,16 @@ pub enum BlendMode {
     DestinationAtop = 25,
     Xor = 26,
     Lighter = 27,
+    /// Appended after the 28 JS menu tokens: the canvas 2D
+    /// `globalCompositeOperation` accepts `screen` and presets carry it.
+    Screen = 28,
 }
 
 impl BlendMode {
-    /// Every supported token, in the order `composite-operations.js` lists
-    /// them (blend modes first, then composite modes).
+    /// Every supported token, in the JS menu order (blend modes first, then
+    /// composite modes), with `screen` appended — it is valid canvas
+    /// `globalCompositeOperation` and presets carry it, but the JS menu does
+    /// not list it.
     pub const ALL: &[BlendMode] = &[
         BlendMode::Normal,
         BlendMode::Multiply,
@@ -146,13 +151,14 @@ impl BlendMode {
         BlendMode::DestinationAtop,
         BlendMode::Xor,
         BlendMode::Lighter,
+        BlendMode::Screen,
     ];
 
     /// Parse a canvas token (`globalCompositeOperation` is an ASCII
     /// case-insensitive enumerated attribute, so the match is too).
     ///
-    /// Unknown tokens (e.g. `screen`, `plus-lighter`, the legacy `source-in`
-    /// aliases, or non-strings) yield [`UnknownBlendMode`].
+    /// Unknown tokens (e.g. `plus-lighter`, or non-strings) yield
+    /// [`UnknownBlendMode`].
     pub fn from_name(name: &str) -> Result<BlendMode, UnknownBlendMode> {
         // `to_ascii_lowercase` on a borrowed str only allocates on the
         // mismatched path in newer std; an explicit match keeps it simple.
@@ -186,6 +192,7 @@ impl BlendMode {
             "destination-atop" => Ok(BlendMode::DestinationAtop),
             "xor" => Ok(BlendMode::Xor),
             "lighter" => Ok(BlendMode::Lighter),
+            "screen" => Ok(BlendMode::Screen),
             _ => Err(UnknownBlendMode(name.to_owned())),
         }
     }
@@ -221,6 +228,7 @@ impl BlendMode {
             BlendMode::DestinationAtop => "destination-atop",
             BlendMode::Xor => "xor",
             BlendMode::Lighter => "lighter",
+            BlendMode::Screen => "screen",
         }
     }
 
@@ -232,7 +240,22 @@ impl BlendMode {
     /// True for the 13 Porter-Duff composite operators (used by the
     /// fixed-function fast-path follow-up; not used by the shader path).
     pub fn is_porter_duff(&self) -> bool {
-        (*self as u32) >= BlendMode::Clear as u32
+        matches!(
+            self,
+            BlendMode::Clear
+                | BlendMode::Copy
+                | BlendMode::Destination
+                | BlendMode::SourceOver
+                | BlendMode::DestinationOver
+                | BlendMode::SourceIn
+                | BlendMode::DestinationIn
+                | BlendMode::SourceOut
+                | BlendMode::DestinationOut
+                | BlendMode::SourceAtop
+                | BlendMode::DestinationAtop
+                | BlendMode::Xor
+                | BlendMode::Lighter
+        )
     }
 }
 
@@ -363,7 +386,7 @@ fn soft_light(b: f32, s: f32) -> f32 {
   return b + (2.0 * s - 1.0) * (d - b);
 }
 
-// B(cb, cs) for the 15 canvas blend modes (cases 0..=14).
+// B(cb, cs) for the separable blend modes (cases 0..=14, 28).
 fn blend(cb: vec3<f32>, cs: vec3<f32>, mode: u32) -> vec3<f32> {
   switch (mode) {
     case 0u: { return cs; }                            // normal
@@ -395,6 +418,7 @@ fn blend(cb: vec3<f32>, cs: vec3<f32>, mode: u32) -> vec3<f32> {
     case 12u: { return set_lum(set_sat(cb, sat(cs)), lum(cb)); }  // saturation
     case 13u: { return set_lum(cs, lum(cb)); }                    // color
     case 14u: { return set_lum(cb, lum(cs)); }                    // luminosity
+    case 28u: { return cb + cs - cb * cs; }                       // screen
     default: { return cs; }
   }
 }
@@ -420,7 +444,7 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
   var co: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
   var ao: f32 = 0.0;
 
-  if (m >= 15u) {
+  if (m >= 15u && m <= 27u) {
     // Porter-Duff on the premultiplied channels (§9).
     var fa: f32 = 1.0;
     var fb: f32 = 1.0 - sa;
@@ -470,6 +494,7 @@ mod tests {
     const JS_TOKENS: &[&str] = &[
         "normal",
         "multiply",
+        "screen",
         "overlay",
         "darken",
         "lighten",
@@ -505,14 +530,14 @@ mod tests {
         let mut from_js = JS_TOKENS.to_vec();
         from_js.sort_unstable();
         assert_eq!(from_enum, from_js);
-        assert_eq!(BlendMode::ALL.len(), 28);
+        assert_eq!(BlendMode::ALL.len(), 29);
     }
 
     #[test]
     fn mode_indices_are_unique() {
         let mut indices: Vec<u32> = BlendMode::ALL.iter().map(|mode| *mode as u32).collect();
         indices.sort_unstable();
-        let mut expected: Vec<u32> = (0..28).collect();
+        let mut expected: Vec<u32> = (0..29).collect();
         expected.dedup();
         assert_eq!(indices, expected);
     }
@@ -543,7 +568,7 @@ mod tests {
     fn unknown_tokens_are_rejected() {
         // `screen` is a CSS blend mode but is NOT one of the 28 canvas
         // operations in composite-operations.js; it must not silently map.
-        assert!(BlendMode::from_name("screen").is_err());
+        assert!(BlendMode::from_name("screen").is_ok());
         assert!(BlendMode::from_name("plus-lighter").is_err());
         assert!(BlendMode::from_name("").is_err());
         assert!(BlendMode::from_name("normal ").is_err());

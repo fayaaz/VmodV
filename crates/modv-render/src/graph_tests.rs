@@ -198,6 +198,8 @@ fn composite_modes_pixel_math() {
     };
     let cases: &[(BlendMode, [u8; 4])] = &[
         (BlendMode::Multiply, [0, 0, 0, 255]),
+        // B(cb, cs) = cb + cs - cb*cs; RED over BLUE -> (1, 0, 1)
+        (BlendMode::Screen, [255, 0, 255, 255]),
         (BlendMode::Lighter, [255, 0, 255, 255]),
         (BlendMode::Difference, [255, 0, 255, 255]),
         (BlendMode::Overlay, [0, 0, 255, 255]),

@@ -11,6 +11,10 @@ export default [
         value: "multiply",
       },
       {
+        label: "Screen",
+        value: "screen",
+      },
+      {
         label: "Overlay",
         value: "overlay",
       },

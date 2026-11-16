@@ -3772,6 +3772,7 @@ fn map_blend_mode(mode: EngineBlendMode) -> RenderBlendMode {
         EngineBlendMode::Saturation => Render::Saturation,
         EngineBlendMode::Color => Render::Color,
         EngineBlendMode::Luminosity => Render::Luminosity,
+        EngineBlendMode::Screen => Render::Screen,
         EngineBlendMode::Clear => Render::Clear,
         EngineBlendMode::Copy => Render::Copy,
         EngineBlendMode::Destination => Render::Destination,
@@ -4545,6 +4546,7 @@ void main() {
     #[test]
     fn blend_tokens_map_and_unknown_tokens_are_rejected() {
         assert_eq!(parse_blend_mode("multiply"), Ok(RenderBlendMode::Multiply));
+        assert_eq!(parse_blend_mode("screen"), Ok(RenderBlendMode::Screen));
         assert_eq!(
             parse_blend_mode("source-over"),
             Ok(RenderBlendMode::SourceOver)
