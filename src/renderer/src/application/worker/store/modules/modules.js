@@ -636,8 +636,18 @@ const actions = {
 
   init({ commit, state }, { moduleId, width, height }) {
     const module = state.active[moduleId];
-    const moduleName = module.$moduleName;
-    const moduleDefinition = state.registered[moduleName];
+    const moduleName = module && module.$moduleName;
+    const moduleDefinition = moduleName
+      ? state.registered[moduleName]
+      : undefined;
+
+    if (!moduleDefinition) {
+      console.error(
+        "modules/init: no registered definition for",
+        JSON.stringify(moduleName),
+      );
+      return;
+    }
 
     if ("init" in moduleDefinition) {
       const { data, props } = module;

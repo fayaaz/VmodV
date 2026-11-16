@@ -487,6 +487,7 @@ import {
   scenePreviewPollDelay,
   shouldTransferScenePreviewCanvas,
 } from "../application/engine-client.js";
+import { sceneModuleCount } from "../application/scene-groups.js";
 import { Container, Draggable } from "vue3-smooth-dnd";
 import Dialog from "./Dialog.vue";
 import Group from "./Group.vue";
@@ -760,10 +761,7 @@ export default {
 
     sceneModuleCount(scene) {
       if (Array.isArray(scene.groups)) {
-        return scene.groups.reduce(
-          (count, group) => count + (group.modules || []).length,
-          0,
-        );
+        return sceneModuleCount(scene.groups);
       }
 
       return Array.isArray(scene.layers) ? scene.layers.length : 0;

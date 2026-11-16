@@ -990,6 +990,16 @@ test("Ctrl+drag copies a cell's group into an empty cell of another scene", asyn
   expect(copied.sceneRow).toBe(2);
   expect(copied.moduleNames).toEqual(["Ball"]);
 
+  // Regression: the panel must survive re-rendering the holed Scene. Its
+  // module-count helper used to throw on the null hole and unmount the
+  // whole Scenes panel after a Ctrl+drag copy.
+  await expect(page.locator(".scenes__grid")).toBeVisible();
+  const copiedCell = page.locator(toCell);
+  await expect(copiedCell).not.toHaveClass(/scenes__gridCell--empty/);
+  await expect(copiedCell.locator(".scenes__gridCellModule")).toHaveText(
+    "Ball",
+  );
+
   await removeScene(sceneA.id);
   await removeScene(sceneB.id);
   await removeUserGroups();
