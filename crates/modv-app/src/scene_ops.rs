@@ -2288,8 +2288,19 @@ impl Store {
         }
         if let Some(props) = module.dollar_props.as_object() {
             for descriptor in props.values() {
-                if let Some(input_id) = descriptor.get("id").and_then(Value::as_str) {
-                    self.remove_input(input_id);
+                let Some(input_id) = descriptor.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                self.remove_input(input_id);
+                // "clear up datatypes with multiple inputs" (`modules.js:798-819`):
+                // each component sub-input `${id}-${key}` is removed with its
+                // parent.
+                let type_name = descriptor
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                for key in modv_engine::inputs::data_type_input_keys(type_name) {
+                    self.remove_input(&format!("{input_id}-{key}"));
                 }
             }
         }
@@ -2458,8 +2469,8 @@ impl Store {
         let mut dollar_props = Map::new();
         for prop in props.keys() {
             let schema = self.registry.prop_schema(&module_name, prop);
-            let mut descriptor = old_descriptors
-                .get(prop)
+            let old_descriptor = old_descriptors.get(prop);
+            let mut descriptor = old_descriptor
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
@@ -2473,6 +2484,30 @@ impl Store {
             };
             self.insert_input(input);
             descriptor.insert("id".to_string(), json!(input_id));
+
+            // `initialiseModuleProperties` (`modules.js:91-113`) with
+            // `generateNewIds`: the data-type component sub-inputs are minted
+            // for the live module too, so a Scene-applied color/vec prop keeps
+            // its per-component link rows.
+            if let Some(schema) = &schema {
+                for key in modv_engine::inputs::data_type_input_keys(&schema.type_) {
+                    let input = Input {
+                        id: format!("{input_id}-{key}"),
+                        type_: "action".to_string(),
+                        data: json!({
+                            "moduleId": id,
+                            "prop": prop,
+                            "path": format!("[{key}]"),
+                        }),
+                        get_location: Some(format!(
+                            "modules.active[\"{id}\"].props[\"{prop}\"][\"{key}\"]"
+                        )),
+                        location: Some("modules/updateProp".to_string()),
+                    };
+                    self.insert_input(input);
+                }
+            }
+
             if let Some(schema) = &schema {
                 descriptor
                     .entry("type".to_string())
@@ -2485,12 +2520,32 @@ impl Store {
                 }
             }
             dollar_props.insert(prop.clone(), Value::Object(descriptor.clone()));
-            if let Some(old_id) = old_descriptors
-                .get(prop)
+            if let Some(old_id) = old_descriptor
                 .and_then(|descriptor| descriptor.get("id"))
                 .and_then(Value::as_str)
             {
-                input_map.insert(old_id.to_string(), input_id);
+                input_map.insert(old_id.to_string(), input_id.clone());
+                // `mapModuleInputIds` (`scenes.js:426-433`) remaps each
+                // data-type sub-input `${old id}-${key}` → `${new id}-${key}`,
+                // using the union of the old and new prop types.
+                let old_type = old_descriptor
+                    .and_then(|descriptor| descriptor.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let new_type = schema
+                    .as_ref()
+                    .map(|schema| schema.type_.as_str())
+                    .unwrap_or_default();
+                let mut keys: Vec<&str> =
+                    modv_engine::inputs::data_type_input_keys(old_type).to_vec();
+                for key in modv_engine::inputs::data_type_input_keys(new_type) {
+                    if !keys.contains(key) {
+                        keys.push(key);
+                    }
+                }
+                for key in keys {
+                    input_map.insert(format!("{old_id}-{key}"), format!("{input_id}-{key}"));
+                }
             }
         }
 
@@ -4019,6 +4074,111 @@ mod tests {
     }
 
     // ————————————————— applyScene —————————————————
+
+    #[test]
+    fn apply_scene_mints_and_remaps_component_sub_inputs() {
+        // A Scene snapshot's color prop carries its saved sub-input ids in
+        // `inputs.inputLinks` keyed `${old parent}-r`; applying the Scene
+        // mints fresh sub-inputs for the live module and remaps the link
+        // (`mapModuleInputIds`, `scenes.js:426-433`).
+        let scene = json!({
+            "id": "scene-components",
+            "name": "Component scene",
+            "groups": [{
+                "id": "doc-text-group",
+                "name": "Background",
+                "hidden": false,
+                "modules": ["doc-text-module"],
+                "enabled": 1,
+                "alpha": 1,
+                "inherit": false,
+                "inheritFrom": -1,
+                "pipeline": false,
+                "clearing": true,
+                "compositeOperation": "normal",
+            }],
+            "modules": {
+                "doc-text-module": {
+                    "$id": "doc-text-module",
+                    "$moduleName": "Text",
+                    "meta": { "name": "Text", "enabled": true },
+                    "props": { "fillColor": {"r": 0.2, "g": 0.4, "b": 0.6, "a": 1.0} },
+                    "data": {},
+                    "$props": { "fillColor": { "id": "doc-fill", "type": "color" } },
+                },
+            },
+            "inputs": {
+                "focusedInput": { "id": null, "title": null },
+                "inputs": {
+                    "doc-fill-r": {
+                        "id": "doc-fill-r",
+                        "type": "action",
+                        "getLocation": "modules.active[\"doc-text-module\"].props[\"fillColor\"][\"r\"]",
+                        "location": "modules/updateProp",
+                        "data": { "moduleId": "doc-text-module", "prop": "fillColor", "path": "[r]" }
+                    }
+                },
+                "inputLinks": {
+                    "doc-fill-r": {
+                        "id": "doc-fill-r",
+                        "type": "getter",
+                        "location": "meyda/getFeature",
+                        "args": ["bass"],
+                        "min": 0,
+                        "max": 1,
+                        "source": "meyda"
+                    }
+                },
+            },
+        });
+
+        let mut store = Store::new();
+        seed_scene(&mut store, scene);
+        store
+            .dispatch(
+                "scenes/applyScene",
+                json!({ "sceneId": "scene-components" }),
+            )
+            .expect("applyScene dispatches");
+
+        let module = store
+            .state()
+            .modules
+            .values()
+            .find(|module| module.module_name == "Text")
+            .expect("live Text module");
+        let new_parent = module.dollar_props["fillColor"]["id"]
+            .as_str()
+            .expect("fresh parent input id")
+            .to_string();
+        assert_ne!(new_parent, "doc-fill", "fresh parent input id");
+
+        // The live module owns the four component sub-inputs.
+        for key in ["r", "g", "b", "a"] {
+            let sub_id = format!("{new_parent}-{key}");
+            let input = store
+                .state()
+                .inputs
+                .get(&sub_id)
+                .unwrap_or_else(|| panic!("sub-input {sub_id} minted"));
+            assert_eq!(input.data["moduleId"], json!(module.id));
+            assert_eq!(input.data["prop"], json!("fillColor"));
+            assert_eq!(input.data["path"], json!(format!("[{key}]")));
+        }
+
+        // The saved red-component link was remapped onto the fresh id.
+        let remapped = format!("{new_parent}-r");
+        let link = store
+            .state()
+            .input_links
+            .get(&remapped)
+            .expect("the component link is restored on the fresh id");
+        assert_eq!(link.source.as_deref(), Some("meyda"));
+        assert!(
+            !store.state().input_links.contains_key("doc-fill-r"),
+            "the stale document id is not resurrected"
+        );
+    }
 
     #[test]
     fn apply_scene_normalises_numeric_enabled_flags() {

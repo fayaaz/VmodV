@@ -27,8 +27,8 @@ use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraView, EngineHealth, EngineSnapshot,
     GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView, MidiDeviceView,
     MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest, PreviewTexture,
-    PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction, UiCommand, UiState,
-    gallery_preview_key, scene_preview_key,
+    PropComponentView, PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction,
+    UiCommand, UiState, gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -1263,7 +1263,7 @@ impl NativeApp {
                     .find(|group| group.modules.iter().any(|id| id == &module.id))
                     .map(|group| group.id.clone())
                     .unwrap_or_default();
-                module_view(module, group_id, &registry, &tween_by_id)
+                module_view(module, group_id, &registry, &tween_by_id, state)
             })
             .collect();
 
@@ -1630,6 +1630,7 @@ fn module_view(
     group_id: String,
     registry: &crate::module_registry::ModuleRegistry,
     tween_by_id: &HashMap<String, TweenView>,
+    state: &modv_engine::engine_state::EngineState,
 ) -> ModuleView {
     let meta = module.meta.as_object();
     let module_type = registry
@@ -1667,6 +1668,27 @@ fn module_view(
                         .and_then(|entry| entry.get("id"))
                         .and_then(Value::as_str)
                         .map(str::to_string);
+                    // The data-type component sub-inputs (`${parent}-${key}`,
+                    // `modules.js:91-113`) are exposed only when the engine
+                    // actually minted them, so a preset-loaded module without
+                    // its inputs shows no dangling rows.
+                    let components = input_id
+                        .as_deref()
+                        .map(|parent| {
+                            modv_engine::inputs::data_type_input_keys(&prop_type)
+                                .iter()
+                                .filter_map(|key| {
+                                    let input_id = format!("{parent}-{key}");
+                                    state.inputs.get(&input_id).is_some().then(|| {
+                                        PropComponentView {
+                                            key: (*key).to_string(),
+                                            input_id,
+                                        }
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     PropView {
                         name: name.clone(),
                         step: if prop_type == "int" {
@@ -1680,6 +1702,7 @@ fn module_view(
                         max: schema.as_ref().and_then(|schema| schema.max),
                         default: schema.as_ref().and_then(|schema| schema.default.clone()),
                         input_id: input_id.clone(),
+                        components,
                         tween: input_id
                             .as_ref()
                             .and_then(|id| tween_by_id.get(id))
@@ -2659,7 +2682,14 @@ mod tests {
         }))
         .expect("module JSON");
         let registry = crate::module_registry::ModuleRegistry::builtin();
-        let view = module_view(&module, "group-1".to_string(), &registry, &HashMap::new());
+        let state = modv_engine::engine_state::EngineState::new();
+        let view = module_view(
+            &module,
+            "group-1".to_string(),
+            &registry,
+            &HashMap::new(),
+            &state,
+        );
         assert_eq!(view.alpha_input_id.as_deref(), Some("input-alpha"));
         assert_eq!(
             view.composite_operation_input_id.as_deref(),
@@ -2689,6 +2719,103 @@ mod tests {
             view.composite_operation_input_id.as_deref(),
             Some("group-blend")
         );
+    }
+
+    #[test]
+    fn a_freshly_created_group_view_carries_its_control_input_ids() {
+        // `groups/createGroup` mints the six control inputs
+        // (`groups.js:174-197`), so a fresh Group's view immediately exposes
+        // the Alpha/Blend link rows in the Inspector.
+        let mut store = Store::new();
+        let group = store
+            .dispatch(
+                "groups/createGroup",
+                serde_json::json!({ "name": "Effects" }),
+            )
+            .expect("createGroup dispatches");
+        let group_id = group["id"].as_str().expect("id").to_string();
+
+        let state_group = store.state().find_group(&group_id).expect("group");
+        let view = group_view(state_group);
+        let alpha = view.alpha_input_id.expect("alpha input id stamped");
+        let blend = view
+            .composite_operation_input_id
+            .expect("compositeOperation input id stamped");
+        assert_ne!(alpha, blend);
+        assert!(store.state().inputs.contains_key(&alpha));
+        assert!(store.state().inputs.contains_key(&blend));
+    }
+
+    #[test]
+    fn component_inputs_populate_the_prop_views() {
+        // makeActiveModule mints the data-type component sub-inputs
+        // (`modules.js:91-113`); the Inspector lists each component as a
+        // linkable row under its parent prop, like the JS ColorControl's
+        // focused inputs.
+        let mut store = Store::new();
+        let module = store
+            .dispatch(
+                "modules/makeActiveModule",
+                serde_json::json!({"moduleName": "Text"}),
+            )
+            .expect("makeActiveModule dispatches");
+        let module_id = module["$id"].as_str().expect("id").to_string();
+
+        let registry = crate::module_registry::ModuleRegistry::builtin();
+        let engine_module = store.state().modules.get(&module_id).expect("module");
+        let view = module_view(
+            engine_module,
+            String::new(),
+            &registry,
+            &HashMap::new(),
+            store.state(),
+        );
+
+        let fill = view
+            .props
+            .iter()
+            .find(|prop| prop.name == "fillColor")
+            .expect("fillColor prop view");
+        let parent = fill.input_id.clone().expect("parent input id");
+        assert_eq!(
+            fill.components,
+            vec![
+                PropComponentView {
+                    key: "r".to_string(),
+                    input_id: format!("{parent}-r"),
+                },
+                PropComponentView {
+                    key: "g".to_string(),
+                    input_id: format!("{parent}-g"),
+                },
+                PropComponentView {
+                    key: "b".to_string(),
+                    input_id: format!("{parent}-b"),
+                },
+                PropComponentView {
+                    key: "a".to_string(),
+                    input_id: format!("{parent}-a"),
+                },
+            ]
+        );
+
+        // A scalar prop owns no component rows.
+        let size = view
+            .props
+            .iter()
+            .find(|prop| prop.name == "size")
+            .expect("size prop view");
+        assert!(size.components.is_empty());
+
+        // Every exposed component id resolves to a registered input, so the
+        // link editor writes through the existing link path.
+        for component in &fill.components {
+            assert!(
+                store.state().inputs.contains_key(&component.input_id),
+                "{} is registered",
+                component.input_id
+            );
+        }
     }
 
     #[test]

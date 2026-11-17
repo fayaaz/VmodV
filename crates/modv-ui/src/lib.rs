@@ -29,8 +29,8 @@ pub use model::{
     AudioDeviceView, AudioSelectionView, AudioView, COMPOSITE_OPERATIONS, CameraView, EngineHealth,
     EngineSnapshot, ExpressionView, GroupView, InputLinkView, MediaAction, MediaSnapshot,
     MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView,
-    PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView, TextureSourceView,
-    TweenView, gallery_preview_key, scene_preview_key,
+    PreviewRequest, PreviewTexture, PropComponentView, PropView, SceneCellView, SceneView,
+    TextureSourceView, TweenView, gallery_preview_key, scene_preview_key,
 };
 pub use state::{
     AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiAction, UiCommand, UiState,

@@ -473,10 +473,23 @@ pub struct PropView {
     pub default: Option<Value>,
     /// The prop's input id (`$props[prop].id`), when one exists.
     pub input_id: Option<String>,
+    /// The prop's component sub-inputs (`${parent}-${key}`, the JS Vec/Color
+    /// sliders' focused inputs), keyed `r/g/b/a` or `0..N`, when the engine
+    /// minted them.
+    pub components: Vec<PropComponentView>,
     /// The tween descriptor linked to this prop, when one exists.
     pub tween: Option<TweenView>,
     /// Enum options, when the prop declares them.
     pub options: Vec<String>,
+}
+
+/// One component sub-input of a prop (a Vec lane or Color channel).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PropComponentView {
+    /// The component key: `r`/`g`/`b`/`a` for colors, `0`..`N` for vecs.
+    pub key: String,
+    /// Sub-input id (`${parent input id}-${key}`).
+    pub input_id: String,
 }
 
 /// A tween descriptor read from the engine state.

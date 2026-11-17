@@ -2047,6 +2047,30 @@ impl Store {
                     };
                     self.insert_module_input(input);
                     descriptor.insert("id".to_string(), json!(input_id));
+
+                    // `initialiseModuleProperties` (`modules.js:91-113`): a
+                    // prop whose data type exposes component inputs owns one
+                    // sub-input per component, named `${parent id}-${key}`
+                    // and writing the parent prop at `[key]` — the JS UI
+                    // binds each Vec/Color slider to its own input.
+                    if let Some(schema) = &schema {
+                        for key in modv_engine::inputs::data_type_input_keys(&schema.type_) {
+                            let input = Input {
+                                id: format!("{input_id}-{key}"),
+                                type_: "action".to_string(),
+                                data: json!({
+                                    "moduleId": id,
+                                    "prop": prop,
+                                    "path": format!("[{key}]"),
+                                }),
+                                get_location: Some(format!(
+                                    "modules.active[\"{id}\"].props[\"{prop}\"][\"{key}\"]"
+                                )),
+                                location: Some("modules/updateProp".to_string()),
+                            };
+                            self.insert_module_input(input);
+                        }
+                    }
                 }
                 dollar_props.insert(prop.clone(), Value::Object(descriptor));
             }
@@ -5392,6 +5416,188 @@ mod tests {
         let deltas = store.drain_deltas();
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].r#type, "modules/ADD_ACTIVE_MODULE");
+    }
+
+    /// Assert the `${parent}-${key}` component inputs a prop's data type
+    /// owns (`initialiseModuleProperties`, `modules.js:91-113`), with the
+    /// exact JS naming and payloads.
+    fn assert_component_inputs(
+        store: &Store,
+        module_id: &str,
+        module: &Value,
+        prop: &str,
+        keys: &[&str],
+    ) {
+        let parent = module["$props"][prop]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{prop} has a parent input id"));
+        for key in keys {
+            let sub_id = format!("{parent}-{key}");
+            let input = store
+                .state()
+                .inputs
+                .get(&sub_id)
+                .unwrap_or_else(|| panic!("{prop}.{key} sub-input {sub_id} exists"));
+            assert_eq!(input.type_, "action", "{prop}.{key}");
+            assert_eq!(
+                input.location.as_deref(),
+                Some("modules/updateProp"),
+                "{prop}.{key}"
+            );
+            assert_eq!(input.data["moduleId"], json!(module_id), "{prop}.{key}");
+            assert_eq!(input.data["prop"], json!(prop), "{prop}.{key}");
+            assert_eq!(
+                input.data["path"],
+                json!(format!("[{key}]")),
+                "{prop}.{key} writes the parent at [key]"
+            );
+            assert_eq!(
+                input.get_location.as_deref(),
+                Some(
+                    format!("modules.active[\"{module_id}\"].props[\"{prop}\"][\"{key}\"]")
+                        .as_str()
+                ),
+                "{prop}.{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn make_active_module_mints_color_and_vec_component_inputs() {
+        let mut store = Store::new();
+        store.drain_deltas();
+        // Text owns two `color` props (`fillColor`/`strokeColor`,
+        // `Text.js:84-115`); a color's data type exposes r/g/b/a.
+        let text = store
+            .dispatch("modules/makeActiveModule", json!({"moduleName": "Text"}))
+            .expect("makeActiveModule dispatches");
+        let text_id = text["$id"].as_str().expect("id").to_string();
+        assert_component_inputs(&store, &text_id, &text, "fillColor", &["r", "g", "b", "a"]);
+        assert_component_inputs(
+            &store,
+            &text_id,
+            &text,
+            "strokeColor",
+            &["r", "g", "b", "a"],
+        );
+
+        // Webcam's `position` is a vec2 (`Webcam.js:20`): lanes 0 and 1.
+        let webcam = store
+            .dispatch("modules/makeActiveModule", json!({"moduleName": "Webcam"}))
+            .expect("makeActiveModule dispatches");
+        let webcam_id = webcam["$id"].as_str().expect("id").to_string();
+        assert_component_inputs(&store, &webcam_id, &webcam, "position", &["0", "1"]);
+        let position = webcam["$props"]["position"]["id"]
+            .as_str()
+            .expect("parent id");
+        assert!(
+            !store.state().inputs.contains_key(&format!("{position}-2")),
+            "a vec2 owns no third lane"
+        );
+    }
+
+    #[test]
+    fn make_active_module_mints_no_component_inputs_for_scalar_props() {
+        let mut store = Store::new();
+        let module = store
+            .dispatch("modules/makeActiveModule", json!({"moduleName": "Text"}))
+            .expect("makeActiveModule dispatches");
+        // Text's scalar props (int/float/bool/text) own no component inputs.
+        for prop in ["size", "offsetX", "fill", "text", "font"] {
+            let parent = module["$props"][prop]["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{prop} has an input id"));
+            for key in ["r", "g", "b", "a", "0", "1", "2", "3"] {
+                assert!(
+                    !store
+                        .state()
+                        .inputs
+                        .contains_key(&format!("{parent}-{key}")),
+                    "{prop} must not own a {key} sub-input"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn make_active_module_gallery_skips_component_inputs() {
+        let mut store = Store::new();
+        let module = store
+            .dispatch(
+                "modules/makeActiveModule",
+                json!({"moduleName": "Text", "moduleMeta": {"isGallery": true}}),
+            )
+            .expect("makeActiveModule dispatches");
+        assert!(
+            module["$props"]["fillColor"]
+                .as_object()
+                .expect("descriptor")
+                .get("id")
+                .is_none()
+        );
+        // A Gallery module owns no inputs at all, component inputs included.
+        assert!(store.state().inputs.is_empty());
+    }
+
+    #[test]
+    fn component_link_write_updates_the_parent_prop() {
+        let mut store = Store::new();
+        let module = store
+            .dispatch("modules/makeActiveModule", json!({"moduleName": "Text"}))
+            .expect("makeActiveModule dispatches");
+        let id = module["$id"].as_str().expect("id").to_string();
+        // Meyda links skip a disabled module (`loop.js:164-170`).
+        store
+            .dispatch(
+                "modules/updateMeta",
+                json!({"id": id, "metaKey": "enabled", "data": true}),
+            )
+            .expect("enable dispatches");
+        let parent = module["$props"]["fillColor"]["id"]
+            .as_str()
+            .expect("parent");
+        let red = format!("{parent}-r");
+
+        // Bind the red component to the bass feature, like the focused-input
+        // editor does.
+        store
+            .dispatch(
+                "inputs/createInputLink",
+                json!({
+                    "inputId": red,
+                    "type": "getter",
+                    "location": "meyda/getFeature",
+                    "args": ["bass"],
+                    "min": 0,
+                    "max": 1,
+                    "source": "meyda",
+                }),
+            )
+            .expect("createInputLink dispatches");
+
+        let audio = AudioFrame {
+            bass: 0.75,
+            ..AudioFrame::default()
+        };
+        store.update_input_links(&audio, Duration::from_millis(0));
+
+        // Only the bound component changes; the rest of the parent keeps its
+        // default (`set_prop_value` writes the prop at `[r]`).
+        let props = &store.state().modules[&id].props;
+        assert_eq!(props["fillColor"]["r"], json!(0.75));
+        assert_eq!(props["fillColor"]["g"], json!(1.0));
+        assert_eq!(props["fillColor"]["b"], json!(1.0));
+        assert_eq!(props["fillColor"]["a"], json!(1.0));
+
+        // The mirror delta carries the sub-path so the UI slider follows.
+        let deltas = store.drain_deltas();
+        let write = deltas
+            .iter()
+            .find(|delta| delta.r#type == "modules/UPDATE_ACTIVE_MODULE_PROP")
+            .expect("the component write is committed");
+        assert_eq!(write.payload["prop"], json!("fillColor"));
+        assert_eq!(write.payload["data"]["path"], json!("[r]"));
+        assert_eq!(write.payload["data"]["value"], json!(0.75));
     }
 
     #[test]

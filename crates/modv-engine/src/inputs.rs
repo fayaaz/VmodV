@@ -86,6 +86,25 @@ impl Input {
     }
 }
 
+/// The component keys a prop's data type exposes as sub-inputs
+/// (`getDataTypeInputKeys`, `scenes.js:199-209`).
+///
+/// The JS reads them from the worker's `dataTypes` state
+/// (`dataTypes.js`: `vec2` → `{0,1}`, `vec3` → `{0,1,2}`,
+/// `vec4` → `{0,1,2,3}`, `color` → `{r,g,b,a}`); they are compiled in here
+/// so the engine, the scene snapshot machinery and the native UI agree on
+/// one table. A plugin-registered type contributes no sub-inputs, which
+/// matches the `inputs`-less entries.
+pub fn data_type_input_keys(type_name: &str) -> &'static [&'static str] {
+    match type_name {
+        "vec2" => &["0", "1"],
+        "vec3" => &["0", "1", "2"],
+        "vec4" => &["0", "1", "2", "3"],
+        "color" => &["r", "g", "b", "a"],
+        _ => &[],
+    }
+}
+
 /// An input link: binds an input to a store source and maps the raw source
 /// value into the input's range.
 ///
@@ -434,5 +453,20 @@ mod tests {
         });
         let input: Input = serde_json::from_value(raw.clone()).unwrap();
         assert_eq!(serde_json::to_value(&input).unwrap(), raw);
+    }
+
+    #[test]
+    fn data_type_input_keys_match_the_worker_data_types() {
+        // `dataTypes.js`: vec2/vec3/vec4 expose index keys, color exposes
+        // r/g/b/a; every other type (including plugin types) exposes none.
+        assert_eq!(data_type_input_keys("vec2"), &["0", "1"]);
+        assert_eq!(data_type_input_keys("vec3"), &["0", "1", "2"]);
+        assert_eq!(data_type_input_keys("vec4"), &["0", "1", "2", "3"]);
+        assert_eq!(data_type_input_keys("color"), &["r", "g", "b", "a"]);
+        for scalar in [
+            "float", "int", "bool", "text", "enum", "event", "tween", "texture", "unknown",
+        ] {
+            assert!(data_type_input_keys(scalar).is_empty(), "{scalar}");
+        }
     }
 }

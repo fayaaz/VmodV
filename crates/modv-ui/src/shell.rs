@@ -1011,6 +1011,24 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                         if let Some(input_id) = &prop.input_id {
                             link_row(ui, &prop.name, input_id, snapshot, state);
                         }
+                        // The data-type component sub-inputs (Vec lanes,
+                        // Color channels) are listed under their parent prop,
+                        // each with its own link row — the expansion the JS
+                        // InputConfig reaches through the per-component
+                        // focused inputs (`ColorControl.focusInput`).
+                        if !prop.components.is_empty() {
+                            ui.indent(("prop-components", &prop.name), |ui| {
+                                for component in &prop.components {
+                                    link_row(
+                                        ui,
+                                        &format!("{}.{}", prop.name, component.key),
+                                        &component.input_id,
+                                        snapshot,
+                                        state,
+                                    );
+                                }
+                            });
+                        }
                     }
                 });
         });

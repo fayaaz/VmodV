@@ -353,24 +353,11 @@ fn push_unique(ids: &mut Vec<String>, id: String) {
     }
 }
 
-/// `getDataTypeInputKeys` (`scenes.js:199-209`): the sub-input names a prop's
-/// data type exposes.
-///
-/// The JS reads them from the worker's `dataTypes` state. The built-in types
-/// (`store/modules/dataTypes.js`) are compiled in here; a plugin-registered type
-/// contributes no sub-inputs, which matches the `inputs`-less entries.
-fn data_type_input_keys(type_name: &str) -> &'static [&'static str] {
-    match type_name {
-        "vec2" => &["0", "1"],
-        "vec3" => &["0", "1", "2"],
-        "vec4" => &["0", "1", "2", "3"],
-        "color" => &["r", "g", "b", "a"],
-        _ => &[],
-    }
-}
-
 /// `addModuleInputIds` (`scenes.js:211-240`): the Module's meta input ids, its
 /// `$props` ids and each prop's data-type sub-inputs.
+///
+/// The sub-input keys come from [`crate::inputs::data_type_input_keys`], the
+/// compiled-in `dataTypes` table.
 fn add_module_input_ids(module: &Value, input_ids: &mut Vec<String>) {
     for name in MODULE_META_INPUT_NAMES {
         let input_id = module
@@ -396,7 +383,7 @@ fn add_module_input_ids(module: &Value, input_ids: &mut Vec<String>) {
 
         let type_name = prop.get("type").and_then(Value::as_str).unwrap_or_default();
 
-        for key in data_type_input_keys(type_name) {
+        for key in crate::inputs::data_type_input_keys(type_name) {
             push_unique(input_ids, format!("{prop_id}-{key}"));
         }
     }

@@ -4,8 +4,8 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::{
-    EngineSnapshot, ExpressionView, GroupView, InputLinkView, LinkEditor, ModuleView, PropView,
-    UiState,
+    EngineSnapshot, ExpressionView, GroupView, InputLinkView, LinkEditor, ModuleView,
+    PropComponentView, PropView, UiState,
 };
 
 fn group() -> GroupView {
@@ -114,6 +114,7 @@ fn the_expression_section_loads_the_assignment_for_the_focused_input() {
             step: Some(0.001),
             default: None,
             input_id: Some("in-gain".to_string()),
+            components: Vec::new(),
             tween: None,
             options: Vec::new(),
         }],
@@ -161,4 +162,113 @@ fn the_expression_section_loads_the_assignment_for_the_focused_input() {
     );
     harness.get_by_label("Clear expression");
     harness.get_by_label("Evaluate every frame");
+}
+
+#[test]
+fn component_sub_inputs_get_link_rows_under_their_parent_prop() {
+    // A color prop owns four `${parent}-${key}` sub-inputs
+    // (`initialiseModuleProperties`, `modules.js:91-113`); the Inspector
+    // lists each component under the parent, like the JS ColorControl's
+    // focused inputs.
+    let module = ModuleView {
+        id: "module-1".to_string(),
+        module_name: "Text".to_string(),
+        group_id: "group-1".to_string(),
+        enabled: true,
+        alpha: 1.0,
+        alpha_input_id: None,
+        composite_operation: "normal".to_string(),
+        composite_operation_input_id: None,
+        module_type: "2d".to_string(),
+        props: vec![PropView {
+            name: "fillColor".to_string(),
+            prop_type: "color".to_string(),
+            value: serde_json::json!({"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}),
+            min: None,
+            max: None,
+            step: None,
+            default: None,
+            input_id: Some("in-fill".to_string()),
+            components: ["r", "g", "b", "a"]
+                .iter()
+                .map(|key| PropComponentView {
+                    key: (*key).to_string(),
+                    input_id: format!("in-fill-{key}"),
+                })
+                .collect(),
+            tween: None,
+            options: Vec::new(),
+        }],
+    };
+    let mut snapshot = EngineSnapshot {
+        groups: vec![group()],
+        modules: vec![module],
+        input_links: std::collections::HashMap::from([(
+            "in-fill-r".to_string(),
+            InputLinkView {
+                input_id: "in-fill-r".to_string(),
+                kind: "getter".to_string(),
+                location: Some("meyda/getFeature".to_string()),
+                args: Some(serde_json::json!(["bass"])),
+                source: Some("meyda".to_string()),
+                min: Some(0.0),
+                max: Some(1.0),
+                matcher: None,
+            },
+        )]),
+        ..Default::default()
+    };
+    snapshot.modules[0].group_id = "group-1".to_string();
+
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+
+    let draw_snapshot = snapshot.clone();
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &draw_snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    // Only the bound `r` component carries a link in this fixture, so a
+    // single LINK badge proves the component row is drawn (without the
+    // expansion the badge count is zero — the parent itself is unlinked).
+    assert_eq!(
+        harness.get_all_by_label("LINK").count(),
+        1,
+        "the linked component row carries the LINK badge"
+    );
+    // Opening the component editor keeps the JS title shape
+    // (`${inputTitle}.${append}`).
+    let editor_state = harness.state();
+    assert!(editor_state.link_editor.is_none());
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    state.link_editor = Some(LinkEditor::for_input("in-fill-g", "fillColor.g", &snapshot));
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+    let editor = harness
+        .state()
+        .link_editor
+        .as_ref()
+        .expect("the component editor stays open");
+    assert_eq!(editor.input_id, "in-fill-g");
+    assert_eq!(editor.title, "fillColor.g");
+    harness.get_by_label("Audio");
+    harness.get_by_label("Feature");
 }
