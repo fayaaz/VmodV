@@ -10,6 +10,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec
 use serde_json::Value;
 
 use crate::model::{EngineSnapshot, PreviewRequest, SceneCellView, SceneView, scene_preview_key};
+use crate::panels::row_monitor::{RowMonitorDisplay, row_monitor_display};
 use crate::state::UiAction;
 use crate::theme;
 use crate::widgets::range_control::chip;
@@ -195,6 +196,58 @@ const CELL_SIZE: Vec2 = Vec2::new(154.0, 76.0);
 /// Width of the row-label gutter and the column-header height.
 const ROW_LABEL_WIDTH: f32 = 96.0;
 const HEADER_HEIGHT: f32 = 20.0;
+/// Fixed size of the row gutter's layer-monitor thumbnail.
+const ROW_MONITOR_THUMB: Vec2 = Vec2::new(48.0, 27.0);
+
+/// Draw the row's layer monitor in the gutter's bottom-right corner: a small
+/// aspect-correct letterboxed snapshot of the row's live Group (the same
+/// [`crate::shell::fit_preview_rect`] letterboxing the Gallery/output use),
+/// dimmed while performance mode is off, or a subtle "no layer" placeholder
+/// when the row has no active Group.
+///
+/// The pixels come from the shell's slow-cadence GPU snapshot of the Group's
+/// rendered texture (see `modv-app`'s row-monitor plumbing); a live Group
+/// whose first refresh has not landed yet keeps an empty plate instead of
+/// the misleading placeholder.
+fn draw_row_monitor(ui: &mut egui::Ui, snapshot: &EngineSnapshot, row: usize, cell: egui::Rect) {
+    let monitor = snapshot.row_monitors.get(&row);
+    let display = row_monitor_display(monitor.is_some(), snapshot.performance.enabled);
+    let thumb = egui::Rect::from_min_size(
+        cell.right_bottom() + egui::vec2(-ROW_MONITOR_THUMB.x - 4.0, -ROW_MONITOR_THUMB.y - 4.0),
+        ROW_MONITOR_THUMB,
+    );
+    let painter = ui.painter();
+    painter.rect_filled(thumb, CornerRadius::same(2), theme::INPUT);
+    match (display, monitor.and_then(|view| view.texture)) {
+        (RowMonitorDisplay::Monitor { alpha }, Some(texture)) => {
+            let fitted =
+                crate::shell::fit_preview_rect(thumb.size(), [texture.width, texture.height])
+                    .translate(thumb.min.to_vec2());
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            // Every egui colour is premultiplied, so a tint of
+            // white * alpha scales the premultiplied monitor content exactly
+            // like a canvas `globalAlpha` fade.
+            let tint = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+            painter.image(texture.id, fitted, uv, Color32::from_white_alpha(tint));
+        }
+        (RowMonitorDisplay::Monitor { .. }, None) => {}
+        (RowMonitorDisplay::NoLayer, _) => {
+            painter.text(
+                thumb.center(),
+                Align2::CENTER_CENTER,
+                "no layer",
+                FontId::proportional(7.0),
+                theme::MUTED,
+            );
+        }
+    }
+    painter.rect_stroke(
+        thumb,
+        CornerRadius::same(2),
+        Stroke::new(1.0, theme::BORDER),
+        StrokeKind::Inside,
+    );
+}
 
 /// The grid height: the tallest Scene, the named rows and the live row labels.
 fn grid_row_count(snapshot: &EngineSnapshot) -> usize {
@@ -600,13 +653,8 @@ fn row_label_cell(
         FontId::proportional(11.0),
         theme::FOREGROUND,
     );
-    painter.text(
-        rect.right_bottom() + egui::vec2(-8.0, -8.0),
-        Align2::RIGHT_BOTTOM,
-        "::",
-        FontId::monospace(10.0),
-        theme::MUTED,
-    );
+
+    draw_row_monitor(ui, snapshot, row, rect);
 
     if response.double_clicked() {
         grid.begin_row_rename(row, names.get(row).cloned().unwrap_or_default());

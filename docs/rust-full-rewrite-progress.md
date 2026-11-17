@@ -38,6 +38,16 @@ Last updated: 2026-11-17.
   un-premultiplies them (`modv_ui::un_premultiply_rgba`) before creating the
   egui texture — the old flatten-to-opaque kept the alpha-scaled RGB and
   turned transparent halos into dark fringes over light backgrounds.
+- Scenes-grid row monitors: each performance row's gutter shows a
+  slow-cadence snapshot of its live Group. The shell copies the compositor's
+  already-rendered Group texture (a plain GPU-GPU blit, no readback, no
+  isolated state) at the cadence picked by the pure
+  `modv_ui::panels::row_monitor` policy — at most one row per frame, every
+  row inside a ~3 fps band — and registers it with `egui-wgpu` as a native
+  texture. Rows without a live Group show a subtle "no layer" placeholder,
+  monitors dim to 35% while performance mode is off, and the snapshot is
+  dropped with its Group on Scene applies/resizes so no texture leaks across
+  crossfades.
 - `window_state.rs` reads/writes the same `<userData>/window-state.json` as
   the Electron app, with atomic writes and the JS normalisation rules.
 - `make native` / `make native-debug` run the native shell with the host

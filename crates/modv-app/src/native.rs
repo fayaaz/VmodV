@@ -27,8 +27,8 @@ use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraView, EngineHealth, EngineSnapshot,
     GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView, MidiDeviceView,
     MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest, PreviewTexture,
-    PropComponentView, PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction,
-    UiCommand, UiState, gallery_preview_key, scene_preview_key,
+    PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView, TextureSourceView,
+    TweenView, UiAction, UiCommand, UiState, gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -49,7 +49,7 @@ use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
-use modv_engine::engine_state::{Group, ModuleInstance, js_truthy};
+use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group, ModuleInstance, js_truthy};
 use modv_media::video::{TestPattern, VideoSourceConfig};
 
 /// The native shell's run loop.
@@ -77,6 +77,20 @@ struct OutputWindow {
 /// One uploaded egui preview texture and its pixel size.
 struct PreviewEntry {
     handle: egui::TextureHandle,
+    width: u32,
+    height: u32,
+}
+
+/// One performance row's layer monitor: the live Group rendering the row and
+/// the egui native texture holding its slow-cadence GPU snapshot.
+///
+/// The texture is registered after the row's first monitored refresh; the
+/// entry (and the compositor-side snapshot) is dropped as soon as the row's
+/// Group changes or disappears — a Scene apply rebuilds Groups with fresh ids,
+/// so the old snapshot must never be sampled as if it were current.
+struct RowMonitorEntry {
+    group_id: String,
+    texture: Option<egui::TextureId>,
     width: u32,
     height: u32,
 }
@@ -109,6 +123,9 @@ pub struct NativeApp {
     preview_textures: HashMap<String, PreviewEntry>,
     preview_order: VecDeque<String>,
     preview_error_counts: HashMap<String, u32>,
+    /// Layer monitors keyed by performance row (the Scenes grid's per-row
+    /// thumbnails).
+    row_monitors: HashMap<usize, RowMonitorEntry>,
     window_state: WindowState,
     window_state_path: PathBuf,
     window_state_dirty: bool,
@@ -265,6 +282,7 @@ impl NativeApp {
             preview_textures: HashMap::new(),
             preview_order: VecDeque::new(),
             preview_error_counts: HashMap::new(),
+            row_monitors: HashMap::new(),
             window_state: WindowState::read(&user_data.join(WINDOW_STATE_FILENAME)),
             window_state_path: user_data.join(WINDOW_STATE_FILENAME),
             window_state_dirty: false,
@@ -650,6 +668,7 @@ impl NativeApp {
         }
         self.present();
         self.answer_preview_requests();
+        self.refresh_row_monitors();
 
         self.frames += 1;
         self.metric_frames += 1;
@@ -1079,6 +1098,148 @@ impl NativeApp {
         }
     }
 
+    /// Sync the Scenes grid's row layer monitors.
+    ///
+    /// Each row with a live (non-ghost, non-Gallery) Group gets a monitor
+    /// entry; an entry whose Group changed or vanished frees its egui
+    /// texture immediately (Scene applies mint fresh Group ids, so the old
+    /// snapshot must never be sampled as if current). The compositor drops
+    /// the GPU-side snapshot with the Group on prune/resize/reset, and no
+    /// renderer instance is ever disposed here — the monitor only copies
+    /// compositor-owned textures, so the shared ISF/2D/Point10 state is
+    /// untouched.
+    ///
+    /// One row's snapshot refreshes per frame, chosen by
+    /// [`modv_ui::panels::row_monitor::row_monitor_refresh_row`]: every row
+    /// stays inside a slow ~3 fps band, so 6+ rows never cost real render
+    /// time (the copy is a GPU-GPU blit at output size, no readback).
+    fn refresh_row_monitors(&mut self) {
+        let live = live_row_groups(self.store.state());
+        if live.is_empty() {
+            if !self.row_monitors.is_empty() {
+                self.free_all_row_monitors();
+            }
+            return;
+        }
+
+        // Sync the row map first: rows whose Group went away or changed drop
+        // their entry (and egui texture) right away.
+        self.row_monitors.retain(|row, entry| {
+            let keep = live
+                .iter()
+                .any(|(live_row, group)| live_row == row && entry.group_id == *group);
+            if !keep
+                && let Some(renderer) = &mut self.egui_renderer
+                && let Some(texture) = entry.texture
+            {
+                renderer.free_texture(&texture);
+            }
+            keep
+        });
+
+        let Some(compositor) = &mut self.compositor else {
+            return;
+        };
+        let (width, height) = compositor.main_texture_size();
+        if width == 0 || height == 0 {
+            return;
+        }
+        for (row, group_id) in &live {
+            match self.row_monitors.get_mut(row) {
+                Some(entry) if entry.group_id == *group_id => {
+                    if entry.width != width || entry.height != height {
+                        // The compositor was resized: the old snapshot is a
+                        // different size and its native texture must be
+                        // re-registered from the new view.
+                        if let Some(renderer) = &mut self.egui_renderer
+                            && let Some(texture) = entry.texture
+                        {
+                            renderer.free_texture(&texture);
+                        }
+                        entry.texture = None;
+                        entry.width = width;
+                        entry.height = height;
+                    }
+                }
+                Some(entry) => {
+                    if let Some(renderer) = &mut self.egui_renderer
+                        && let Some(texture) = entry.texture
+                    {
+                        renderer.free_texture(&texture);
+                    }
+                    *entry = RowMonitorEntry {
+                        group_id: group_id.clone(),
+                        texture: None,
+                        width,
+                        height,
+                    };
+                }
+                None => {
+                    self.row_monitors.insert(
+                        *row,
+                        RowMonitorEntry {
+                            group_id: group_id.clone(),
+                            texture: None,
+                            width,
+                            height,
+                        },
+                    );
+                }
+            }
+        }
+
+        // At most one row's monitor refreshes on this frame.
+        let Some(index) = modv_ui::panels::row_monitor_refresh_row(self.frames, live.len()) else {
+            return;
+        };
+        let Some((row, group_id)) = live.get(index) else {
+            return;
+        };
+        if !compositor.refresh_row_monitor(group_id) {
+            return;
+        }
+        let Some(view) = compositor.row_monitor_view(group_id) else {
+            return;
+        };
+        let Some(engine) = &self.engine else {
+            return;
+        };
+        let Some(renderer) = &mut self.egui_renderer else {
+            return;
+        };
+        if let Some(entry) = self.row_monitors.get_mut(row) {
+            entry.texture = match entry.texture {
+                Some(id) => {
+                    renderer.update_egui_texture_from_wgpu_texture(
+                        &engine.device,
+                        &view,
+                        wgpu::FilterMode::Linear,
+                        id,
+                    );
+                    Some(id)
+                }
+                None => Some(renderer.register_native_texture(
+                    &engine.device,
+                    &view,
+                    wgpu::FilterMode::Linear,
+                )),
+            };
+        }
+    }
+
+    /// Drop every row monitor, freeing the egui textures.
+    fn free_all_row_monitors(&mut self) {
+        self.row_monitors.retain(|_, entry| {
+            if let Some(renderer) = &mut self.egui_renderer
+                && let Some(texture) = entry.texture
+            {
+                renderer.free_texture(&texture);
+            }
+            false
+        });
+        self.row_monitors.clear();
+    }
+
     fn upload_preview(&mut self, key: String, mut pixels: Vec<u8>, width: u32, height: u32) {
         if pixels.len() != (width as usize) * (height as usize) * 4 {
             let count = self.preview_error_counts.entry(key.clone()).or_insert(0);
@@ -1406,6 +1567,23 @@ impl NativeApp {
                 scene_previews.insert(key.clone(), texture);
             }
         }
+        let row_monitors = self
+            .row_monitors
+            .iter()
+            .map(|(row, entry)| {
+                (
+                    *row,
+                    RowMonitorView {
+                        group_id: entry.group_id.clone(),
+                        texture: entry.texture.map(|id| PreviewTexture {
+                            id,
+                            width: entry.width,
+                            height: entry.height,
+                        }),
+                    },
+                )
+            })
+            .collect();
         let midi = MidiSnapshot {
             available: self.midi_client.available(),
             error: self.midi_client.error().map(str::to_string),
@@ -1472,6 +1650,7 @@ impl NativeApp {
             health,
             gallery_previews,
             scene_previews,
+            row_monitors,
             texture_sources,
             input_links,
             tweens: tween_by_id,
@@ -1735,6 +1914,26 @@ fn module_view(
         module_type,
         props,
     }
+}
+
+/// The live Scene-row mapping for the row monitors: `(row, group id)` for
+/// every row that a live (non-ghost, non-Gallery) Group renders, rows in
+/// ascending order and at most one Group per row (the first in store order
+/// wins, matching how the row-name remap stamps `sceneRow`).
+///
+/// Groups reach this list with `sceneRow` stamped either by a Scene apply or
+/// by `scenes/setRowNames`'s remap; a Group with no row stamp is not tied to
+/// a performance row and stays unmonitored.
+fn live_row_groups(state: &modv_engine::engine_state::EngineState) -> Vec<(usize, String)> {
+    let mut rows: Vec<(usize, String)> = state
+        .groups
+        .iter()
+        .filter(|group| group.transition_ghost != Some(true) && group.name != GALLERY_GROUP_NAME)
+        .filter_map(|group| group.scene_row.map(|row| (row, group.id.clone())))
+        .collect();
+    rows.sort_by_key(|(row, _)| *row);
+    rows.dedup_by_key(|(row, _)| *row);
+    rows
 }
 
 fn group_view(group: &Group) -> GroupView {
@@ -2721,6 +2920,72 @@ mod tests {
         assert_eq!(
             view.composite_operation_input_id.as_deref(),
             Some("group-blend")
+        );
+    }
+
+    #[test]
+    fn live_row_groups_skip_ghosts_and_the_gallery_and_dedup_rows() {
+        // The row monitors must follow exactly the Groups the composition
+        // treats as live rows: a fading transition ghost and the Gallery
+        // group are never a row's "current" layer, a Group without a row
+        // stamp is not tied to a performance row, and when two live Groups
+        // claim one row the first in store order wins.
+        let group = |id: &str, name: &str, body: serde_json::Value| -> Group {
+            let mut value = serde_json::json!({
+                "id": id,
+                "name": name,
+                "hidden": false,
+                "modules": [],
+                "enabled": 1,
+                "alpha": 1.0,
+                "inherit": true,
+                "inheritFrom": -1,
+                "pipeline": false,
+                "clearing": true,
+                "compositeOperation": "normal",
+            });
+            if let (Some(object), Some(extra)) = (value.as_object_mut(), body.as_object()) {
+                for (key, entry) in extra {
+                    object.insert(key.clone(), entry.clone());
+                }
+            }
+            serde_json::from_value(value).expect("group JSON")
+        };
+        let mut state = modv_engine::engine_state::EngineState::new();
+        state.groups.push(group(
+            "gallery",
+            GALLERY_GROUP_NAME,
+            serde_json::json!({ "sceneRow": 0 }),
+        ));
+        state.groups.push(group(
+            "ghost",
+            "Foreground",
+            serde_json::json!({ "sceneRow": 1, "transitionGhost": true }),
+        ));
+        state
+            .groups
+            .push(group("unstamped", "Foreground", serde_json::json!({})));
+        state.groups.push(group(
+            "row-2-a",
+            "Foreground",
+            serde_json::json!({ "sceneRow": 2 }),
+        ));
+        state.groups.push(group(
+            "row-2-b",
+            "Foreground",
+            serde_json::json!({ "sceneRow": 2 }),
+        ));
+        state.groups.push(group(
+            "row-0",
+            "Background",
+            serde_json::json!({ "sceneRow": 0 }),
+        ));
+
+        assert_eq!(
+            live_row_groups(&state),
+            vec![(0, "row-0".to_string()), (2, "row-2-a".to_string())],
+            "rows ascend; ghosts, the Gallery group and unstamped groups are \
+             skipped; the first store-order group per row wins"
         );
     }
 

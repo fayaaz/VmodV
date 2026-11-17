@@ -832,6 +832,11 @@ pub struct Compositor {
     group_targets: HashSet<String>,
     /// Row-fade blend targets keyed by row index (`loop.js:498-537`).
     row_fade_targets: HashMap<usize, OutputTexture>,
+    /// Row-monitor snapshot textures keyed by Group id (the native Scenes
+    /// grid's per-row thumbnails). One plain GPU-GPU copy of the Group's
+    /// rendered texture, taken at the UI's slow monitor cadence; dropped with
+    /// the Group on prune/resize/reset, never sharing a production pass.
+    row_monitors: HashMap<String, OutputTexture>,
     /// The captured outgoing frame of a whole-scene shader transition.
     ///
     /// Copied once from main when the transition starts (main then holds the
@@ -1036,6 +1041,7 @@ impl Compositor {
             module_output: None,
             group_targets: HashSet::new(),
             row_fade_targets: HashMap::new(),
+            row_monitors: HashMap::new(),
             transition_from: None,
             scene_transition: None,
             slots: HashMap::new(),
@@ -1558,6 +1564,7 @@ impl Compositor {
         self.module_output = None;
         self.surfaces.remove(&TextureId::from(MAIN_TEXTURE_ID));
         self.surfaces.remove(&module_output_id());
+        self.row_monitors.clear();
         for row in std::mem::take(&mut self.row_fade_targets).into_keys() {
             self.surfaces.remove(&row_fade_texture_id(row));
         }
@@ -2763,6 +2770,17 @@ impl Compositor {
             .collect();
         self.dispose_group_targets(stale_groups);
 
+        // Row monitors follow their Groups: a Scene apply rebuilds Groups
+        // with fresh ids, so the outgoing rows' snapshots must not survive
+        // the swap — the next frame's prune drops them with the Group
+        // textures. `retained` keeps a private preview compositor's cached
+        // ids alive exactly as for group targets.
+        let retained_groups = &retained.groups;
+        self.row_monitors.retain(|group_id, _| {
+            live_groups.contains(group_id.as_str())
+                || retained_groups.iter().any(|retained| retained == group_id)
+        });
+
         let live_modules: HashSet<&str> = state.modules.keys().map(String::as_str).collect();
         let stale_modules: Vec<String> = self
             .slots
@@ -3308,6 +3326,50 @@ impl Compositor {
         } else {
             (0, 0)
         }
+    }
+
+    /// Copy `group_id`'s current rendered texture into the Group's row-monitor
+    /// snapshot (the native Scenes grid's per-row thumbnail source).
+    ///
+    /// This is a plain GPU-GPU copy at output size — no read-back, no extra
+    /// pass in the production frame graph and no isolated state: the Group's
+    /// texture is the very one the frame graph already rendered this frame.
+    /// The UI samples the snapshot with linear filtering, so no downscale pass
+    /// is needed either. Returns `false` when the Group has no rendered
+    /// texture (never drawn, or culled before its first draw).
+    pub fn refresh_row_monitor(&mut self, group_id: &str) -> bool {
+        let Some(group_texture) = self.surfaces.get(&group_texture_id(group_id)).cloned() else {
+            return false;
+        };
+        let (width, height) = self.size;
+        if width == 0 || height == 0 {
+            return false;
+        }
+        let stale = self.row_monitors.get(group_id).is_none_or(|monitor| {
+            monitor.texture.width() != width || monitor.texture.height() != height
+        });
+        if stale {
+            self.row_monitors.insert(
+                group_id.to_string(),
+                self.create_output_texture(&format!("modv-row-monitor-{group_id}"), width, height),
+            );
+        }
+        let monitor = &self.row_monitors[group_id];
+        self.copy_texture(&group_texture, &monitor.texture);
+        true
+    }
+
+    /// The row-monitor snapshot view for a Group refreshed through
+    /// [`Self::refresh_row_monitor`].
+    ///
+    /// Like the main preview view, this is registered with `egui-wgpu` as a
+    /// native texture; the content is premultiplied (the frame graph's blend
+    /// output), which is exactly what egui-wgpu's premultiplied blending
+    /// consumes — no per-pixel conversion happens on this path.
+    pub fn row_monitor_view(&self, group_id: &str) -> Option<wgpu::TextureView> {
+        self.row_monitors
+            .get(group_id)
+            .map(|monitor| monitor.view.clone())
     }
 
     /// Read the main texture back as tightly packed RGBA8
@@ -4174,6 +4236,50 @@ mod tests {
             [255, 255, 255, 255],
             2,
             "invert over cleared group",
+        );
+    }
+
+    #[test]
+    fn row_monitors_snapshot_the_live_group_and_follow_the_prune() {
+        // The Scenes grid's per-row thumbnails copy the Group's rendered
+        // texture (option (a): no readback, no isolated state), and the
+        // snapshot must not outlive the Group — a Scene apply prunes the old
+        // Groups and the monitor goes with them, so no texture leaks across
+        // applies or crossfades.
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+
+        let state = invert_state(1.0);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders");
+
+        assert!(
+            compositor.refresh_row_monitor("group-a"),
+            "the live group's texture is copied into its monitor"
+        );
+        assert!(compositor.row_monitor_view("group-a").is_some());
+        assert!(
+            !compositor.refresh_row_monitor("definitely-not-a-group"),
+            "a Group with no rendered texture has nothing to copy"
+        );
+        assert!(
+            compositor
+                .row_monitor_view("definitely-not-a-group")
+                .is_none()
+        );
+
+        // A frame whose state no longer holds the group prunes it; the
+        // monitor snapshot is dropped with the Group's own texture.
+        compositor
+            .render_frame(&EngineState::new(), &frame_info())
+            .expect("empty frame renders");
+        assert!(
+            compositor.row_monitor_view("group-a").is_none(),
+            "the prune drops the stale monitor with its Group"
         );
     }
 

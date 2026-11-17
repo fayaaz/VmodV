@@ -40,6 +40,9 @@ pub struct EngineSnapshot {
     pub gallery_previews: HashMap<String, PreviewTexture>,
     /// Scene-cell hover previews keyed by [`scene_preview_key`].
     pub scene_previews: HashMap<String, PreviewTexture>,
+    /// Live row monitors keyed by performance row (the row gutter's
+    /// thumbnail of the row's currently active Group).
+    pub row_monitors: HashMap<usize, RowMonitorView>,
     /// Live texture sources the Inspector's texture picker can bind.
     pub texture_sources: Vec<TextureSourceView>,
     /// Input links keyed by the input id they write to.
@@ -217,6 +220,21 @@ pub struct PreviewTexture {
     pub id: egui::TextureId,
     pub width: u32,
     pub height: u32,
+}
+
+/// The live layer state of one performance row (the grid's row monitor).
+///
+/// The shell keeps a slow-cadence GPU snapshot of the row's live Group and
+/// registers it with `egui-wgpu` as a native texture; the grid letterboxes
+/// it into the row gutter, dimmed while performance mode is off. `texture`
+/// is `None` from the moment the Group appears until the row's first
+/// monitored refresh lands.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RowMonitorView {
+    /// The live Group rendering this row.
+    pub group_id: String,
+    /// The uploaded monitor snapshot, once the first refresh lands.
+    pub texture: Option<PreviewTexture>,
 }
 
 /// The key used by [`EngineSnapshot::scene_previews`].
