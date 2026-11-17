@@ -67,7 +67,9 @@ fn demo_snapshot() -> EngineSnapshot {
         enabled: true,
         hidden: false,
         alpha: 1.0,
+        alpha_input_id: None,
         composite_operation: "screen".to_string(),
+        composite_operation_input_id: None,
         inherit: true,
         clearing: true,
         pipeline: false,
@@ -79,6 +81,9 @@ fn demo_snapshot() -> EngineSnapshot {
         group_id: group.id.clone(),
         enabled: true,
         alpha: 1.0,
+        alpha_input_id: None,
+        composite_operation: "normal".to_string(),
+        composite_operation_input_id: None,
         module_type: "2d".to_string(),
         props: vec![
             PropView {

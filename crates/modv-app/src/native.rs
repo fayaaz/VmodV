@@ -22,6 +22,7 @@ use modv_media::audio::engine::AudioFeed;
 use modv_render::Engine;
 use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_present_mode};
 use modv_render::wgpu;
+use modv_ui::model::ExpressionView;
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraView, EngineHealth, EngineSnapshot,
     GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView, MidiDeviceView,
@@ -48,7 +49,7 @@ use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
-use modv_engine::engine_state::js_truthy;
+use modv_engine::engine_state::{Group, ModuleInstance, js_truthy};
 use modv_media::video::{TestPattern, VideoSourceConfig};
 
 /// The native shell's run loop.
@@ -1262,96 +1263,11 @@ impl NativeApp {
                     .find(|group| group.modules.iter().any(|id| id == &module.id))
                     .map(|group| group.id.clone())
                     .unwrap_or_default();
-                let meta = module.meta.as_object();
-                let module_type = registry
-                    .meta_fields(&module.module_name)
-                    .and_then(|meta| meta.get("type").and_then(Value::as_str).map(str::to_string))
-                    .or_else(|| {
-                        module
-                            .meta
-                            .get("type")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
-                let props = module
-                    .props
-                    .as_object()
-                    .map(|props| {
-                        props
-                            .iter()
-                            .map(|(name, value)| {
-                                let schema = registry.prop_schema(&module.module_name, name);
-                                let prop_type = schema
-                                    .as_ref()
-                                    .map(|schema| schema.type_.clone())
-                                    .unwrap_or_else(|| "text".to_string());
-                                let input_id = module
-                                    .dollar_props
-                                    .as_object()
-                                    .and_then(|props| props.get(name))
-                                    .and_then(|entry| entry.get("id"))
-                                    .and_then(Value::as_str)
-                                    .map(str::to_string);
-                                PropView {
-                                    name: name.clone(),
-                                    step: if prop_type == "int" {
-                                        Some(1.0)
-                                    } else {
-                                        Some(0.001)
-                                    },
-                                    prop_type,
-                                    value: value.clone(),
-                                    min: schema.as_ref().and_then(|schema| schema.min),
-                                    max: schema.as_ref().and_then(|schema| schema.max),
-                                    default: schema
-                                        .as_ref()
-                                        .and_then(|schema| schema.default.clone()),
-                                    input_id: input_id.clone(),
-                                    tween: input_id
-                                        .as_ref()
-                                        .and_then(|id| tween_by_id.get(id))
-                                        .cloned(),
-                                    options: Vec::new(),
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                ModuleView {
-                    id: module.id.clone(),
-                    module_name: module.module_name.clone(),
-                    group_id,
-                    enabled: meta
-                        .and_then(|meta| meta.get("enabled"))
-                        .map(js_truthy)
-                        .unwrap_or(true),
-                    alpha: meta
-                        .and_then(|meta| meta.get("alpha"))
-                        .and_then(Value::as_f64)
-                        .unwrap_or(1.0) as f32,
-                    module_type,
-                    props,
-                }
+                module_view(module, group_id, &registry, &tween_by_id)
             })
             .collect();
 
-        let groups = state
-            .groups
-            .iter()
-            .map(|group| GroupView {
-                id: group.id.clone(),
-                name: group.name.clone(),
-                enabled: group.enabled == modv_engine::engine_state::GROUP_ENABLED,
-                hidden: group.hidden,
-                alpha: group.alpha as f32,
-                composite_operation: group.composite_operation.clone(),
-                inherit: group.inherit,
-                clearing: group.clearing,
-                pipeline: group.pipeline,
-                module_ids: group.modules.clone(),
-            })
-            .collect();
+        let groups = state.groups.iter().map(group_view).collect();
 
         let registered = registered_modules(&registry);
         let scenes_state = self.store.scenes_state();
@@ -1555,6 +1471,8 @@ impl NativeApp {
             scene_previews,
             texture_sources,
             input_links,
+            tweens: tween_by_id,
+            expressions: expression_views(state),
             media,
             midi,
             audio_devices: self.audio_devices.clone(),
@@ -1705,6 +1623,122 @@ impl NativeApp {
         }
         self.close_output();
     }
+}
+
+fn module_view(
+    module: &ModuleInstance,
+    group_id: String,
+    registry: &crate::module_registry::ModuleRegistry,
+    tween_by_id: &HashMap<String, TweenView>,
+) -> ModuleView {
+    let meta = module.meta.as_object();
+    let module_type = registry
+        .meta_fields(&module.module_name)
+        .and_then(|meta| meta.get("type").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| {
+            module
+                .meta
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let meta_string = |key: &str| {
+        meta.and_then(|meta| meta.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let props = module
+        .props
+        .as_object()
+        .map(|props| {
+            props
+                .iter()
+                .map(|(name, value)| {
+                    let schema = registry.prop_schema(&module.module_name, name);
+                    let prop_type = schema
+                        .as_ref()
+                        .map(|schema| schema.type_.clone())
+                        .unwrap_or_else(|| "text".to_string());
+                    let input_id = module
+                        .dollar_props
+                        .as_object()
+                        .and_then(|props| props.get(name))
+                        .and_then(|entry| entry.get("id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    PropView {
+                        name: name.clone(),
+                        step: if prop_type == "int" {
+                            Some(1.0)
+                        } else {
+                            Some(0.001)
+                        },
+                        prop_type,
+                        value: value.clone(),
+                        min: schema.as_ref().and_then(|schema| schema.min),
+                        max: schema.as_ref().and_then(|schema| schema.max),
+                        default: schema.as_ref().and_then(|schema| schema.default.clone()),
+                        input_id: input_id.clone(),
+                        tween: input_id
+                            .as_ref()
+                            .and_then(|id| tween_by_id.get(id))
+                            .cloned(),
+                        options: Vec::new(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ModuleView {
+        id: module.id.clone(),
+        module_name: module.module_name.clone(),
+        group_id,
+        enabled: meta
+            .and_then(|meta| meta.get("enabled"))
+            .map(js_truthy)
+            .unwrap_or(true),
+        alpha: meta
+            .and_then(|meta| meta.get("alpha"))
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0) as f32,
+        alpha_input_id: meta_string("alphaInputId"),
+        composite_operation: meta_string("compositeOperation")
+            .unwrap_or_else(|| "normal".to_string()),
+        composite_operation_input_id: meta_string("compositeOperationInputId"),
+        module_type,
+        props,
+    }
+}
+
+fn group_view(group: &Group) -> GroupView {
+    GroupView {
+        id: group.id.clone(),
+        name: group.name.clone(),
+        enabled: group.enabled == modv_engine::engine_state::GROUP_ENABLED,
+        hidden: group.hidden,
+        alpha: group.alpha as f32,
+        alpha_input_id: group.alpha_input_id.clone(),
+        composite_operation: group.composite_operation.clone(),
+        composite_operation_input_id: group.composite_operation_input_id.clone(),
+        inherit: group.inherit,
+        clearing: group.clearing,
+        pipeline: group.pipeline,
+        module_ids: group.modules.clone(),
+    }
+}
+
+fn expression_views(state: &modv_engine::engine_state::EngineState) -> Vec<ExpressionView> {
+    state
+        .expressions
+        .values()
+        .map(|assignment| ExpressionView {
+            id: assignment.id.clone(),
+            input_id: assignment.input_id.clone(),
+            expression: assignment.expression.clone(),
+            evaluate_every_frame: assignment.evaluate_every_frame,
+        })
+        .collect()
 }
 
 fn registered_modules(registry: &crate::module_registry::ModuleRegistry) -> Vec<ModuleMetaView> {
@@ -2606,5 +2640,88 @@ mod tests {
             "--state wins over the userData default"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn alpha_and_blend_input_ids_populate_module_and_group_views() {
+        let module: ModuleInstance = serde_json::from_value(serde_json::json!({
+            "$id": "module-1",
+            "$moduleName": "Bands",
+            "meta": {
+                "alpha": 0.5,
+                "enabled": true,
+                "compositeOperation": "screen",
+                "alphaInputId": "input-alpha",
+                "compositeOperationInputId": "input-blend"
+            },
+            "props": { "u_bass": 0.3 },
+            "$props": { "u_bass": { "id": "input-bass", "type": "float" } }
+        }))
+        .expect("module JSON");
+        let registry = crate::module_registry::ModuleRegistry::builtin();
+        let view = module_view(&module, "group-1".to_string(), &registry, &HashMap::new());
+        assert_eq!(view.alpha_input_id.as_deref(), Some("input-alpha"));
+        assert_eq!(
+            view.composite_operation_input_id.as_deref(),
+            Some("input-blend")
+        );
+        assert_eq!(view.composite_operation, "screen");
+
+        let group: Group = serde_json::from_value(serde_json::json!({
+            "id": "group-1",
+            "name": "Effects",
+            "hidden": false,
+            "modules": [],
+            "enabled": 1,
+            "alpha": 1.0,
+            "inherit": true,
+            "inheritFrom": -1,
+            "pipeline": false,
+            "clearing": false,
+            "compositeOperation": "normal",
+            "alphaInputId": "group-alpha",
+            "compositeOperationInputId": "group-blend"
+        }))
+        .expect("group JSON");
+        let view = group_view(&group);
+        assert_eq!(view.alpha_input_id.as_deref(), Some("group-alpha"));
+        assert_eq!(
+            view.composite_operation_input_id.as_deref(),
+            Some("group-blend")
+        );
+    }
+
+    #[test]
+    fn expression_views_mirror_the_engine_assignments_in_store_order() {
+        let mut store = Store::new();
+        store
+            .dispatch(
+                "expressions/create",
+                serde_json::json!({
+                    "inputId": "input-alpha",
+                    "expression": "value * 2",
+                    "evaluateEveryFrame": true
+                }),
+            )
+            .expect("create expression");
+        store
+            .dispatch(
+                "expressions/create",
+                serde_json::json!({
+                    "inputId": "input-blend",
+                    "expression": "value / 2"
+                }),
+            )
+            .expect("create expression");
+
+        let views = expression_views(store.state());
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].input_id, "input-alpha");
+        assert_eq!(views[0].expression, "value * 2");
+        assert!(views[0].evaluate_every_frame);
+        assert_eq!(views[1].input_id, "input-blend");
+        assert_eq!(views[1].expression, "value / 2");
+        assert!(!views[1].evaluate_every_frame);
+        assert!(!views[0].id.is_empty());
     }
 }

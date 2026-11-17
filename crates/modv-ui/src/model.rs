@@ -44,6 +44,10 @@ pub struct EngineSnapshot {
     pub texture_sources: Vec<TextureSourceView>,
     /// Input links keyed by the input id they write to.
     pub input_links: HashMap<String, InputLinkView>,
+    /// Tween descriptors keyed by their id (which is the input id they drive).
+    pub tweens: HashMap<String, TweenView>,
+    /// Expression assignments in store order (`expressions.js` state shape).
+    pub expressions: Vec<ExpressionView>,
     /// Live capture state for the Media panel.
     pub media: MediaSnapshot,
     /// Native MIDI input state.
@@ -300,6 +304,49 @@ pub struct InputLinkView {
     pub matcher: Option<Value>,
 }
 
+/// One expression assignment (`expressions.js`: `{ id, inputId, expression }`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExpressionView {
+    pub id: String,
+    pub input_id: String,
+    pub expression: String,
+    pub evaluate_every_frame: bool,
+}
+
+/// The blend/composite operations `ActiveModule.vue` offers
+/// (`util/composite-operations.js`).
+pub const COMPOSITE_OPERATIONS: &[&str] = &[
+    "normal",
+    "multiply",
+    "screen",
+    "overlay",
+    "darken",
+    "lighten",
+    "color-dodge",
+    "color-burn",
+    "hard-light",
+    "soft-light",
+    "difference",
+    "exclusion",
+    "hue",
+    "saturation",
+    "color",
+    "luminosity",
+    "clear",
+    "copy",
+    "destination",
+    "source-over",
+    "destination-over",
+    "source-in",
+    "destination-in",
+    "source-out",
+    "destination-out",
+    "source-atop",
+    "destination-atop",
+    "xor",
+    "lighter",
+];
+
 /// One live texture source (`group:<id>`, `isf:<id>`, `camera:<id>`, ...).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextureSourceView {
@@ -350,6 +397,19 @@ impl EngineSnapshot {
     pub fn registered_module(&self, name: &str) -> Option<&ModuleMetaView> {
         self.registered.iter().find(|module| module.name == name)
     }
+
+    /// The expression assignment for `input_id`, when one exists
+    /// (`expressions/getByInputId`).
+    pub fn expression_for_input(&self, input_id: &str) -> Option<&ExpressionView> {
+        self.expressions
+            .iter()
+            .find(|assignment| assignment.input_id == input_id)
+    }
+
+    /// The tween descriptor linked to `input_id`, when one exists.
+    pub fn tween_for_input(&self, input_id: &str) -> Option<&TweenView> {
+        self.tweens.get(input_id)
+    }
 }
 
 /// One Group (a render-graph row).
@@ -360,7 +420,11 @@ pub struct GroupView {
     pub enabled: bool,
     pub hidden: bool,
     pub alpha: f32,
+    /// Engine `alphaInputId`; a link row is drawn when present.
+    pub alpha_input_id: Option<String>,
     pub composite_operation: String,
+    /// Engine `compositeOperationInputId`; a link row is drawn when present.
+    pub composite_operation_input_id: Option<String>,
     pub inherit: bool,
     pub clearing: bool,
     pub pipeline: bool,
@@ -384,6 +448,12 @@ pub struct ModuleView {
     pub group_id: String,
     pub enabled: bool,
     pub alpha: f32,
+    /// Engine `meta.alphaInputId`; a link row is drawn when present.
+    pub alpha_input_id: Option<String>,
+    /// Engine `meta.compositeOperation` (Inspector Blend control).
+    pub composite_operation: String,
+    /// Engine `meta.compositeOperationInputId`; a link row is drawn when present.
+    pub composite_operation_input_id: Option<String>,
     pub module_type: String,
     pub props: Vec<PropView>,
 }
@@ -662,5 +732,35 @@ mod tests {
             "The selected device is not currently connected"
         );
         assert_eq!(selection.active_detail(&[]), "input · alsa:gone");
+    }
+
+    #[test]
+    fn expression_and_tween_lookups_use_the_input_id() {
+        let snapshot = EngineSnapshot {
+            expressions: vec![ExpressionView {
+                id: "expr-1".to_string(),
+                input_id: "input-alpha".to_string(),
+                expression: "value * 2".to_string(),
+                evaluate_every_frame: true,
+            }],
+            tweens: HashMap::from([(
+                "input-tween".to_string(),
+                TweenView {
+                    id: "input-tween".to_string(),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            snapshot
+                .expression_for_input("input-alpha")
+                .map(|assignment| assignment.expression.as_str()),
+            Some("value * 2")
+        );
+        assert!(snapshot.expression_for_input("input-missing").is_none());
+        assert!(snapshot.tween_for_input("input-tween").is_some());
+        assert!(snapshot.tween_for_input("input-alpha").is_none());
     }
 }
