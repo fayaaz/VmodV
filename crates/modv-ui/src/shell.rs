@@ -2023,13 +2023,55 @@ fn gallery_tile(
         ),
         StrokeKind::Inside,
     );
-    painter.text(
-        rect.left_bottom() + vec2(5.0, -5.0),
-        egui::Align2::LEFT_BOTTOM,
-        truncate(&module.name, 12),
+    // The full name is laid out once and never shortened: a name that fits
+    // sits at the strip's left edge, an overlong one marquees while hovered.
+    // The strip clips it away from the tile border and the type label.
+    let name_strip = gallery_name_strip(rect);
+    let name_galley = painter.layout_no_wrap(
+        module.name.clone(),
         egui::FontId::proportional(10.0),
         theme::FOREGROUND,
     );
+    let name_layout = gallery_name_layout(&module.name, name_galley.size().x, name_strip.width());
+    let now = ui.input(|input| input.time);
+    let hovered_name = state
+        .gallery_name_hover
+        .as_ref()
+        .filter(|(name, _)| name == &module.name)
+        .map(|(_, started)| *started);
+    if name_layout.overflow > 0.0 && response.hovered() {
+        if hovered_name.is_none() {
+            state.gallery_name_hover = Some((module.name.clone(), now));
+        }
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(16));
+    } else if hovered_name.is_some() {
+        state.gallery_name_hover = None;
+    }
+    let elapsed = if response.hovered() {
+        state
+            .gallery_name_hover
+            .as_ref()
+            .filter(|(name, _)| name == &module.name)
+            .map(|(_, started)| (now - started).max(0.0) as f32)
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let name_offset = marquee_offset(
+        elapsed,
+        name_layout.overflow,
+        GALLERY_NAME_SPEED,
+        GALLERY_NAME_HOLD_START,
+        GALLERY_NAME_HOLD_END,
+    );
+    let name_pos = egui::pos2(
+        name_strip.left() - name_offset,
+        name_strip.bottom() - 3.0 - name_galley.size().y,
+    );
+    painter
+        .with_clip_rect(name_strip)
+        .galley(name_pos, name_galley, theme::FOREGROUND);
     painter.text(
         rect.left_top() + vec2(5.0, 4.0),
         egui::Align2::LEFT_TOP,
@@ -2396,6 +2438,76 @@ fn truncate(text: &str, max: usize) -> String {
     }
 }
 
+/// Horizontal marquee speed for overlong Gallery tile names, in points/second.
+const GALLERY_NAME_SPEED: f32 = 28.0;
+/// How long the marquee rests at the start of the name before scrolling.
+const GALLERY_NAME_HOLD_START: f32 = 0.5;
+/// How long the marquee rests on the end of the name before returning.
+const GALLERY_NAME_HOLD_END: f32 = 0.8;
+
+/// The full Gallery tile name plus how far it overruns the tile's name strip.
+#[derive(Debug, Clone, PartialEq)]
+struct GalleryNameLayout {
+    /// The full module name. It is never shortened with `~` or an ellipsis;
+    /// an overlong name marquees instead.
+    text: String,
+    /// Width of the full name at the tile font size.
+    width: f32,
+    /// `width - strip_width`, clamped to zero when the name fits.
+    overflow: f32,
+}
+
+/// Describe the full Gallery tile name against the width of the name strip.
+fn gallery_name_layout(name: &str, text_width: f32, strip_width: f32) -> GalleryNameLayout {
+    let width = text_width.max(0.0);
+    GalleryNameLayout {
+        text: name.to_string(),
+        width,
+        overflow: (width - strip_width).max(0.0),
+    }
+}
+
+/// The band a Gallery tile's name is painted (and clipped) inside.
+fn gallery_name_strip(tile: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(tile.left() + 5.0, tile.bottom() - 22.0),
+        egui::pos2(tile.right() - 4.0, tile.bottom() - 2.0),
+    )
+}
+
+/// Ping-pong marquee offset after `elapsed_secs` of hovering.
+///
+/// The cycle holds at the start, scrolls left by `overflow_px` at `speed`
+/// px/s, holds at the end, and travels back to the start.
+fn marquee_offset(
+    elapsed_secs: f32,
+    overflow_px: f32,
+    speed: f32,
+    hold_start: f32,
+    hold_end: f32,
+) -> f32 {
+    if !overflow_px.is_finite() || !speed.is_finite() || overflow_px <= 0.0 || speed <= 0.0 {
+        return 0.0;
+    }
+    let hold_start = hold_start.max(0.0);
+    let hold_end = hold_end.max(0.0);
+    let travel = overflow_px / speed;
+    let cycle = hold_start + travel + hold_end + travel;
+    if !cycle.is_finite() || cycle <= 0.0 || !elapsed_secs.is_finite() {
+        return 0.0;
+    }
+    let elapsed = elapsed_secs.max(0.0) % cycle;
+    if elapsed < hold_start {
+        0.0
+    } else if elapsed < hold_start + travel {
+        ((elapsed - hold_start) * speed).clamp(0.0, overflow_px)
+    } else if elapsed < hold_start + travel + hold_end {
+        overflow_px
+    } else {
+        (overflow_px - (elapsed - hold_start - travel - hold_end) * speed).clamp(0.0, overflow_px)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2406,5 +2518,103 @@ mod tests {
         assert_eq!(short_id("abc"), "abc");
         assert_eq!(truncate("short", 12), "short");
         assert_eq!(truncate("a very long module name", 8), "a very ~");
+    }
+
+    #[test]
+    fn gallery_name_stays_full_and_overflows_the_strip() {
+        let tile = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), vec2(108.0, 76.0));
+        let strip = gallery_name_strip(tile);
+        assert!(strip.min.x >= tile.min.x, "strip starts inside the tile");
+        assert!(strip.max.x <= tile.max.x, "strip ends inside the tile");
+        assert!(strip.min.y >= tile.min.y, "strip top inside the tile");
+        assert!(strip.max.y <= tile.max.y, "strip bottom inside the tile");
+        assert!(
+            strip.min.y > tile.min.y + 20.0,
+            "strip stays clear of the type label at the top"
+        );
+
+        let short = gallery_name_layout("Ball", 18.0, strip.width());
+        assert_eq!(short.text, "Ball");
+        assert_eq!(short.width, 18.0);
+        assert_eq!(short.overflow, 0.0, "a name that fits has no overflow");
+
+        let long_name = "It Is Coming For You";
+        let long = gallery_name_layout(long_name, strip.width() + 41.0, strip.width());
+        assert_eq!(
+            long.text, long_name,
+            "the full name is kept; nothing is ~-shortened"
+        );
+        assert!(!long.text.contains('~'));
+        assert_eq!(long.overflow, 41.0, "overflow is text_width - strip_width");
+    }
+
+    #[test]
+    fn marquee_ignores_names_that_fit() {
+        for elapsed in [0.0, 0.1, 0.9, 7.5, 120.0] {
+            assert_eq!(
+                marquee_offset(
+                    elapsed,
+                    0.0,
+                    GALLERY_NAME_SPEED,
+                    GALLERY_NAME_HOLD_START,
+                    GALLERY_NAME_HOLD_END,
+                ),
+                0.0
+            );
+        }
+        assert_eq!(
+            marquee_offset(
+                1.0,
+                -3.0,
+                GALLERY_NAME_SPEED,
+                GALLERY_NAME_HOLD_START,
+                GALLERY_NAME_HOLD_END,
+            ),
+            0.0,
+            "negative overflow never scrolls"
+        );
+    }
+
+    #[test]
+    fn marquee_holds_scrolls_clamps_holds_and_returns() {
+        let (overflow, speed, hold_start, hold_end) = (56.0, 28.0, 0.5, 0.8);
+        let travel = overflow / speed; // 2 s
+        let cycle = hold_start + travel + hold_end + travel;
+        let offset = |elapsed: f32| marquee_offset(elapsed, overflow, speed, hold_start, hold_end);
+
+        assert_eq!(offset(0.0), 0.0, "starts at the left edge");
+        assert_eq!(offset(0.4), 0.0, "holds at the start for 0.5 s");
+        assert_eq!(offset(hold_start), 0.0, "hold ends at 0.5 s");
+
+        let quarter = offset(hold_start + 0.5);
+        let half = offset(hold_start + 1.0);
+        assert!(
+            (quarter - speed * 0.5).abs() < 0.01,
+            "advances at `speed` px/s"
+        );
+        assert!((half - 2.0 * quarter).abs() < 0.01, "the scroll is linear");
+        assert_eq!(
+            offset(hold_start + travel),
+            overflow,
+            "clamps at the overflow distance"
+        );
+
+        assert_eq!(
+            offset(hold_start + travel + hold_end * 0.5),
+            overflow,
+            "holds at the end"
+        );
+
+        let returning = offset(hold_start + travel + hold_end + travel * 0.25);
+        assert!(
+            returning < overflow && returning > 0.0,
+            "travels back towards the start ({returning})"
+        );
+
+        assert_eq!(offset(cycle), 0.0, "a full cycle returns to the left edge");
+        assert!(
+            (offset(cycle + hold_start + travel * 0.5) - overflow * 0.5).abs() < 0.01,
+            "the cycle repeats"
+        );
     }
 }

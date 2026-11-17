@@ -128,6 +128,11 @@ pub struct UiState {
     /// enqueue one request per frame.
     pub last_gallery_request: Option<std::time::Instant>,
     pub gallery_hover: Option<String>,
+    /// The Gallery tile whose name is marqueeing and the `egui` clock time its
+    /// hover started (seconds). Kept apart from `gallery_hover`, which drives
+    /// preview requests, and cleared when the pointer leaves the tile so the
+    /// next hover restarts the name at its left edge.
+    pub gallery_name_hover: Option<(String, f64)>,
     pub output_open: bool,
     pub show_p0: bool,
     pub show_about: bool,
@@ -670,6 +675,7 @@ impl UiState {
             preview_requests: Vec::new(),
             last_gallery_request: None,
             gallery_hover: None,
+            gallery_name_hover: None,
             output_open: false,
             show_p0: true,
             show_about: false,
