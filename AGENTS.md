@@ -126,6 +126,21 @@ renderer stays the default until the plan's M7.
   `modv-engine/src/tweens.rs`; JS plugin hooks run in a renderer-side host in
   engine mode (`application/plugin-host.js`).
 
+## Native Rust UI (`MODV_UI=native`, opt-in)
+
+`docs/rust-full-rewrite.md` is the native single-process plan;
+`docs/rust-full-rewrite-progress.md` tracks it. The native shell is a second
+binary in the same workspace (`modv-ui` + `modv-app/src/native.rs`), not a
+replacement yet: Electron and the JS engine/UI stay the default and remain
+selectable until parity is signed off.
+
+- `make native` — build/run the release `modv` binary with the host Wayland/X11 session, PulseAudio and `/dev/dri` forwarding (same GUI args as `make dev`). `make native-debug` uses the debug profile; pass frames with `make native ARGS="--frames 300"`.
+- `MODV_UI=native make dev` — switch the normal dev entry point from Electron to the native shell. `make dev` without it still runs Electron; `MODV_ENGINE=1` still selects the Rust engine inside Electron.
+- `modv --headless` / `modv --screenshot` — the same engine-only paths as `modv-engine`; `--state` and `--isf-dir` are shared.
+- The native shell owns `Store` + `Compositor` in-process (no IPC/Vuex mirror), registers the compositor's main texture with `egui-wgpu` for the live preview, and renders Gallery/Scene hover previews through the engine's isolated preview caches. It reuses `<userData>/window-state.json` (atomic writes) and keeps preset/Scene/playlist formats unchanged.
+- `MODV_USER_DATA` overrides the userData directory for diagnostics. `make test-unit`/`test-e2e` still target the legacy tree; the native tests are `make engine-test ARGS="-p modv-ui"` and the `modv-app` unit tests.
+- Not ported yet: dockable layout persistence, the media manager/ISF watcher, MIDI, the opt-in Boa plugin host, NDI/OSC panels and packaging. Do not delete `src/`, `tests/` or the Node config while those remain.
+
 ## Architecture (three execution contexts)
 
 - **Electron main**: `src/main/index.js` (entry; Chromium switches + single-instance lock), `src/main/window-prefs.js` (BrowserWindow prefs + IPC handlers), `src/main/menu-bar.js`, `src/main/media-manager/` (file watching + read/save handlers for presets, isf, video, image, palette, scene), `src/main/shutdown.js` (quit coordinator), `src/main/system-audio.js` (PulseAudio/PipeWire capture IPC).
