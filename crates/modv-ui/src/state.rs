@@ -151,6 +151,12 @@ pub struct UiState {
     pub bpm_source: String,
     pub tap_times: Vec<std::time::Instant>,
     pub side_panel_tab: SidePanelTab,
+    /// The tab an in-flight right-panel drag is carrying, refreshed at the
+    /// start of every frame from egui's drag-and-drop payload.
+    pub tab_drag: Option<crate::tab_drag::TabDrag>,
+    /// A one-frame request to place a floated tab's window at the position it
+    /// was dropped, before the user moves or resizes it.
+    pub tab_float_target: Option<(SidePanelTab, crate::layout::WindowBounds)>,
     /// Panel sizes, floating-window bounds and right-panel tab placements.
     pub layout: crate::layout::LayoutState,
     /// MediaHub operations drained by the shell after drawing.
@@ -826,6 +832,8 @@ impl UiState {
             bpm_source: "beatdetektor".to_string(),
             tap_times: Vec::new(),
             side_panel_tab: SidePanelTab::Inspector,
+            tab_drag: None,
+            tab_float_target: None,
             layout: crate::layout::LayoutState::default(),
             media_actions: Vec::new(),
             p0: P0State::default(),

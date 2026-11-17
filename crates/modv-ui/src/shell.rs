@@ -5,7 +5,9 @@
 //! a central live-output + Gallery + Scenes area, a status bar and a menu bar.
 //! P5 replaces this hand layout with `egui_tiles` docking.
 
-use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, vec2};
+use egui::{
+    Align, Align2, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, Vec2, vec2,
+};
 
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
 use crate::layout::{
@@ -21,6 +23,7 @@ use crate::state::{
     DEFAULT_OSC_HOST, GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState,
     filter_gallery_modules,
 };
+use crate::tab_drag::{TabDrag, TabDropTarget, floating_bounds_for_drop};
 use crate::theme;
 use crate::widgets::input_link::{link_editor_window, link_row};
 use crate::widgets::range_control::chip;
@@ -42,6 +45,7 @@ const MIN_GALLERY_HEIGHT: f32 = 96.0;
 /// Draw the complete native UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     state.sync_status(snapshot);
+    state.tab_drag = egui::DragAndDrop::payload::<TabDrag>(ui.ctx()).map(|payload| *payload);
     state
         .layout
         .tabs
@@ -483,7 +487,7 @@ fn audio_meters(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
 }
 
 fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    let reserved = reserved_side_width(state);
+    let reserved = reserved_side_width(state, state.tab_drag.is_some());
     let max_width = (ui.available_width() - reserved - MIN_CENTRE_WIDTH).max(MIN_GROUPS_WIDTH);
     let response = egui::Panel::left("modv-groups")
         .default_size(state.layout.groups_width)
@@ -825,13 +829,13 @@ fn paint_gallery_drop_target(ui: &egui::Ui, rect: egui::Rect, module_name: &str)
 }
 
 /// The width already reserved by the right-hand panels that are visible.
-fn reserved_side_width(state: &UiState) -> f32 {
-    let strip = if state.layout.tabs.has_strip_tabs() {
+fn reserved_side_width(state: &UiState, tab_dragging: bool) -> f32 {
+    let strip = if state.layout.tabs.has_strip_tabs() || tab_dragging {
         state.layout.inspector_width
     } else {
         0.0
     };
-    let dock = if state.layout.tabs.docked_tabs().is_empty() {
+    let dock = if state.layout.tabs.docked_tabs().is_empty() && !tab_dragging {
         0.0
     } else {
         state.layout.dock_width
@@ -959,10 +963,13 @@ fn group_module_list(
 }
 
 fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    if !state.layout.tabs.has_strip_tabs() {
+    // While a tab is dragged from the dock or a floating window the strip is a
+    // drop target, so it stays mounted (with a "Back to tabs" placeholder) even
+    // when every tab currently lives elsewhere.
+    if !state.layout.tabs.has_strip_tabs() && state.tab_drag.is_none() {
         return;
     }
-    let dock = if state.layout.tabs.docked_tabs().is_empty() {
+    let dock = if state.layout.tabs.docked_tabs().is_empty() && state.tab_drag.is_none() {
         0.0
     } else {
         state.layout.dock_width
@@ -985,38 +992,51 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
     state.layout.inspector_width = response.response.rect.width();
 }
 
-/// The right-hand tab strip: one tab per placement plus a float control.
+/// Height of one tab-strip entry, including its compact detach icon.
+const TAB_HEIGHT: f32 = 24.0;
+/// The detach icon's hit area inside a tab's right edge.
+const TAB_ICON_SIZE: f32 = 14.0;
+
+/// The right-hand tab strip: one draggable tab per placement.
+///
+/// A tab is both a click target (select it) and a drag source carrying a
+/// [`TabDrag`]. While a drag is in flight the strip advertises itself, so a
+/// floating window's grip can be dropped here to return the tab.
 fn tab_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    ui.horizontal_wrapped(|ui| {
+    let row = ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
+        let mut placed = 0;
         for tab in SidePanelTab::ALL {
             if state.layout.tabs.placement(tab) != TabPlacement::Tabs {
                 continue;
             }
-            let selected = state.side_panel_tab == tab;
-            if ui
-                .selectable_label(
-                    selected,
-                    egui::RichText::new(tab.title().to_uppercase())
-                        .strong()
-                        .size(12.0),
-                )
-                .clicked()
-            {
-                state.side_panel_tab = tab;
-            }
-            if ui
-                .small_button("Detach")
-                .on_hover_text(format!("Detach {} into a floating window", tab.title()))
-                .clicked()
-            {
-                state
-                    .layout
-                    .tabs
-                    .place(tab, TabPlacement::Floating, &mut state.side_panel_tab);
-            }
+            placed += 1;
+            tab_entry(ui, tab, state);
+        }
+        if placed == 0 && state.tab_drag.is_some() {
+            ui.label(
+                egui::RichText::new("Back to tabs")
+                    .strong()
+                    .size(12.0)
+                    .color(theme::MUTED),
+            );
         }
     });
+    let strip_rect = row.response.rect;
+
+    if state.tab_drag.is_some() {
+        let hovered = ui.rect_contains_pointer(strip_rect);
+        let from_elsewhere = state
+            .tab_drag
+            .is_some_and(|drag| state.layout.tabs.placement(drag.tab) != TabPlacement::Tabs);
+        if hovered || from_elsewhere {
+            paint_tab_drop_zone(ui, strip_rect, hovered, hovered, Some("Back to tabs"));
+        }
+        if let Some(payload) = released_tab(ui, strip_rect) {
+            apply_tab_drop(ui.ctx(), state, payload.tab, TabDropTarget::Strip);
+        }
+    }
+
     ui.separator();
 
     let active = state.side_panel_tab;
@@ -1025,6 +1045,271 @@ fn tab_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
         .show(ui, |ui| {
             tab_content(ui, snapshot, state, active);
         });
+}
+
+/// One tab-strip entry: a painted tab shape, a click/drag response and the
+/// compact detach icon inside its right edge.
+fn tab_entry(ui: &mut egui::Ui, tab: SidePanelTab, state: &mut UiState) {
+    let title = tab.title().to_uppercase();
+    let galley = ui.painter().layout_no_wrap(
+        title.clone(),
+        egui::FontId::proportional(12.0),
+        theme::FOREGROUND,
+    );
+    let size = vec2(galley.size().x + 24.0 + TAB_ICON_SIZE, TAB_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &title));
+    if response.drag_started() {
+        response.dnd_set_drag_payload(TabDrag::new(tab));
+    }
+
+    let selected = state.side_panel_tab == tab;
+    let hovered = response.hovered();
+    let dragging = state.tab_drag.is_some_and(|drag| drag.tab == tab);
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 4.0 - TAB_ICON_SIZE * 0.5, rect.center().y),
+        Vec2::splat(TAB_ICON_SIZE),
+    );
+    let icon_response = ui.interact(icon_rect, response.id.with("detach"), Sense::click());
+    icon_response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, "Detach to a floating window")
+    });
+    let icon_hovered = icon_response.hovered();
+    let icon_visible = selected || hovered || icon_hovered;
+
+    let painter = ui.painter();
+    let fill = if selected {
+        theme::ACCENT_DIM
+    } else if hovered || dragging {
+        theme::PANEL_ALT
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, CornerRadius::same(0), fill);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(0),
+        Stroke::new(
+            1.0,
+            if selected || dragging {
+                theme::ACCENT
+            } else if hovered {
+                theme::MUTED
+            } else {
+                theme::BORDER
+            },
+        ),
+        StrokeKind::Inside,
+    );
+    if selected {
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - 2.0),
+                vec2(rect.width(), 2.0),
+            ),
+            CornerRadius::same(0),
+            theme::ACCENT,
+        );
+    }
+    let text_center = egui::pos2(
+        rect.left() + (rect.width() - TAB_ICON_SIZE - 4.0) * 0.5,
+        rect.center().y,
+    );
+    painter.text(
+        text_center,
+        Align2::CENTER_CENTER,
+        &title,
+        egui::FontId::proportional(12.0),
+        if selected || hovered || dragging {
+            theme::FOREGROUND
+        } else {
+            theme::MUTED
+        },
+    );
+    if icon_visible {
+        paint_detach_icon(
+            painter,
+            icon_rect,
+            if icon_hovered {
+                theme::FOREGROUND
+            } else {
+                theme::MUTED
+            },
+        );
+    }
+
+    if response.clicked() && !icon_response.clicked() {
+        state.side_panel_tab = tab;
+    }
+    if response.hovered() || icon_hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.context_menu(|ui| {
+        if ui.button("Detach to floating window").clicked() {
+            state
+                .layout
+                .tabs
+                .place(tab, TabPlacement::Floating, &mut state.side_panel_tab);
+            ui.close();
+        }
+        if ui
+            .button("Dock to area")
+            .on_hover_text("Move this panel into its own dock column")
+            .clicked()
+        {
+            state
+                .layout
+                .tabs
+                .place(tab, TabPlacement::Docked, &mut state.side_panel_tab);
+            ui.close();
+        }
+    });
+    if icon_response
+        .on_hover_text("Detach to a floating window")
+        .clicked()
+    {
+        state
+            .layout
+            .tabs
+            .place(tab, TabPlacement::Floating, &mut state.side_panel_tab);
+    }
+}
+
+/// The compact detach affordance: a small outlined square with a pop-out
+/// arrow. Deliberately not tab-shaped, so it cannot read as a second tab.
+fn paint_detach_icon(painter: &egui::Painter, rect: egui::Rect, colour: Color32) {
+    let glyph = egui::Rect::from_center_size(rect.center(), Vec2::splat(10.0));
+    painter.rect_stroke(
+        glyph,
+        CornerRadius::same(1),
+        Stroke::new(1.0, colour),
+        StrokeKind::Inside,
+    );
+    let start = glyph.left_bottom() + vec2(2.5, -2.5);
+    let end = glyph.right_top() + vec2(-2.5, 2.5);
+    painter.line_segment([start, end], Stroke::new(1.0, colour));
+    painter.line_segment([end, end + vec2(-3.5, 0.0)], Stroke::new(1.0, colour));
+    painter.line_segment([end, end + vec2(0.0, 3.5)], Stroke::new(1.0, colour));
+}
+
+/// Consume a released [`TabDrag`] payload when the pointer is over `rect`.
+///
+/// The hit test uses `Ui::rect_contains_pointer` rather than a response's
+/// `contains_pointer`: the whole target area accepts the drop even when the
+/// pointer is over one of its child widgets (a tab, a label or a slider).
+fn released_tab(ui: &egui::Ui, rect: egui::Rect) -> Option<TabDrag> {
+    if !ui.rect_contains_pointer(rect) || !ui.input(|input| input.pointer.any_released()) {
+        return None;
+    }
+    egui::DragAndDrop::take_payload::<TabDrag>(ui.ctx()).map(|payload| *payload)
+}
+
+/// Write a dropped tab's exclusive placement and, for a central-area drop,
+/// remember the clamped floating-window bounds so the window opens where it
+/// was released.
+fn apply_tab_drop(
+    ctx: &egui::Context,
+    state: &mut UiState,
+    tab: SidePanelTab,
+    target: TabDropTarget,
+) {
+    state.tab_drag = None;
+    state
+        .layout
+        .tabs
+        .place(tab, target.placement(), &mut state.side_panel_tab);
+    match target {
+        TabDropTarget::Float(position) => {
+            let bounds = floating_bounds_for_drop(position, ctx.content_rect());
+            state
+                .layout
+                .record_window_rect(&LayoutState::tab_window_id(tab), bounds.as_rect());
+            state.tab_float_target = Some((tab, bounds));
+        }
+        TabDropTarget::Strip | TabDropTarget::Dock => {
+            if state
+                .tab_float_target
+                .is_some_and(|(target, _)| target == tab)
+            {
+                state.tab_float_target = None;
+            }
+        }
+    }
+}
+
+/// Paint a tab drop target: an optional accent wash, a bright border when
+/// hovered, and a small chip naming the drop ("Dock here", "Back to tabs",
+/// "Float here").
+fn paint_tab_drop_zone(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    hovered: bool,
+    outline: bool,
+    chip: Option<&str>,
+) {
+    let painter = ui.painter();
+    if hovered {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(2),
+            theme::ACCENT.gamma_multiply(0.10),
+        );
+    }
+    if hovered || outline {
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(2),
+            Stroke::new(
+                if hovered { 1.5 } else { 1.0 },
+                if hovered {
+                    theme::ACCENT
+                } else {
+                    theme::BORDER
+                },
+            ),
+            StrokeKind::Inside,
+        );
+    }
+
+    let Some(label) = chip else {
+        return;
+    };
+    let text_colour = if hovered {
+        theme::BACKGROUND
+    } else {
+        theme::MUTED
+    };
+    let galley = painter.layout_no_wrap(
+        label.to_string(),
+        egui::FontId::proportional(10.0),
+        text_colour,
+    );
+    let size = galley.size() + vec2(10.0, 5.0);
+    let chip_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            (rect.right() - size.x - 4.0).max(rect.left() + 4.0),
+            rect.top() + 4.0,
+        ),
+        size,
+    );
+    painter.rect_filled(
+        chip_rect,
+        CornerRadius::same(2),
+        if hovered {
+            theme::ACCENT
+        } else {
+            theme::PANEL_ALT
+        },
+    );
+    if !hovered {
+        painter.rect_stroke(
+            chip_rect,
+            CornerRadius::same(2),
+            Stroke::new(1.0, theme::BORDER),
+            StrokeKind::Inside,
+        );
+    }
+    painter.galley(chip_rect.min + vec2(5.0, 2.5), galley, text_colour);
 }
 
 /// Render one right-panel tab, wherever it is placed.
@@ -1169,11 +1454,13 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
 
 /// The separate dock column between the centre and the right tab strip.
 ///
-/// Hidden while no tab is docked. Several docked tabs stack with a header and
-/// separator each, inside one scroll area.
+/// Hidden while no tab is docked and no drag is in flight. During a drag it
+/// appears as an explicit "Dock here" target even when empty. Several docked
+/// tabs stack with a header and separator each, inside one scroll area.
 fn dock_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     let docked = state.layout.tabs.docked_tabs();
-    if docked.is_empty() {
+    let dragging = state.tab_drag.is_some();
+    if docked.is_empty() && !dragging {
         return;
     }
     let max_width = (ui.available_width() - MIN_CENTRE_WIDTH).max(MIN_DOCK_WIDTH);
@@ -1188,6 +1475,23 @@ fn dock_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 .inner_margin(Margin::same(6)),
         )
         .show(ui, |ui| {
+            if docked.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(
+                        egui::RichText::new("Dock here")
+                            .strong()
+                            .size(14.0)
+                            .color(theme::MUTED),
+                    );
+                    ui.label(
+                        egui::RichText::new("Drag a tab here to dock it")
+                            .size(11.0)
+                            .color(theme::MUTED),
+                    );
+                });
+                return;
+            }
             egui::ScrollArea::vertical()
                 .id_salt("modv-dock-scroll")
                 .show(ui, |ui| {
@@ -1232,9 +1536,25 @@ fn dock_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 });
         });
     state.layout.dock_width = response.response.rect.width();
+
+    let dock_rect = response.response.rect;
+    if dragging {
+        let hovered = ui.rect_contains_pointer(dock_rect);
+        paint_tab_drop_zone(
+            ui,
+            dock_rect,
+            hovered,
+            true,
+            (!docked.is_empty()).then_some("Dock here"),
+        );
+        if let Some(payload) = released_tab(ui, dock_rect) {
+            apply_tab_drop(ui.ctx(), state, payload.tab, TabDropTarget::Dock);
+        }
+    }
 }
 
-/// Every tab placed in a floating window, with dock controls in its header.
+/// Every tab placed in a floating window, with dock controls and a drag grip
+/// in its header.
 fn floating_tab_windows(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
     for tab in state.layout.tabs.floating_tabs() {
         let window_id = LayoutState::tab_window_id(tab);
@@ -1243,24 +1563,46 @@ fn floating_tab_windows(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &
             240.0 + tab.index() as f32 * 26.0,
             90.0 + tab.index() as f32 * 26.0,
         ];
-        let window = restore_window(
-            egui::Window::new(tab.title())
-                .id(egui::Id::unique(("modv-tab-window", tab.key())))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(true)
-                .min_width(240.0)
-                .min_height(200.0)
-                .default_pos(default_pos)
-                .default_size([360.0, 460.0]),
-            &window_id,
-            &state.layout,
-        );
+        let drop_bounds = state
+            .tab_float_target
+            .filter(|(target, _)| *target == tab)
+            .map(|(_, bounds)| bounds);
+        let mut window = egui::Window::new(tab.title())
+            .id(egui::Id::unique(("modv-tab-window", tab.key())))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .min_width(240.0)
+            .min_height(200.0)
+            .default_pos(default_pos)
+            .default_size([360.0, 460.0]);
+        if let Some(bounds) = drop_bounds {
+            window = window.current_pos(bounds.pos());
+        }
+        let window = restore_window(window, &window_id, &state.layout);
 
         let mut dock_tabs = false;
         let mut dock_area = false;
         let response = window.show(ctx, |ui| {
             ui.horizontal(|ui| {
+                let (grip_rect, grip) =
+                    ui.allocate_exact_size(Vec2::splat(16.0), Sense::click_and_drag());
+                grip.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        true,
+                        format!("Drag {} window", tab.title()),
+                    )
+                });
+                if grip.drag_started() {
+                    grip.dnd_set_drag_payload(TabDrag::new(tab));
+                }
+                if grip.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+                paint_window_grip(ui.painter(), grip_rect, grip.hovered());
+                grip.on_hover_text("Drag to the tab strip or dock column");
+
                 if ui
                     .button("Dock to tabs")
                     .on_hover_text("Return this panel to the right-hand tab strip")
@@ -1289,6 +1631,9 @@ fn floating_tab_windows(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &
                 .layout
                 .record_window_rect(&window_id, response.response.rect);
         }
+        if drop_bounds.is_some() {
+            state.tab_float_target = None;
+        }
 
         if dock_tabs {
             state
@@ -1305,6 +1650,24 @@ fn floating_tab_windows(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &
                 .layout
                 .tabs
                 .place(tab, TabPlacement::Tabs, &mut state.side_panel_tab);
+        }
+    }
+}
+
+/// Six dots in two columns: the grab handle for a floating tab window.
+fn paint_window_grip(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
+    let colour = if hovered {
+        theme::FOREGROUND
+    } else {
+        theme::MUTED
+    };
+    for row in 0..3 {
+        for column in 0..2 {
+            painter.circle_filled(
+                rect.center() + vec2(-3.0 + column as f32 * 6.0, -5.0 + row as f32 * 5.0),
+                1.25,
+                colour,
+            );
         }
     }
 }
@@ -2631,7 +2994,7 @@ fn draw_prop(
 }
 
 fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    egui::CentralPanel::default()
+    let response = egui::CentralPanel::default()
         .frame(
             egui::Frame::NONE
                 .fill(theme::BACKGROUND)
@@ -2758,6 +3121,26 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                 .preview_requests
                 .append(&mut state.scene_grid.preview_requests);
         });
+
+    // The central area is the "float it here" target: release anywhere over it
+    // to open the tab as a floating window at the pointer, clamped on-screen.
+    let central_rect = response.response.rect;
+    if state.tab_drag.is_some() {
+        let hovered = ui.rect_contains_pointer(central_rect);
+        paint_tab_drop_zone(
+            ui,
+            central_rect.shrink(3.0),
+            hovered,
+            hovered,
+            Some("Float here"),
+        );
+        if let Some(payload) = released_tab(ui, central_rect) {
+            let pointer = ui
+                .input(|input| input.pointer.interact_pos())
+                .unwrap_or_else(|| central_rect.center());
+            apply_tab_drop(ui.ctx(), state, payload.tab, TabDropTarget::Float(pointer));
+        }
+    }
 }
 
 /// Fit a `resolution`-sized frame inside `available` without stretching.

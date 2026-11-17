@@ -26,6 +26,7 @@ pub mod model;
 pub mod panels;
 pub mod shell;
 pub mod state;
+pub mod tab_drag;
 pub mod theme;
 pub mod widgets;
 

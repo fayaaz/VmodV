@@ -89,7 +89,29 @@ fn app_with_module() -> Harness<'static, UiState> {
 }
 
 fn detach_buttons(harness: &Harness<'_, UiState>) -> usize {
-    harness.get_all_by_label("Detach").count()
+    harness
+        .get_all_by_label("Detach to a floating window")
+        .count()
+}
+
+/// Hover first, then click: the first hover frame can settle a panel-width
+/// measurement, and clicking the pinned icon at its pre-settle rect would land
+/// on the neighbouring tab.
+fn click_first_detach(harness: &mut Harness<'static, UiState>) {
+    let pos = harness
+        .get_all_by_label("Detach to a floating window")
+        .next()
+        .expect("Inspector detach control")
+        .rect()
+        .center();
+    harness.hover_at(pos);
+    harness.run();
+    harness
+        .get_all_by_label("Detach to a floating window")
+        .next()
+        .expect("Inspector detach control")
+        .click();
+    harness.run();
 }
 
 #[test]
@@ -127,12 +149,7 @@ fn detaching_the_inspector_floats_it_and_selects_the_next_tab() {
     harness.run();
 
     // The first detach control belongs to the first strip tab (Inspector).
-    harness
-        .get_all_by_label("Detach")
-        .next()
-        .expect("Inspector detach control")
-        .click();
-    harness.run();
+    click_first_detach(&mut harness);
 
     assert_eq!(
         harness
@@ -162,7 +179,7 @@ fn dock_to_area_shows_the_dock_column_and_back_to_tabs_restores_the_strip() {
     let mut harness = app();
     harness.run();
     harness
-        .get_all_by_label("Detach")
+        .get_all_by_label("Detach to a floating window")
         .next()
         .expect("Inspector detach control")
         .click();
@@ -215,16 +232,11 @@ fn docking_several_tabs_stacks_them_in_one_dock_column() {
 
     // Float Inspector, dock it, then float and dock Media through the same
     // controls: the dock column stacks both sections.
-    harness
-        .get_all_by_label("Detach")
-        .next()
-        .expect("Inspector detach control")
-        .click();
-    harness.run();
+    click_first_detach(&mut harness);
     harness.get_by_label("Dock to area").click();
     harness.run();
     harness
-        .get_all_by_label("Detach")
+        .get_all_by_label("Detach to a floating window")
         .next()
         .expect("Media detach control")
         .click();
@@ -247,12 +259,7 @@ fn a_floating_tab_keeps_its_slider_visible() {
     let mut harness = app_with_module();
     harness.run();
 
-    harness
-        .get_all_by_label("Detach")
-        .next()
-        .expect("Inspector detach control")
-        .click();
-    harness.run();
+    click_first_detach(&mut harness);
 
     assert_eq!(
         harness
@@ -278,12 +285,7 @@ fn a_docked_tab_keeps_its_slider_visible() {
     let mut harness = app_with_module();
     harness.run();
 
-    harness
-        .get_all_by_label("Detach")
-        .next()
-        .expect("Inspector detach control")
-        .click();
-    harness.run();
+    click_first_detach(&mut harness);
     harness.get_by_label("Dock to area").click();
     harness.run();
 

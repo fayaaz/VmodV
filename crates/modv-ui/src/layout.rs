@@ -61,6 +61,11 @@ impl WindowBounds {
     pub fn size(&self) -> egui::Vec2 {
         egui::vec2(self.width, self.height)
     }
+
+    /// The outer rectangle these bounds describe.
+    pub fn as_rect(&self) -> egui::Rect {
+        egui::Rect::from_min_size(self.pos(), self.size())
+    }
 }
 
 /// Where a right-panel tab renders.
