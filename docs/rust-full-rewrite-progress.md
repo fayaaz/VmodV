@@ -48,17 +48,21 @@ Last updated: 2026-11-17.
   output window open, 432 registered modules, 62 seeded Scenes, ~41–44 fps in
   a debug build at 960×540 on the reference AMD GPU.
 - **P0 release evidence** (`--apply-scene "Lone Chrome"`, host display):
-  - Reference AMD RX 9070 XT: **138–143 fps** at 960×470–540, PipeWire audio
-    capture active (`audio source pipewire owns capture at 48000 Hz`).
+  - Reference AMD RX 9070 XT: **138–143 fps** at 960×470–540 in the
+    unobstructed runs; a later run on the same host settled at **59.7 fps**
+    after the window manager resized/occluded the output (Fifo pacing), so
+    the number is compositor-sensitive. PipeWire audio capture was active
+    (`audio source pipewire owns capture at 48000 Hz`) and MIDI was available.
   - lavapipe (Docker, `VK_ICD_FILENAMES=lvp_icd.json`): **128 fps** empty,
-    **56.9 fps** with Lone Chrome at 960×540.
+    **57.5 fps** with Lone Chrome at 960×540.
   - RSS with the full 354-ISF registry + one applied Scene: **~157 MB**
     (vs the Electron/hybrid app's multi-hundred-MB floor).
   - Written verdict: **GO** for the framework, with the lavapipe content
     number (57 fps) recorded as the one caveat; the reference GPU is well
     above the 60 fps target.
 - `cargo test -p modv-engine --lib`: **459 passed**.
-- `cargo test -p modv-app --lib`: **414 passed** (serial; GPU-safe).
+- `cargo test -p modv-app --lib`: **422 passed** (serial; GPU-safe), including
+  the MIDI, user-ISF watcher and preset round-trip tests.
 - `cargo test -p modv-ui`: 25 unit + 3 widget smoke + 1 golden snapshot.
 - `make engine-lint` (workspace clippy `-D warnings` + fmt): clean.
 - Full workspace run: 789 passed, 1 failed — `point10::scene_tests::
