@@ -19,7 +19,7 @@ Last updated: 2026-11-17.
 | P5 — docking | Not started | `egui_tiles` is the P0 choice (egui 0.37-compatible). Current layout is fixed panels. |
 | P6 — media manager | **Partial** | `MediaHub` is owned by the native shell (cameras/test pattern/source status), user ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Media-manager file dialogs, project profiles and the full media-tree watch remain. |
 | P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits flags. The opt-in Boa plugin host (D5) remains. |
-| P8/P9 — parity/packaging | **Started (P8)** | First `docs/native-parity-map.md`; no Electron deletion or native packaging in this run (user decision). |
+| P8/P9 — parity/packaging | **Started (P8); native AppImage + .deb** | First `docs/native-parity-map.md`. `make appimage-native` and `make native-deb` build the native installers in Docker (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. Flatpak, the 2.0.0 version bump, switching the nightly release to Rust and deleting Electron remain. |
 
 ## What exists today
 
@@ -147,8 +147,11 @@ Last updated: 2026-11-17.
   creation and a full media-tree watcher.
 - **P7** has expressions, native audio and a `midir` client with a MIDI panel;
   the opt-in Boa plugin host (D5) is still missing.
-- **P9** packaging/CI and the Electron deletion are deliberately out of scope
-  for this run.
+- **P9** has a native AppImage (`make appimage-native`), Debian package
+  (`make native-deb`, checked by `make native-deb-check`) and a Rust-only CI
+  workflow (`.github/workflows/native.yml`). Flatpak, the 2.0.0 native version
+  bump, switching `nightly.yml` to Rust and the Electron/Node deletion are
+  still pending.
 - Native output windows are single (`output-0`); the engine `windows/*`
   registry supports more, and the window-state map is ready for more keys.
 - There is no structured daily logger in the native shell yet; engine/app
