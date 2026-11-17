@@ -52,6 +52,7 @@ use crate::store_ops::Store;
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
 use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group, ModuleInstance, js_truthy};
+use modv_engine::tweens::TweenDescriptor;
 use modv_media::video::{TestPattern, VideoSourceConfig};
 
 /// The native shell's run loop.
@@ -1547,45 +1548,11 @@ impl NativeApp {
             .tweens
             .as_array()
             .map(|tweens| {
+                let bpm = self.store.bpm();
                 tweens
                     .iter()
-                    .filter_map(|tween| {
-                        let id = tween.get("id").and_then(Value::as_str)?.to_string();
-                        Some((
-                            id.clone(),
-                            TweenView {
-                                id,
-                                duration: tween
-                                    .get("duration")
-                                    .and_then(Value::as_f64)
-                                    .unwrap_or(1000.0),
-                                direction: tween
-                                    .get("direction")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("alternate")
-                                    .to_string(),
-                                easing: tween
-                                    .get("easing")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("linear")
-                                    .to_string(),
-                                looping: tween.get("loop").and_then(Value::as_bool).unwrap_or(true),
-                                use_bpm: tween
-                                    .get("useBpm")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(true),
-                                bpm_division: tween
-                                    .get("bpmDivision")
-                                    .and_then(Value::as_f64)
-                                    .unwrap_or(16.0),
-                                steps: tween.get("steps").and_then(Value::as_f64).unwrap_or(0.0),
-                                frames: tween
-                                    .get("frames")
-                                    .and_then(Value::as_array)
-                                    .map_or(0, |frames| frames.len() as u64),
-                            },
-                        ))
-                    })
+                    .filter_map(|tween| tween_view_from_json(tween, bpm))
+                    .map(|view| (view.id.clone(), view))
                     .collect()
             })
             .unwrap_or_default();
@@ -2001,6 +1968,88 @@ impl NativeApp {
         }
         self.close_output();
     }
+}
+
+/// The UI view of one `state.tweens` descriptor at the live tempo.
+///
+/// Decoding through [`TweenDescriptor`] keeps the engine's validation: an
+/// invalid `keyframeTimes` list is dropped (sampling falls back to anime's even
+/// spacing), and every field shares the descriptor's `createTween` defaults.
+/// `cycle_seconds` comes from `effective_duration(bpm)`, the exact length the
+/// engine pre-renders, so the curve editor's beat/seconds axis matches
+/// playback.
+fn tween_view_from_json(tween: &Value, bpm: f64) -> Option<TweenView> {
+    let id = tween.get("id").and_then(Value::as_str)?.to_string();
+    let descriptor: Option<TweenDescriptor> = serde_json::from_value(tween.clone()).ok();
+    let field = |key: &str| tween.get(key);
+
+    let data = descriptor
+        .as_ref()
+        .map(|descriptor| descriptor.data.clone())
+        .unwrap_or_default();
+    let keyframe_times = descriptor
+        .as_ref()
+        .and_then(TweenDescriptor::effective_keyframe_times)
+        .map(<[f64]>::to_vec);
+    let use_bpm = descriptor
+        .as_ref()
+        .map(|descriptor| descriptor.use_bpm)
+        .or_else(|| field("useBpm").and_then(Value::as_bool))
+        .unwrap_or(true);
+    let cycle_seconds = descriptor
+        .as_ref()
+        .map(|descriptor| descriptor.effective_duration(bpm) / 1000.0)
+        .unwrap_or_default();
+
+    Some(TweenView {
+        id,
+        data,
+        keyframe_times,
+        duration: descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.duration)
+            .or_else(|| field("duration").and_then(Value::as_f64))
+            .unwrap_or(1000.0),
+        direction: descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.direction.clone())
+            .or_else(|| {
+                field("direction")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "alternate".to_string()),
+        easing: descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.easing.clone())
+            .or_else(|| field("easing").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| "linear".to_string()),
+        looping: descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.looping)
+            .or_else(|| field("loop").and_then(Value::as_bool))
+            .unwrap_or(true),
+        use_bpm,
+        bpm_division: descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.bpm_division)
+            .or_else(|| field("bpmDivision").and_then(Value::as_f64))
+            .unwrap_or(16.0),
+        duration_as_total_time: descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.duration_as_total_time)
+            .or_else(|| field("durationAsTotalTime").and_then(Value::as_bool))
+            .unwrap_or(false),
+        steps: descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.steps)
+            .or_else(|| field("steps").and_then(Value::as_f64))
+            .unwrap_or(0.0),
+        frames: field("frames")
+            .and_then(Value::as_array)
+            .map_or(0, |frames| frames.len() as u64),
+        cycle_seconds,
+    })
 }
 
 fn module_view(
@@ -3344,5 +3393,115 @@ mod tests {
         assert_eq!(views[1].expression, "value / 2");
         assert!(!views[1].evaluate_every_frame);
         assert!(!views[0].id.is_empty());
+    }
+
+    #[test]
+    fn tween_views_carry_keyframes_and_the_engine_cycle_length() {
+        let view = tween_view_from_json(
+            &serde_json::json!({
+                "id": "input-gain",
+                "data": [[0], [0.5], [1]],
+                "duration": 1000,
+                "useBpm": false,
+                "direction": "normal",
+                "easing": "easeOutQuad",
+                "loop": false,
+                "steps": 2,
+                "frames": [[0], [0], [0], [1], [1], [1]],
+            }),
+            120.0,
+        )
+        .expect("view");
+
+        assert_eq!(view.id, "input-gain");
+        assert_eq!(view.data, vec![vec![0.0], vec![0.5], vec![1.0]]);
+        assert_eq!(view.keyframe_times, None);
+        assert!(!view.use_bpm);
+        assert!(!view.duration_as_total_time);
+        assert_eq!(view.easing, "easeOutQuad");
+        assert_eq!(view.direction, "normal");
+        assert!(!view.looping);
+        assert_eq!(view.steps, 2.0);
+        assert_eq!(view.frames, 6);
+        // 3+ rows divide the 1000 ms duration into one leg per row.
+        assert!((view.cycle_seconds - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn tween_view_cycle_length_uses_the_live_bpm() {
+        let document = serde_json::json!({
+            "id": "input-gain",
+            "data": [[0], [1]],
+            "bpmDivision": 16,
+        });
+
+        // A BPM tween's cycle is (60 * 60 / bpm) * division / rows.
+        let at_120 = tween_view_from_json(&document, 120.0).expect("view");
+        assert!(at_120.use_bpm);
+        assert!((at_120.cycle_seconds - 0.24).abs() < 1e-12);
+
+        let at_60 = tween_view_from_json(&document, 60.0).expect("view");
+        assert!((at_60.cycle_seconds - 0.48).abs() < 1e-12);
+
+        // A falsy tempo falls back to 120 like the engine.
+        let at_zero = tween_view_from_json(&document, 0.0).expect("view");
+        assert!((at_zero.cycle_seconds - 0.24).abs() < 1e-12);
+    }
+
+    #[test]
+    fn tween_view_keeps_valid_keyframe_times_and_drops_invalid_ones() {
+        let valid = tween_view_from_json(
+            &serde_json::json!({
+                "id": "free",
+                "data": [[0], [0.4], [1]],
+                "keyframeTimes": [0, 0.35, 1],
+                "useBpm": false,
+                "duration": 1000,
+            }),
+            120.0,
+        )
+        .expect("view");
+        assert_eq!(valid.keyframe_times, Some(vec![0.0, 0.35, 1.0]));
+
+        for times in [
+            serde_json::json!([0, 1]),
+            serde_json::json!([0, 0.5, 0.5]),
+            serde_json::json!([0.1, 0.5, 1]),
+            serde_json::json!(null),
+        ] {
+            let view = tween_view_from_json(
+                &serde_json::json!({
+                    "id": "bad",
+                    "data": [[0], [0.5], [1]],
+                    "keyframeTimes": times,
+                }),
+                120.0,
+            )
+            .expect("view");
+            assert_eq!(view.keyframe_times, None, "invalid times are dropped");
+        }
+    }
+
+    #[test]
+    fn tween_view_survives_a_decode_failure_and_needs_an_id() {
+        assert!(tween_view_from_json(&serde_json::json!({"data": [[0], [1]]}), 120.0).is_none());
+
+        // `data` that does not decode keeps the descriptor row for the UI's
+        // compact controls rather than dropping the tween entirely.
+        let view = tween_view_from_json(
+            &serde_json::json!({
+                "id": "broken",
+                "data": [["nope"]],
+                "duration": 500,
+                "easing": "linear",
+            }),
+            120.0,
+        )
+        .expect("view");
+        assert_eq!(view.id, "broken");
+        assert!(view.data.is_empty());
+        assert_eq!(view.duration, 500.0);
+        assert_eq!(view.easing, "linear");
+        assert_eq!(view.cycle_seconds, 0.0);
     }
 }

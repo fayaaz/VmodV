@@ -696,14 +696,24 @@ pub struct PropComponentView {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TweenView {
     pub id: String,
+    /// Keyframe rows: channel `i` is the sequence `data[row][i]`.
+    pub data: Vec<Vec<f64>>,
+    /// Explicit keyframe progress (the native `keyframeTimes` extension), when
+    /// the descriptor carries a valid list.
+    pub keyframe_times: Option<Vec<f64>>,
     pub duration: f64,
     pub direction: String,
     pub easing: String,
     pub looping: bool,
     pub use_bpm: bool,
     pub bpm_division: f64,
+    /// Treat `duration` as the whole cycle instead of per-row time.
+    pub duration_as_total_time: bool,
     pub steps: f64,
     pub frames: u64,
+    /// One animation leg in seconds at the live tempo, from the engine's
+    /// `TweenDescriptor::effective_duration` (the axis must match playback).
+    pub cycle_seconds: f64,
 }
 
 /// One saved Scene.
