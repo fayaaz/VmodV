@@ -225,6 +225,11 @@ pub struct Store {
     link_smoothing: HashMap<String, f64>,
     /// Delta-throttle state for Input Link writes, keyed by input id.
     link_deltas: HashMap<String, LinkDeltaState>,
+    /// Controls whose Inputs a Scene apply replaced, keyed by the retired live
+    /// input id. A link editor opened before the apply still names that id;
+    /// [`Self::create_input_link`] resolves it to the rebuilt control instead
+    /// of dropping a link the Scene just re-created.
+    retired_inputs: HashMap<String, crate::input_links::InputIdentity>,
     /// Compiled JS expressions (WS-12), one per input, rebuilt when the
     /// preset/Scene or the `expressions/*` actions change the assignments.
     expression_cache: ExpressionCache,
@@ -338,6 +343,7 @@ impl Store {
             osc_rx: None,
             link_smoothing: HashMap::new(),
             link_deltas: HashMap::new(),
+            retired_inputs: HashMap::new(),
             expression_cache: ExpressionCache::new(),
             windows: WindowRegistry::default(),
             warned: HashSet::new(),
@@ -2741,6 +2747,53 @@ impl Store {
         Ok(json!(true))
     }
 
+    /// Snapshot every live Input's control identity before a Scene apply.
+    ///
+    /// Scene applies rebuild Groups, Modules and Inputs with fresh ids, but an
+    /// editor opened before the apply still names the old input. The snapshot
+    /// is handed back to [`Self::retire_replaced_inputs`] once the apply is
+    /// done so the old id can be resolved to the rebuilt control.
+    pub(crate) fn capture_input_identities(
+        &self,
+    ) -> Vec<(String, crate::input_links::InputIdentity)> {
+        self.state
+            .inputs
+            .keys()
+            .filter_map(|input_id| {
+                crate::input_links::input_identity(&self.state, input_id)
+                    .map(|identity| (input_id.clone(), identity))
+            })
+            .collect()
+    }
+
+    /// Record the controls whose live Inputs disappeared during an apply.
+    ///
+    /// Only ids that are actually gone are kept; an Input the apply kept (for
+    /// example an untouched performance row) keeps its id and needs no
+    /// mapping. The map is a best-effort UI convenience, so a very long
+    /// session with thousands of applies clears it rather than growing without
+    /// bound.
+    pub(crate) fn retire_replaced_inputs(
+        &mut self,
+        captured: Vec<(String, crate::input_links::InputIdentity)>,
+    ) {
+        for (input_id, identity) in captured {
+            if self.state.inputs.contains_key(&input_id) {
+                continue;
+            }
+            self.retired_inputs.insert(input_id, identity);
+        }
+        if self.retired_inputs.len() > 4096 {
+            self.retired_inputs.clear();
+        }
+    }
+
+    /// Resolve a link action's input id onto the control a Scene apply rebuilt.
+    fn retarget_input(&self, input_id: &str) -> Option<String> {
+        let identity = self.retired_inputs.get(input_id)?;
+        crate::input_links::find_input_by_identity(&self.state, identity)
+    }
+
     /// `inputs/createInputLink` (`inputs.js:136-176`).
     ///
     /// JS defaults `min`/`max` to `0`/`1` in the action's destructuring, so an
@@ -2748,23 +2801,44 @@ impl Store {
     /// stays `null` and disables the range mapping.
     fn create_input_link(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
         const ACTION: &str = "inputs/createInputLink";
-        let Some(input_id) = params.get("inputId").and_then(Value::as_str) else {
+        let Some(requested_id) = params.get("inputId").and_then(Value::as_str) else {
             return Ok(json!(false));
         };
         let Some(source) = params.get("source").and_then(Value::as_str) else {
             self.warn_once(
-                format!("input-link-source:{input_id}"),
-                &format!("engine: WARN {ACTION}: no source for input {input_id} (link ignored)"),
+                format!("input-link-source:{requested_id}"),
+                &format!(
+                    "engine: WARN {ACTION}: no source for input {requested_id} (link ignored)"
+                ),
             );
             return Ok(json!(false));
         };
-        if !self.state.inputs.contains_key(input_id) {
+        // A Scene apply replaces every live Input id, so an editor that was
+        // open across the apply still names the id it was opened with. Resolve
+        // that id onto the control the Scene rebuilt rather than dropping a
+        // link that still has a valid target; a genuinely removed control is
+        // ignored once at INFO (the JS store also refuses it, but with a
+        // console warning on every save).
+        let input_id = if self.state.inputs.contains_key(requested_id) {
+            requested_id.to_string()
+        } else if let Some(retargeted) = self.retarget_input(requested_id) {
             self.warn_once(
-                format!("input-link-target:{input_id}"),
-                &format!("engine: WARN {ACTION}: no input with id {input_id} (link ignored)"),
+                format!("input-link-retarget:{requested_id}"),
+                &format!(
+                    "engine: INFO {ACTION}: retargeted replaced input {requested_id} -> {retargeted}"
+                ),
+            );
+            retargeted
+        } else {
+            self.warn_once(
+                format!("input-link-target:{requested_id}"),
+                &format!(
+                    "engine: INFO {ACTION}: ignored link for replaced or removed input {requested_id}"
+                ),
             );
             return Ok(json!(false));
-        }
+        };
+        let retargeted = input_id != requested_id;
 
         let mut link = Map::new();
         link.insert("id".to_string(), json!(input_id));
@@ -2777,6 +2851,16 @@ impl Store {
         );
         if let Some(location) = params.get("location").filter(|value| !value.is_null()) {
             link.insert("location".to_string(), location.clone());
+        }
+        // Tween links point at the tween by the input id; a retargeted save
+        // must follow the rebuilt input (legacy `restoreSceneInputs` does the
+        // same rewrite when it restores a Scene's tween links).
+        if retargeted
+            && source == "tween"
+            && let Some(object) = link.get_mut("location")
+            && object.is_string()
+        {
+            *object = json!(format!("tweens.tweens['{input_id}'].value[0]"));
         }
         if let Some(args) = params.get("args").filter(|value| !value.is_null()) {
             link.insert("args".to_string(), args.clone());
@@ -2798,7 +2882,7 @@ impl Store {
             .map_err(|error| invalid(ACTION, format!("invalid link record: {error}")))?;
         let value = serde_json::to_value(&record)
             .map_err(|error| invalid(ACTION, format!("link record: {error}")))?;
-        self.state.input_links.insert(input_id.to_string(), record);
+        self.state.input_links.insert(input_id.clone(), record);
         self.deltas
             .push("inputs/ADD_INPUT_LINK", json!({ "inputLink": value }));
         Ok(json!(true))
@@ -4109,6 +4193,8 @@ impl Store {
         // Link smoothing/throttle state belongs to the replaced inputs.
         self.link_smoothing.clear();
         self.link_deltas.clear();
+        // Retargeting belongs to the Scene apply history this preset replaces.
+        self.retired_inputs.clear();
         // A capture request belongs to Groups the restore just replaced.
         self.pending_transition_capture = None;
 

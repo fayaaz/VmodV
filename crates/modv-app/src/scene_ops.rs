@@ -657,6 +657,9 @@ impl Store {
         };
 
         let row_names = normalize_row_names(self.scenes.performance.get("rowNames"));
+        // A UI editor may still name an input this apply is about to replace;
+        // remember what each live input drove so its Save can be retargeted.
+        let retired_inputs = self.capture_input_identities();
         let group_snapshots = scene
             .get("groups")
             .and_then(Value::as_array)
@@ -880,6 +883,7 @@ impl Store {
             }
         }
 
+        self.retire_replaced_inputs(retired_inputs);
         self.persist_best_effort();
         Ok(json!({ "sceneId": scene_id }))
     }
@@ -912,6 +916,10 @@ impl Store {
             .get(snapshot_index)?
             .as_object()?
             .clone();
+
+        // A link editor opened on this row still names the input ids the row
+        // apply replaces; keep the control identities for the retarget path.
+        let retired_inputs = self.capture_input_identities();
 
         self.complete_whole_scene_transition();
         self.complete_row_transition(row);
@@ -1088,6 +1096,7 @@ impl Store {
             self.set_current_scene(scene_id);
         }
 
+        self.retire_replaced_inputs(retired_inputs);
         Some(RowApplyOutcome {
             group_id,
             ghost_group_id,
@@ -2243,8 +2252,13 @@ impl Store {
         else {
             return;
         };
+        // A link editor opened on this Group/one of its Modules may still name
+        // an Input the release is about to remove; keep the control identities
+        // so its Save can be retargeted.
+        let retired_inputs = self.capture_input_identities();
         let group = self.state.groups.remove(index);
         self.release_group(group);
+        self.retire_replaced_inputs(retired_inputs);
     }
 
     /// Release a Group already detached from `state.groups`: drop Modules no
@@ -3950,8 +3964,10 @@ mod tests {
     use super::*;
     use crate::store_ops::Store;
     use modv_engine::engine_state::GALLERY_GROUP_NAME;
+    use modv_renderers::two_d::AudioFrame;
     use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
 
     fn temp_dir() -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -4573,6 +4589,184 @@ mod tests {
                 "missing delta {expected} in {types:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_link_saved_against_a_replaced_scene_input_is_retargeted() {
+        // A Scene apply mints fresh input ids (`scenes.js` does the same), so a
+        // link editor or Tween control that was opened before the apply still
+        // holds the previous live id. Saving its link must not be dropped:
+        // the control it names was re-created by the apply.
+        let mut store = Store::new();
+        // Switch instantly so the replaced Groups' inputs are actually gone.
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({ "config": { "allowedTransitions": ["None"] } }),
+            )
+            .expect("performance config");
+        let scene = json!({
+            "id": "scene-retarget",
+            "name": "Retarget Scene",
+            "groups": [{
+                "id": "doc-group",
+                "name": "Effects",
+                "hidden": false,
+                "modules": ["doc-bands"],
+                "enabled": 1,
+                "alpha": 1,
+                "inherit": true,
+                "inheritFrom": -1,
+                "pipeline": false,
+                "clearing": true,
+                "compositeOperation": "normal",
+            }],
+            "modules": {
+                "doc-bands": {
+                    "$id": "doc-bands",
+                    "$moduleName": "Bands",
+                    "meta": { "name": "Bands", "enabled": true },
+                    "props": { "u_ringWidth": 0.3 },
+                    "data": {},
+                    "$props": { "u_ringWidth": { "id": "doc-width", "type": "float" } },
+                },
+            },
+            "inputs": {
+                "focusedInput": { "id": null, "title": null },
+                "inputs": {
+                    "doc-width": {
+                        "id": "doc-width",
+                        "type": "action",
+                        "data": { "moduleId": "doc-bands", "prop": "u_ringWidth" },
+                        "location": "modules/updateProp",
+                    },
+                },
+                "inputLinks": {
+                    "doc-width": {
+                        "id": "doc-width",
+                        "type": "getter",
+                        "location": "meyda/getFeature",
+                        "args": ["bass"],
+                        "source": "meyda",
+                        "min": 0.5,
+                        "max": 1.5,
+                    },
+                },
+            },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+            "midi": {},
+        });
+        seed_scene(&mut store, scene);
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-retarget" }))
+            .expect("first apply");
+
+        let live = |store: &Store| -> (String, String) {
+            let group = store
+                .state()
+                .groups
+                .iter()
+                .find(|group| group.name == "Effects")
+                .expect("Effects group");
+            let module_id = group.modules.first().expect("Bands module").clone();
+            let input_id = store.state().modules[&module_id].dollar_props["u_ringWidth"]["id"]
+                .as_str()
+                .expect("prop input id")
+                .to_string();
+            (module_id, input_id)
+        };
+        let (_, stale_input) = live(&store);
+        assert!(
+            store.state().input_links.contains_key(&stale_input),
+            "the Scene link is live after the first apply"
+        );
+
+        // Re-apply the Scene: every Group/Module/Input id is rebuilt.
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-retarget" }))
+            .expect("second apply");
+        let (module_id, rebuilt_input) = live(&store);
+        assert_ne!(stale_input, rebuilt_input, "the apply mints a new input id");
+        assert!(
+            !store.state().inputs.contains_key(&stale_input),
+            "the old live input is gone"
+        );
+
+        // The editor's Save still names the replaced input.
+        let saved = store
+            .dispatch(
+                "inputs/createInputLink",
+                json!({
+                    "inputId": stale_input,
+                    "type": "getter",
+                    "location": "meyda/getFeature",
+                    "args": ["bass"],
+                    "source": "meyda",
+                    "min": 0.1,
+                    "max": 0.2,
+                }),
+            )
+            .expect("the stale link save dispatches");
+        assert_eq!(saved, json!(true), "the replaced input is retargeted");
+
+        let link = store
+            .state()
+            .input_links
+            .get(&rebuilt_input)
+            .expect("the link lands on the rebuilt input");
+        assert_eq!(link.source.as_deref(), Some("meyda"));
+        assert_eq!(link.min, Some(0.1));
+        assert_eq!(link.max, Some(0.2));
+        assert!(
+            !store.state().input_links.contains_key(&stale_input),
+            "nothing is stored under the replaced id"
+        );
+
+        // The retargeted link still drives the rebuilt module's prop.
+        store.update_input_links(
+            &AudioFrame {
+                bass: 0.5,
+                ..AudioFrame::default()
+            },
+            Duration::ZERO,
+        );
+        let value = store.state().modules[&module_id].props["u_ringWidth"]
+            .as_f64()
+            .expect("u_ringWidth");
+        assert!(
+            (value - 0.15).abs() < 1e-6,
+            "0.5 bass mapped to [0.1, 0.2] writes 0.15, got {value}"
+        );
+
+        // A tween link follows its rebuilt input too; the saved location must
+        // point at the new tween id rather than the retired one.
+        assert_eq!(
+            store
+                .dispatch(
+                    "inputs/createInputLink",
+                    json!({
+                        "inputId": stale_input,
+                        "type": "state",
+                        "location": format!("tweens.tweens['{stale_input}'].value[0]"),
+                        "source": "tween",
+                        "min": 0,
+                        "max": 1,
+                    }),
+                )
+                .expect("the stale tween link save dispatches"),
+            json!(true)
+        );
+        let link = store
+            .state()
+            .input_links
+            .get(&rebuilt_input)
+            .expect("the tween link lands on the rebuilt input");
+        assert_eq!(link.source.as_deref(), Some("tween"));
+        assert_eq!(
+            link.location.as_deref(),
+            Some(format!("tweens.tweens['{rebuilt_input}'].value[0]").as_str())
+        );
     }
 
     #[test]

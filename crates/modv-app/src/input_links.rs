@@ -94,6 +94,117 @@ pub enum LinkTarget {
     },
 }
 
+/// A stable description of the control an Input drives.
+///
+/// A Scene apply rebuilds every Group, Module and Input with fresh ids
+/// (`scenes.js` `applySceneNow`), so a UI action queued against the previous
+/// set names an input that no longer exists. This identity survives the
+/// rebuild and lets the store re-target such an action onto the control the
+/// Scene just re-created instead of dropping the link.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum InputIdentity {
+    /// A Module prop (`data = { moduleId, prop, path? }`).
+    ModuleProp {
+        /// Registered Module name.
+        module: String,
+        /// Prop name.
+        prop: String,
+        /// Sub-prop path (`data.path`, e.g. `[r]`).
+        path: Option<String>,
+    },
+    /// A Module meta input (`data = { id|moduleId, metaKey }`).
+    ModuleMeta {
+        /// Registered Module name.
+        module: String,
+        /// Meta key (`alpha`, `enabled`, `compositeOperation`).
+        meta_key: String,
+    },
+    /// A Group control (`data = { groupId, key }`).
+    Group {
+        /// Group name.
+        group: String,
+        /// Group key (`alpha`, `hidden`, ...).
+        key: String,
+    },
+}
+
+/// Describe the control `input_id` drives, independent of its live UUID.
+///
+/// Returns `None` for an input whose `data` is missing or does not name a
+/// Module/Group target (a hand-added OSC input, for example).
+///
+/// Module identities deliberately omit the owning Group: a Scene re-apply or
+/// row transition may move the same Module to a different row, and the
+/// module/prop pair is still the control the stale action meant. Duplicate
+/// module names are rejected by [`find_input_by_identity`] instead.
+pub(crate) fn input_identity(state: &EngineState, input_id: &str) -> Option<InputIdentity> {
+    let input = state.inputs.get(input_id)?;
+    let data = input.data.as_object()?;
+
+    if let (Some(module_id), Some(prop)) = (
+        data.get("moduleId").and_then(Value::as_str),
+        data.get("prop").and_then(Value::as_str),
+    ) {
+        let module = state.modules.get(module_id)?;
+        return Some(InputIdentity::ModuleProp {
+            module: module.module_name.clone(),
+            prop: prop.to_string(),
+            path: data
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|path| !path.is_empty())
+                .map(str::to_string),
+        });
+    }
+
+    if let Some(meta_key) = data.get("metaKey").and_then(Value::as_str) {
+        let module_id = data
+            .get("moduleId")
+            .or_else(|| data.get("id"))
+            .and_then(Value::as_str)?;
+        let module = state.modules.get(module_id)?;
+        return Some(InputIdentity::ModuleMeta {
+            module: module.module_name.clone(),
+            meta_key: meta_key.to_string(),
+        });
+    }
+
+    if let (Some(group_id), Some(key)) = (
+        data.get("groupId").and_then(Value::as_str),
+        data.get("key").and_then(Value::as_str),
+    ) {
+        let group = state.find_group(group_id)?;
+        return Some(InputIdentity::Group {
+            group: group.name.clone(),
+            key: key.to_string(),
+        });
+    }
+
+    None
+}
+
+/// Find the live Input that drives `identity`, if exactly one does.
+///
+/// A Scene may contain two Modules with the same name; the match is then
+/// ambiguous and no retarget happens (the link is dropped, so a stale action
+/// can never bind the wrong control).
+pub(crate) fn find_input_by_identity(
+    state: &EngineState,
+    identity: &InputIdentity,
+) -> Option<String> {
+    let mut found: Option<String> = None;
+    for input_id in state.inputs.keys() {
+        if input_identity(state, input_id).as_ref() != Some(identity) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(input_id.clone());
+    }
+    found
+}
+
 /// One resolved link value ready to be applied to the store.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkWrite {
@@ -603,6 +714,139 @@ mod tests {
             serde_json::from_value(link).expect("link parses"),
         );
         (state, input_id)
+    }
+
+    fn group(id: &str, name: &str, modules: &[&str]) -> modv_engine::engine_state::Group {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": name,
+            "hidden": false,
+            "modules": modules,
+            "enabled": 1,
+            "alpha": 1.0,
+            "inherit": true,
+            "inheritFrom": -1,
+            "pipeline": false,
+            "clearing": false,
+            "compositeOperation": "normal",
+        }))
+        .expect("group parses")
+    }
+
+    fn target_input(id: &str, data: Value) -> modv_engine::inputs::Input {
+        serde_json::from_value(json!({
+            "id": id,
+            "type": "action",
+            "data": data,
+            "location": "modules/updateProp",
+        }))
+        .expect("input parses")
+    }
+
+    fn state_with_targets(prefix: &str, prop: &str, group_name: &str) -> EngineState {
+        let module_id = format!("{prefix}-module");
+        let group_id = format!("{prefix}-group");
+        let mut state = EngineState::new();
+        state
+            .groups
+            .push(group(&group_id, group_name, &[module_id.as_str()]));
+        state.modules.insert(
+            module_id.clone(),
+            module(&module_id, true, json!({ prop: 0.0 })),
+        );
+        for (id, data) in [
+            (
+                format!("{prefix}-prop"),
+                json!({ "moduleId": module_id, "prop": prop }),
+            ),
+            (
+                format!("{prefix}-sub"),
+                json!({ "moduleId": module_id, "prop": prop, "path": "[0]" }),
+            ),
+            (
+                format!("{prefix}-meta"),
+                json!({ "id": module_id, "metaKey": "alpha" }),
+            ),
+            (
+                format!("{prefix}-group-alpha"),
+                json!({ "groupId": group_id, "key": "alpha" }),
+            ),
+        ] {
+            state.inputs.insert(id.clone(), target_input(&id, data));
+        }
+        state
+    }
+
+    #[test]
+    fn input_identity_matches_the_rebuilt_control_after_a_scene_apply() {
+        // The ids change (as they do on `applyScene`), the control does not.
+        let old = state_with_targets("old", "amount", "Effects");
+        let new = state_with_targets("new", "amount", "Effects");
+
+        for (old_id, new_id) in [
+            ("old-prop", "new-prop"),
+            ("old-sub", "new-sub"),
+            ("old-meta", "new-meta"),
+            ("old-group-alpha", "new-group-alpha"),
+        ] {
+            let identity = input_identity(&old, old_id).expect("identity");
+            assert_eq!(
+                find_input_by_identity(&new, &identity).as_deref(),
+                Some(new_id),
+                "{old_id} resolves to the rebuilt control"
+            );
+        }
+    }
+
+    #[test]
+    fn module_identity_survives_a_scene_row_move() {
+        let old = state_with_targets("old", "amount", "Effects");
+        let moved = state_with_targets("new", "amount", "Background");
+        for (old_id, new_id) in [
+            ("old-prop", "new-prop"),
+            ("old-sub", "new-sub"),
+            ("old-meta", "new-meta"),
+        ] {
+            let identity = input_identity(&old, old_id).expect("identity");
+            assert_eq!(
+                find_input_by_identity(&moved, &identity).as_deref(),
+                Some(new_id),
+                "{old_id} follows the Module across rows"
+            );
+        }
+    }
+
+    #[test]
+    fn input_identity_is_ambiguous_when_two_modules_share_a_name() {
+        let mut state = state_with_targets("a", "amount", "Effects");
+        let second = state_with_targets("b", "amount", "Effects");
+        // Move the second module into the same Group so both controls have
+        // the same Group/Module/prop identity.
+        state
+            .groups
+            .first_mut()
+            .expect("group")
+            .modules
+            .push("b-module".to_string());
+        state.modules.extend(second.modules);
+        state.inputs.extend(second.inputs);
+        let identity = input_identity(&state, "a-prop").expect("identity");
+        assert_eq!(
+            find_input_by_identity(&state, &identity),
+            None,
+            "an ambiguous control is not retargeted"
+        );
+    }
+
+    #[test]
+    fn input_identity_skips_inputs_without_a_control_target() {
+        let mut state = EngineState::new();
+        state.inputs.insert(
+            "osc-input".to_string(),
+            target_input("osc-input", json!({})),
+        );
+        assert_eq!(input_identity(&state, "osc-input"), None);
+        assert_eq!(input_identity(&state, "missing"), None);
     }
 
     fn audio() -> AudioFrame {
