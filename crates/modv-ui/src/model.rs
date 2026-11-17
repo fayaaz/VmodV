@@ -48,6 +48,80 @@ pub struct EngineSnapshot {
     pub media: MediaSnapshot,
     /// Native MIDI input state.
     pub midi: MidiSnapshot,
+    /// Enumerated cpal input devices for the Audio panel.
+    pub audio_devices: Vec<AudioDeviceView>,
+    /// The live native capture selection (the Audio panel's active choice).
+    pub audio_selection: AudioSelectionView,
+}
+
+/// One enumerable audio input device (a cpal input from `modv-media`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AudioDeviceView {
+    /// Stable cpal device id (`host:device`), the value
+    /// [`AudioSelectionView::device`] stores.
+    pub id: String,
+    /// Human-readable device name.
+    pub name: String,
+    /// Default input channel count.
+    pub channels: u16,
+    /// Default input sample rate in Hz.
+    pub default_sample_rate: u32,
+}
+
+/// The native shell's live audio capture selection.
+///
+/// `source` mirrors `AudioSourceSelection::as_str` (`pipewire` or `input`).
+/// `input` with no `device` means the host default input device, exactly like
+/// `--audio-source input` without a device.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioSelectionView {
+    pub source: String,
+    pub device: Option<String>,
+    /// The last live-switch failure. The previous feed keeps running when this
+    /// is set, so the panel can say so instead of implying silence.
+    pub error: Option<String>,
+}
+
+impl Default for AudioSelectionView {
+    fn default() -> Self {
+        Self {
+            source: "pipewire".to_string(),
+            device: None,
+            error: None,
+        }
+    }
+}
+
+impl AudioSelectionView {
+    pub fn is_pipewire(&self) -> bool {
+        self.source == "pipewire"
+    }
+
+    pub fn is_default_input(&self) -> bool {
+        self.source == "input" && self.device.is_none()
+    }
+
+    /// Whether `device` is the selected input (matching its id or name, like
+    /// `--audio-device` accepts both).
+    pub fn matches_device(&self, device: &AudioDeviceView) -> bool {
+        let Some(selected) = self.device.as_deref() else {
+            return false;
+        };
+        self.source == "input"
+            && (selected.eq_ignore_ascii_case(&device.id)
+                || selected.eq_ignore_ascii_case(&device.name))
+    }
+
+    /// A human-readable label for the active source (device names are
+    /// resolved by the panel from [`EngineSnapshot::audio_devices`]).
+    pub fn describe(&self) -> String {
+        match (self.source.as_str(), self.device.as_deref()) {
+            ("pipewire", _) => "System audio (PipeWire monitor)".to_string(),
+            ("input", Some(device)) => format!("input: {device}"),
+            ("input", None) => "Default input (system default)".to_string(),
+            (source, _) => source.to_string(),
+        }
+    }
 }
 
 /// One uploaded preview texture (an egui texture owned by the shell).
@@ -366,4 +440,59 @@ pub struct EngineHealth {
     pub frames_presented: u64,
     pub output_open: bool,
     pub audio_active: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device(id: &str, name: &str) -> AudioDeviceView {
+        AudioDeviceView {
+            id: id.to_string(),
+            name: name.to_string(),
+            channels: 2,
+            default_sample_rate: 48_000,
+        }
+    }
+
+    #[test]
+    fn the_default_audio_selection_is_the_system_monitor() {
+        let selection = AudioSelectionView::default();
+
+        assert!(selection.is_pipewire());
+        assert!(!selection.is_default_input());
+        assert_eq!(selection.describe(), "System audio (PipeWire monitor)");
+        assert!(!selection.matches_device(&device("alsa:usb", "USB Microphone")));
+    }
+
+    #[test]
+    fn input_selection_matches_by_id_or_name_and_marks_the_default() {
+        let usb = device("alsa:usb", "USB Microphone");
+        let mut selection = AudioSelectionView {
+            source: "input".to_string(),
+            device: Some("ALSA:USB".to_string()),
+            error: None,
+        };
+
+        assert!(
+            selection.matches_device(&usb),
+            "ids match case-insensitively"
+        );
+        assert!(!selection.is_default_input());
+
+        selection.device = Some("usb microphone".to_string());
+        assert!(selection.matches_device(&usb), "names match too");
+
+        selection.device = None;
+        assert!(selection.is_default_input());
+        assert_eq!(selection.describe(), "Default input (system default)");
+        assert!(!selection.matches_device(&usb));
+
+        selection.source = "pipewire".to_string();
+        selection.device = Some(usb.id.clone());
+        assert!(
+            !selection.matches_device(&usb),
+            "a device is only meaningful for the input source"
+        );
+    }
 }

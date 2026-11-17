@@ -5,8 +5,8 @@
 
 use egui_kittest::Harness;
 use modv_ui::{
-    AudioView, EngineHealth, EngineSnapshot, GroupView, ModuleMetaView, ModuleView,
-    PerformanceView, PropView, SceneCellView, SceneView, UiState,
+    AudioDeviceView, AudioSelectionView, AudioView, EngineHealth, EngineSnapshot, GroupView,
+    ModuleMetaView, ModuleView, PerformanceView, PropView, SceneCellView, SceneView, UiState,
 };
 
 fn demo_snapshot() -> EngineSnapshot {
@@ -122,6 +122,17 @@ fn demo_snapshot() -> EngineSnapshot {
             frames_presented: 120,
             output_open: true,
             audio_active: false,
+        },
+        audio_devices: vec![AudioDeviceView {
+            id: "alsa:builtin".to_string(),
+            name: "Built-in Audio Analog Stereo".to_string(),
+            channels: 2,
+            default_sample_rate: 48_000,
+        }],
+        audio_selection: AudioSelectionView {
+            source: "pipewire".to_string(),
+            device: None,
+            error: None,
         },
         ..Default::default()
     }

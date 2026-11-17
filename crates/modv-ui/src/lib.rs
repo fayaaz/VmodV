@@ -26,9 +26,10 @@ pub mod theme;
 pub mod widgets;
 
 pub use model::{
-    AudioView, CameraView, EngineHealth, EngineSnapshot, GroupView, InputLinkView, MediaAction,
-    MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView,
-    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView,
-    TextureSourceView, TweenView, gallery_preview_key, scene_preview_key,
+    AudioDeviceView, AudioSelectionView, AudioView, CameraView, EngineHealth, EngineSnapshot,
+    GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView, MidiDeviceView,
+    MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest, PreviewTexture,
+    PropView, SceneCellView, SceneView, TextureSourceView, TweenView, gallery_preview_key,
+    scene_preview_key,
 };
 pub use state::{UiAction, UiCommand, UiState};

@@ -1,0 +1,147 @@
+//! Kittest coverage for the native Audio panel.
+//!
+//! The panel is the native counterpart of Electron's `AudioVideo.vue` input
+//! picker: system audio (PipeWire monitor), the host default input and every
+//! enumerated cpal device, with the active choice marked and a live switch
+//! queued as a [`UiCommand::SetAudioSource`].
+
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
+use modv_ui::state::SidePanelTab;
+use modv_ui::{
+    AudioDeviceView, AudioSelectionView, EngineHealth, EngineSnapshot, UiCommand, UiState,
+};
+
+fn demo_snapshot() -> EngineSnapshot {
+    EngineSnapshot {
+        audio_devices: vec![
+            AudioDeviceView {
+                id: "alsa:usb".to_string(),
+                name: "USB Microphone".to_string(),
+                channels: 2,
+                default_sample_rate: 48_000,
+            },
+            AudioDeviceView {
+                id: "alsa:builtin".to_string(),
+                name: "Built-in Audio".to_string(),
+                channels: 2,
+                default_sample_rate: 44_100,
+            },
+        ],
+        audio_selection: AudioSelectionView {
+            source: "pipewire".to_string(),
+            device: None,
+            error: None,
+        },
+        health: EngineHealth {
+            audio_active: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
+    let snapshot = demo_snapshot();
+    let mut state = UiState::new();
+    state.side_panel_tab = SidePanelTab::Audio;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("System audio (PipeWire monitor)");
+    harness.get_by_label("Default input (system default)");
+    harness.get_by_label("USB Microphone");
+    harness.get_by_label("Built-in Audio");
+    harness.get_by_label("2 ch / 48000 Hz");
+    harness.get_by_label("audio: engine");
+}
+
+#[test]
+fn clicking_a_device_queues_the_live_switch() {
+    let snapshot = demo_snapshot();
+    let mut state = UiState::new();
+    state.side_panel_tab = SidePanelTab::Audio;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("USB Microphone").click();
+    harness.run();
+
+    assert!(
+        harness
+            .state()
+            .commands
+            .contains(&UiCommand::SetAudioSource {
+                source: "input".to_string(),
+                device: Some("alsa:usb".to_string()),
+            }),
+        "clicking a device must queue the switch, got {:?}",
+        harness.state().commands
+    );
+}
+
+#[test]
+fn the_refresh_button_requests_a_new_device_scan() {
+    let snapshot = demo_snapshot();
+    let mut state = UiState::new();
+    state.side_panel_tab = SidePanelTab::Audio;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("Refresh devices").click();
+    harness.run();
+
+    assert!(
+        harness
+            .state()
+            .commands
+            .contains(&UiCommand::RefreshAudioDevices),
+        "the Refresh button must request a rescan, got {:?}",
+        harness.state().commands
+    );
+}
+
+#[test]
+fn a_failed_live_switch_is_shown_in_the_panel() {
+    let mut snapshot = demo_snapshot();
+    snapshot.audio_selection.error = Some("no input device matches \"missing\"".to_string());
+    let mut state = UiState::new();
+    state.side_panel_tab = SidePanelTab::Audio;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("no input device matches \"missing\"");
+}

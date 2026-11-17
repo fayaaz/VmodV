@@ -851,6 +851,15 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                 }
                 if ui
                     .selectable_label(
+                        state.side_panel_tab == SidePanelTab::Audio,
+                        egui::RichText::new("AUDIO").strong().size(10.0),
+                    )
+                    .clicked()
+                {
+                    state.side_panel_tab = SidePanelTab::Audio;
+                }
+                if ui
+                    .selectable_label(
                         state.side_panel_tab == SidePanelTab::Info,
                         egui::RichText::new("INFO").strong().size(10.0),
                     )
@@ -883,6 +892,10 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                 .id_salt("inspector-scroll")
                 .show(ui, |ui| {
                     match state.side_panel_tab {
+                        SidePanelTab::Audio => {
+                            audio_panel(ui, snapshot, state);
+                            return;
+                        }
                         SidePanelTab::Media => {
                             media_panel(ui, snapshot, state);
                             return;
@@ -1007,11 +1020,15 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
             ));
             ui.end_row();
             ui.label(egui::RichText::new("Audio").color(theme::MUTED));
-            ui.label(if snapshot.health.audio_active {
-                "engine capture"
-            } else {
-                "silent"
-            });
+            ui.label(format!(
+                "{}  ({})",
+                snapshot.audio_selection.describe(),
+                if snapshot.health.audio_active {
+                    "engine"
+                } else {
+                    "silent"
+                }
+            ));
             ui.end_row();
             ui.label(egui::RichText::new("Tempo").color(theme::MUTED));
             ui.label(format!("{:.0} BPM", snapshot.audio.bpm));
@@ -1142,6 +1159,128 @@ fn plugins_panel(ui: &mut egui::Ui) {
         )
         .size(9.0)
         .color(theme::MUTED),
+    );
+}
+
+fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let selection = &snapshot.audio_selection;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("AUDIO INPUT").strong().size(10.0));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (label, color) = if snapshot.health.audio_active {
+                ("engine live", theme::OK)
+            } else {
+                ("silent", theme::MUTED)
+            };
+            ui.label(
+                egui::RichText::new(label)
+                    .monospace()
+                    .size(9.0)
+                    .color(color),
+            );
+        });
+    });
+    ui.label(
+        egui::RichText::new(
+            "Engine-owned capture. A new choice applies live and is remembered for the next launch.",
+        )
+        .size(9.0)
+        .color(theme::MUTED),
+    );
+    if let Some(error) = &selection.error {
+        ui.add_space(4.0);
+        ui.colored_label(theme::DANGER, error);
+        ui.label(
+            egui::RichText::new("The previous source is still running.")
+                .size(9.0)
+                .color(theme::MUTED),
+        );
+    }
+    ui.separator();
+    ui.label(egui::RichText::new("SOURCE").strong().size(9.0));
+    if ui
+        .selectable_label(
+            selection.is_pipewire(),
+            egui::RichText::new("System audio (PipeWire monitor)").size(11.0),
+        )
+        .clicked()
+    {
+        state.queue(UiCommand::SetAudioSource {
+            source: "pipewire".to_string(),
+            device: None,
+        });
+    }
+    ui.label(
+        egui::RichText::new("Default output monitor (Linux PipeWire loopback).")
+            .size(9.0)
+            .color(theme::MUTED),
+    );
+    ui.separator();
+    ui.label(egui::RichText::new("INPUT DEVICES").strong().size(9.0));
+    if ui
+        .selectable_label(
+            selection.is_default_input(),
+            egui::RichText::new("Default input (system default)").size(11.0),
+        )
+        .clicked()
+    {
+        state.queue(UiCommand::SetAudioSource {
+            source: "input".to_string(),
+            device: None,
+        });
+    }
+    if snapshot.audio_devices.is_empty() {
+        ui.label(
+            egui::RichText::new("No audio input devices found; connect one and refresh.")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    }
+    for device in &snapshot.audio_devices {
+        if ui
+            .selectable_label(
+                selection.matches_device(device),
+                egui::RichText::new(&device.name).size(11.0),
+            )
+            .clicked()
+        {
+            state.queue(UiCommand::SetAudioSource {
+                source: "input".to_string(),
+                device: Some(device.id.clone()),
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} ch / {} Hz",
+                    device.channels, device.default_sample_rate
+                ))
+                .monospace()
+                .size(8.5)
+                .color(theme::MUTED),
+            );
+            ui.label(
+                egui::RichText::new(&device.id)
+                    .monospace()
+                    .size(8.5)
+                    .color(theme::MUTED),
+            );
+        });
+    }
+    ui.separator();
+    if ui.button("Refresh devices").clicked() {
+        state.queue(UiCommand::RefreshAudioDevices);
+    }
+    let active = snapshot
+        .audio_devices
+        .iter()
+        .find(|device| selection.matches_device(device))
+        .map(|device| device.name.clone())
+        .unwrap_or_else(|| selection.describe());
+    ui.label(
+        egui::RichText::new(format!("Active: {active}"))
+            .size(9.0)
+            .color(theme::MUTED),
     );
 }
 

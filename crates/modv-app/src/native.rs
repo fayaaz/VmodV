@@ -23,11 +23,11 @@ use modv_render::Engine;
 use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_present_mode};
 use modv_render::wgpu;
 use modv_ui::{
-    AudioView, CameraView, EngineHealth, EngineSnapshot, GroupView, InputLinkView, MediaAction,
-    MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView,
-    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView,
-    TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
-    scene_preview_key,
+    AudioDeviceView, AudioSelectionView, AudioView, CameraView, EngineHealth, EngineSnapshot,
+    GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView, MidiDeviceView,
+    MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest, PreviewTexture,
+    PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction, UiCommand, UiState,
+    gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -119,6 +119,14 @@ pub struct NativeApp {
     last_camera_scan: Instant,
     audio_feed: Option<AudioFeed>,
     audio_error_logged: bool,
+    /// The live capture selection (the Audio panel's active choice).
+    audio_selection: AudioSourceSelection,
+    audio_device: Option<String>,
+    audio_devices: Vec<AudioDeviceView>,
+    last_audio_scan: Instant,
+    /// The last failed live switch, shown in the Audio panel.
+    audio_switch_error: Option<String>,
+    audio_settings_path: PathBuf,
     midi_client: MidiClient,
     isf_dir: Option<PathBuf>,
     user_isf_dirs: Vec<PathBuf>,
@@ -170,7 +178,55 @@ impl NativeApp {
             eprintln!("ui: WARN could not load preset {}: {error}", path.display());
         }
         apply_startup_scene(&mut store, cli.apply_scene.as_deref());
-        let audio_feed = open_native_audio(&cli);
+
+        // Audio capture selection: explicit `--audio-source`/`--audio-device`
+        // (or their MODV_* environment fallbacks) wins, then the choice saved
+        // by the Audio panel, then the PipeWire monitor → default input
+        // fallback the native shell has always used.
+        let audio_settings_path = user_data.join(crate::audio_settings::AUDIO_SETTINGS_FILENAME);
+        let audio_explicit = crate::audio_settings::audio_cli_explicit(
+            &std::env::args().collect::<Vec<_>>(),
+            std::env::var("MODV_AUDIO_SOURCE").ok().as_deref(),
+            std::env::var("MODV_AUDIO_DEVICE").ok().as_deref(),
+        );
+        let persisted_audio =
+            match crate::audio_settings::AudioSettings::read_from(&audio_settings_path) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    eprintln!("ui: WARN ignoring the saved audio selection: {error}");
+                    None
+                }
+            };
+        if let Some(settings) = &persisted_audio {
+            eprintln!(
+                "ui: INFO saved audio selection: {}{}",
+                settings.describe(),
+                if audio_explicit {
+                    " (overridden by --audio-source/--audio-device or the environment)"
+                } else {
+                    ""
+                }
+            );
+        }
+        let audio_plan = crate::audio_settings::initial_plan(
+            cli.audio_source,
+            cli.audio_device.as_deref(),
+            audio_explicit,
+            persisted_audio.as_ref(),
+        );
+        let (audio_feed, audio_selection, audio_device) = match open_native_audio(&audio_plan) {
+            Some((feed, selection, device)) => (Some(feed), selection, device),
+            None => (
+                None,
+                audio_plan
+                    .first()
+                    .map(|(selection, _)| *selection)
+                    .unwrap_or(AudioSourceSelection::Pipewire),
+                audio_plan.first().and_then(|(_, device)| device.clone()),
+            ),
+        };
+        let audio_devices =
+            crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
         let midi_client = MidiClient::new();
         let isf_watcher = IsfWatcher::new(&user_isf_dirs);
         if isf_watcher.is_some() {
@@ -216,6 +272,12 @@ impl NativeApp {
             last_camera_scan: start.checked_sub(Duration::from_secs(10)).unwrap_or(start),
             audio_feed,
             audio_error_logged: false,
+            audio_selection,
+            audio_device,
+            audio_devices,
+            last_audio_scan: start,
+            audio_switch_error: None,
+            audio_settings_path,
             midi_client,
             isf_dir,
             user_isf_dirs,
@@ -410,6 +472,7 @@ impl NativeApp {
 
     fn tick_engine(&mut self, dt: Duration) {
         self.pump_audio(dt);
+        self.refresh_audio_devices_if_due();
         self.store.drain_osc();
         self.midi_client.pump(&mut self.store);
         if self.store.scenes_tick_due() {
@@ -846,7 +909,92 @@ impl NativeApp {
                 UiCommand::SaveSnapshot => self.save_snapshot(),
                 UiCommand::SavePreset => self.save_preset(),
                 UiCommand::FlushLogs => {}
+                UiCommand::SetAudioSource { source, device } => {
+                    self.set_audio_source(&source, device.as_deref());
+                }
+                UiCommand::RefreshAudioDevices => self.refresh_audio_devices(),
             }
+        }
+    }
+
+    /// Switch native audio capture live.
+    ///
+    /// The replacement feed opens before the current one stops, so a bad
+    /// selection (unplugged device, busy PipeWire node) leaves the running
+    /// capture untouched and only reports the error. A successful choice is
+    /// persisted to `<userData>/native-audio.json` for the next launch.
+    fn set_audio_source(&mut self, source: &str, device: Option<&str>) {
+        let selection = match source {
+            "pipewire" => AudioSourceSelection::Pipewire,
+            "input" => AudioSourceSelection::Input,
+            other => {
+                let error = format!("unknown audio source {other:?} (expected pipewire or input)");
+                self.audio_switch_error = Some(error.clone());
+                self.record_error(error);
+                return;
+            }
+        };
+        let requested_device = device.map(str::to_string);
+        let opened = crate::audio::open_feed(selection, requested_device.as_deref());
+        let device_note = requested_device
+            .as_deref()
+            .map(|device| format!(" (device {device})"))
+            .unwrap_or_default();
+        match crate::audio_settings::decide_switch(self.audio_feed.is_some(), opened) {
+            crate::audio_settings::SwitchDecision::Replace(feed) => {
+                let sample_rate = feed.sample_rate();
+                if let Some(mut previous) = self.audio_feed.replace(feed) {
+                    previous.stop();
+                }
+                self.audio_selection = selection;
+                self.audio_device = requested_device;
+                self.audio_switch_error = None;
+                self.audio_error_logged = false;
+                if let Err(error) = crate::audio_settings::AudioSettings::from_selection(
+                    selection,
+                    self.audio_device.clone(),
+                )
+                .write_to(&self.audio_settings_path)
+                {
+                    self.record_error(format!("could not save the audio selection: {error}"));
+                }
+                eprintln!(
+                    "ui: INFO audio source {} owns capture{} at {sample_rate} Hz",
+                    selection.as_str(),
+                    device_note
+                );
+            }
+            crate::audio_settings::SwitchDecision::Keep { error }
+            | crate::audio_settings::SwitchDecision::Silent { error } => {
+                let message = format!(
+                    "audio source {}{device_note} could not start: {error}",
+                    selection.as_str()
+                );
+                eprintln!(
+                    "ui: WARN {message}{}",
+                    if self.audio_feed.is_some() {
+                        "; keeping the previous source"
+                    } else {
+                        "; engine stays silent"
+                    }
+                );
+                self.audio_switch_error = Some(message.clone());
+                self.record_error(message);
+            }
+        }
+    }
+
+    /// Re-enumerate cpal inputs for the Audio panel (hot-plug refreshes once a
+    /// second and the panel's Refresh button forces it).
+    fn refresh_audio_devices(&mut self) {
+        self.audio_devices =
+            crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
+        self.last_audio_scan = Instant::now();
+    }
+
+    fn refresh_audio_devices_if_due(&mut self) {
+        if self.last_audio_scan.elapsed() >= Duration::from_secs(1) {
+            self.refresh_audio_devices();
         }
     }
 
@@ -1366,6 +1514,11 @@ impl NativeApp {
             output_open: self.output.is_some(),
             audio_active: self.store.engine_audio_active(),
         };
+        let audio_selection = AudioSelectionView {
+            source: self.audio_selection.as_str().to_string(),
+            device: self.audio_device.clone(),
+            error: self.audio_switch_error.clone(),
+        };
 
         EngineSnapshot {
             groups,
@@ -1386,6 +1539,8 @@ impl NativeApp {
             input_links,
             media,
             midi,
+            audio_devices: self.audio_devices.clone(),
+            audio_selection,
         }
     }
 
@@ -1829,25 +1984,29 @@ fn clamp_saved_to_monitor(saved: SavedWindow, event_loop: &ActiveEventLoop) -> S
     }
 }
 
-/// The audio capture sources to try for the native shell.
+/// The audio capture sources to try for a requested selection.
 ///
 /// An explicit engine-owned `--audio-source` wins; the renderer default is
-/// translated to the system monitor, then the default input.
+/// translated to the system monitor, then the default input. Startup order
+/// (including a persisted Audio-panel choice) is
+/// [`crate::audio_settings::initial_plan`].
+#[cfg(test)]
 fn native_audio_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelection> {
-    if selection.engine_owned() {
-        vec![selection]
-    } else {
-        vec![AudioSourceSelection::Pipewire, AudioSourceSelection::Input]
-    }
+    crate::audio_settings::default_sources(selection)
 }
 
-/// Open the first working native audio feed.
-fn open_native_audio(cli: &Cli) -> Option<AudioFeed> {
-    for selection in native_audio_sources(cli.audio_source) {
-        match crate::audio::open_feed(selection, cli.audio_device.as_deref()) {
+/// Open the first working feed from the startup plan.
+///
+/// Returns the feed together with the selection that actually started, so the
+/// Audio panel marks the live source even when a persisted device was
+/// unplugged and a fallback took over.
+fn open_native_audio(
+    plan: &[(AudioSourceSelection, Option<String>)],
+) -> Option<(AudioFeed, AudioSourceSelection, Option<String>)> {
+    for (selection, device) in plan {
+        match crate::audio::open_feed(*selection, device.as_deref()) {
             Ok(feed) => {
-                let device_note = cli
-                    .audio_device
+                let device_note = device
                     .as_deref()
                     .map(|device| format!(" (device {device})"))
                     .unwrap_or_default();
@@ -1859,7 +2018,7 @@ fn open_native_audio(cli: &Cli) -> Option<AudioFeed> {
                 );
                 // The first `pump_audio` frame publishes the feed state; until
                 // then the store reports silence (`audio_active == false`).
-                return Some(feed);
+                return Some((feed, *selection, device.clone()));
             }
             Err(error) => {
                 eprintln!(
@@ -2109,6 +2268,14 @@ mod tests {
         assert_eq!(
             native_audio_sources(AudioSourceSelection::Pipewire),
             vec![AudioSourceSelection::Pipewire]
+        );
+    }
+
+    #[test]
+    fn an_empty_audio_plan_starts_no_feed() {
+        assert!(
+            open_native_audio(&[]).is_none(),
+            "no plan entry means no capture attempt"
         );
     }
 

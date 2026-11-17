@@ -47,6 +47,14 @@ pub enum UiCommand {
     SaveSnapshot,
     SavePreset,
     FlushLogs,
+    /// Switch native audio capture live. `source` is `pipewire` or `input`;
+    /// an `input` with no `device` selects the host default input.
+    SetAudioSource {
+        source: String,
+        device: Option<String>,
+    },
+    /// Re-enumerate cpal input devices (hot-plug).
+    RefreshAudioDevices,
 }
 
 /// P0 framework-spike evidence and the go/no-go state.
@@ -154,6 +162,7 @@ pub enum SidePanelTab {
     #[default]
     Inspector,
     Media,
+    Audio,
     Info,
     Plugins,
     Midi,

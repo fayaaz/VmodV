@@ -5,6 +5,7 @@
 //! snapshot/restore and the shared-memory preview ring.
 
 pub mod audio;
+pub mod audio_settings;
 pub mod cli;
 pub mod compositor;
 pub mod expressions;
