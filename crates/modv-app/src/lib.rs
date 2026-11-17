@@ -27,6 +27,7 @@ pub mod supervisor;
 pub mod texture_sources;
 pub mod window;
 pub mod windows;
+pub mod window_state;
 
 use std::process::ExitCode;
 

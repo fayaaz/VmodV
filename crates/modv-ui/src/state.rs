@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use crate::model::{EngineSnapshot, PreviewRequest, PropView};
+use crate::model::{EngineSnapshot, MediaAction, PreviewRequest, PropView};
 use crate::panels::scene_grid::SceneGridState;
 use crate::widgets::RangeControl;
 
@@ -123,12 +123,23 @@ pub struct UiState {
     pub show_shortcuts: bool,
     pub search_focus: bool,
     pub link_editor: Option<LinkEditor>,
+    pub side_panel_tab: SidePanelTab,
+    /// MediaHub operations drained by the shell after drawing.
+    pub media_actions: Vec<MediaAction>,
     pub p0: P0State,
     pub inspector_probe: RangeControl,
     pub inspector_probe_value: f64,
     /// The most recent engine error rendered in the status bar/toast list.
     pub last_error: Option<String>,
     pub status: StatusState,
+}
+
+/// Which panel the right side shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SidePanelTab {
+    #[default]
+    Inspector,
+    Media,
 }
 
 /// The focused-input link editor's draft values.
@@ -259,6 +270,8 @@ impl UiState {
             show_shortcuts: false,
             search_focus: false,
             link_editor: None,
+            side_panel_tab: SidePanelTab::Inspector,
+            media_actions: Vec::new(),
             p0: P0State::default(),
             inspector_probe,
             inspector_probe_value: 0.5,
@@ -316,6 +329,14 @@ impl UiState {
     /// The shell drains at most one preview request per frame.
     pub fn take_preview_requests(&mut self) -> Vec<PreviewRequest> {
         std::mem::take(&mut self.preview_requests)
+    }
+
+    pub fn push_media_action(&mut self, action: MediaAction) {
+        self.media_actions.push(action);
+    }
+
+    pub fn take_media_actions(&mut self) -> Vec<MediaAction> {
+        std::mem::take(&mut self.media_actions)
     }
 
     /// Queue an application command.

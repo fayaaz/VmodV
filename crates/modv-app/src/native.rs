@@ -22,8 +22,8 @@ use modv_render::Engine;
 use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_present_mode};
 use modv_render::wgpu;
 use modv_ui::{
-    AudioView, EngineHealth, EngineSnapshot, GroupView, ModuleMetaView, ModuleView,
-    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView, TweenView, UiAction,
+    AudioView, CameraView, MediaAction, MediaSnapshot, MediaSourceView, EngineHealth, EngineSnapshot, GroupView, ModuleMetaView, ModuleView,
+    InputLinkView, PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction,
     UiCommand, UiState, gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
@@ -36,8 +36,11 @@ use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::cli::Cli;
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
+use crate::media::MediaHub;
 use crate::report::AdapterSummary;
 use crate::store_ops::Store;
+use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
+use modv_media::video::{TestPattern, VideoSourceConfig};
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use modv_engine::engine_state::js_truthy;
 
@@ -98,6 +101,13 @@ pub struct NativeApp {
     preview_textures: HashMap<String, PreviewEntry>,
     preview_order: VecDeque<String>,
     preview_errors: HashSet<String>,
+    window_state: WindowState,
+    window_state_path: PathBuf,
+    window_state_dirty: bool,
+    last_window_state_save: Instant,
+    window_state_error_logged: bool,
+    media_hub: MediaHub,
+    last_media_health: Instant,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -116,7 +126,7 @@ pub struct NativeApp {
 impl NativeApp {
     fn new(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Self {
         let start = Instant::now();
-        let _ = crate::media::init();
+        let media_hub = MediaHub::new();
 
         let isf_dir = resolve_isf_dir(&cli);
         let mut store = Store::with_state_path_and_isf(cli.state.as_deref(), isf_dir.as_deref());
@@ -185,6 +195,13 @@ impl NativeApp {
             preview_textures: HashMap::new(),
             preview_order: VecDeque::new(),
             preview_errors: HashSet::new(),
+            window_state: WindowState::read(&user_data_dir().join(WINDOW_STATE_FILENAME)),
+            window_state_path: user_data_dir().join(WINDOW_STATE_FILENAME),
+            window_state_dirty: false,
+            last_window_state_save: start,
+            window_state_error_logged: false,
+            media_hub,
+            last_media_health: start,
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -208,13 +225,25 @@ impl NativeApp {
             return;
         };
 
-        let attributes = WindowAttributes::default()
+        let mut attributes = WindowAttributes::default()
             .with_title("modV Native")
             .with_inner_size(PhysicalSize::new(
                 self.cli.width.max(480),
                 self.cli.height.max(320),
             ))
             .with_min_inner_size(PhysicalSize::new(480, 320));
+        if let Some(saved) = self.window_state.main_window.clone() {
+            attributes = attributes
+                .with_inner_size(LogicalSize::new(saved.width, saved.height))
+                .with_position(LogicalPosition::new(saved.x, saved.y))
+                .with_maximized(saved.maximized);
+            if saved.fullscreen {
+                attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+            }
+        }
+        if self.cli.fullscreen {
+            attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
         let ui_window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(error) => {
@@ -285,7 +314,7 @@ impl NativeApp {
             return Err("engine is not ready".to_string());
         };
 
-        let attributes = WindowAttributes::default()
+        let mut attributes = WindowAttributes::default()
             .with_title("VmodV Output  (F = fullscreen)")
             .with_inner_size(LogicalSize::new(
                 f64::from(OUTPUT_WIDTH),
@@ -293,6 +322,14 @@ impl NativeApp {
             ))
             .with_position(LogicalPosition::new(120.0, 120.0))
             .with_resizable(true);
+        if let Some(saved) = self.window_state.output().cloned() {
+            attributes = attributes
+                .with_inner_size(LogicalSize::new(saved.width, saved.height))
+                .with_position(LogicalPosition::new(saved.x, saved.y));
+            if saved.fullscreen {
+                attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+            }
+        }
         let window = event_loop
             .create_window(attributes)
             .map_err(|error| error.to_string())?;
@@ -447,6 +484,11 @@ impl NativeApp {
         self.last_frame = now;
 
         self.tick_engine(dt);
+        self.drain_media_actions();
+        if now.saturating_duration_since(self.last_media_health) >= Duration::from_secs(1) {
+            self.media_hub.poll_health();
+            self.last_media_health = now;
+        }
         self.drain_ui_commands(event_loop);
         if self.done {
             return;
@@ -456,6 +498,9 @@ impl NativeApp {
         self.ui_state.sync_status(&snapshot);
         self.run_ui(&snapshot);
         self.drain_ui_actions();
+        if let Some(compositor) = &mut self.compositor {
+            compositor.sync_media(&mut self.media_hub);
+        }
         self.render_engine(dt.as_secs_f64());
         if self
             .compositor
@@ -475,6 +520,13 @@ impl NativeApp {
             self.frame_ms = 1000.0 / self.fps.max(0.001);
             self.metric_frames = 0;
             self.last_metric = now;
+        }
+
+        if self.window_state_dirty
+            && now.saturating_duration_since(self.last_window_state_save)
+                >= Duration::from_secs(1)
+        {
+            self.save_window_state();
         }
 
         let reached_frames = self
@@ -646,6 +698,30 @@ impl NativeApp {
         }
         for id in frame.free {
             renderer.free_texture(&id);
+        }
+    }
+
+    fn drain_media_actions(&mut self) {
+        for action in self.ui_state.take_media_actions() {
+            match action {
+                MediaAction::StartCamera { id } => {
+                    let source_id = format!("camera:{id}");
+                    let config = VideoSourceConfig::camera(&id).with_mode(1280, 720, 30);
+                    if let Err(error) = self.media_hub.start(&source_id, config) {
+                        self.record_error(format!("camera {id} failed: {error}"));
+                    }
+                }
+                MediaAction::StartTestPattern => {
+                    let config = VideoSourceConfig::test_pattern(TestPattern::Smpte)
+                        .with_mode(1280, 720, 30);
+                    if let Err(error) = self.media_hub.start("test-pattern:smpte", config) {
+                        self.record_error(format!("test pattern failed: {error}"));
+                    }
+                }
+                MediaAction::Stop { source_id } => {
+                    self.media_hub.stop(&source_id);
+                }
+            }
         }
     }
 
@@ -961,6 +1037,9 @@ impl NativeApp {
                 hidden: group.hidden,
                 alpha: group.alpha as f32,
                 composite_operation: group.composite_operation.clone(),
+                inherit: group.inherit,
+                clearing: group.clearing,
+                pipeline: group.pipeline,
                 module_ids: group.modules.clone(),
             })
             .collect();
@@ -985,6 +1064,99 @@ impl NativeApp {
             bass: self.store.audio().bass,
             mid: self.store.audio().mid,
             treble: self.store.audio().treble,
+        };
+        let mut texture_sources = state
+            .groups
+            .iter()
+            .map(|group| TextureSourceView {
+                id: format!("group:{}", group.id),
+                label: group.name.clone(),
+                kind: "group".to_string(),
+            })
+            .collect::<Vec<_>>();
+        texture_sources.extend(self.media_hub.statuses().into_iter().map(|source| {
+            let kind = match source.kind {
+                "camera" => "camera",
+                "file" => "video",
+                other => other,
+            };
+            TextureSourceView {
+                id: source.source_id.clone(),
+                label: format!("{} ({})", source.source_id, source.state),
+                kind: kind.to_string(),
+            }
+        }));
+        texture_sources.extend(state.modules.values().map(|module| {
+            let kind = match module
+                .meta
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
+                "isf" => "isf",
+                "2d" => "two-d",
+                "3d" | "point10" => "point10",
+                _ => "isf",
+            };
+            TextureSourceView {
+                id: format!("{kind}:{}", module.id),
+                label: module.module_name.clone(),
+                kind: kind.to_string(),
+            }
+        }));
+        let input_links = state
+            .input_links
+            .values()
+            .map(|link| {
+                (
+                    link.id.clone(),
+                    InputLinkView {
+                        input_id: link.id.clone(),
+                        kind: format!("{:?}", link.kind).to_ascii_lowercase(),
+                        location: link.location.clone(),
+                        args: link.args.clone().map(serde_json::Value::Array),
+                        source: link.source.clone(),
+                        min: link.min,
+                        max: link.max,
+                        matcher: link.matcher.clone(),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let media = MediaSnapshot {
+            available: self.media_hub.is_available(),
+            error: self.media_hub.init_error().map(str::to_string),
+            cameras: self
+                .media_hub
+                .list_cameras()
+                .into_iter()
+                .map(|camera| {
+                    let mode = camera.max_mode();
+                    CameraView {
+                        id: camera.id,
+                        name: camera.name,
+                        max_width: mode.map_or(0, |mode| mode.width),
+                        max_height: mode.map_or(0, |mode| mode.height),
+                        max_fps: mode.map_or(0, |mode| mode.fps),
+                    }
+                })
+                .collect(),
+            sources: self
+                .media_hub
+                .statuses()
+                .into_iter()
+                .map(|source| MediaSourceView {
+                    source_id: source.source_id,
+                    kind: source.kind.to_string(),
+                    index: source.index,
+                    state: source.state.to_string(),
+                    width: source.width,
+                    height: source.height,
+                    frames: source.frames,
+                    dropped: source.dropped,
+                    last_error: source.last_error,
+                })
+                .collect(),
         };
         let mut gallery_previews = HashMap::new();
         let mut scene_previews = HashMap::new();
@@ -1024,6 +1196,84 @@ impl NativeApp {
             health,
             gallery_previews,
             scene_previews,
+            texture_sources,
+            input_links,
+            media,
+        }
+    }
+
+    /// Remember the main window's current logical placement.
+    fn remember_main_window(&mut self) {
+        let Some(window) = &self.ui_window else {
+            return;
+        };
+        let scale = window.scale_factor();
+        let size = window.inner_size();
+        let previous = self.window_state.main_window.clone().unwrap_or_default();
+        let position = window
+            .outer_position()
+            .ok()
+            .map(|position| (f64::from(position.x) / scale, f64::from(position.y) / scale));
+        let saved = SavedWindow {
+            x: position.map(|value| value.0).unwrap_or(previous.x),
+            y: position.map(|value| value.1).unwrap_or(previous.y),
+            width: f64::from(size.width) / scale,
+            height: f64::from(size.height) / scale,
+            display_id: None,
+            maximized: window.is_maximized(),
+            fullscreen: window.fullscreen().is_some(),
+        };
+        if saved.is_usable() {
+            self.window_state.main_window = Some(saved);
+            self.window_state_dirty = true;
+        }
+    }
+
+    /// Remember an output window's current logical placement.
+    fn remember_output_window(&mut self) {
+        let Some(output) = &self.output else {
+            return;
+        };
+        let scale = output.window.scale_factor();
+        let size = output.window.inner_size();
+        let previous = self.window_state.output().cloned().unwrap_or_default();
+        let position = output
+            .window
+            .outer_position()
+            .ok()
+            .map(|position| (f64::from(position.x) / scale, f64::from(position.y) / scale));
+        let saved = SavedWindow {
+            x: position.map(|value| value.0).unwrap_or(previous.x),
+            y: position.map(|value| value.1).unwrap_or(previous.y),
+            width: f64::from(size.width) / scale,
+            height: f64::from(size.height) / scale,
+            display_id: None,
+            maximized: output.window.is_maximized(),
+            fullscreen: output.window.fullscreen().is_some(),
+        };
+        if saved.is_usable() {
+            self.window_state.set_output(saved);
+            self.window_state_dirty = true;
+        }
+    }
+
+    fn save_window_state(&mut self) {
+        self.remember_main_window();
+        self.remember_output_window();
+        match self.window_state.write(&self.window_state_path) {
+            Ok(()) => {
+                self.window_state_dirty = false;
+                self.last_window_state_save = Instant::now();
+            }
+            Err(error) => {
+                if !self.window_state_error_logged {
+                    self.window_state_error_logged = true;
+                    eprintln!(
+                        "ui: WARN could not write {}: {error}",
+                        self.window_state_path.display()
+                    );
+                }
+            }
         }
     }
 
@@ -1063,6 +1313,7 @@ impl NativeApp {
             }
         );
         self.save_snapshot();
+        self.save_window_state();
         event_loop.exit();
     }
 
@@ -1070,8 +1321,10 @@ impl NativeApp {
         if !self.done {
             self.save_snapshot();
         }
+        self.save_window_state();
         self.store.flush_link_deltas();
         self.store.shutdown_ndi();
+        self.media_hub.stop_all();
         self.close_output();
     }
 }
@@ -1275,8 +1528,10 @@ impl ApplicationHandler for NativeApp {
         match event {
             WindowEvent::CloseRequested => {
                 if is_ui {
+                    self.remember_main_window();
                     self.finish_and_exit(event_loop);
                 } else {
+                    self.remember_output_window();
                     self.close_output();
                 }
             }
@@ -1288,6 +1543,11 @@ impl ApplicationHandler for NativeApp {
             WindowEvent::Resized(size) => {
                 if size.width == 0 || size.height == 0 {
                     return;
+                }
+                if is_ui {
+                    self.remember_main_window();
+                } else {
+                    self.remember_output_window();
                 }
                 if is_ui {
                     if let Some(engine) = &self.engine
@@ -1311,6 +1571,13 @@ impl ApplicationHandler for NativeApp {
             WindowEvent::RedrawRequested => {
                 if is_ui {
                     self.draw_frame(event_loop);
+                }
+            }
+            WindowEvent::Moved(_) => {
+                if is_ui {
+                    self.remember_main_window();
+                } else {
+                    self.remember_output_window();
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {

@@ -7,9 +7,9 @@
 
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, vec2};
 
-use crate::model::{EngineSnapshot, ModuleMetaView, PropView, gallery_preview_key};
+use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PropView, gallery_preview_key};
 use crate::panels::scene_grid::draw_scene_grid;
-use crate::state::{GalleryCategory, UiAction, UiCommand, UiState};
+use crate::state::{GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState};
 use crate::theme;
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 use crate::widgets::input_link::{link_editor_window, link_row};
@@ -738,12 +738,35 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                 .inner_margin(Margin::same(6)),
         )
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("INSPECTOR").strong().size(10.0));
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(
+                        state.side_panel_tab == SidePanelTab::Inspector,
+                        egui::RichText::new("INSPECTOR").strong().size(10.0),
+                    )
+                    .clicked()
+                {
+                    state.side_panel_tab = SidePanelTab::Inspector;
+                }
+                if ui
+                    .selectable_label(
+                        state.side_panel_tab == SidePanelTab::Media,
+                        egui::RichText::new("MEDIA").strong().size(10.0),
+                    )
+                    .clicked()
+                {
+                    state.side_panel_tab = SidePanelTab::Media;
+                }
+            });
             ui.separator();
 
             egui::ScrollArea::vertical()
                 .id_salt("inspector-scroll")
                 .show(ui, |ui| {
+                    if state.side_panel_tab == SidePanelTab::Media {
+                        media_panel(ui, snapshot, state);
+                        return;
+                    }
                     let Some(module_id) = state.selected_module.clone() else {
                         inspector_empty(ui, snapshot, state);
                         return;
@@ -816,6 +839,111 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                     }
                 });
         });
+}
+
+fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let media = &snapshot.media;
+    if !media.available {
+        ui.label(
+            egui::RichText::new("Video capture is unavailable")
+                .strong()
+                .color(theme::DANGER),
+        );
+        if let Some(error) = &media.error {
+            ui.label(egui::RichText::new(error).size(10.0).color(theme::MUTED));
+        }
+        return;
+    }
+    if let Some(error) = &media.error {
+        ui.colored_label(theme::DANGER, error);
+    }
+    ui.horizontal(|ui| {
+        if ui.button("Test pattern").clicked() {
+            state.push_media_action(MediaAction::StartTestPattern);
+        }
+        ui.label(
+            egui::RichText::new(format!(
+                "{} camera(s), {} source(s)",
+                media.cameras.len(),
+                media.sources.len()
+            ))
+            .size(10.0)
+            .color(theme::MUTED),
+        );
+    });
+    ui.separator();
+    ui.label(egui::RichText::new("CAMERAS").strong().size(10.0));
+    if media.cameras.is_empty() {
+        ui.label(
+            egui::RichText::new("No cameras detected.")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    }
+    for camera in &media.cameras {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(&camera.name).size(11.0));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}  {}x{}@{}",
+                        camera.id, camera.max_width, camera.max_height, camera.max_fps
+                    ))
+                    .monospace()
+                    .size(8.5)
+                    .color(theme::MUTED),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Start").clicked() {
+                    state.push_media_action(MediaAction::StartCamera {
+                        id: camera.id.clone(),
+                    });
+                }
+            });
+        });
+    }
+    ui.separator();
+    ui.label(egui::RichText::new("SOURCES").strong().size(10.0));
+    if media.sources.is_empty() {
+        ui.label(
+            egui::RichText::new("No running sources.")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    }
+    for source in &media.sources {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}  #{}  {}",
+                        source.source_id, source.index, source.state
+                    ))
+                    .size(10.0),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}x{}  {} frames  {} dropped",
+                        source.width, source.height, source.frames, source.dropped
+                    ))
+                    .monospace()
+                    .size(8.5)
+                    .color(theme::MUTED),
+                );
+                if let Some(error) = &source.last_error {
+                    ui.colored_label(theme::DANGER, error);
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Stop").clicked() {
+                    state.push_media_action(MediaAction::Stop {
+                        source_id: source.source_id.clone(),
+                    });
+                }
+            });
+        });
+    }
 }
 
 fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {

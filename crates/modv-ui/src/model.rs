@@ -44,6 +44,8 @@ pub struct EngineSnapshot {
     pub texture_sources: Vec<TextureSourceView>,
     /// Input links keyed by the input id they write to.
     pub input_links: HashMap<String, InputLinkView>,
+    /// Live capture state for the Media panel.
+    pub media: MediaSnapshot,
 }
 
 /// One uploaded preview texture (an egui texture owned by the shell).
@@ -62,6 +64,47 @@ pub fn scene_preview_key(scene_id: &str, row: usize) -> String {
 /// The key used by [`EngineSnapshot::gallery_previews`].
 pub fn gallery_preview_key(module_name: &str) -> String {
     format!("module:{module_name}")
+}
+
+/// The native MediaHub's camera and running-source state.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MediaSnapshot {
+    pub available: bool,
+    pub error: Option<String>,
+    pub cameras: Vec<CameraView>,
+    pub sources: Vec<MediaSourceView>,
+}
+
+/// One enumerable camera.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CameraView {
+    pub id: String,
+    pub name: String,
+    pub max_width: u32,
+    pub max_height: u32,
+    pub max_fps: u32,
+}
+
+/// One running media source.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MediaSourceView {
+    pub source_id: String,
+    pub kind: String,
+    pub index: usize,
+    pub state: String,
+    pub width: u32,
+    pub height: u32,
+    pub frames: u64,
+    pub dropped: u64,
+    pub last_error: Option<String>,
+}
+
+/// A MediaHub operation requested by the UI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MediaAction {
+    StartCamera { id: String },
+    StartTestPattern,
+    Stop { source_id: String },
 }
 
 /// One engine Input Link (audio getter, state path, MIDI or OSC).
