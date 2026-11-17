@@ -113,7 +113,7 @@ Empty `{}` entry = implicit final pass to the destination.
 
 ## UnknownVariable (`TIME`) in the corpus
 
-65 shaders use `TIME` with no declaration — it is **always** runtime-injected
+64 shaders use `TIME` with no declaration — it is **always** runtime-injected
 (see skeleton). Similarly `restartNow`-style event inputs, ISF input uniforms,
 and `PASSINDEX`/`FRAMEINDEX`/`DATE`/`TIMEDELTA`.
 
@@ -123,7 +123,8 @@ After the ES→450 rewrite, representative shaders (Bloom, Life, badtv) fail
 only on `UnknownVariable` — i.e. the pipeline works end to end once the
 preprocessor emits the full macro set + input uniforms. Expect the corpus to
 translate at a high rate; the multi-pass + PERSISTENT paths are separate
-(63 `PASSES` multi-pass shaders; 43 `PERSISTENT`; 16 `FLOAT`).
+(64 shaders declare `PASSES`, 47 of them with more than one pass; 46 use a
+`PERSISTENT` buffer; 15 use a `FLOAT` buffer).
 The one known-gap area: shaders declaring `uniform` for inputs the JSON
 header also declares with `DEFAULT` values (overlapping declarations are
 harmless).

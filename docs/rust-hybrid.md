@@ -648,16 +648,16 @@ golden images matching the legacy renderer within a tolerance (see
   `ISFTexture.prototype.setSize` so PERSISTENT FLOAT buffers allocate
   `RGBA32F` with `NEAREST` filtering. Required because the vendored ISF
   renderer used an unsized RGBA internal format, which WebGL2 rejects.
-- `modules/isf/` — **351** `.fs` shaders and **36** `.vs` vertex sidecars.
+- `modules/isf/` — **354** `.fs` shaders and **36** `.vs` vertex sidecars.
 
 Corpus characteristics (measured):
 
 | Property                               |                                                                     Count |
 | -------------------------------------- | ------------------------------------------------------------------------: |
-| `.fs` shaders                          |                                                                       351 |
+| `.fs` shaders                          |                                                                       354 |
 | `.vs` sidecars                         |                                                                        36 |
-| Multi-pass (`PASSES` array)            |                                                                        63 |
-| `PERSISTENT` buffers (needs `RGBA32F`) |                                                                        43 |
+| Multi-pass (`PASSES` array)            |                                                                        64 |
+| `PERSISTENT` buffers (needs `RGBA32F`) |                                                                        46 |
 | Shaders with an `image` input          |                                                                       288 |
 | Total input declarations               | 1096 float, 392 image, 122 color, 117 bool, 89 point2D, 73 long, 15 event |
 
@@ -732,7 +732,7 @@ The translator is the highest-risk single component in the plan. Strategy:
 3. **Fall back** to a hand-written WGSL override when translation fails.
    Overrides live in `crates/modv-renderers/isf/overrides/<shader-name>.wgsl`
    and are selected by shader name.
-4. **Measure** — a corpus test compiles all 351 shaders and writes a report of
+4. **Measure** — a corpus test compiles all 354 shaders and writes a report of
    which ones translate cleanly and which need overrides. The report is a
    tracked artefact so progress is visible and regressions are caught.
 
@@ -740,10 +740,10 @@ The translator is the highest-risk single component in the plan. Strategy:
 `Rgba32Float` textures natively for `PERSISTENT` FLOAT buffers, with
 `FilterMode::Nearest`.
 
-**Done when.** ≥ 95 % of the 351 shaders translate with no override, the
-remaining ≤ 18 have overrides, and all 351 render a golden image. The
+**Done when.** ≥ 95 % of the 354 shaders translate with no override, the
+remaining ≤ 18 have overrides, and all 354 render a golden image. The
 `float` and multi-pass paths are covered by dedicated tests (the multi-pass
-corpus is the 63 `PASSES` shaders; the float corpus is the 43 `PERSISTENT`
+corpus is the 64 `PASSES` shaders; the float corpus is the 46 `PERSISTENT`
 shaders).
 
 ---
@@ -1791,10 +1791,10 @@ Suites:
 
 | Suite          | Count | Notes                                                              |
 | -------------- | ----: | ------------------------------------------------------------------ |
-| Shader modules |    37 | all built-in shader modules                                        |
-| ISF corpus     |   351 | compile check + a smoke render for a representative subset         |
+| Shader modules |    36 | all built-in shader modules                                        |
+| ISF corpus     |   354 | compile check + a smoke render for a representative subset         |
 | 2D modules     |    15 | hand-written 2D modules                                            |
-| Point10 scenes |    25 | per scene, at a fixed size and fixed audio fixture                 |
+| Point10 scenes |    27 | per scene, at a fixed size and fixed audio fixture                 |
 | Compositor     |   ~20 | group order, inherit, pipeline, blend modes, row fade, transitions |
 
 ### E2E
@@ -1985,7 +1985,7 @@ Three different shader corpora, three different strategies:
 | Corpus                  | Size                      | Strategy                                                                                                                                   |
 | ----------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Built-in shader modules | 36 modules, ~800 LOC GLSL | **Hand-port to WGSL.** Small enough that machine translation costs more than writing it.                                                   |
-| ISF corpus              | 351 `.fs` + 36 `.vs`      | **Machine-translate** with an ISF-aware preprocessor, plus per-shader WGSL overrides for the failures. A corpus test tracks the pass rate. |
+| ISF corpus              | 354 `.fs` + 36 `.vs`      | **Machine-translate** with an ISF-aware preprocessor, plus per-shader WGSL overrides for the failures. A corpus test tracks the pass rate. |
 | Point10                 | 25 scenes, TSL + GLSL     | **Hand-port.** TSL has no Rust analogue; the compute passes (curl noise, gaussian blur, bloom) are written directly in WGSL.               |
 
 For the ISF corpus the pipeline is:
@@ -2072,7 +2072,7 @@ translator; one shader module; the delta stream and the state model.
 
 **Exit.**
 
-- ≥ 95 % of the 351 ISF shaders translate; the rest have overrides.
+- ≥ 95 % of the 354 ISF shaders translate; the rest have overrides.
 - A preset loads and saves with a deep-equal round trip.
 - The Gallery renders previews through the Rust engine.
 
@@ -2233,8 +2233,8 @@ planning ranges, not commitments.
 | `modv-ipc`               | protocol, framing, socket client/server, shm ring       | ~1.5k LOC               |
 | `modv-engine`            | state model, scenes, presets, inputs, timing            | ~8k LOC                 |
 | `modv-render`            | device, render graph, texture pool, compositor, present | ~3k LOC                 |
-| `modv-renderers/isf`     | ISF parser, macro preprocessor, runtime, translator     | ~4k LOC + 351 overrides |
-| `modv-renderers/shader`  | 37 WGSL shader modules                                  | ~2k LOC                 |
+| `modv-renderers/isf`     | ISF parser, macro preprocessor, runtime, translator     | ~4k LOC (no overrides)  |
+| `modv-renderers/shader`  | 36 WGSL shader modules                                  | ~2k LOC                 |
 | `modv-renderers/2d`      | canvas facade, text, 15 modules                         | ~4k LOC                 |
 | `modv-renderers/three`   | Cube renderer                                           | ~0.5k LOC               |
 | `modv-renderers/point10` | shared helpers, plane9, postfx, 25 scenes               | ~12–18k LOC WGSL + Rust |
@@ -2272,9 +2272,9 @@ creation, audio pump and camera-capture halves move to the engine, while the
 
 | Corpus                        |                Count |     LOC |
 | ----------------------------- | -------------------: | ------: |
-| ISF shaders                   | 351 `.fs` + 36 `.vs` | ~49,000 |
-| Point10 scenes                |                   25 |  13,587 |
-| Shader modules                |                   37 |   1,048 |
+| ISF shaders                   | 354 `.fs` + 36 `.vs` | ~49,000 |
+| Point10 scenes                |                   27 |  13,587 |
+| Shader modules                |                   36 |   1,048 |
 | 2D modules (hand-written)     |                   15 |   1,892 |
 | 2D modules (Point10 wrappers) |                   26 |     191 |
 | three modules                 |                    1 |     119 |
