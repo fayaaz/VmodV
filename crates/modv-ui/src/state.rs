@@ -151,6 +151,8 @@ pub struct UiState {
     pub bpm_source: String,
     pub tap_times: Vec<std::time::Instant>,
     pub side_panel_tab: SidePanelTab,
+    /// Panel sizes, floating-window bounds and right-panel tab placements.
+    pub layout: crate::layout::LayoutState,
     /// MediaHub operations drained by the shell after drawing.
     pub media_actions: Vec<MediaAction>,
     pub p0: P0State,
@@ -173,6 +175,61 @@ pub enum SidePanelTab {
     Info,
     Plugins,
     Midi,
+}
+
+impl SidePanelTab {
+    /// Every right-panel tab, in strip order.
+    pub const ALL: [Self; 6] = [
+        Self::Inspector,
+        Self::Media,
+        Self::Audio,
+        Self::Info,
+        Self::Plugins,
+        Self::Midi,
+    ];
+    /// The number of right-panel tabs.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// The tab's index in [`SidePanelTab::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            Self::Inspector => 0,
+            Self::Media => 1,
+            Self::Audio => 2,
+            Self::Info => 3,
+            Self::Plugins => 4,
+            Self::Midi => 5,
+        }
+    }
+
+    /// The stable id persisted in `native-layout.json`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Inspector => "inspector",
+            Self::Media => "media",
+            Self::Audio => "audio",
+            Self::Info => "info",
+            Self::Plugins => "plugins",
+            Self::Midi => "midi",
+        }
+    }
+
+    /// The panel title used by the strip, dock headers and windows.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Inspector => "Inspector",
+            Self::Media => "Media",
+            Self::Audio => "Audio",
+            Self::Info => "Info",
+            Self::Plugins => "Plugins",
+            Self::Midi => "MIDI",
+        }
+    }
+
+    /// Parse a persisted key; unknown ids are ignored.
+    pub fn from_key(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tab| tab.key() == value)
+    }
 }
 
 /// The audio features `AudioFeatures.vue` offers, in menu order.
@@ -745,6 +802,7 @@ impl UiState {
             bpm_source: "beatdetektor".to_string(),
             tap_times: Vec::new(),
             side_panel_tab: SidePanelTab::Inspector,
+            layout: crate::layout::LayoutState::default(),
             media_actions: Vec::new(),
             p0: P0State::default(),
             inspector_probe,

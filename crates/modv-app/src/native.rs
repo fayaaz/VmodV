@@ -50,6 +50,7 @@ use crate::pacing::FramePacer;
 use crate::report::AdapterSummary;
 use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
+use crate::ui_layout::{LAYOUT_SETTINGS_FILENAME, LayoutSettings};
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
 use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group, ModuleInstance, js_truthy};
@@ -170,6 +171,12 @@ pub struct NativeApp {
     window_state_dirty: bool,
     last_window_state_save: Instant,
     window_state_error_logged: bool,
+    /// The persisted resizable layout (panels, sections, tab placements, windows).
+    layout_settings: LayoutSettings,
+    layout_settings_path: PathBuf,
+    layout_dirty: bool,
+    last_layout_save: Instant,
+    layout_error_logged: bool,
     media_hub: MediaHub,
     last_media_health: Instant,
     /// Cached V4L2 enumeration; rescanning every frame is 50–500 µs per camera.
@@ -321,6 +328,18 @@ impl NativeApp {
             );
         }
         let media_restore_pending = media_settings.cameras.clone();
+
+        // The resizable layout (panel/section sizes, tab placements and
+        // floating-window bounds). Malformed documents are ignored with a
+        // warning; the defaults keep the shell usable.
+        let layout_settings_path = user_data.join(LAYOUT_SETTINGS_FILENAME);
+        let layout_settings = match LayoutSettings::read_from(&layout_settings_path) {
+            Ok(settings) => settings.unwrap_or_default(),
+            Err(error) => {
+                eprintln!("ui: WARN ignoring the saved layout: {error}");
+                LayoutSettings::default()
+            }
+        };
         let midi_client = MidiClient::new();
         let isf_watcher = IsfWatcher::new(&user_isf_dirs);
         if isf_watcher.is_some() {
@@ -362,6 +381,11 @@ impl NativeApp {
             window_state_dirty: false,
             last_window_state_save: start,
             window_state_error_logged: false,
+            layout_settings,
+            layout_settings_path,
+            layout_dirty: false,
+            last_layout_save: start,
+            layout_error_logged: false,
             media_hub,
             last_media_health: start,
             media_cameras: Vec::new(),
@@ -438,6 +462,20 @@ impl NativeApp {
                 return;
             }
         };
+
+        // Apply the saved layout to the real window size before the first frame.
+        // `clamp_to` protects a layout saved on a larger display, and the shell
+        // applies the same minimums while drawing.
+        let inner = ui_window
+            .inner_size()
+            .to_logical::<f32>(ui_window.scale_factor());
+        let applied = self
+            .layout_settings
+            .clone()
+            .clamp_to(inner.width, inner.height);
+        applied.apply_to_ui(&mut self.ui_state.layout);
+        self.layout_settings = applied;
+
         let ui_surface = match create_surface(engine, Arc::clone(&ui_window)) {
             Ok(surface) => surface,
             Err(error) => {
@@ -766,6 +804,11 @@ impl NativeApp {
         {
             self.save_window_state();
         }
+        if self.layout_dirty
+            && now.saturating_duration_since(self.last_layout_save) >= Duration::from_secs(1)
+        {
+            self.save_layout();
+        }
 
         let reached_frames = self
             .cli
@@ -822,6 +865,7 @@ impl NativeApp {
         // the set deltas were uploaded above and the free list is kept in the
         // pending frame, so clear the epaint bookkeeping.
         textures_delta.clear();
+        self.sync_layout();
         self.pending_ui = Some(PendingUiFrame {
             clipped,
             pixels_per_point,
@@ -1945,6 +1989,41 @@ impl NativeApp {
         }
     }
 
+    fn sync_layout(&mut self) {
+        let current = LayoutSettings::from_ui(&self.ui_state.layout);
+        if current != self.layout_settings {
+            self.layout_settings = current;
+            self.layout_dirty = true;
+        }
+    }
+
+    /// Flush the layout if the shell changed it.
+    ///
+    /// Best-effort like the window state: a read-only userData directory logs
+    /// once and never blocks the frame loop or quit.
+    fn save_layout(&mut self) {
+        self.sync_layout();
+        if !self.layout_dirty {
+            return;
+        }
+        match self.layout_settings.write_to(&self.layout_settings_path) {
+            Ok(()) => {
+                self.layout_dirty = false;
+                self.last_layout_save = Instant::now();
+            }
+            Err(error) => {
+                self.layout_dirty = false;
+                if !self.layout_error_logged {
+                    self.layout_error_logged = true;
+                    eprintln!(
+                        "ui: WARN could not write {}: {error}",
+                        self.layout_settings_path.display()
+                    );
+                }
+            }
+        }
+    }
+
     fn record_error(&mut self, message: String) {
         eprintln!("ui: ERROR {message}");
         self.last_error = Some(message);
@@ -1996,6 +2075,7 @@ impl NativeApp {
         );
         self.save_snapshot();
         self.save_window_state();
+        self.save_layout();
         event_loop.exit();
     }
 
@@ -2004,6 +2084,7 @@ impl NativeApp {
             self.save_snapshot();
         }
         self.save_window_state();
+        self.save_layout();
         self.store.flush_link_deltas();
         self.store.shutdown_ndi();
         self.media_hub.stop_all();

@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod layout;
 pub mod model;
 pub mod panels;
 pub mod shell;
@@ -25,6 +26,7 @@ pub mod state;
 pub mod theme;
 pub mod widgets;
 
+pub use layout::{LayoutState, TabLayout, TabPlacement, WindowBounds};
 pub use model::{
     AudioDeviceView, AudioSelectionView, AudioView, COMPOSITE_OPERATIONS, CameraModeView,
     CameraView, EngineHealth, EngineSnapshot, ExpressionView, GroupView, InputLinkView,
@@ -37,6 +39,6 @@ pub use model::{
     unique_resolutions,
 };
 pub use state::{
-    AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, TweenCurveEditor, TweenHandleDrag,
-    UiAction, UiCommand, UiState, mint_smoothing_id,
+    AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, SidePanelTab, TweenCurveEditor,
+    TweenHandleDrag, UiAction, UiCommand, UiState, mint_smoothing_id,
 };

@@ -12,6 +12,8 @@
 //!   "inspector_width": 320.0,
 //!   "live_height": 0.0,
 //!   "gallery_height": 0.0,
+//!   "dock_width": 300.0,
+//!   "tabs": { "inspector": "docked", "media": "floating" },
 //!   "windows": {
 //!     "tempo": { "x": 40.0, "y": 60.0, "width": 320.0, "height": 200.0 }
 //!   }
@@ -21,16 +23,23 @@
 //! All sizes are logical points (the same unit egui and winit use). Panel
 //! widths are non-zero; a section height of `0` means "automatic" (the current
 //! proportional default). `windows` is keyed by a stable window id, so a window
-//! that is not open this run keeps its saved geometry for the next one.
+//! that is not open this run keeps its saved geometry for the next one. `tabs`
+//! holds only the non-default `docked`/`floating` placements of the right-panel
+//! tabs (`inspector`, `media`, `audio`, `info`, `plugins`, `midi`); a missing
+//! or unknown entry means `tabs`.
 //!
 //! Nothing here touches egui or the windowing system: the document, the atomic
-//! read/write and the clamping rules are pure, so they are unit-testable on a
-//! headless host. A saved layout is clamped against the *current* window before
-//! use ([`LayoutSettings::clamp_to`]) so a smaller window or a resolution change
-//! can never push a panel or a floating window off-screen.
+//! read/write, the clamping rules and the conversions to
+//! [`modv_ui::LayoutState`] are pure, so they are unit-testable on a headless
+//! host. A saved layout is clamped against the *current* window before use
+//! ([`LayoutSettings::clamp_to`]) so a smaller window or a resolution change can
+//! never push a panel or a floating window off-screen.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use modv_ui::layout::{LayoutState, TabPlacement, WindowBounds as UiWindowBounds};
+use modv_ui::state::SidePanelTab;
 
 /// The persisted layout document inside the shared userData directory.
 pub const LAYOUT_SETTINGS_FILENAME: &str = "native-layout.json";
@@ -41,16 +50,23 @@ pub const DEFAULT_GROUPS_WIDTH: f32 = 250.0;
 /// The Inspector panel's default width (logical points), matching the shell's
 /// current `egui::Panel::right("modv-inspector").default_size(320.0)`.
 pub const DEFAULT_INSPECTOR_WIDTH: f32 = 320.0;
+/// The dock column's default width.
+pub const DEFAULT_DOCK_WIDTH: f32 = 300.0;
 
 /// The Groups panel's minimum width (`min_size(190.0)`).
 pub const MIN_GROUPS_WIDTH: f32 = 190.0;
 /// The Inspector panel's minimum width (`min_size(232.0)`).
 pub const MIN_INSPECTOR_WIDTH: f32 = 232.0;
+/// The dock column's minimum width.
+pub const MIN_DOCK_WIDTH: f32 = 232.0;
 /// The centre column's minimum width: below this the Live Output/Gallery no
 /// longer render usefully.
 pub const MIN_CENTRE_WIDTH: f32 = 360.0;
-/// The width at which all three minima fit.
+/// The width at which the Groups/Inspector/centre minima fit.
 pub const MIN_TOTAL_WIDTH: f32 = MIN_GROUPS_WIDTH + MIN_INSPECTOR_WIDTH + MIN_CENTRE_WIDTH;
+/// The width at which all four columns fit with a docked tab.
+pub const MIN_TOTAL_WIDTH_WITH_DOCK: f32 =
+    MIN_GROUPS_WIDTH + MIN_INSPECTOR_WIDTH + MIN_DOCK_WIDTH + MIN_CENTRE_WIDTH;
 
 /// The Live Output section's minimum height.
 pub const MIN_LIVE_HEIGHT: f32 = 120.0;
@@ -133,6 +149,12 @@ pub struct LayoutSettings {
     /// The centre stack's Gallery height; `0` is automatic.
     #[serde(default)]
     pub gallery_height: f32,
+    /// The dock column width in logical points.
+    #[serde(default = "default_dock_width")]
+    pub dock_width: f32,
+    /// Non-default tab placements keyed by tab id (`inspector`, `media`, …).
+    #[serde(default)]
+    pub tabs: BTreeMap<String, String>,
     /// Per-floating-window geometry, keyed by a stable window id.
     #[serde(default)]
     pub windows: BTreeMap<String, WindowBounds>,
@@ -146,6 +168,10 @@ fn default_inspector_width() -> f32 {
     DEFAULT_INSPECTOR_WIDTH
 }
 
+fn default_dock_width() -> f32 {
+    DEFAULT_DOCK_WIDTH
+}
+
 impl Default for LayoutSettings {
     fn default() -> Self {
         Self {
@@ -153,6 +179,8 @@ impl Default for LayoutSettings {
             inspector_width: DEFAULT_INSPECTOR_WIDTH,
             live_height: 0.0,
             gallery_height: 0.0,
+            dock_width: DEFAULT_DOCK_WIDTH,
+            tabs: BTreeMap::new(),
             windows: BTreeMap::new(),
         }
     }
@@ -232,6 +260,20 @@ impl LayoutSettings {
             inspector_width: width(self.inspector_width, DEFAULT_INSPECTOR_WIDTH),
             live_height: height(self.live_height),
             gallery_height: height(self.gallery_height),
+            dock_width: width(self.dock_width, DEFAULT_DOCK_WIDTH),
+            // Keep only known tab ids and placements, and only non-default
+            // placements: the document is canonical and unknown values degrade
+            // to the tab strip.
+            tabs: self
+                .tabs
+                .iter()
+                .filter_map(|(tab, placement)| {
+                    let tab = SidePanelTab::from_key(tab)?;
+                    let placement = TabPlacement::from_key(placement);
+                    (placement != TabPlacement::Tabs)
+                        .then(|| (tab.key().to_string(), placement.key().to_string()))
+                })
+                .collect(),
             windows: self
                 .windows
                 .iter()
@@ -255,10 +297,17 @@ impl LayoutSettings {
     ///   dropped so the window reopens at its default placement.
     pub fn clamp_to(&self, available_width: f32, available_height: f32) -> Self {
         let sanitised = self.sanitised();
+        let dock_visible = sanitised
+            .tabs
+            .values()
+            .any(|placement| TabPlacement::from_key(placement) == TabPlacement::Docked);
+
         // An unknown/zero size means "use the minimum layout" for widths and
         // "leave both sections automatic" for heights.
         let available_width = if available_width.is_finite() && available_width > 0.0 {
             available_width
+        } else if dock_visible {
+            MIN_TOTAL_WIDTH_WITH_DOCK
         } else {
             MIN_TOTAL_WIDTH
         };
@@ -268,7 +317,32 @@ impl LayoutSettings {
             0.0
         };
 
-        let (groups_width, inspector_width) = if available_width >= MIN_TOTAL_WIDTH {
+        let (groups_width, inspector_width, dock_width) = if dock_visible {
+            if available_width >= MIN_TOTAL_WIDTH_WITH_DOCK {
+                let dock_width = sanitised.dock_width.clamp(
+                    MIN_DOCK_WIDTH,
+                    available_width - MIN_GROUPS_WIDTH - MIN_INSPECTOR_WIDTH - MIN_CENTRE_WIDTH,
+                );
+                let groups_width = sanitised.groups_width.clamp(
+                    MIN_GROUPS_WIDTH,
+                    available_width - dock_width - MIN_INSPECTOR_WIDTH - MIN_CENTRE_WIDTH,
+                );
+                let inspector_width = sanitised.inspector_width.clamp(
+                    MIN_INSPECTOR_WIDTH,
+                    available_width - dock_width - groups_width - MIN_CENTRE_WIDTH,
+                );
+                (groups_width, inspector_width, dock_width)
+            } else {
+                // Too small for every column: scale all four minima so the
+                // centre column never goes negative.
+                let scale = available_width / MIN_TOTAL_WIDTH_WITH_DOCK;
+                (
+                    MIN_GROUPS_WIDTH * scale,
+                    MIN_INSPECTOR_WIDTH * scale,
+                    MIN_DOCK_WIDTH * scale,
+                )
+            }
+        } else if available_width >= MIN_TOTAL_WIDTH {
             let groups_width = sanitised.groups_width.clamp(
                 MIN_GROUPS_WIDTH,
                 available_width - MIN_INSPECTOR_WIDTH - MIN_CENTRE_WIDTH,
@@ -277,12 +351,21 @@ impl LayoutSettings {
                 MIN_INSPECTOR_WIDTH,
                 available_width - groups_width - MIN_CENTRE_WIDTH,
             );
-            (groups_width, inspector_width)
+            let dock_width = sanitised
+                .dock_width
+                .clamp(MIN_DOCK_WIDTH, available_width.max(MIN_DOCK_WIDTH));
+            (groups_width, inspector_width, dock_width)
         } else {
             // Too small for the panel minimums: scale them (and the centre)
             // proportionally so the centre column never goes negative.
             let scale = available_width / MIN_TOTAL_WIDTH;
-            (MIN_GROUPS_WIDTH * scale, MIN_INSPECTOR_WIDTH * scale)
+            (
+                MIN_GROUPS_WIDTH * scale,
+                MIN_INSPECTOR_WIDTH * scale,
+                sanitised
+                    .dock_width
+                    .clamp(MIN_DOCK_WIDTH, available_width.max(MIN_DOCK_WIDTH)),
+            )
         };
 
         let mut live_height = if sanitised.live_height > 0.0 {
@@ -313,6 +396,8 @@ impl LayoutSettings {
             inspector_width,
             live_height,
             gallery_height,
+            dock_width,
+            tabs: sanitised.tabs,
             windows: sanitised
                 .windows
                 .iter()
@@ -322,6 +407,67 @@ impl LayoutSettings {
                         .map(|bounds| (window.clone(), bounds))
                 })
                 .collect(),
+        }
+    }
+
+    /// The live UI layout expressed as a persisted document.
+    pub fn from_ui(layout: &LayoutState) -> Self {
+        let mut tabs = BTreeMap::new();
+        for tab in SidePanelTab::ALL {
+            let placement = layout.tabs.placement(tab);
+            if placement != TabPlacement::Tabs {
+                tabs.insert(tab.key().to_string(), placement.key().to_string());
+            }
+        }
+        Self {
+            groups_width: layout.groups_width,
+            inspector_width: layout.inspector_width,
+            live_height: layout.live_height,
+            gallery_height: layout.gallery_height,
+            dock_width: layout.dock_width,
+            tabs,
+            windows: layout
+                .windows
+                .iter()
+                .map(|(window, bounds)| {
+                    (
+                        window.clone(),
+                        WindowBounds::new(bounds.x, bounds.y, bounds.width, bounds.height),
+                    )
+                })
+                .collect(),
+        }
+        .sanitised()
+    }
+
+    /// Apply the document to the live UI layout.
+    ///
+    /// Values are sanitised first, so a hand-edited NaN or an unknown tab
+    /// placement can never reach the shell.
+    pub fn apply_to_ui(&self, layout: &mut LayoutState) {
+        let settings = self.sanitised();
+        layout.groups_width = settings.groups_width;
+        layout.inspector_width = settings.inspector_width;
+        layout.live_height = settings.live_height;
+        layout.gallery_height = settings.gallery_height;
+        layout.dock_width = settings.dock_width;
+        layout.windows = settings
+            .windows
+            .iter()
+            .map(|(window, bounds)| {
+                (
+                    window.clone(),
+                    UiWindowBounds::new(bounds.x, bounds.y, bounds.width, bounds.height),
+                )
+            })
+            .collect();
+        for tab in SidePanelTab::ALL {
+            let placement = settings
+                .tabs
+                .get(tab.key())
+                .map(|placement| TabPlacement::from_key(placement))
+                .unwrap_or(TabPlacement::Tabs);
+            layout.tabs.set_placement(tab, placement);
         }
     }
 
@@ -388,6 +534,8 @@ mod tests {
         assert_eq!(layout.inspector_width, 320.0);
         assert_eq!(layout.live_height, 0.0, "0 means the automatic split");
         assert_eq!(layout.gallery_height, 0.0);
+        assert_eq!(layout.dock_width, 300.0);
+        assert!(layout.tabs.is_empty(), "every tab starts in the strip");
         assert!(layout.windows.is_empty());
 
         layout.write_to(&path).expect("write layout");
@@ -684,6 +832,164 @@ mod tests {
             !layout.windows.contains_key("palette"),
             "a later unusable reading forgets the saved placement"
         );
+    }
+
+    #[test]
+    fn dock_width_and_tab_placements_round_trip() {
+        let (directory, path) = temp_path();
+        let layout = LayoutSettings {
+            dock_width: 360.0,
+            tabs: BTreeMap::from([
+                ("inspector".to_string(), "docked".to_string()),
+                ("media".to_string(), "floating".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        layout.write_to(&path).expect("write layout");
+        assert_eq!(
+            LayoutSettings::read_from(&path).expect("read layout"),
+            Some(layout.clone())
+        );
+        assert!(!path.with_extension("json.tmp").exists());
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn a_partial_document_keeps_the_default_dock_and_tab_placements() {
+        let (directory, path) = temp_path();
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        std::fs::write(&path, r#"{"groups_width": 300.0}"#).expect("write partial document");
+
+        let layout = LayoutSettings::read_from(&path)
+            .expect("read partial document")
+            .expect("document");
+        assert_eq!(layout.dock_width, DEFAULT_DOCK_WIDTH);
+        assert!(layout.tabs.is_empty(), "missing tabs mean the strip");
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn dock_width_clamping_keeps_the_centre_and_the_other_columns_usable() {
+        let layout = LayoutSettings {
+            groups_width: 250.0,
+            inspector_width: 320.0,
+            dock_width: 5000.0,
+            tabs: BTreeMap::from([("audio".to_string(), "docked".to_string())]),
+            ..Default::default()
+        };
+
+        let clamped = layout.clamp_to(1200.0, 800.0);
+        assert_eq!(
+            clamped.dock_width,
+            1200.0 - MIN_GROUPS_WIDTH - MIN_INSPECTOR_WIDTH - MIN_CENTRE_WIDTH
+        );
+        assert_eq!(clamped.groups_width, MIN_GROUPS_WIDTH);
+        assert_eq!(clamped.inspector_width, MIN_INSPECTOR_WIDTH);
+        assert_eq!(
+            1200.0 - clamped.groups_width - clamped.inspector_width - clamped.dock_width,
+            MIN_CENTRE_WIDTH,
+            "the centre column is never squeezed below its minimum"
+        );
+
+        let tiny = layout.clamp_to(700.0, 800.0);
+        let centre = 700.0 - tiny.groups_width - tiny.inspector_width - tiny.dock_width;
+        assert!(centre > 0.0, "a tiny window scales every column: {centre}");
+        assert!(tiny.dock_width < MIN_DOCK_WIDTH);
+        assert!(tiny.dock_width > 0.0, "NaN/zero is rejected by the scaling");
+
+        let no_dock = LayoutSettings {
+            dock_width: 5000.0,
+            ..Default::default()
+        };
+        let clamped = no_dock.clamp_to(1280.0, 800.0);
+        assert_eq!(
+            clamped.dock_width, 1280.0,
+            "a hidden dock has no centre budget to protect"
+        );
+    }
+
+    #[test]
+    fn unknown_tab_ids_and_placements_degrade_to_the_strip() {
+        let settings = LayoutSettings {
+            tabs: BTreeMap::from([
+                ("inspector".to_string(), "docked".to_string()),
+                ("media".to_string(), "floating".to_string()),
+                ("audio".to_string(), "sideways".to_string()),
+                ("future-tab".to_string(), "floating".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let mut layout = LayoutState::default();
+        settings.apply_to_ui(&mut layout);
+
+        assert_eq!(
+            layout.tabs.placement(SidePanelTab::Inspector),
+            TabPlacement::Docked
+        );
+        assert_eq!(
+            layout.tabs.placement(SidePanelTab::Media),
+            TabPlacement::Floating
+        );
+        assert_eq!(
+            layout.tabs.placement(SidePanelTab::Audio),
+            TabPlacement::Tabs,
+            "an unknown placement degrades to the tab strip"
+        );
+        assert_eq!(
+            layout.tabs.placement(SidePanelTab::Midi),
+            TabPlacement::Tabs
+        );
+
+        let written = LayoutSettings::from_ui(&layout);
+        assert_eq!(
+            written.tabs.len(),
+            2,
+            "unknown ids/placements are not written back"
+        );
+        assert!(written.tabs.contains_key("inspector"));
+        assert!(written.tabs.contains_key("media"));
+    }
+
+    #[test]
+    fn the_ui_layout_round_trips_through_the_settings_document() {
+        let mut ui_layout = LayoutState {
+            groups_width: 280.0,
+            inspector_width: 340.0,
+            live_height: 210.0,
+            gallery_height: 160.0,
+            dock_width: 350.0,
+            ..Default::default()
+        };
+        ui_layout
+            .tabs
+            .set_placement(SidePanelTab::Inspector, TabPlacement::Docked);
+        ui_layout
+            .tabs
+            .set_placement(SidePanelTab::Midi, TabPlacement::Floating);
+        ui_layout.record_window_rect(
+            "tempo",
+            egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(320.0, 200.0)),
+        );
+
+        let settings = LayoutSettings::from_ui(&ui_layout);
+        assert_eq!(settings.dock_width, 350.0);
+        assert_eq!(settings.live_height, 210.0);
+        assert_eq!(
+            settings.tabs.get("inspector").map(String::as_str),
+            Some("docked")
+        );
+        assert_eq!(
+            settings.windows.get("tempo"),
+            Some(&bounds(10.0, 20.0, 320.0, 200.0))
+        );
+
+        let mut restored = LayoutState::default();
+        settings.apply_to_ui(&mut restored);
+        assert_eq!(restored, ui_layout);
     }
 
     #[test]
