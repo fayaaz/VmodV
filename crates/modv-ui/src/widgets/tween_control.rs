@@ -232,19 +232,16 @@ mod tests {
     #[test]
     fn create_tween_emits_descriptor_and_state_link() {
         let mut state = UiState::new();
-        let mut control = TweenControl::new(
-            "gain",
-            Some("input-1".to_string()),
-            None,
-            0.0,
-            1.0,
-        );
+        let mut control = TweenControl::new("gain", Some("input-1".to_string()), None, 0.0, 1.0);
         control.create_or_update(&mut state, None);
         let actions = state.take_actions();
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0].action, "tweens/createTween");
         assert_eq!(actions[0].payload["id"], "input-1");
-        assert_eq!(actions[0].payload["data"], serde_json::json!([[0.0], [1.0]]));
+        assert_eq!(
+            actions[0].payload["data"],
+            serde_json::json!([[0.0], [1.0]])
+        );
         assert_eq!(actions[1].action, "inputs/createInputLink");
         assert_eq!(actions[1].payload["source"], "tween");
         assert_eq!(

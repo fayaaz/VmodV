@@ -23,8 +23,9 @@ use modv_render::Engine;
 use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_present_mode};
 use modv_render::wgpu;
 use modv_ui::{
-    AudioView, CameraView, MediaAction, MediaSnapshot, MediaSourceView, EngineHealth, EngineSnapshot, GroupView, ModuleMetaView, ModuleView,
-    InputLinkView, PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction,
+    AudioView, CameraView, EngineHealth, EngineSnapshot, GroupView, InputLinkView, MediaAction,
+    MediaSnapshot, MediaSourceView, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
+    PreviewTexture, PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction,
     UiCommand, UiState, gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
@@ -41,10 +42,10 @@ use crate::media::MediaHub;
 use crate::report::AdapterSummary;
 use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
-use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
-use modv_media::video::{TestPattern, VideoSourceConfig};
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
+use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
 use modv_engine::engine_state::js_truthy;
+use modv_media::video::{TestPattern, VideoSourceConfig};
 
 /// The native shell's run loop.
 pub fn run(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Result<(), String> {
@@ -254,7 +255,6 @@ impl NativeApp {
         if let Some(saved) = self
             .window_state
             .main_window
-            .clone()
             .map(|saved| clamp_saved_to_monitor(saved, event_loop))
         {
             attributes = attributes
@@ -583,8 +583,7 @@ impl NativeApp {
         }
 
         if self.window_state_dirty
-            && now.saturating_duration_since(self.last_window_state_save)
-                >= Duration::from_secs(1)
+            && now.saturating_duration_since(self.last_window_state_save) >= Duration::from_secs(1)
         {
             self.save_window_state();
         }
@@ -932,19 +931,17 @@ impl NativeApp {
         // The engine's preview readbacks are premultiplied; flatten onto
         // opaque black before handing them to egui, which expects straight
         // alpha. This is the same flatten the main preview path applies.
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel[3] = 255;
         }
-        let image = egui::ColorImage::from_rgba_unmultiplied(
-            [width as usize, height as usize],
-            &pixels,
-        );
+        let image =
+            egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &pixels);
         if let Some(entry) = self.preview_textures.get_mut(&key) {
             entry.handle.set(image, egui::TextureOptions::LINEAR);
         } else {
-            let handle = self
-                .egui_ctx
-                .load_texture(key.clone(), image, egui::TextureOptions::LINEAR);
+            let handle =
+                self.egui_ctx
+                    .load_texture(key.clone(), image, egui::TextureOptions::LINEAR);
             self.preview_textures.insert(
                 key.clone(),
                 PreviewEntry {
@@ -972,9 +969,7 @@ impl NativeApp {
             .as_mut()
             .is_some_and(Compositor::capture_transition_source);
         if !captured && self.store.fall_back_scene_transition_to_fade() {
-            eprintln!(
-                "ui: WARN no outgoing frame to capture; Scene transition falls back to Fade"
-            );
+            eprintln!("ui: WARN no outgoing frame to capture; Scene transition falls back to Fade");
         }
     }
 
@@ -1044,7 +1039,10 @@ impl NativeApp {
                             id.clone(),
                             TweenView {
                                 id,
-                                duration: tween.get("duration").and_then(Value::as_f64).unwrap_or(1000.0),
+                                duration: tween
+                                    .get("duration")
+                                    .and_then(Value::as_f64)
+                                    .unwrap_or(1000.0),
                                 direction: tween
                                     .get("direction")
                                     .and_then(Value::as_str)
@@ -1056,7 +1054,10 @@ impl NativeApp {
                                     .unwrap_or("linear")
                                     .to_string(),
                                 looping: tween.get("loop").and_then(Value::as_bool).unwrap_or(true),
-                                use_bpm: tween.get("useBpm").and_then(Value::as_bool).unwrap_or(true),
+                                use_bpm: tween
+                                    .get("useBpm")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(true),
                                 bpm_division: tween
                                     .get("bpmDivision")
                                     .and_then(Value::as_f64)
@@ -1338,7 +1339,7 @@ impl NativeApp {
         };
         let scale = window.scale_factor();
         let size = window.inner_size();
-        let previous = self.window_state.main_window.clone().unwrap_or_default();
+        let previous = self.window_state.main_window.unwrap_or_default();
         let position = window
             .outer_position()
             .ok()
@@ -1365,7 +1366,7 @@ impl NativeApp {
         };
         let scale = output.window.scale_factor();
         let size = output.window.inner_size();
-        let previous = self.window_state.output().cloned().unwrap_or_default();
+        let previous = self.window_state.output().copied().unwrap_or_default();
         let position = output
             .window
             .outer_position()
@@ -1419,10 +1420,9 @@ impl NativeApp {
             .unwrap_or_else(|| user_data_dir().join("native-preset.json"));
         match save_preset_to(&path, &self.store) {
             Ok(()) => eprintln!("ui: INFO preset saved to {}", path.display()),
-            Err(error) => self.record_error(format!(
-                "could not save preset {}: {error}",
-                path.display()
-            )),
+            Err(error) => {
+                self.record_error(format!("could not save preset {}: {error}", path.display()))
+            }
         }
     }
 
@@ -1662,7 +1662,10 @@ fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
     ) {
         Ok(_) => eprintln!(
             "ui: INFO applied Scene {:?} ({} groups)",
-            scene.get("name").and_then(Value::as_str).unwrap_or(scene_id),
+            scene
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(scene_id),
             store.state().groups.len()
         ),
         Err(error) => eprintln!("ui: WARN --apply-scene failed: {error}"),
@@ -1677,10 +1680,7 @@ fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
 ///
 /// The legacy `resolveWindowBounds` does this at show time; without it a window
 /// saved on a 4K display can sit off-screen on a smaller laptop.
-fn clamp_saved_to_monitor(
-    saved: SavedWindow,
-    event_loop: &ActiveEventLoop,
-) -> SavedWindow {
+fn clamp_saved_to_monitor(saved: SavedWindow, event_loop: &ActiveEventLoop) -> SavedWindow {
     let Some(monitor) = event_loop.primary_monitor() else {
         return saved;
     };
@@ -1705,10 +1705,7 @@ fn native_audio_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelec
     if selection.engine_owned() {
         vec![selection]
     } else {
-        vec![
-            AudioSourceSelection::Pipewire,
-            AudioSourceSelection::Input,
-        ]
+        vec![AudioSourceSelection::Pipewire, AudioSourceSelection::Input]
     }
 }
 
@@ -1971,10 +1968,7 @@ mod tests {
     fn native_audio_defaults_to_the_system_monitor_then_input() {
         assert_eq!(
             native_audio_sources(AudioSourceSelection::Renderer),
-            vec![
-                AudioSourceSelection::Pipewire,
-                AudioSourceSelection::Input
-            ]
+            vec![AudioSourceSelection::Pipewire, AudioSourceSelection::Input]
         );
         assert_eq!(
             native_audio_sources(AudioSourceSelection::Input),
@@ -1990,7 +1984,10 @@ mod tests {
     fn preset_round_trip_restores_groups_and_modules() {
         let mut store = Store::new();
         let group = store
-            .dispatch("groups/createGroup", serde_json::json!({"name": "Round Trip"}))
+            .dispatch(
+                "groups/createGroup",
+                serde_json::json!({"name": "Round Trip"}),
+            )
             .expect("create group");
         let group_id = group["id"].as_str().expect("group id").to_string();
         let module = store

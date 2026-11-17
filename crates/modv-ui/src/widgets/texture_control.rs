@@ -58,13 +58,7 @@ impl TextureControl {
                 .width(96.0)
                 .show_ui(ui, |ui| {
                     for option in [
-                        "inherit",
-                        "group",
-                        "canvas",
-                        "webcam",
-                        "image",
-                        "video",
-                        "screen",
+                        "inherit", "group", "canvas", "webcam", "image", "video", "screen",
                     ] {
                         if ui.selectable_label(kind == option, option).clicked() {
                             kind = option.to_string();

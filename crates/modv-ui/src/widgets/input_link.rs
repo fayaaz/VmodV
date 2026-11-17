@@ -29,44 +29,38 @@ pub fn link_row(
     snapshot: &EngineSnapshot,
     state: &mut UiState,
 ) {
-    ui.horizontal(|ui| {
-        match snapshot.input_links.get(input_id) {
-            Some(link) => {
-                let summary = link_summary(link);
-                ui.label(
-                    egui::RichText::new("LINK")
-                        .monospace()
-                        .size(8.0)
-                        .color(theme::ACCENT),
-                );
-                ui.label(
-                    egui::RichText::new(summary)
-                        .size(9.0)
-                        .color(theme::MUTED),
-                )
+    ui.horizontal(|ui| match snapshot.input_links.get(input_id) {
+        Some(link) => {
+            let summary = link_summary(link);
+            ui.label(
+                egui::RichText::new("LINK")
+                    .monospace()
+                    .size(8.0)
+                    .color(theme::ACCENT),
+            );
+            ui.label(egui::RichText::new(summary).size(9.0).color(theme::MUTED))
                 .on_hover_text(format!("input {input_id}"));
-                if ui.small_button("Edit").clicked() {
-                    state.link_editor = Some(LinkEditor::from_link(
-                        input_id,
-                        format!("{prop_name}  ({prop_name})"),
-                        link,
-                    ));
-                }
-                if ui.small_button("x").on_hover_text("Remove link").clicked() {
-                    state.push_action(
-                        "inputs/removeInputLink",
-                        serde_json::json!({ "inputId": input_id }),
-                    );
-                }
+            if ui.small_button("Edit").clicked() {
+                state.link_editor = Some(LinkEditor::from_link(
+                    input_id,
+                    format!("{prop_name}  ({prop_name})"),
+                    link,
+                ));
             }
-            None => {
-                if ui
-                    .small_button("+ link")
-                    .on_hover_text("Bind this input to audio, state, MIDI or OSC")
-                    .clicked()
-                {
-                    state.link_editor = Some(LinkEditor::audio(input_id, prop_name));
-                }
+            if ui.small_button("x").on_hover_text("Remove link").clicked() {
+                state.push_action(
+                    "inputs/removeInputLink",
+                    serde_json::json!({ "inputId": input_id }),
+                );
+            }
+        }
+        None => {
+            if ui
+                .small_button("+ link")
+                .on_hover_text("Bind this input to audio, state, MIDI or OSC")
+                .clicked()
+            {
+                state.link_editor = Some(LinkEditor::audio(input_id, prop_name));
             }
         }
     });
@@ -88,9 +82,17 @@ fn link_summary(link: &InputLinkView) -> String {
             .and_then(|args| args.first())
             .and_then(|value| value.as_str())
             .unwrap_or("?");
-        format!("audio.{feature}  ->  {}..{}", link.min.unwrap_or(0.0), link.max.unwrap_or(1.0))
+        format!(
+            "audio.{feature}  ->  {}..{}",
+            link.min.unwrap_or(0.0),
+            link.max.unwrap_or(1.0)
+        )
     } else if source == "midi" {
-        format!("midi  {location}  ->  {}..{}", link.min.unwrap_or(0.0), link.max.unwrap_or(1.0))
+        format!(
+            "midi  {location}  ->  {}..{}",
+            link.min.unwrap_or(0.0),
+            link.max.unwrap_or(1.0)
+        )
     } else if source == "osc" {
         format!("osc  {location}")
     } else {
@@ -247,7 +249,6 @@ pub fn link_editor_window(ui: &mut egui::Ui, state: &mut UiState) {
             Err(error) => {
                 editor.error = Some(error);
                 state.link_editor = Some(editor);
-                return;
             }
         }
     } else if remove {

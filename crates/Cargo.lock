@@ -2676,15 +2676,12 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "uuid",
 ]
 
 [[package]]
 name = "modv-ipc"
 version = "0.1.0"
 dependencies = [
- "libc",
- "memmap2",
  "serde",
  "serde_json",
 ]

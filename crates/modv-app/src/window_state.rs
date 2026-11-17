@@ -97,22 +97,26 @@ impl WindowState {
         {
             return Self::default();
         }
-        let mut state = Self::default();
-        state.main_window = value
+        let main_window = value
             .get("mainWindow")
             .cloned()
             .and_then(|value| serde_json::from_value::<SavedWindow>(value).ok())
             .and_then(|window| window.sanitised());
-        if let Some(windows) = value.get("windows").and_then(serde_json::Value::as_object) {
-            for (key, saved) in windows {
+        let mut windows = BTreeMap::new();
+        if let Some(saved_windows) = value.get("windows").and_then(serde_json::Value::as_object) {
+            for (key, saved) in saved_windows {
                 if let Ok(saved) = serde_json::from_value::<SavedWindow>(saved.clone())
                     && let Some(saved) = saved.sanitised()
                 {
-                    state.windows.insert(key.clone(), saved);
+                    windows.insert(key.clone(), saved);
                 }
             }
         }
-        state
+        Self {
+            version: WINDOW_STATE_VERSION,
+            main_window,
+            windows,
+        }
     }
 
     /// Write the document atomically (`tmp` + rename), returning an error on
@@ -257,7 +261,10 @@ mod tests {
         let a = window(0.0, 0.0, 100.0, 100.0);
         let b = window(200.0, 200.0, 100.0, 100.0);
         assert_eq!(intersection_area(a, b), 0.0);
-        assert_eq!(intersection_area(a, window(50.0, 50.0, 100.0, 100.0)), 2500.0);
+        assert_eq!(
+            intersection_area(a, window(50.0, 50.0, 100.0, 100.0)),
+            2500.0
+        );
     }
 
     #[test]
@@ -270,8 +277,10 @@ mod tests {
                 .map_or(0, |duration| duration.as_nanos())
         ));
         let path = dir.join(WINDOW_STATE_FILENAME);
-        let mut state = WindowState::default();
-        state.main_window = Some(window(12.0, 34.0, 1280.0, 720.0));
+        let mut state = WindowState {
+            main_window: Some(window(12.0, 34.0, 1280.0, 720.0)),
+            ..Default::default()
+        };
         state.set_output(window(0.0, 0.0, 300.0, 300.0));
         state.write(&path).expect("write state");
         let loaded = WindowState::read(&path);

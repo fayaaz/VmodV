@@ -89,12 +89,7 @@ impl SceneGridState {
         });
     }
 
-    pub fn request_preview(
-        &mut self,
-        scene_id: &str,
-        row: usize,
-        interval: std::time::Duration,
-    ) {
+    pub fn request_preview(&mut self, scene_id: &str, row: usize, interval: std::time::Duration) {
         let now = std::time::Instant::now();
         let current = (scene_id.to_string(), row);
         let due = self
@@ -210,13 +205,13 @@ pub fn draw_scene_grid(
                             let header = ui.add_sized(
                                 [CELL_SIZE.x, 20.0],
                                 egui::Button::new(
-                                    egui::RichText::new(&scene.name).size(11.0).color(
-                                        if current {
+                                    egui::RichText::new(&scene.name)
+                                        .size(11.0)
+                                        .color(if current {
                                             theme::ACCENT
                                         } else {
                                             theme::FOREGROUND
-                                        },
-                                    ),
+                                        }),
                                 )
                                 .frame(false),
                             );
@@ -234,7 +229,14 @@ pub fn draw_scene_grid(
                         for row in 0..row_count {
                             let cell = scene.cell(row).cloned().unwrap_or_default();
                             let _ = draw_scene_cell(
-                                ui, scene, row, &cell, snapshot, grid, live_preview, actions,
+                                ui,
+                                scene,
+                                row,
+                                &cell,
+                                snapshot,
+                                grid,
+                                live_preview,
+                                actions,
                             );
                             ui.add_space(2.0);
                         }
@@ -292,11 +294,7 @@ fn performance_bar(
                     .suffix(" s"),
             )
             .changed();
-        ui.label(
-            egui::RichText::new("fade")
-                .size(10.0)
-                .color(theme::MUTED),
-        );
+        ui.label(egui::RichText::new("fade").size(10.0).color(theme::MUTED));
         let mut fade = snapshot.performance.transition_seconds;
         let fade_changed = ui
             .add(
@@ -606,7 +604,7 @@ fn draw_scene_cell(
 
     // Context menu.
     response.context_menu(|ui| {
-        scene_cell_menu(ui, scene, row, &cell, snapshot, grid, actions);
+        scene_cell_menu(ui, scene, row, cell, snapshot, grid, actions);
     });
 
     hovered

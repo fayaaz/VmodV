@@ -187,6 +187,12 @@ impl ExpressionCache {
         self.by_input.len()
     }
 
+    /// Whether no expressions are compiled (tests/diagnostics).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn is_empty(&self) -> bool {
+        self.by_input.is_empty()
+    }
+
     /// Evaluate the expression assigned to `input_id`, if any.
     ///
     /// `Ok(None)` means the input has no expression and the caller must keep

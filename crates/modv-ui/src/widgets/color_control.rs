@@ -119,7 +119,10 @@ mod tests {
 
     #[test]
     fn reads_object_and_array_colours() {
-        let object = ColorControl::new("tint", &serde_json::json!({"r": 0.1, "g": 0.2, "b": 0.3, "a": 0.4}));
+        let object = ColorControl::new(
+            "tint",
+            &serde_json::json!({"r": 0.1, "g": 0.2, "b": 0.3, "a": 0.4}),
+        );
         assert_eq!(object.rgba, [0.1, 0.2, 0.3, 0.4]);
         let array = ColorControl::new("tint", &serde_json::json!([1, 0, 0, 1]));
         assert_eq!(array.rgba, [1.0, 0.0, 0.0, 1.0]);
@@ -127,7 +130,10 @@ mod tests {
 
     #[test]
     fn serialises_the_legacy_ratio_shape() {
-        let control = ColorControl::new("tint", &serde_json::json!({"r": 2, "g": -1, "b": 0.5, "a": 1}));
+        let control = ColorControl::new(
+            "tint",
+            &serde_json::json!({"r": 2, "g": -1, "b": 0.5, "a": 1}),
+        );
         let value = control.to_value();
         assert_eq!(value["r"], 1.0);
         assert_eq!(value["g"], 0.0);

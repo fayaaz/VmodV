@@ -66,7 +66,11 @@ impl VecControl {
                     .sense(Sense::click()),
             )
             .on_hover_text(&self.label);
-            for (index, lane) in ["X", "Y", "Z", "W"].iter().take(self.values.len()).enumerate() {
+            for (index, lane) in ["X", "Y", "Z", "W"]
+                .iter()
+                .take(self.values.len())
+                .enumerate()
+            {
                 ui.label(
                     egui::RichText::new(*lane)
                         .monospace()

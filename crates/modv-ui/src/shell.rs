@@ -11,9 +11,9 @@ use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PropView, galler
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState};
 use crate::theme;
-use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 use crate::widgets::input_link::{link_editor_window, link_row};
 use crate::widgets::range_control::chip;
+use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 
 /// Draw the complete native UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -74,7 +74,10 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
             .or_else(|| snapshot.performance.current_scene_id.clone())
             .or_else(|| snapshot.scenes.first().map(|scene| scene.id.clone()));
         if let Some(scene_id) = scene_id {
-            state.push_action("scenes/applyScene", serde_json::json!({"sceneId": scene_id}));
+            state.push_action(
+                "scenes/applyScene",
+                serde_json::json!({"sceneId": scene_id}),
+            );
         }
     }
     // Number keys jump to a Scene column (1-based), matching the legacy row
@@ -360,7 +363,14 @@ fn fps_sparkline(ui: &mut egui::Ui, state: &UiState) {
         if let Some(previous) = previous {
             painter.line_segment(
                 [previous, point],
-                Stroke::new(1.0, if *fps >= 55.0 { theme::OK } else { theme::ACCENT }),
+                Stroke::new(
+                    1.0,
+                    if *fps >= 55.0 {
+                        theme::OK
+                    } else {
+                        theme::ACCENT
+                    },
+                ),
             );
         }
         previous = Some(point);
@@ -444,8 +454,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                         .map(|group| group.id.clone())
                         .collect();
                     for (index, group) in snapshot.groups.iter().enumerate() {
-                        let selected =
-                            state.selected_group.as_deref() == Some(group.id.as_str());
+                        let selected = state.selected_group.as_deref() == Some(group.id.as_str());
                         let mut enabled = group.enabled;
                         ui.horizontal(|ui| {
                             if ui
@@ -475,18 +484,12 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                 state.group_name_draft_id = Some(group.id.clone());
                             }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui
-                                    .small_button("x")
-                                    .on_hover_text("Remove Group")
-                                    .clicked()
-                                {
+                                if ui.small_button("x").on_hover_text("Remove Group").clicked() {
                                     state.push_action(
                                         "groups/removeGroup",
                                         serde_json::json!({ "groupId": group.id }),
                                     );
-                                    if state.selected_group.as_deref()
-                                        == Some(group.id.as_str())
-                                    {
+                                    if state.selected_group.as_deref() == Some(group.id.as_str()) {
                                         state.selected_group = None;
                                         state.selected_module = None;
                                     }
@@ -532,16 +535,15 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
 
                         if selected {
                             ui.indent(("group-controls", &group.id), |ui| {
-                                if state.group_name_draft_id.as_deref()
-                                    != Some(group.id.as_str())
-                                {
+                                if state.group_name_draft_id.as_deref() != Some(group.id.as_str()) {
                                     state.group_name_draft = group.name.clone();
                                     state.group_name_draft_id = Some(group.id.clone());
                                 }
-                                let name_response =
-                                    ui.add(egui::TextEdit::singleline(&mut state.group_name_draft)
+                                let name_response = ui.add(
+                                    egui::TextEdit::singleline(&mut state.group_name_draft)
                                         .desired_width(ui.available_width() - 8.0)
-                                        .font(egui::TextStyle::Small));
+                                        .font(egui::TextStyle::Small),
+                                );
                                 if name_response.lost_focus()
                                     && ui.input(|input| input.key_pressed(egui::Key::Enter))
                                 {
@@ -592,9 +594,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                     let mut inherit = group.inherit;
                                     if ui
                                         .checkbox(&mut inherit, "Inherit")
-                                        .on_hover_text(
-                                            "Inherit the previous Group's canvas",
-                                        )
+                                        .on_hover_text("Inherit the previous Group's canvas")
                                         .changed()
                                     {
                                         state.push_action(
@@ -673,8 +673,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                     });
 
                                 ui.separator();
-                                let modules =
-                                    snapshot.modules_in_group(&group.id);
+                                let modules = snapshot.modules_in_group(&group.id);
                                 if modules.is_empty() {
                                     ui.label(
                                         egui::RichText::new("empty")
@@ -689,10 +688,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                         == Some(module.id.as_str());
                                     ui.horizontal(|ui| {
                                         let mut module_enabled = module.enabled;
-                                        if ui
-                                            .checkbox(&mut module_enabled, "")
-                                            .changed()
-                                        {
+                                        if ui.checkbox(&mut module_enabled, "").changed() {
                                             state.push_action(
                                                 "modules/updateMeta",
                                                 serde_json::json!({
@@ -741,9 +737,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                                 if ui
                                                     .add_enabled(
                                                         module_index + 1 < modules.len(),
-                                                        egui::Button::new("v")
-                                                            .small()
-                                                            .frame(false),
+                                                        egui::Button::new("v").small().frame(false),
                                                     )
                                                     .on_hover_text("Move module down")
                                                     .clicked()
@@ -761,9 +755,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                                 if ui
                                                     .add_enabled(
                                                         module_index > 0,
-                                                        egui::Button::new("^")
-                                                            .small()
-                                                            .frame(false),
+                                                        egui::Button::new("^").small().frame(false),
                                                     )
                                                     .on_hover_text("Move module up")
                                                     .clicked()
@@ -961,7 +953,12 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
 }
 
 fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
-    ui.label(egui::RichText::new("modV Native").strong().size(14.0).color(theme::ACCENT));
+    ui.label(
+        egui::RichText::new("modV Native")
+            .strong()
+            .size(14.0)
+            .color(theme::ACCENT),
+    );
     ui.label(format!("Rust {}", env!("CARGO_PKG_VERSION")));
     ui.separator();
     egui::Grid::new("info-grid")
@@ -1024,7 +1021,11 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
 }
 
 fn plugins_panel(ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new("JavaScript plugins").strong().size(11.0));
+    ui.label(
+        egui::RichText::new("JavaScript plugins")
+            .strong()
+            .size(11.0),
+    );
     ui.label(
         egui::RichText::new(
             "D5 keeps plugins, but the native shell has not landed the sandboxed Boa host yet. The switch is deliberately disabled until the consent flow and restricted host API exist; the legacy Electron build remains available for grab-canvas.",
@@ -1032,10 +1033,16 @@ fn plugins_panel(ui: &mut egui::Ui) {
         .size(10.0)
         .color(theme::MUTED),
     );
-    ui.add_enabled(false, egui::Checkbox::new(&mut false, "Enable JavaScript plugins (advanced)"));
+    ui.add_enabled(
+        false,
+        egui::Checkbox::new(&mut false, "Enable JavaScript plugins (advanced)"),
+    );
     ui.add_space(4.0);
     ui.label(egui::RichText::new("Bundled plugins").strong().size(10.0));
-    ui.add_enabled(false, egui::Checkbox::new(&mut false, "grab-canvas  (not ported)"));
+    ui.add_enabled(
+        false,
+        egui::Checkbox::new(&mut false, "grab-canvas  (not ported)"),
+    );
     ui.separator();
     ui.label(
         egui::RichText::new(
@@ -1356,10 +1363,8 @@ fn draw_prop(
                 if let serde_json::Value::Array(colors) = &prop.value {
                     for color in colors.iter().take(8) {
                         let control = ColorControl::new("", color);
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(12.0, 12.0),
-                            egui::Sense::hover(),
-                        );
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                         let [r, g, b, a] = control.rgba;
                         ui.painter().rect_filled(
                             rect,
@@ -1766,11 +1771,7 @@ fn gallery_tile(
     );
 
     if response.hovered() {
-        state.request_gallery_preview(
-            &module.name,
-            true,
-            std::time::Duration::from_millis(150),
-        );
+        state.request_gallery_preview(&module.name, true, std::time::Duration::from_millis(150));
     }
     if response.clicked() {
         state.selected_gallery_module = Some(module.name.clone());
@@ -1948,7 +1949,9 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
                     PaletteAction::Command(command) => state.queue(command.clone()),
                     PaletteAction::AddModule(value) => {
                         if let Some((module, group)) = value.split_once('|') {
-                            state.actions.push(UiAction::add_module_to_group(module, group));
+                            state
+                                .actions
+                                .push(UiAction::add_module_to_group(module, group));
                         }
                     }
                     PaletteAction::Scene(scene_id) => {
@@ -1971,7 +1974,9 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
             PaletteAction::Command(command) => state.queue(command.clone()),
             PaletteAction::AddModule(value) => {
                 if let Some((module, group)) = value.split_once('|') {
-                    state.actions.push(UiAction::add_module_to_group(module, group));
+                    state
+                        .actions
+                        .push(UiAction::add_module_to_group(module, group));
                 }
             }
             PaletteAction::Scene(scene_id) => {
@@ -2027,11 +2032,7 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
                         let intervals: Vec<f64> = state
                             .tap_times
                             .windows(2)
-                            .map(|pair| {
-                                pair[1]
-                                    .saturating_duration_since(pair[0])
-                                    .as_secs_f64()
-                            })
+                            .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64())
                             .filter(|interval| *interval > 0.0)
                             .collect();
                         if !intervals.is_empty() {
