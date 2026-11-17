@@ -11,13 +11,14 @@
 //! The legacy Electron app remains the shipping product; this binary is the
 //! opt-in native path (`MODV_UI=native`, `make native`).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_wgpu::{Renderer as EguiRenderer, RendererOptions, ScreenDescriptor};
 use egui_winit::State as EguiWinitState;
+use modv_media::audio::engine::AudioFeed;
 use modv_render::Engine;
 use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_present_mode};
 use modv_render::wgpu;
@@ -34,7 +35,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
 use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
-use crate::cli::Cli;
+use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
 use crate::media::MediaHub;
 use crate::report::AdapterSummary;
@@ -100,7 +101,7 @@ pub struct NativeApp {
     /// Gallery/Scene hover textures owned by the UI context.
     preview_textures: HashMap<String, PreviewEntry>,
     preview_order: VecDeque<String>,
-    preview_errors: HashSet<String>,
+    preview_error_counts: HashMap<String, u32>,
     window_state: WindowState,
     window_state_path: PathBuf,
     window_state_dirty: bool,
@@ -108,6 +109,11 @@ pub struct NativeApp {
     window_state_error_logged: bool,
     media_hub: MediaHub,
     last_media_health: Instant,
+    /// Cached V4L2 enumeration; rescanning every frame is 50–500 µs per camera.
+    media_cameras: Vec<modv_media::video::CameraInfo>,
+    last_camera_scan: Instant,
+    audio_feed: Option<AudioFeed>,
+    audio_error_logged: bool,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -172,6 +178,8 @@ impl NativeApp {
                 .map_or(0, serde_json::Map::len)
         );
 
+        let audio_feed = open_native_audio(&cli);
+
         let egui_ctx = egui::Context::default();
         modv_ui::theme::apply(&egui_ctx);
 
@@ -194,7 +202,7 @@ impl NativeApp {
             preview_size: (0, 0),
             preview_textures: HashMap::new(),
             preview_order: VecDeque::new(),
-            preview_errors: HashSet::new(),
+            preview_error_counts: HashMap::new(),
             window_state: WindowState::read(&user_data_dir().join(WINDOW_STATE_FILENAME)),
             window_state_path: user_data_dir().join(WINDOW_STATE_FILENAME),
             window_state_dirty: false,
@@ -202,6 +210,10 @@ impl NativeApp {
             window_state_error_logged: false,
             media_hub,
             last_media_health: start,
+            media_cameras: Vec::new(),
+            last_camera_scan: start.checked_sub(Duration::from_secs(10)).unwrap_or(start),
+            audio_feed,
+            audio_error_logged: false,
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -232,7 +244,12 @@ impl NativeApp {
                 self.cli.height.max(320),
             ))
             .with_min_inner_size(PhysicalSize::new(480, 320));
-        if let Some(saved) = self.window_state.main_window.clone() {
+        if let Some(saved) = self
+            .window_state
+            .main_window
+            .clone()
+            .map(|saved| clamp_saved_to_monitor(saved, event_loop))
+        {
             attributes = attributes
                 .with_inner_size(LogicalSize::new(saved.width, saved.height))
                 .with_position(LogicalPosition::new(saved.x, saved.y))
@@ -322,7 +339,12 @@ impl NativeApp {
             ))
             .with_position(LogicalPosition::new(120.0, 120.0))
             .with_resizable(true);
-        if let Some(saved) = self.window_state.output().cloned() {
+        if let Some(saved) = self
+            .window_state
+            .output()
+            .cloned()
+            .map(|saved| clamp_saved_to_monitor(saved, event_loop))
+        {
             attributes = attributes
                 .with_inner_size(LogicalSize::new(saved.width, saved.height))
                 .with_position(LogicalPosition::new(saved.x, saved.y));
@@ -382,6 +404,7 @@ impl NativeApp {
     }
 
     fn tick_engine(&mut self, dt: Duration) {
+        self.pump_audio(dt);
         self.store.drain_osc();
         if self.store.scenes_tick_due() {
             let delta = dt.as_secs_f64() * 1000.0;
@@ -394,6 +417,33 @@ impl NativeApp {
         }
         let audio = self.store.audio().clone();
         self.store.update_input_links(&audio, self.start.elapsed());
+    }
+
+    /// Pump the native engine-owned audio feed and publish it into the store.
+    ///
+    /// The Electron path defaults to the renderer's WebAudio pump; native has
+    /// no renderer, so it opens PipeWire's default monitor (the system-audio
+    /// loopback) and falls back to the default input. A capture failure logs
+    /// once, stops the feed and leaves the engine silent instead of killing
+    /// the frame loop.
+    fn pump_audio(&mut self, dt: Duration) {
+        let Some(feed) = self.audio_feed.as_mut() else {
+            return;
+        };
+        let snapshot = feed.frame(dt.as_secs_f32());
+        let kick = feed.analyser().kick();
+        let error = feed.take_error();
+        self.store
+            .set_engine_audio(&snapshot, kick, self.start.elapsed());
+        let Some(error) = error else {
+            return;
+        };
+        if !self.audio_error_logged {
+            self.audio_error_logged = true;
+            eprintln!("ui: WARN native audio capture stopped ({error}); engine is silent");
+        }
+        self.audio_feed = None;
+        self.store.disable_engine_audio();
     }
 
     fn frame_info(&self) -> FrameInfo {
@@ -488,6 +538,10 @@ impl NativeApp {
         if now.saturating_duration_since(self.last_media_health) >= Duration::from_secs(1) {
             self.media_hub.poll_health();
             self.last_media_health = now;
+        }
+        if now.saturating_duration_since(self.last_camera_scan) >= Duration::from_secs(1) {
+            self.media_cameras = self.media_hub.list_cameras();
+            self.last_camera_scan = now;
         }
         self.drain_ui_commands(event_loop);
         if self.done {
@@ -847,8 +901,10 @@ impl NativeApp {
         match result {
             Ok((pixels, width, height)) => self.upload_preview(key, pixels, width, height),
             Err(error) => {
-                if self.preview_errors.insert(key.clone()) {
-                    eprintln!("ui: WARN preview {key} failed: {error}");
+                let count = self.preview_error_counts.entry(key.clone()).or_insert(0);
+                *count += 1;
+                if *count == 1 || count.is_multiple_of(10) {
+                    eprintln!("ui: WARN preview {key} failed (attempt {count}): {error}");
                 }
             }
         }
@@ -856,8 +912,13 @@ impl NativeApp {
 
     fn upload_preview(&mut self, key: String, mut pixels: Vec<u8>, width: u32, height: u32) {
         if pixels.len() != (width as usize) * (height as usize) * 4 {
-            if self.preview_errors.insert(key.clone()) {
-                eprintln!("ui: WARN preview {key} returned {} bytes", pixels.len());
+            let count = self.preview_error_counts.entry(key.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 || count.is_multiple_of(10) {
+                eprintln!(
+                    "ui: WARN preview {key} returned {} bytes (attempt {count})",
+                    pixels.len()
+                );
             }
             return;
         }
@@ -1127,9 +1188,9 @@ impl NativeApp {
             available: self.media_hub.is_available(),
             error: self.media_hub.init_error().map(str::to_string),
             cameras: self
-                .media_hub
-                .list_cameras()
-                .into_iter()
+                .media_cameras
+                .iter()
+                .cloned()
                 .map(|camera| {
                     let mode = camera.max_mode();
                     CameraView {
@@ -1325,6 +1386,9 @@ impl NativeApp {
         self.store.flush_link_deltas();
         self.store.shutdown_ndi();
         self.media_hub.stop_all();
+        if let Some(mut feed) = self.audio_feed.take() {
+            feed.stop();
+        }
         self.close_output();
     }
 }
@@ -1466,6 +1530,81 @@ fn acquire_surface(
 ///
 /// Packaging moves the corpus to `resources/isf`; during development it still
 /// lives beside the legacy renderer tree. `$MODV_ISF_DIR` and `--isf-dir` win.
+/// The audio capture sources to try for the native shell.
+///
+/// An explicit engine-owned `--audio-source` wins; the renderer default is
+/// translated to the system monitor, then the default input.
+/// Clamp a saved placement onto the primary monitor.
+///
+/// The legacy `resolveWindowBounds` does this at show time; without it a window
+/// saved on a 4K display can sit off-screen on a smaller laptop.
+fn clamp_saved_to_monitor(
+    saved: SavedWindow,
+    event_loop: &ActiveEventLoop,
+) -> SavedWindow {
+    let Some(monitor) = event_loop.primary_monitor() else {
+        return saved;
+    };
+    let scale = monitor.scale_factor();
+    let position = monitor.position();
+    let size = monitor.size();
+    let area = SavedWindow {
+        x: f64::from(position.x) / scale,
+        y: f64::from(position.y) / scale,
+        width: f64::from(size.width) / scale,
+        height: f64::from(size.height) / scale,
+        ..Default::default()
+    };
+    if area.is_usable() {
+        crate::window_state::clamp_bounds_to_area(saved, area)
+    } else {
+        saved
+    }
+}
+
+fn native_audio_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelection> {
+    if selection.engine_owned() {
+        vec![selection]
+    } else {
+        vec![
+            AudioSourceSelection::Pipewire,
+            AudioSourceSelection::Input,
+        ]
+    }
+}
+
+/// Open the first working native audio feed.
+fn open_native_audio(cli: &Cli) -> Option<AudioFeed> {
+    for selection in native_audio_sources(cli.audio_source) {
+        match crate::audio::open_feed(selection, cli.audio_device.as_deref()) {
+            Ok(feed) => {
+                let device_note = cli
+                    .audio_device
+                    .as_deref()
+                    .map(|device| format!(" (device {device})"))
+                    .unwrap_or_default();
+                eprintln!(
+                    "ui: INFO audio source {} owns capture{} at {} Hz",
+                    selection.as_str(),
+                    device_note,
+                    feed.sample_rate()
+                );
+                // The first `pump_audio` frame publishes the feed state; until
+                // then the store reports silence (`audio_active == false`).
+                return Some(feed);
+            }
+            Err(error) => {
+                eprintln!(
+                    "ui: WARN audio source {} unavailable: {error}",
+                    selection.as_str()
+                );
+            }
+        }
+    }
+    eprintln!("ui: WARN no native audio source started; engine runs silent");
+    None
+}
+
 fn resolve_isf_dir(cli: &Cli) -> Option<PathBuf> {
     resolve_isf_dir_from(cli.isf_dir.as_deref())
 }
@@ -1687,6 +1826,25 @@ mod tests {
         assert_eq!(view.max_seconds, 10.0);
         assert_eq!(view.transition_seconds, 1.5);
         assert_eq!(view.allowed_transitions, vec!["Fade", "Wipe"]);
+    }
+
+    #[test]
+    fn native_audio_defaults_to_the_system_monitor_then_input() {
+        assert_eq!(
+            native_audio_sources(AudioSourceSelection::Renderer),
+            vec![
+                AudioSourceSelection::Pipewire,
+                AudioSourceSelection::Input
+            ]
+        );
+        assert_eq!(
+            native_audio_sources(AudioSourceSelection::Input),
+            vec![AudioSourceSelection::Input]
+        );
+        assert_eq!(
+            native_audio_sources(AudioSourceSelection::Pipewire),
+            vec![AudioSourceSelection::Pipewire]
+        );
     }
 
     #[test]

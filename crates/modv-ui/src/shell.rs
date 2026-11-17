@@ -48,10 +48,13 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.queue(UiCommand::SaveSnapshot);
     }
     if search {
-        state.show_search = true;
-        state.search_focus = true;
+        state.show_search = !state.show_search;
+        state.palette_focus = state.show_search;
         state.command_query.clear();
         state.command_selection = 0;
+        if state.show_search {
+            state.search_focus = false;
+        }
     }
     if help {
         state.show_shortcuts = !state.show_shortcuts;
@@ -644,7 +647,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                             "saturation",
                                             "color",
                                             "luminosity",
-                                            "add",
+                                            "lighter",
                                         ] {
                                             if ui
                                                 .selectable_label(
@@ -1695,6 +1698,7 @@ enum PaletteAction {
     Command(UiCommand),
     AddModule(String),
     Scene(String),
+    ShowShortcuts,
 }
 
 fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -1738,10 +1742,7 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
         ),
         (
             "Show keyboard shortcuts".to_string(),
-            PaletteAction::Action(
-                "ui/showShortcuts",
-                serde_json::json!({}),
-            ),
+            PaletteAction::ShowShortcuts,
         ),
     ];
     for scene in &snapshot.scenes {
@@ -1787,9 +1788,9 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
                     .hint_text("Type a command, Scene or module  (Enter to run)")
                     .desired_width(f32::INFINITY),
             );
-            if state.search_focus {
+            if state.palette_focus {
                 response.request_focus();
-                state.search_focus = false;
+                state.palette_focus = false;
             }
             if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
                 state.command_selection =
@@ -1837,6 +1838,7 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
                             serde_json::json!({ "sceneId": scene_id }),
                         );
                     }
+                    PaletteAction::ShowShortcuts => state.show_shortcuts = true,
                 }
                 state.show_search = false;
             }
@@ -1859,6 +1861,7 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
                     serde_json::json!({ "sceneId": scene_id }),
                 );
             }
+            PaletteAction::ShowShortcuts => state.show_shortcuts = true,
         }
         state.show_search = false;
     }

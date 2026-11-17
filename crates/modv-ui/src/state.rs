@@ -124,6 +124,9 @@ pub struct UiState {
     pub show_about: bool,
     pub show_shortcuts: bool,
     pub search_focus: bool,
+    /// One-shot focus request for the Ctrl+K palette (separate from the
+    /// Gallery search field).
+    pub palette_focus: bool,
     pub link_editor: Option<LinkEditor>,
     pub show_bpm: bool,
     pub show_search: bool,
@@ -279,6 +282,7 @@ impl UiState {
             show_about: false,
             show_shortcuts: false,
             search_focus: false,
+            palette_focus: false,
             link_editor: None,
             show_bpm: false,
             show_search: false,
