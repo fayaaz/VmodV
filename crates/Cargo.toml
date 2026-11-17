@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "modv-app",
+    "modv-ui",
     "modv-engine",
     "modv-ipc",
     "modv-media",

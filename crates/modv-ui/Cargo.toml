@@ -1,0 +1,13 @@
+[package]
+name = "modv-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "modV native UI (egui) — see docs/rust-full-rewrite.md"
+
+[dependencies]
+egui = { version = "0.37.0", features = ["default_fonts"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+
+[dev-dependencies]
+egui_kittest = "0.37.0"
