@@ -99,6 +99,14 @@
 //! [`TweenDescriptor::extra`] so a load -> save round trip keeps them verbatim;
 //! a two-row `[0, 1]` list samples exactly like an even-spaced two-row tween.
 //!
+//! [`TweenDescriptor::with_free_keyframes`] performs the one-way conversion the
+//! curve editor uses: anime's evenly spaced multi-keyframe shape becomes an
+//! explicit list (a duplicate first row plus the even grid) that plays back
+//! identically. Evenly spaced free times are sampled with anime's segment
+//! arithmetic rather than the normalised fractions, so the conversion is
+//! bit-exact for wall-clock tweens (a BPM cycle can move by one ulp because the
+//! `(60 * 60 / bpm) * division` base is re-expressed for the extra row).
+//!
 //! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use indexmap::IndexMap;
@@ -265,6 +273,55 @@ impl TweenDescriptor {
         } else {
             base / self.data.len() as f64
         }
+    }
+
+    /// Whether the descriptor still uses anime's evenly spaced keyframes:
+    /// three or more rows and no usable `keyframeTimes`.
+    pub fn uses_even_keyframes(&self) -> bool {
+        self.data.len() >= 3 && self.effective_keyframe_times().is_none()
+    }
+
+    /// Rewrite an evenly keyframed tween as a free-times tween that plays back
+    /// the same way.
+    ///
+    /// anime's 3+ row shape holds row 0 for the first `1/N` of the run and
+    /// then reaches rows `1..N-1` at `2/N..1` (one eased segment per
+    /// keyframe). Duplicating row 0 and placing the `N+1` rows on the even grid
+    /// `[0, 1/N, ..., 1]` expresses exactly the same segments with explicit
+    /// times, so the curve editor can drag them.
+    ///
+    /// The extra row would otherwise divide the animation duration once more
+    /// (`effective_duration` divides by the row count unless
+    /// `durationAsTotalTime`), so the duration is re-expressed as the total
+    /// time: the wall-clock shape is bit-exact, and a BPM tween's division is
+    /// scaled so the cycle length is preserved to the last ulp the
+    /// `(60 * 60 / bpm) * division` formula allows.
+    ///
+    /// Two-row tweens (anime's `[from, to]` shorthand) and descriptors that
+    /// already carry valid times are returned unchanged.
+    pub fn with_free_keyframes(&self) -> Self {
+        if !self.uses_even_keyframes() {
+            return self.clone();
+        }
+
+        let rows = self.data.len();
+        let mut data = Vec::with_capacity(rows + 1);
+        data.push(self.data[0].clone());
+        data.extend(self.data.iter().cloned());
+        let times: Vec<f64> = (0..=rows).map(|index| index as f64 / rows as f64).collect();
+
+        let mut descriptor = self.clone();
+        descriptor.data = data;
+        descriptor.keyframe_times = Some(times);
+        if !descriptor.duration_as_total_time {
+            descriptor.duration_as_total_time = true;
+            if descriptor.use_bpm {
+                descriptor.bpm_division /= rows as f64;
+            } else {
+                descriptor.duration /= rows as f64;
+            }
+        }
+        descriptor
     }
 
     /// Serialize back to the preset shape.
@@ -854,6 +911,20 @@ fn sample_free(
         }
     };
 
+    // Evenly spaced free times are the representation a normalised tween uses
+    // for anime's even keyframes (see [`TweenDescriptor::normalised_keyframes`])
+    // and the maths is identical there: one segment per pair of rows, each
+    // `duration / segments` long. Compute it with anime's segment arithmetic
+    // rather than from the normalised fractions, so normalising an animated
+    // tween is a pure representation change (bit-identical frames).
+    if evenly_spaced(times) {
+        let segments = values.len() - 1;
+        let segment = duration / segments as f64;
+        let (index, start) = active_keyframe_tween(segments, segment, time);
+        let elapsed = normalize_elapsed(time - start, segment);
+        return interpolate(values[index], values[index + 1], eased(tween, elapsed));
+    }
+
     let mut index = values.len() - 2;
     for candidate in 0..values.len() - 1 {
         if progress < times[candidate + 1] {
@@ -866,6 +937,16 @@ fn sample_free(
     let local = ((progress - times[index]) / width).clamp(0.0, 1.0);
 
     interpolate(values[index], values[index + 1], eased(tween, local))
+}
+
+/// Whether `times` is the exact even grid `0, 1/(n-1), ..., 1`.
+fn evenly_spaced(times: &[f64]) -> bool {
+    let last = times.len().saturating_sub(1);
+    last > 0
+        && times
+            .iter()
+            .enumerate()
+            .all(|(index, time)| *time == index as f64 / last as f64)
 }
 
 /// The active tween index and its start time for a 3+ keyframe channel.
@@ -2473,5 +2554,122 @@ mod tests {
         assert!(!set.contains("old"));
         assert!(set.contains("new"));
         assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn free_keyframe_normalisation_preserves_wall_clock_playback() {
+        for rows in [3usize, 5] {
+            for duration_as_total_time in [false, true] {
+                let data = even_rows(rows);
+                let mut even = TweenDescriptor::new("even", data);
+                even.use_bpm = false;
+                even.duration = 1000.0;
+                even.easing = "easeInOutSine".to_string();
+                even.direction = "normal".to_string();
+                even.duration_as_total_time = duration_as_total_time;
+
+                let free = even.with_free_keyframes();
+                assert_eq!(free.data.len(), rows + 1);
+                assert_eq!(free.data[0], even.data[0]);
+                assert_eq!(&free.data[1..], &even.data[..]);
+                assert_eq!(
+                    free.keyframe_times,
+                    Some((0..=rows).map(|index| index as f64 / rows as f64).collect())
+                );
+
+                for fps in [60.0, 30.0, 144.0] {
+                    for looping in [false, true] {
+                        let mut even = even.clone();
+                        even.looping = looping;
+                        let free = even.with_free_keyframes();
+                        assert_eq!(
+                            build_tween_frames(&even, fps, 120.0),
+                            build_tween_frames(&free, fps, 120.0),
+                            "{rows} rows, total={duration_as_total_time}, fps={fps}, loop={looping}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn free_keyframe_normalisation_keeps_the_bpm_cycle() {
+        // The `duration`/`bpmDivision` re-expression multiplies and divides a
+        // different row count, so a bpm tween can drift by an ulp; the frame
+        // count and the animation itself must not change.
+        for rows in [3usize, 5] {
+            let mut even = TweenDescriptor::new("even", even_rows(rows));
+            even.easing = "easeOutQuad".to_string();
+            even.direction = "alternate".to_string();
+            let free = even.with_free_keyframes();
+
+            for bpm in [120.0, 128.0, 174.0, 0.0] {
+                for fps in [60.0, 30.0, 144.0] {
+                    let before = build_tween_frames(&even, fps, bpm);
+                    let after = build_tween_frames(&free, fps, bpm);
+                    assert_eq!(before.len(), after.len(), "frame count");
+                    let mut worst = 0.0f64;
+                    for (a, b) in before.iter().flatten().zip(after.iter().flatten()) {
+                        worst = worst.max((a - b).abs());
+                    }
+                    assert!(
+                        worst <= 1e-12,
+                        "{rows} rows at {bpm} bpm / {fps} fps drifted by {worst:e}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn normalisation_only_rewrites_evenly_keyframed_multi_row_tweens() {
+        let two = TweenDescriptor::new("two", vec![vec![0.0], vec![1.0]]);
+        assert!(!two.uses_even_keyframes());
+        assert_eq!(two.with_free_keyframes(), two);
+
+        let mut free = TweenDescriptor::new("free", even_rows(3));
+        free.keyframe_times = Some(vec![0.0, 0.25, 1.0]);
+        assert!(!free.uses_even_keyframes());
+        assert_eq!(free.with_free_keyframes(), free);
+
+        let mut explicit = TweenDescriptor::new("explicit", even_rows(3));
+        explicit.keyframe_times = Some(vec![0.0, 0.5, 1.0]);
+        assert!(!explicit.uses_even_keyframes());
+        assert_eq!(explicit.with_free_keyframes(), explicit);
+
+        let mut total = TweenDescriptor::new("three", even_rows(3));
+        total.use_bpm = false;
+        total.duration_as_total_time = true;
+        assert!(total.uses_even_keyframes());
+        // Already-total durations need no scaling at all.
+        let normalised = total.with_free_keyframes();
+        assert!(normalised.duration_as_total_time);
+        assert_eq!(normalised.duration, total.duration);
+    }
+
+    #[test]
+    fn evenly_spaced_free_times_sample_like_an_even_tween() {
+        // A two-row `[0, 1]` list is anime's `[from, to]` shorthand; the even
+        // grid fast path keeps it bit-identical.
+        let mut even = TweenDescriptor::new("two", vec![vec![0.0], vec![1.0]]);
+        even.use_bpm = false;
+        even.duration = 500.0;
+        even.easing = "easeInOutCubic".to_string();
+        let mut free = even.clone();
+        free.keyframe_times = Some(vec![0.0, 1.0]);
+        assert_eq!(
+            build_tween_frames(&even, 30.0, 120.0),
+            build_tween_frames(&free, 30.0, 120.0)
+        );
+    }
+
+    fn even_rows(rows: usize) -> Vec<Vec<f64>> {
+        (0..rows)
+            .map(|index| {
+                let progress = index as f64 / (rows - 1) as f64;
+                vec![progress, progress * progress, 1.0 - progress]
+            })
+            .collect()
     }
 }
