@@ -39,6 +39,7 @@ use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
+use crate::isf_watch::IsfWatcher;
 use crate::media::MediaHub;
 use crate::midi::MidiClient;
 use crate::report::AdapterSummary;
@@ -119,6 +120,9 @@ pub struct NativeApp {
     audio_feed: Option<AudioFeed>,
     audio_error_logged: bool,
     midi_client: MidiClient,
+    isf_dir: Option<PathBuf>,
+    user_isf_dirs: Vec<PathBuf>,
+    isf_watcher: Option<IsfWatcher>,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -197,6 +201,10 @@ impl NativeApp {
         apply_startup_scene(&mut store, cli.apply_scene.as_deref());
         let audio_feed = open_native_audio(&cli);
         let midi_client = MidiClient::new();
+        let isf_watcher = IsfWatcher::new(&user_isf_dirs);
+        if isf_watcher.is_some() {
+            eprintln!("ui: INFO watching user ISF folders for changes");
+        }
         if midi_client.available() {
             eprintln!("ui: INFO MIDI input available (hot-plug polled at 1 Hz)");
         } else if let Some(error) = midi_client.error() {
@@ -238,6 +246,9 @@ impl NativeApp {
             audio_feed,
             audio_error_logged: false,
             midi_client,
+            isf_dir,
+            user_isf_dirs,
+            isf_watcher,
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -563,6 +574,9 @@ impl NativeApp {
         if now.saturating_duration_since(self.last_camera_scan) >= Duration::from_secs(1) {
             self.media_cameras = self.media_hub.list_cameras();
             self.last_camera_scan = now;
+        }
+        if self.isf_watcher.as_mut().is_some_and(IsfWatcher::pump) {
+            self.rescan_modules();
         }
         self.drain_ui_commands(event_loop);
         if self.done {
@@ -977,6 +991,23 @@ impl NativeApp {
     }
 
     /// Capture the outgoing frame for a starting whole-scene transition.
+    /// Rebuild the module registry after a user ISF change.
+    fn rescan_modules(&mut self) {
+        let registry = self
+            .store
+            .reload_modules(self.isf_dir.as_deref(), &self.user_isf_dirs);
+        if let Some(compositor) = &mut self.compositor {
+            compositor.set_registry(registry);
+        }
+        let count = self
+            .store
+            .registry_arc()
+            .registered_modules()
+            .as_object()
+            .map_or(0, serde_json::Map::len);
+        eprintln!("ui: INFO user ISF rescan registered {count} modules");
+    }
+
     fn capture_pending_transition(&mut self) {
         if self.store.take_pending_transition_capture().is_none() {
             return;

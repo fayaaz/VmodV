@@ -1940,4 +1940,39 @@ mod tests {
         assert!(bloom.meta.preview_with_output);
         assert!(bloom.document.passes.len() > 1, "Bloom is multi-pass");
     }
+
+    #[test]
+    fn extra_isf_directories_register_new_shaders() {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-extra-isf-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("create extra ISF dir");
+        std::fs::write(
+            dir.join("Native Test Shader.fs"),
+            r#"/*{
+  "NAME": "Native Test Shader",
+  "DESCRIPTION": "native registration test",
+  "CREDIT": "modV",
+  "ISFVSN": "2",
+  "CATEGORIES": ["Effects"],
+  "INPUTS": []
+}*/
+void main() { gl_FragColor = vec4(1.0); }
+"#,
+        )
+        .expect("write test shader");
+        let registry = ModuleRegistry::build_with_extra(None, std::slice::from_ref(&dir));
+        assert!(
+            registry
+                .isf_definitions()
+                .iter()
+                .any(|definition| definition.name == "Native Test Shader"),
+            "extra ISF directory was not registered"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

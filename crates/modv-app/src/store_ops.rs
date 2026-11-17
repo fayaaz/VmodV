@@ -344,6 +344,19 @@ impl Store {
         }
     }
 
+    /// Rebuild the registry from the corpus plus user ISF directories.
+    ///
+    /// Existing module instances keep their names; the new definitions are
+    /// available for the Gallery, `makeActiveModule` and the compositor.
+    pub fn reload_modules(
+        &mut self,
+        isf_dir: Option<&std::path::Path>,
+        extra_isf_dirs: &[std::path::PathBuf],
+    ) -> Arc<ModuleRegistry> {
+        self.registry = Arc::new(ModuleRegistry::build_with_extra(isf_dir, extra_isf_dirs));
+        Arc::clone(&self.registry)
+    }
+
     /// A shared handle to the registry, for the compositor to build against the
     /// same module definitions (including the scanned ISF corpus).
     pub fn registry_arc(&self) -> Arc<ModuleRegistry> {

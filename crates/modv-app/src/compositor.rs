@@ -1066,6 +1066,17 @@ impl Compositor {
         }
     }
 
+    /// Swap in a freshly scanned module registry (user ISF rescan).
+    ///
+    /// Existing instances stay alive; new definitions can create their
+    /// pipelines on the next draw. Failed-module caches are cleared so a
+    /// previously broken user shader can be retried.
+    pub fn set_registry(&mut self, registry: Arc<ModuleRegistry>) {
+        self.registry = registry;
+        self.failed_modules.clear();
+        self.failed_isf.clear();
+    }
+
     /// Resize the output. Every output-sized texture is dropped and lazily
     /// reallocated at the new size on the next frame.
     pub fn resize(&mut self, width: u32, height: u32) {
