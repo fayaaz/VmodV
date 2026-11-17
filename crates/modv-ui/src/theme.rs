@@ -1,28 +1,31 @@
 //! The native shell's black-and-neon-green theme.
 //!
 //! The palette descends from the legacy dark chrome (`App.vue` +
-//! `golden-layout_theme.css`) but is rebuilt as near-black surfaces with a
+//! `golden-layout_theme.css`) but is rebuilt as black surfaces with a
 //! single neon-green accent: no grey chrome, no rounded pills. Fonts are the
 //! bundled IBM Plex faces ([`crate::fonts`]), one visible step larger than the
 //! original port.
 //!
 //! Surfaces are deliberately separated so a control can never disappear into
-//! whatever it sits on: `BACKGROUND`/`PANEL`/`PANEL_ALT`/`INPUT` form a strictly
-//! ordered ladder, and sliders get their own track that differs from all of
-//! them ([`SLIDER_TRACK`]) plus an accent trailing fill.
+//! whatever it sits on: the frames (`BACKGROUND`/`PANEL`) are pure black, the
+//! raised surfaces (`INPUT`/`PANEL_ALT`) step lighter, and sliders get their
+//! own track that differs from all of them ([`SLIDER_TRACK`]) plus an accent
+//! trailing fill.
 
 use egui::style::HandleShape;
 use egui::{Color32, CornerRadius, Stroke};
 
-/// Window/background fill (`#050806`, near-black with a green cast).
-pub const BACKGROUND: Color32 = Color32::from_rgb(5, 8, 6);
-/// Panel fill (`#0A100C`): side panels, dock column, tab strip, floating windows.
-pub const PANEL: Color32 = Color32::from_rgb(10, 16, 12);
-/// Raised surface inside a panel (`#0E1711`): banners, selected rows, badges.
-/// Never use this as a panel/window background.
-pub const PANEL_ALT: Color32 = Color32::from_rgb(14, 23, 17);
-/// Input/track well (`#040705`).
-pub const INPUT: Color32 = Color32::from_rgb(4, 7, 5);
+/// Window/background fill (`#000000`, pure black).
+pub const BACKGROUND: Color32 = Color32::from_rgb(0, 0, 0);
+/// Panel fill (`#000000`): side panels, dock column, tab strip, floating
+/// windows. Frames are black; the green lives in the accents and borders.
+pub const PANEL: Color32 = Color32::from_rgb(0, 0, 0);
+/// Raised surface inside a panel (`#121212`, neutral): buttons, banners,
+/// selected rows, badges. Never use this as a panel/window background.
+pub const PANEL_ALT: Color32 = Color32::from_rgb(18, 18, 18);
+/// Input/track well (`#0A0A0A`): one step above the black frames so fields
+/// and input boxes still read.
+pub const INPUT: Color32 = Color32::from_rgb(10, 10, 10);
 /// Foreground text (`#E8F5EC`).
 pub const FOREGROUND: Color32 = Color32::from_rgb(232, 245, 236);
 /// Muted/secondary text (`#7E9B88`).
@@ -246,7 +249,7 @@ mod tests {
         let ratio = contrast(ACCENT, BACKGROUND);
         assert!(
             ratio >= 4.5,
-            "neon green on near-black must clear WCAG AA, got {ratio:.2}"
+            "neon green on black must clear WCAG AA, got {ratio:.2}"
         );
         assert!(
             contrast(FOREGROUND, PANEL) >= 7.0,
@@ -259,14 +262,22 @@ mod tests {
     }
 
     #[test]
-    fn the_surface_ladder_is_strictly_ordered() {
-        let surfaces = [INPUT, BACKGROUND, PANEL, PANEL_ALT];
-        for pair in surfaces.windows(2) {
+    fn frames_are_black_and_raised_surfaces_step_lighter() {
+        assert_eq!(BACKGROUND, Color32::BLACK);
+        assert_eq!(PANEL, Color32::BLACK);
+        let raised = [INPUT, PANEL_ALT];
+        for pair in raised.windows(2) {
             assert!(
                 luminance(pair[0]) < luminance(pair[1]),
-                "surfaces must get lighter in ladder order: {:?} vs {:?}",
+                "raised surfaces must get lighter: {:?} vs {:?}",
                 pair[0],
                 pair[1]
+            );
+        }
+        for surface in raised {
+            assert!(
+                luminance(surface) > luminance(PANEL),
+                "{surface:?} must separate from the black frame"
             );
         }
     }
