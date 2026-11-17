@@ -1,6 +1,6 @@
 //! The native shell: window chrome, menus, status bar and panel composition.
 //!
-//! P0 composition deliberately mirrors the legacy layout closely enough to
+//! The composition deliberately mirrors the legacy layout closely enough to
 //! judge the immediate-mode fit: Groups on the left, Inspector on the right,
 //! a central live-output + Gallery + Scenes area, a status bar and a menu bar.
 //! P5 replaces this hand layout with `egui_tiles` docking.
@@ -9,7 +9,9 @@ use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKi
 
 use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PropView, gallery_preview_key};
 use crate::panels::scene_grid::draw_scene_grid;
-use crate::state::{GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState};
+use crate::state::{
+    GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState, filter_gallery_modules,
+};
 use crate::theme;
 use crate::widgets::input_link::{link_editor_window, link_row};
 use crate::widgets::range_control::chip;
@@ -228,8 +230,6 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                         state.queue(UiCommand::CloseOutputWindow);
                         ui.close();
                     }
-                    ui.separator();
-                    ui.checkbox(&mut state.show_p0, "P0 checklist");
                 });
 
                 ui.menu_button("Help", |ui| {
@@ -338,7 +338,6 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                     .color(theme::MUTED),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    chip(ui, "P0", theme::ACCENT);
                     ui.label(
                         egui::RichText::new(&state.status.backend)
                             .size(10.0)
@@ -1433,28 +1432,6 @@ fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
         }
         ui.separator();
     }
-
-    ui.label(
-        egui::RichText::new("P0 PROBE")
-            .strong()
-            .size(10.0)
-            .color(theme::ACCENT),
-    );
-    ui.label(
-        egui::RichText::new("RangeControl: slider, drag value, reset and E/T badges.")
-            .size(10.0)
-            .color(theme::MUTED),
-    );
-    let changed = state.inspector_probe.draw(ui);
-    if changed {
-        state.inspector_probe_value = state.inspector_probe.value;
-    }
-    ui.label(
-        egui::RichText::new(format!("probe value = {:.4}", state.inspector_probe_value))
-            .monospace()
-            .size(10.0)
-            .color(theme::MUTED),
-    );
 }
 
 fn draw_prop(
@@ -1674,7 +1651,6 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                         .size(18.0)
                         .color(theme::FOREGROUND),
                 );
-                chip(ui, "P0 FRAMEWORK SPIKE", theme::ACCENT);
                 ui.label(
                     egui::RichText::new("egui + wgpu + in-process engine")
                         .size(11.0)
@@ -1702,10 +1678,7 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             ui.add_space(4.0);
             ui.separator();
 
-            ui.columns(2, |columns| {
-                preview_panel(&mut columns[0], snapshot, state);
-                probe_panel(&mut columns[1], snapshot, state);
-            });
+            preview_panel(ui, snapshot, state);
 
             ui.separator();
             gallery_strip(ui, snapshot, state);
@@ -1748,19 +1721,41 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         });
 }
 
+/// Fit a `resolution`-sized frame inside `available` without stretching.
+///
+/// The frame is centered and letterboxed/pillarboxed within the available
+/// area. A zero or otherwise unusable resolution falls back to 16:9.
+pub fn fit_preview_rect(available: egui::Vec2, resolution: [u32; 2]) -> egui::Rect {
+    let available = vec2(available.x.max(1.0), available.y.max(1.0));
+    let (source_width, source_height) = if resolution[0] > 0 && resolution[1] > 0 {
+        (resolution[0] as f32, resolution[1] as f32)
+    } else {
+        (16.0, 9.0)
+    };
+    let scale = (available.x / source_width).min(available.y / source_height);
+    let size = vec2(source_width * scale, source_height * scale);
+    let min = (available - size) * 0.5;
+    egui::Rect::from_min_size(egui::pos2(min.x, min.y), size)
+}
+
 fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     ui.label(egui::RichText::new("LIVE OUTPUT").strong().size(10.0));
     let width = ui.available_width().max(120.0);
-    let height = (width * 9.0 / 16.0).clamp(80.0, 300.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let max_height = (ui.available_height() * 0.28).clamp(160.0, 260.0);
+    let height = (width * 9.0 / 16.0).clamp(80.0, max_height);
+    let (container, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    // The container spans the full central width; the output is fitted inside
+    // it and the leftover panel background forms the letterbox bars.
+    let image_rect =
+        fit_preview_rect(container.size(), snapshot.resolution).translate(container.min.to_vec2());
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(2), theme::INPUT);
+    painter.rect_filled(image_rect, CornerRadius::same(2), theme::INPUT);
     if let Some(texture_id) = state.preview_texture {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        painter.image(texture_id, rect.shrink(1.0), uv, Color32::WHITE);
+        painter.image(texture_id, image_rect.shrink(1.0), uv, Color32::WHITE);
     } else {
         painter.text(
-            rect.center(),
+            image_rect.center(),
             egui::Align2::CENTER_CENTER,
             "Waiting for the first composited frame",
             egui::FontId::proportional(12.0),
@@ -1768,13 +1763,13 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         );
     }
     painter.rect_stroke(
-        rect,
+        image_rect,
         CornerRadius::same(2),
         Stroke::new(1.0, theme::BORDER),
         StrokeKind::Inside,
     );
     painter.text(
-        rect.left_top() + vec2(6.0, 4.0),
+        image_rect.left_top() + vec2(6.0, 4.0),
         egui::Align2::LEFT_TOP,
         "LIVE",
         egui::FontId::monospace(9.0),
@@ -1783,88 +1778,19 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
     }
+    let aspect = if snapshot.resolution[0] > 0 && snapshot.resolution[1] > 0 {
+        snapshot.resolution[0] as f64 / snapshot.resolution[1] as f64
+    } else {
+        16.0 / 9.0
+    };
     ui.label(
         egui::RichText::new(format!(
-            "{}x{} compositor main texture, registered with egui-wgpu (zero readback)",
+            "{}x{} ({aspect:.2}:1) compositor main texture, registered with egui-wgpu (zero readback)",
             snapshot.resolution[0], snapshot.resolution[1]
         ))
         .size(9.0)
         .color(theme::MUTED),
     );
-}
-
-fn probe_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("P0 CHECKLIST").strong().size(10.0));
-        let fps = snapshot.fps;
-        let verdict = state.p0.verdict(fps, 55.0);
-        chip(
-            ui,
-            if verdict { "GO" } else { "PENDING" },
-            if verdict { theme::OK } else { theme::ACCENT },
-        );
-    });
-
-    let mut missing_glyph_free = Vec::new();
-    for (label, ok, detail) in state.p0.checklist(snapshot.fps) {
-        missing_glyph_free.push((label, ok, detail));
-    }
-    for (label, ok, detail) in missing_glyph_free {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(if ok { "[x]" } else { "[ ]" })
-                    .monospace()
-                    .color(if ok { theme::OK } else { theme::MUTED }),
-            );
-            ui.label(egui::RichText::new(label).size(10.5).color(if ok {
-                theme::FOREGROUND
-            } else {
-                theme::MUTED
-            }))
-            .on_hover_text(detail);
-        });
-    }
-
-    ui.add_space(4.0);
-    ui.separator();
-    ui.label(
-        egui::RichText::new("RANGECONTROL PROBE")
-            .strong()
-            .size(10.0)
-            .color(theme::ACCENT),
-    );
-    let changed = state.inspector_probe.draw(ui);
-    if changed {
-        state.inspector_probe_value = state.inspector_probe.value;
-    }
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("value").size(10.0).color(theme::MUTED));
-        ui.label(
-            egui::RichText::new(format!("{:.4}", state.inspector_probe_value))
-                .monospace()
-                .size(11.0),
-        );
-        ui.label(
-            egui::RichText::new("(E = expression, T = tween)")
-                .size(9.0)
-                .color(theme::MUTED),
-        );
-    });
-
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        if ui.button("New Group").clicked() {
-            state.push_action("groups/createGroup", serde_json::json!({}));
-        }
-        if ui.button("Apply first Scene").clicked()
-            && let Some(scene) = snapshot.scenes.first()
-        {
-            state.push_action(
-                "scenes/applyScene",
-                serde_json::json!({"sceneId": scene.id}),
-            );
-        }
-    });
 }
 
 fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -1905,24 +1831,22 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         });
     });
 
-    let filter = state.search.trim().to_ascii_lowercase();
-    let category = state.gallery_category.key();
-    let filtered: Vec<&ModuleMetaView> = snapshot
-        .registered
-        .iter()
-        .filter(|module| module.gallery_category() == category)
-        .filter(|module| {
-            filter.is_empty()
-                || module.name.to_ascii_lowercase().contains(&filter)
-                || module.author.to_ascii_lowercase().contains(&filter)
-        })
-        .take(24)
-        .collect();
+    let filtered =
+        filter_gallery_modules(&snapshot.registered, state.gallery_category, &state.search);
+    // Keep the Gallery to roughly half of the height left below the preview so
+    // the Scenes panel stays on screen; the grid scrolls vertically inside it.
+    let available_height = ui.available_height().max(1.0);
+    let max_height = (available_height * 0.46)
+        .clamp(96.0, 340.0)
+        .min(available_height * 0.7);
 
-    egui::ScrollArea::horizontal()
-        .id_salt("gallery-strip")
+    egui::ScrollArea::vertical()
+        .id_salt("gallery-grid")
+        .max_height(max_height)
+        .auto_shrink([false, true])
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 if filtered.is_empty() {
                     ui.label(
                         egui::RichText::new("No modules match this filter.")
@@ -1943,7 +1867,7 @@ fn gallery_tile(
     snapshot: &EngineSnapshot,
     state: &mut UiState,
 ) {
-    let size = vec2(92.0, 66.0);
+    let size = vec2(108.0, 76.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let selected = state.selected_gallery_module.as_deref() == Some(module.name.as_str());
     let fill = if selected {

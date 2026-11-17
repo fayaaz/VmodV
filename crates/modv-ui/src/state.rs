@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 
 use serde_json::Value;
 
-use crate::model::{EngineSnapshot, MediaAction, PreviewRequest, PropView};
+use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PreviewRequest, PropView};
 use crate::panels::scene_grid::SceneGridState;
 use crate::widgets::RangeControl;
 
@@ -280,7 +280,7 @@ impl UiState {
             selected_gallery_module: None,
             group_name_draft: String::new(),
             group_name_draft_id: None,
-            gallery_category: GalleryCategory::Effects,
+            gallery_category: GalleryCategory::All,
             search: String::new(),
             scene_grid: SceneGridState::default(),
             actions: Vec::new(),
@@ -424,30 +424,72 @@ impl UiState {
 /// Gallery section filter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GalleryCategory {
+    /// Every registered module, regardless of section.
     #[default]
+    All,
     Effects,
     TwoDScenes,
     ThreeDScenes,
 }
 
 impl GalleryCategory {
-    pub const ALL: [Self; 3] = [Self::Effects, Self::TwoDScenes, Self::ThreeDScenes];
+    pub const ALL: [Self; 4] = [
+        Self::All,
+        Self::Effects,
+        Self::TwoDScenes,
+        Self::ThreeDScenes,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::All => "All",
             Self::Effects => "Effects",
             Self::TwoDScenes => "2D Scenes",
             Self::ThreeDScenes => "3D Scenes",
         }
     }
 
+    /// The legacy Gallery section key. `All` returns an empty string, so this
+    /// must never be used for matching; use [`Self::matches`] instead.
     pub fn key(self) -> &'static str {
         match self {
+            Self::All => "",
             Self::Effects => "effects",
             Self::TwoDScenes => "2d-scenes",
             Self::ThreeDScenes => "3d-scenes",
         }
     }
+
+    /// Whether a module in `module_category` (from
+    /// [`ModuleMetaView::gallery_category`]) belongs to this section.
+    pub fn matches(self, module_category: &str) -> bool {
+        match self {
+            Self::All => true,
+            _ => module_category == self.key(),
+        }
+    }
+}
+
+/// The Gallery's visible modules for a category and search text.
+///
+/// The search matches the module name or author, case-insensitively, and a
+/// whitespace-only query behaves like an empty one. There is deliberately no
+/// tile cap: the Gallery scrolls instead of truncating the registry.
+pub fn filter_gallery_modules<'a>(
+    registered: &'a [ModuleMetaView],
+    category: GalleryCategory,
+    search: &str,
+) -> Vec<&'a ModuleMetaView> {
+    let filter = search.trim().to_ascii_lowercase();
+    registered
+        .iter()
+        .filter(|module| category.matches(module.gallery_category()))
+        .filter(|module| {
+            filter.is_empty()
+                || module.name.to_ascii_lowercase().contains(&filter)
+                || module.author.to_ascii_lowercase().contains(&filter)
+        })
+        .collect()
 }
 
 #[cfg(test)]

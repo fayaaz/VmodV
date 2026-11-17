@@ -9,6 +9,57 @@ use modv_ui::{
     ModuleMetaView, ModuleView, PerformanceView, PropView, SceneCellView, SceneView, UiState,
 };
 
+fn meta(name: &str, module_type: &str, category: &str) -> ModuleMetaView {
+    ModuleMetaView {
+        name: name.to_string(),
+        module_type: module_type.to_string(),
+        category: category.to_string(),
+        author: "modV".to_string(),
+        version: "1.0".to_string(),
+        description: String::new(),
+    }
+}
+
+fn demo_modules() -> Vec<ModuleMetaView> {
+    let modules = vec![
+        // Effects.
+        meta("Bands", "shader", "effects"),
+        meta("Kaleidoscope", "shader", "effects"),
+        meta("Twirl", "shader", "effects"),
+        meta("Mirror", "isf", "effects"),
+        meta("Glow", "isf", "effects"),
+        meta("Blur", "isf", "effects"),
+        meta("Pixelate", "isf", "effects"),
+        meta("Edge Detect", "isf", "effects"),
+        meta("Color Shift", "isf", "effects"),
+        meta("Feedback", "shader", "effects"),
+        meta("Strobe", "shader", "effects"),
+        meta("Vignette", "isf", "effects"),
+        // 2D Scenes.
+        meta("Smoke", "2d", "2d-scenes"),
+        meta("Fire Chars", "2d", "2d-scenes"),
+        meta("Water Waves", "2d", "2d-scenes"),
+        meta("Particle Flow", "2d", "2d-scenes"),
+        meta("Lissajous", "2d", "2d-scenes"),
+        meta("Concentric", "2d", "2d-scenes"),
+        meta("Grid Warp", "2d", "2d-scenes"),
+        meta("Plasma", "2d", "2d-scenes"),
+        meta("Tunnel Vision", "2d", "2d-scenes"),
+        // 3D Scenes.
+        meta("Chromatic Line", "2d", "3d-scenes"),
+        meta("Tunnel", "isf", "3d-scenes"),
+        meta("Deep Sea", "isf", "3d-scenes"),
+        meta("Boxy", "isf", "3d-scenes"),
+        meta("DVD Room", "isf", "3d-scenes"),
+        meta("It Is Coming For You", "isf", "3d-scenes"),
+        meta("Rolling Fire", "isf", "3d-scenes"),
+        meta("Photon Cloud", "isf", "3d-scenes"),
+        meta("Warp Gate", "isf", "3d-scenes"),
+        meta("Voxel Garden", "isf", "3d-scenes"),
+    ];
+    modules
+}
+
 fn demo_snapshot() -> EngineSnapshot {
     let group = GroupView {
         id: "group-foreground".to_string(),
@@ -76,24 +127,7 @@ fn demo_snapshot() -> EngineSnapshot {
         groups: vec![group],
         modules: vec![module],
         scenes: vec![scene],
-        registered: vec![
-            ModuleMetaView {
-                name: "Chromatic Line".to_string(),
-                module_type: "2d".to_string(),
-                category: "3d-scenes".to_string(),
-                author: "modV".to_string(),
-                version: "1.0".to_string(),
-                description: String::new(),
-            },
-            ModuleMetaView {
-                name: "Bands".to_string(),
-                module_type: "shader".to_string(),
-                category: "effects".to_string(),
-                author: "modV".to_string(),
-                version: "1.0".to_string(),
-                description: String::new(),
-            },
-        ],
+        registered: demo_modules(),
         performance: PerformanceView {
             enabled: false,
             current_scene_id: Some("scene-1".to_string()),
