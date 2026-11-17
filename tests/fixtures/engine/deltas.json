@@ -1,5 +1,89 @@
 [
   {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-1",
+        "type": "commit",
+        "data": {
+          "groupId": "group-1",
+          "key": "alpha"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-2",
+        "type": "commit",
+        "data": {
+          "groupId": "group-1",
+          "key": "enabled"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-3",
+        "type": "commit",
+        "data": {
+          "groupId": "group-1",
+          "key": "clearing"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-4",
+        "type": "commit",
+        "data": {
+          "groupId": "group-1",
+          "key": "inherit"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-5",
+        "type": "commit",
+        "data": {
+          "groupId": "group-1",
+          "key": "compositeOperation"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-6",
+        "type": "commit",
+        "data": {
+          "groupId": "group-1",
+          "key": "pipeline"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
     "type": "groups/ADD_GROUP",
     "payload": {
       "group": {
@@ -13,7 +97,97 @@
         "inheritFrom": -1,
         "pipeline": false,
         "clearing": false,
-        "compositeOperation": "normal"
+        "compositeOperation": "normal",
+        "alphaInputId": "input-1",
+        "enabledInputId": "input-2",
+        "clearingInputId": "input-3",
+        "inheritInputId": "input-4",
+        "compositeOperationInputId": "input-5",
+        "pipelineInputId": "input-6"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-7",
+        "type": "commit",
+        "data": {
+          "groupId": "group-2",
+          "key": "alpha"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-8",
+        "type": "commit",
+        "data": {
+          "groupId": "group-2",
+          "key": "enabled"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-9",
+        "type": "commit",
+        "data": {
+          "groupId": "group-2",
+          "key": "clearing"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-10",
+        "type": "commit",
+        "data": {
+          "groupId": "group-2",
+          "key": "inherit"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-11",
+        "type": "commit",
+        "data": {
+          "groupId": "group-2",
+          "key": "compositeOperation"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-12",
+        "type": "commit",
+        "data": {
+          "groupId": "group-2",
+          "key": "pipeline"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
       }
     }
   },
@@ -31,7 +205,97 @@
         "inheritFrom": -1,
         "pipeline": false,
         "clearing": false,
-        "compositeOperation": "normal"
+        "compositeOperation": "normal",
+        "alphaInputId": "input-7",
+        "enabledInputId": "input-8",
+        "clearingInputId": "input-9",
+        "inheritInputId": "input-10",
+        "compositeOperationInputId": "input-11",
+        "pipelineInputId": "input-12"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-13",
+        "type": "commit",
+        "data": {
+          "groupId": "group-3",
+          "key": "alpha"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-14",
+        "type": "commit",
+        "data": {
+          "groupId": "group-3",
+          "key": "enabled"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-15",
+        "type": "commit",
+        "data": {
+          "groupId": "group-3",
+          "key": "clearing"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-16",
+        "type": "commit",
+        "data": {
+          "groupId": "group-3",
+          "key": "inherit"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-17",
+        "type": "commit",
+        "data": {
+          "groupId": "group-3",
+          "key": "compositeOperation"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
+      }
+    }
+  },
+  {
+    "type": "inputs/ADD_INPUT",
+    "payload": {
+      "input": {
+        "id": "input-18",
+        "type": "commit",
+        "data": {
+          "groupId": "group-3",
+          "key": "pipeline"
+        },
+        "location": "groups/UPDATE_GROUP_BY_KEY"
       }
     }
   },
@@ -49,7 +313,13 @@
         "inheritFrom": -1,
         "pipeline": false,
         "clearing": false,
-        "compositeOperation": "normal"
+        "compositeOperation": "normal",
+        "alphaInputId": "input-13",
+        "enabledInputId": "input-14",
+        "clearingInputId": "input-15",
+        "inheritInputId": "input-16",
+        "compositeOperationInputId": "input-17",
+        "pipelineInputId": "input-18"
       }
     }
   },
@@ -57,7 +327,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-1",
+        "id": "input-19",
         "type": "action",
         "data": {
           "moduleId": "module-1",
@@ -72,7 +342,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-2",
+        "id": "input-20",
         "type": "action",
         "data": {
           "id": "module-1",
@@ -87,7 +357,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-3",
+        "id": "input-21",
         "type": "action",
         "data": {
           "id": "module-1",
@@ -102,7 +372,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-4",
+        "id": "input-22",
         "type": "action",
         "data": {
           "id": "module-1",
@@ -135,9 +405,9 @@
           "enabled": false,
           "compositeOperation": "normal",
           "isGallery": false,
-          "alphaInputId": "input-2",
-          "enabledInputId": "input-3",
-          "compositeOperationInputId": "input-4"
+          "alphaInputId": "input-20",
+          "enabledInputId": "input-21",
+          "compositeOperationInputId": "input-22"
         },
         "props": {
           "u_ringWidth": 0.05
@@ -149,7 +419,7 @@
             "min": 0.01,
             "max": 0.5,
             "default": 0.05,
-            "id": "input-1"
+            "id": "input-19"
           }
         },
         "$status": []
@@ -160,7 +430,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-5",
+        "id": "input-23",
         "type": "action",
         "data": {
           "id": "module-2",
@@ -175,7 +445,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-6",
+        "id": "input-24",
         "type": "action",
         "data": {
           "id": "module-2",
@@ -190,7 +460,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-7",
+        "id": "input-25",
         "type": "action",
         "data": {
           "id": "module-2",
@@ -217,9 +487,9 @@
           "enabled": false,
           "compositeOperation": "normal",
           "isGallery": false,
-          "alphaInputId": "input-5",
-          "enabledInputId": "input-6",
-          "compositeOperationInputId": "input-7"
+          "alphaInputId": "input-23",
+          "enabledInputId": "input-24",
+          "compositeOperationInputId": "input-25"
         },
         "props": {},
         "data": {},
@@ -232,7 +502,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-8",
+        "id": "input-26",
         "type": "action",
         "data": {
           "moduleId": "module-3",
@@ -247,7 +517,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-9",
+        "id": "input-27",
         "type": "action",
         "data": {
           "moduleId": "module-3",
@@ -262,7 +532,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-10",
+        "id": "input-28",
         "type": "action",
         "data": {
           "moduleId": "module-3",
@@ -277,7 +547,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-11",
+        "id": "input-29",
         "type": "action",
         "data": {
           "moduleId": "module-3",
@@ -292,7 +562,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-12",
+        "id": "input-30",
         "type": "action",
         "data": {
           "moduleId": "module-3",
@@ -307,7 +577,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-13",
+        "id": "input-31",
         "type": "action",
         "data": {
           "moduleId": "module-3",
@@ -322,7 +592,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-14",
+        "id": "input-32",
         "type": "action",
         "data": {
           "moduleId": "module-3",
@@ -337,7 +607,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-15",
+        "id": "input-33",
         "type": "action",
         "data": {
           "id": "module-3",
@@ -352,7 +622,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-16",
+        "id": "input-34",
         "type": "action",
         "data": {
           "id": "module-3",
@@ -367,7 +637,7 @@
     "type": "inputs/ADD_INPUT",
     "payload": {
       "input": {
-        "id": "input-17",
+        "id": "input-35",
         "type": "action",
         "data": {
           "id": "module-3",
@@ -397,9 +667,9 @@
           "enabled": false,
           "compositeOperation": "normal",
           "isGallery": false,
-          "alphaInputId": "input-15",
-          "enabledInputId": "input-16",
-          "compositeOperationInputId": "input-17"
+          "alphaInputId": "input-33",
+          "enabledInputId": "input-34",
+          "compositeOperationInputId": "input-35"
         },
         "props": {
           "amount": 10,
@@ -432,38 +702,38 @@
             "min": 1.0,
             "max": 300.0,
             "default": 10,
-            "id": "input-8"
+            "id": "input-26"
           },
           "speed": {
             "type": "float",
             "min": 0.0,
             "max": 20.0,
             "default": 2.0,
-            "id": "input-9"
+            "id": "input-27"
           },
           "wrap": {
             "type": "bool",
             "default": false,
-            "id": "input-10"
+            "id": "input-28"
           },
           "size": {
             "type": "int",
             "min": 1.0,
             "max": 50.0,
             "default": 2,
-            "id": "input-11"
+            "id": "input-29"
           },
           "intensity": {
             "type": "int",
             "min": 0.0,
             "max": 30.0,
             "default": 15,
-            "id": "input-12"
+            "id": "input-30"
           },
           "soundType": {
             "type": "bool",
             "default": false,
-            "id": "input-13"
+            "id": "input-31"
           },
           "color": {
             "type": "tween",
@@ -483,7 +753,7 @@
               "duration": 10000,
               "easing": "linear"
             },
-            "id": "input-14"
+            "id": "input-32"
           }
         },
         "$status": []

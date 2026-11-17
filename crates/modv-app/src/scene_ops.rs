@@ -140,7 +140,10 @@ pub const SCENES_STORAGE_FILENAME: &str = "scenes.json";
 pub const SCENES_STORAGE_VERSION: i64 = 1;
 
 /// The six Group controls that own an input (`groups.js:174-197`).
-const GROUP_CONTROL_INPUTS: &[(&str, &str)] = &[
+///
+/// Shared by the Scene machinery (live-group rebuilds) and
+/// [`crate::store_ops::Store::create_group`].
+pub(crate) const GROUP_CONTROL_INPUTS: &[(&str, &str)] = &[
     ("alpha", "alphaInputId"),
     ("enabled", "enabledInputId"),
     ("clearing", "clearingInputId"),

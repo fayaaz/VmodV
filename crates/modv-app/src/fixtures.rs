@@ -543,9 +543,31 @@ mod tests {
     /// The exact delta sequence the committed fixtures contain. Pinned so a
     /// shape/order change in the session is a visible test failure rather than
     /// a silently stale fixture file.
-    const EXPECTED_TYPES: [&str; 36] = [
+    ///
+    /// Each `createGroup` mints its six control inputs before committing the
+    /// Group (`groups.js:174-197`), so every group block is six
+    /// `inputs/ADD_INPUT` deltas followed by one `groups/ADD_GROUP`.
+    const EXPECTED_TYPES: [&str; 54] = [
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
         "groups/ADD_GROUP",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
         "groups/ADD_GROUP",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
+        "inputs/ADD_INPUT",
         "groups/ADD_GROUP",
         "inputs/ADD_INPUT",
         "inputs/ADD_INPUT",
@@ -640,8 +662,10 @@ mod tests {
         assert_eq!(snapshot["renderOrder"], json!([0, 2, 1]));
 
         // Each live Module owns one Input per prop plus the three meta
-        // controls (the unregistered module created none and was removed).
-        assert_eq!(snapshot["inputs"]["inputs"].as_object().unwrap().len(), 17);
+        // controls (the unregistered module created none and was removed),
+        // and each of the three Groups owns its six control inputs
+        // (`groups.js:174-197`): 17 + 18 = 35.
+        assert_eq!(snapshot["inputs"]["inputs"].as_object().unwrap().len(), 35);
         assert_eq!(snapshot["inputs"]["inputLinks"], json!({}));
         assert_eq!(snapshot["expressions"]["assignments"], json!({}));
         assert_eq!(snapshot["tweens"], json!([]));
@@ -703,7 +727,7 @@ mod tests {
                 "group-1", "group-2", "group-3", "module-1", "module-2", "module-3", "module-4",
             ]
         );
-        assert_eq!(placeholders.len(), 7 + 17);
+        assert_eq!(placeholders.len(), 7 + 35);
         for (index, placeholder) in placeholders[7..].iter().enumerate() {
             assert_eq!(*placeholder, format!("input-{}", index + 1));
         }

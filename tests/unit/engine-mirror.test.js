@@ -124,7 +124,10 @@ describe("engine → JS mirror parity", () => {
 
   test("the fixtures are the emitted shape", () => {
     expect(Array.isArray(deltas)).toBe(true);
-    expect(deltas.length).toBe(36);
+    // Each createGroup mints its six control inputs before committing the
+    // Group (`groups.js:174-197`): 18 group inputs + 17 module inputs plus
+    // the group/module commits and mutations below.
+    expect(deltas.length).toBe(54);
     for (const delta of deltas) {
       expect(Object.keys(delta).sort()).toEqual(["payload", "type"]);
       expect(typeof delta.type).toBe("string");
@@ -180,18 +183,51 @@ describe("engine → JS mirror parity", () => {
   });
 
   test("module inputs and expression defaults match in both stores", () => {
-    // Each live Module now owns an input per prop plus the three meta
-    // controls (alpha/enabled/compositeOperation), so the scripted session
-    // creates 17 of them; the JS mirror must replay the same records.
-    expect(Object.keys(preset.inputs.inputs)).toHaveLength(17);
+    // Each live Module owns an input per prop plus the three meta controls
+    // (alpha/enabled/compositeOperation), and each of the three Groups owns
+    // its six control inputs (`groups.js:174-197`): 17 + 18 = 35 records the
+    // JS mirror must replay identically.
+    expect(Object.keys(preset.inputs.inputs)).toHaveLength(35);
     expect(preset.inputs.inputLinks).toEqual({});
     expect(store.state.inputs.inputs).toEqual(preset.inputs.inputs);
     expect(store.state.inputs.inputLinks).toEqual(preset.inputs.inputLinks);
 
-    // The engine still emits an input record with the module's getLocation so
-    // the Inspector can bind each control to its own input.
-    const first = Object.values(preset.inputs.inputs)[0];
-    expect(first.getLocation).toMatch(
+    // The six control inputs each Group owns are commit-side records bound
+    // to `groups/UPDATE_GROUP_BY_KEY` (no getLocation — the payload carries
+    // the group/key data), and their ids are stamped on the Group.
+    const groupInputs = Object.values(preset.inputs.inputs).filter(
+      (input) => input.location === "groups/UPDATE_GROUP_BY_KEY",
+    );
+    expect(groupInputs).toHaveLength(18);
+    for (const input of groupInputs) {
+      expect(input.type).toBe("commit");
+      expect(input.getLocation).toBeUndefined();
+      expect(input.data.key).toEqual(
+        expect.stringMatching(
+          /^(alpha|enabled|clearing|inherit|compositeOperation|pipeline)$/,
+        ),
+      );
+    }
+    for (const group of preset.groups) {
+      for (const key of [
+        "alphaInputId",
+        "enabledInputId",
+        "clearingInputId",
+        "inheritInputId",
+        "compositeOperationInputId",
+        "pipelineInputId",
+      ]) {
+        expect(typeof group[key]).toBe("string");
+        expect(preset.inputs.inputs[group[key]]).toBeDefined();
+      }
+    }
+
+    // The engine still emits an input record with the module's getLocation
+    // so the Inspector can bind each control to its own input.
+    const moduleInput = Object.values(preset.inputs.inputs).find((input) =>
+      input.getLocation,
+    );
+    expect(moduleInput.getLocation).toMatch(
       /^modules\.active\["module-\d+"\]\.(props|meta)/,
     );
 

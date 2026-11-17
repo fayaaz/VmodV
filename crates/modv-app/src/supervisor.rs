@@ -1358,12 +1358,39 @@ mod tests {
         assert_eq!(result["modules"], json!([]));
         assert_eq!(store.state().groups.len(), 1);
 
-        let delta = events
+        // `createGroup` mints the six control inputs before committing the
+        // Group (`groups.js:174-197`), so the delta stream carries their
+        // `inputs/ADD_INPUT` records first and `ADD_GROUP` last.
+        let deltas: Vec<&Event> = events
             .iter()
-            .find(|event| event.event == "state/delta")
-            .expect("state/delta is broadcast");
-        assert_eq!(delta.data["type"], json!("groups/ADD_GROUP"));
+            .filter(|event| event.event == "state/delta")
+            .collect();
+        assert!(deltas.len() >= 7, "six inputs plus the group commit");
+        for delta in &deltas[..6] {
+            assert_eq!(delta.data["type"], json!("inputs/ADD_INPUT"));
+        }
+        let delta = deltas
+            .iter()
+            .find(|delta| delta.data["type"] == json!("groups/ADD_GROUP"))
+            .expect("groups/ADD_GROUP is broadcast");
         assert_eq!(delta.data["payload"]["group"]["name"], json!("Gallery"));
+        // Every stamped control id has its input record in the stream.
+        for key in [
+            "alphaInputId",
+            "enabledInputId",
+            "clearingInputId",
+            "inheritInputId",
+            "compositeOperationInputId",
+            "pipelineInputId",
+        ] {
+            let input_id = result[key].as_str().expect(key);
+            assert!(
+                deltas
+                    .iter()
+                    .any(|delta| delta.data["payload"]["input"]["id"] == json!(input_id)),
+                "{key} delta is broadcast"
+            );
+        }
     }
 
     #[test]

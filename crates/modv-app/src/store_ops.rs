@@ -787,6 +787,42 @@ impl Store {
             .unwrap_or("New Group")
             .to_string();
 
+        // `groups.js:174-197`: every Group control owns an input bound to
+        // `groups/UPDATE_GROUP_BY_KEY` and carries its id as `<name>InputId`.
+        // A pre-supplied id (preset/Scene reload paths) is trusted verbatim —
+        // JS only mints when the argument is `undefined` — and a fresh Group
+        // gets all six minted before `ADD_GROUP`, so the Inspector's control
+        // rows (Alpha/Blend/...) exist immediately.
+        let mut alpha_input_id = optional_string(params, "alphaInputId");
+        let mut enabled_input_id = optional_string(params, "enabledInputId");
+        let mut clearing_input_id = optional_string(params, "clearingInputId");
+        let mut inherit_input_id = optional_string(params, "inheritInputId");
+        let mut composite_operation_input_id = optional_string(params, "compositeOperationInputId");
+        let mut pipeline_input_id = optional_string(params, "pipelineInputId");
+        for (control, key) in crate::scene_ops::GROUP_CONTROL_INPUTS {
+            if params.contains_key(*key) {
+                continue;
+            }
+            let input_id = crate::ids::uuid_v4();
+            let input = Input {
+                id: input_id.clone(),
+                type_: "commit".to_string(),
+                data: json!({ "groupId": id, "key": control }),
+                get_location: None,
+                location: Some("groups/UPDATE_GROUP_BY_KEY".to_string()),
+            };
+            self.insert_module_input(input);
+            match *key {
+                "alphaInputId" => alpha_input_id = Some(input_id),
+                "enabledInputId" => enabled_input_id = Some(input_id),
+                "clearingInputId" => clearing_input_id = Some(input_id),
+                "inheritInputId" => inherit_input_id = Some(input_id),
+                "compositeOperationInputId" => composite_operation_input_id = Some(input_id),
+                "pipelineInputId" => pipeline_input_id = Some(input_id),
+                _ => {}
+            }
+        }
+
         let group = Group {
             id,
             name,
@@ -811,12 +847,12 @@ impl Store {
             scene_row: optional_usize(params, "sceneRow"),
             transition_ghost: optional_bool(params, "transitionGhost"),
             draw_to_canvas_id: optional_string(params, "drawToCanvasId"),
-            alpha_input_id: optional_string(params, "alphaInputId"),
-            enabled_input_id: optional_string(params, "enabledInputId"),
-            clearing_input_id: optional_string(params, "clearingInputId"),
-            inherit_input_id: optional_string(params, "inheritInputId"),
-            composite_operation_input_id: optional_string(params, "compositeOperationInputId"),
-            pipeline_input_id: optional_string(params, "pipelineInputId"),
+            alpha_input_id,
+            enabled_input_id,
+            clearing_input_id,
+            inherit_input_id,
+            composite_operation_input_id,
+            pipeline_input_id,
             extra: unknown_keys(params, CREATE_GROUP_KEYS),
         };
 
@@ -1886,7 +1922,8 @@ impl Store {
     /// their mutable state inside the module instance the compositor owns, so
     /// unlike JS there is no module `data` export to copy
     /// (`modules.js:330-338`).
-    /// Insert a Module-owned Input and emit the mirror delta.
+    /// Insert a Module- or Group-owned Input and emit the mirror delta
+    /// (`inputs/ADD_INPUT`), the shape of the JS `inputs/addInput` action.
     fn insert_module_input(&mut self, input: Input) {
         let value = serde_json::to_value(&input).unwrap_or(Value::Null);
         self.state.inputs.insert(input.id.clone(), input);
@@ -4695,6 +4732,140 @@ mod tests {
         assert_eq!(store.state().groups[0].name, "A");
     }
 
+    /// `groups.js:174-197`: each Group control owns an input bound to
+    /// `groups/UPDATE_GROUP_BY_KEY`, stamped on the Group as `<name>InputId`.
+    const GROUP_CONTROL_KEYS: [(&str, &str); 6] = [
+        ("alpha", "alphaInputId"),
+        ("enabled", "enabledInputId"),
+        ("clearing", "clearingInputId"),
+        ("inherit", "inheritInputId"),
+        ("compositeOperation", "compositeOperationInputId"),
+        ("pipeline", "pipelineInputId"),
+    ];
+
+    #[test]
+    fn create_group_mints_the_six_control_inputs() {
+        let mut store = Store::new();
+        store.drain_deltas();
+        let group = store
+            .dispatch("groups/createGroup", json!({ "name": "Effects" }))
+            .expect("createGroup dispatches");
+        let group_id = group["id"].as_str().expect("id").to_string();
+
+        let mut minted: Vec<String> = Vec::new();
+        for (control, key) in GROUP_CONTROL_KEYS {
+            let input_id = group[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} stamped on the group"));
+            minted.push(input_id.to_string());
+            let input = store
+                .state()
+                .inputs
+                .get(input_id)
+                .unwrap_or_else(|| panic!("{key} input exists"));
+            assert_eq!(input.type_, "commit", "{key}");
+            assert_eq!(
+                input.location.as_deref(),
+                Some("groups/UPDATE_GROUP_BY_KEY"),
+                "{key}"
+            );
+            assert_eq!(input.data["groupId"], json!(group_id), "{key}");
+            assert_eq!(input.data["key"], json!(control), "{key}");
+            assert!(input.get_location.is_none(), "{key}");
+        }
+        minted.sort();
+        minted.dedup();
+        assert_eq!(minted.len(), 6, "the minted ids are distinct");
+
+        // The inputs are dispatched before ADD_GROUP, matching the JS
+        // action's `inputs/addInput` calls before the group commit.
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas.len(), 7);
+        for delta in &deltas[..6] {
+            assert_eq!(delta.r#type, "inputs/ADD_INPUT");
+        }
+        assert_eq!(deltas[6].r#type, "groups/ADD_GROUP");
+    }
+
+    #[test]
+    fn create_group_reuses_supplied_control_input_ids() {
+        let mut store = Store::new();
+        let group = store
+            .dispatch(
+                "groups/createGroup",
+                json!({
+                    "id": "g-1",
+                    "name": "Effects",
+                    "alphaInputId": "supplied-alpha",
+                    "pipelineInputId": null,
+                }),
+            )
+            .expect("createGroup dispatches");
+
+        // A pre-supplied id is trusted verbatim (the preset/Scene reload
+        // paths supply them); the engine never mints a second input for it.
+        assert_eq!(group["alphaInputId"], json!("supplied-alpha"));
+        assert!(!store.state().inputs.contains_key("supplied-alpha"));
+        // JS only mints for `undefined` ids: a present-but-null id is kept,
+        // not replaced with a fresh input.
+        assert!(group.get("pipelineInputId").is_none());
+        // The remaining four controls are minted.
+        assert_eq!(store.state().inputs.len(), 4);
+        for key in [
+            "enabledInputId",
+            "clearingInputId",
+            "inheritInputId",
+            "compositeOperationInputId",
+        ] {
+            let input_id = group[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} minted"));
+            assert!(
+                store.state().inputs.contains_key(input_id),
+                "{key} input registered"
+            );
+        }
+    }
+
+    #[test]
+    fn created_group_inputs_survive_the_preset_round_trip() {
+        let mut store = Store::new();
+        let group = store
+            .dispatch("groups/createGroup", json!({ "name": "Effects" }))
+            .expect("createGroup dispatches");
+        let group_id = group["id"].as_str().expect("id").to_string();
+        let alpha_input_id = group["alphaInputId"]
+            .as_str()
+            .expect("alpha input id")
+            .to_string();
+
+        let preset = create_preset_from_state(store.state());
+        let saved = &preset["groups"][0];
+        assert_eq!(saved["id"], json!(group_id));
+        assert_eq!(saved["alphaInputId"], json!(alpha_input_id));
+        let inputs = preset["inputs"]["inputs"].as_object().expect("inputs map");
+        for (_, key) in GROUP_CONTROL_KEYS {
+            let input_id = group[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} stamped"));
+            assert!(inputs.contains_key(input_id), "{key} input persisted");
+        }
+
+        // Restoring the preset keeps the saved ids instead of minting
+        // duplicates (the JS load path never re-runs createGroup).
+        let mut restored = Store::new();
+        restored.restore(&preset).expect("restore dispatches");
+        let group = restored
+            .state()
+            .find_group(&group_id)
+            .expect("group restored");
+        assert_eq!(
+            group.alpha_input_id.as_deref(),
+            Some(alpha_input_id.as_str())
+        );
+        assert_eq!(restored.state().inputs.len(), 6);
+    }
+
     #[test]
     fn update_group_by_key_sets_typed_fields() {
         let (mut store, id) = store_with_group("Group");
@@ -4983,21 +5154,9 @@ mod tests {
     #[test]
     fn remove_group_cleans_its_inputs_and_removes_it() {
         let (mut store, id) = store_with_group("Effects");
-        // The engine's createGroup does not synthesise the six control inputs
-        // (the JS action does); bind one explicitly so the cleanup path runs.
-        store
-            .dispatch(
-                "groups/UPDATE_GROUP",
-                json!({ "groupId": id, "data": { "alphaInputId": "input-a" } }),
-            )
-            .expect("bind alpha input");
-        store
-            .dispatch(
-                "inputs/addInput",
-                json!({ "id": "input-a", "type": "commit" }),
-            )
-            .expect("input");
-        assert_eq!(store.state().inputs.len(), 1);
+        // createGroup mints the six control inputs (`groups.js:174-197`);
+        // removeGroup must clean all of them up with the Group.
+        assert_eq!(store.state().inputs.len(), 6);
         store.drain_deltas();
 
         store
@@ -5015,7 +5174,10 @@ mod tests {
         assert!(
             deltas
                 .iter()
-                .any(|delta| delta.r#type == "inputs/REMOVE_INPUT")
+                .filter(|delta| delta.r#type == "inputs/REMOVE_INPUT")
+                .count()
+                == 6,
+            "each control input gets its own REMOVE_INPUT delta"
         );
     }
 
@@ -6766,44 +6928,57 @@ mod tests {
             .map(|mutation| serde_json::to_value(mutation).unwrap())
             .collect();
 
-        // group, 4 inputs (Bands' one prop + three meta), module, plus the
-        // mutations below.
-        assert_eq!(deltas.len(), 13);
-        assert_eq!(deltas[0]["type"], json!("groups/ADD_GROUP"));
-        assert_eq!(deltas[0]["payload"]["group"], group);
-        for index in 0..4 {
-            assert_eq!(deltas[1 + index]["type"], json!("inputs/ADD_INPUT"));
+        // 6 group control inputs + group, 4 module inputs (Bands' one prop +
+        // three meta), module, plus the mutations below.
+        assert_eq!(deltas.len(), 19);
+        // The Group's six control inputs arrive before the Group itself
+        // (`groups.js:174-197`).
+        for delta in &deltas[..6] {
+            assert_eq!(delta["type"], json!("inputs/ADD_INPUT"));
             assert!(
-                deltas[1 + index]["payload"]["input"]["id"].is_string(),
+                delta["payload"]["input"]["id"].is_string(),
+                "every input carries its id"
+            );
+            assert_eq!(
+                delta["payload"]["input"]["location"],
+                json!("groups/UPDATE_GROUP_BY_KEY")
+            );
+        }
+        assert_eq!(deltas[6]["type"], json!("groups/ADD_GROUP"));
+        assert_eq!(deltas[6]["payload"]["group"], group);
+        for delta in &deltas[7..11] {
+            assert_eq!(delta["type"], json!("inputs/ADD_INPUT"));
+            assert!(
+                delta["payload"]["input"]["id"].is_string(),
                 "every input carries its id"
             );
         }
         assert_eq!(
-            deltas[1]["payload"]["input"]["data"]["prop"],
+            deltas[7]["payload"]["input"]["data"]["prop"],
             json!("u_ringWidth")
         );
         assert_eq!(
-            deltas[2]["payload"]["input"]["data"]["metaKey"],
+            deltas[8]["payload"]["input"]["data"]["metaKey"],
             json!("alpha")
         );
-        assert_eq!(deltas[5]["type"], json!("modules/ADD_ACTIVE_MODULE"));
-        assert_eq!(deltas[5]["payload"]["module"], module);
+        assert_eq!(deltas[11]["type"], json!("modules/ADD_ACTIVE_MODULE"));
+        assert_eq!(deltas[11]["payload"]["module"], module);
         assert_eq!(
-            deltas[6],
+            deltas[12],
             json!({
                 "type": "groups/ADD_MODULE_TO_GROUP",
                 "payload": {"moduleId": module_id, "groupId": group_id, "position": 0}
             })
         );
         assert_eq!(
-            deltas[7],
+            deltas[13],
             json!({
                 "type": "groups/UPDATE_GROUP_BY_KEY",
                 "payload": {"groupId": group_id, "key": "alpha", "data": 0.5}
             })
         );
         assert_eq!(
-            deltas[8],
+            deltas[14],
             json!({
                 "type": "modules/UPDATE_ACTIVE_MODULE_PROP",
                 "payload": {
@@ -6814,22 +6989,22 @@ mod tests {
             })
         );
         assert_eq!(
-            deltas[9],
+            deltas[15],
             json!({
                 "type": "modules/UPDATE_ACTIVE_MODULE_META",
                 "payload": {"id": module_id, "metaKey": "alpha", "data": 1}
             })
         );
         assert_eq!(
-            deltas[10],
+            deltas[16],
             json!({
                 "type": "modules/UPDATE_ACTIVE_MODULE",
                 "payload": {"id": module_id, "key": "data", "value": {}}
             })
         );
-        assert_eq!(deltas[11]["type"], json!("groups/REMOVE_MODULE_FROM_GROUP"));
-        assert_eq!(deltas[12]["type"], json!("modules/REMOVE_ACTIVE_MODULE"));
-        assert_eq!(deltas[12]["payload"], json!({"moduleId": module_id}));
+        assert_eq!(deltas[17]["type"], json!("groups/REMOVE_MODULE_FROM_GROUP"));
+        assert_eq!(deltas[18]["type"], json!("modules/REMOVE_ACTIVE_MODULE"));
+        assert_eq!(deltas[18]["payload"], json!({"moduleId": module_id}));
     }
 
     #[test]
