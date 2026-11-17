@@ -40,14 +40,14 @@
 //! | `media/stop-source` | `{ sourceId }` | `{ sourceId }` |
 //! | `media/status` | — | `{ sources: [{ sourceId, kind, index, state, width, height, frames, dropped, lastError }] }` |
 //!
-//! `index` is 1-based and counts the **start order of the running sources**;
-//! the Webcam module resolves its `camera` prop against
-//! [`MediaHub::select_source_id`]. The list is all running sources (cameras,
-//! files, screens, test patterns) rather than cameras only: the legacy
-//! renderer's Webcam module also fell back to the primary `video` element when
-//! no webcam was selected, and a single ordered list keeps the prop and the
-//! stop/start indexes unambiguous. (The renderer's `reconcileCameraIndex`
-//! therefore compares against the engine's own index, not a cameras-only one.)
+//! `index` is the **camera-only** 1-based Webcam index: it counts cameras,
+//! screens and test patterns in start order (the list
+//! [`MediaHub::camera_ids`] returns), so it agrees with the module's `camera`
+//! prop, which resolves against [`MediaHub::select_source_id`]. Files report
+//! `0` ("not a Webcam source"). Non-camera sources keep their own slots in
+//! [`MediaHub::ids`]; reordering cameras never restarts a pipeline. (The
+//! renderer's `reconcileCameraIndex` therefore compares against this
+//! camera-only index, not the full source order.)
 //!
 //! `state` is the renderer's vocabulary (`engine-media.js`
 //! `MEDIA_SOURCE_STATE_LABELS`): `running`, `starting`, `stopped` or `error`.
@@ -388,19 +388,30 @@ impl MediaHub {
     }
 
     /// Every source's status, in start order.
+    ///
+    /// `index` is the **camera-only** 1-based Webcam index
+    /// ([`Self::camera_ids`]), so it agrees with the module's `camera` prop,
+    /// and 0 for a file (which the Webcam module cannot draw). A screen or test
+    /// pattern occupies a Webcam slot, as it did in the legacy renderer's
+    /// `selectedVideoSources`.
     pub fn statuses(&self) -> Vec<MediaSourceStatus> {
+        let cameras = self.camera_ids();
         let mut statuses = Vec::with_capacity(self.order.len());
 
-        for (position, id) in self.order.iter().enumerate() {
+        for id in &self.order {
             let Some(entry) = self.entries.get(id) else {
                 continue;
             };
+            let index = cameras
+                .iter()
+                .position(|camera| camera == id)
+                .map_or(0, |position| position + 1);
             let live = entry.running.then(|| self.hub.status(id)).flatten();
             let status = match live {
                 Some(status) => MediaSourceStatus {
                     source_id: id.clone(),
                     kind: status.kind,
-                    index: position + 1,
+                    index,
                     state: state_label(status.state),
                     width: status.width,
                     height: status.height,
@@ -411,7 +422,7 @@ impl MediaHub {
                 None => MediaSourceStatus {
                     source_id: id.clone(),
                     kind: entry.config.kind.label(),
-                    index: position + 1,
+                    index,
                     // The pipeline is released while the backoff runs, so the
                     // source is between restarts (`error`/`ended` is latched in
                     // `lastError`). Reported as `starting` so the renderer's
@@ -534,6 +545,58 @@ impl MediaHub {
             })
             .cloned()
             .collect()
+    }
+
+    /// The mode a source was started with, when it is registered.
+    pub fn source_mode(&self, source_id: &str) -> Option<(u32, u32, u32)> {
+        self.entries
+            .get(source_id)
+            .map(|entry| (entry.config.width, entry.config.height, entry.config.fps))
+    }
+
+    /// Reorder the camera-like sources to `ids` without restarting pipelines.
+    ///
+    /// `ids` are source ids (`camera:/dev/video0`, `screen:…`, …) in the
+    /// desired Webcam-index order. Only entries whose kind is camera-like
+    /// ([`Self::camera_ids`]) move: the slots owned by files keep their
+    /// position, and camera-like sources that `ids` does not name stay after
+    /// the named ones in their previous relative order. Unknown ids and
+    /// duplicates are ignored. Returns whether the order changed.
+    pub fn set_camera_order(&mut self, ids: &[String]) -> bool {
+        let cameras = self.camera_ids();
+        if cameras.is_empty() {
+            return false;
+        }
+
+        let mut requested = Vec::with_capacity(cameras.len());
+        for id in ids {
+            if cameras.contains(id) && !requested.contains(id) {
+                requested.push(id.clone());
+            }
+        }
+        for id in &cameras {
+            if !requested.contains(id) {
+                requested.push(id.clone());
+            }
+        }
+        if requested == cameras {
+            return false;
+        }
+
+        let mut requested = requested.into_iter();
+        let mut order = Vec::with_capacity(self.order.len());
+        for id in &self.order {
+            if cameras.contains(id) {
+                if let Some(replacement) = requested.next() {
+                    order.push(replacement);
+                }
+            } else {
+                order.push(id.clone());
+            }
+        }
+        self.order = order;
+
+        true
     }
 
     /// Resolve the Webcam module's 1-based `camera` index against `order`.
@@ -1071,6 +1134,186 @@ mod tests {
         let (data, bytes_per_row) = padded_rows(&aligned, &mut scratch);
         assert_eq!(bytes_per_row, 256);
         assert_eq!(data.len(), aligned.rgba.len());
+    }
+
+    /// A hub whose sources are fake entries (no GStreamer pipeline, no GPU), so
+    /// the order bookkeeping is testable on any host.
+    fn fake_hub(entries: &[(&str, VideoSourceKind)]) -> MediaHub {
+        let mut media = MediaHub {
+            hub: VideoHub::new(),
+            order: entries.iter().map(|(id, _)| id.to_string()).collect(),
+            entries: HashMap::new(),
+            init: Ok(()),
+            last_health: Instant::now(),
+            screen_logged: true,
+        };
+
+        for (id, kind) in entries {
+            media.entries.insert(
+                id.to_string(),
+                SourceEntry {
+                    config: VideoSourceConfig {
+                        kind: kind.clone(),
+                        width: 640,
+                        height: 480,
+                        fps: 30,
+                    },
+                    frame: VideoFrame::default(),
+                    looping: false,
+                    running: false,
+                    attempts: 0,
+                    retry_at: None,
+                    last_error: None,
+                    logged_failure: false,
+                    last_size: (0, 0),
+                    last_frames: 0,
+                    last_dropped: 0,
+                },
+            );
+        }
+
+        media
+    }
+
+    fn camera_kind(id: &str) -> VideoSourceKind {
+        VideoSourceKind::Camera { id: id.to_string() }
+    }
+
+    #[test]
+    fn set_camera_order_reorders_cameras_without_moving_files() {
+        let mut media = fake_hub(&[
+            (
+                "file:a",
+                VideoSourceKind::File {
+                    uri: "file:///a.mp4".to_string(),
+                },
+            ),
+            ("camera:a", camera_kind("a")),
+            ("screen:s", VideoSourceKind::Screen { node_id: 7 }),
+            ("camera:b", camera_kind("b")),
+            (
+                "test-pattern:smpte",
+                VideoSourceKind::TestPattern {
+                    pattern: TestPattern::Smpte,
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            media.camera_ids(),
+            vec![
+                "camera:a".to_string(),
+                "screen:s".to_string(),
+                "camera:b".to_string(),
+                "test-pattern:smpte".to_string(),
+            ]
+        );
+
+        assert!(media.set_camera_order(&["camera:b".to_string(), "camera:a".to_string(),]));
+        assert_eq!(
+            media.ids(),
+            [
+                "file:a",
+                "camera:b",
+                "camera:a",
+                "screen:s",
+                "test-pattern:smpte",
+            ],
+            "camera-like entries reorder among their own slots; files keep theirs"
+        );
+        assert_eq!(
+            media.camera_ids(),
+            vec![
+                "camera:b".to_string(),
+                "camera:a".to_string(),
+                "screen:s".to_string(),
+                "test-pattern:smpte".to_string(),
+            ],
+            "the Webcam index follows the requested order immediately"
+        );
+        assert_eq!(media.statuses()[0].index, 0, "a file is not a Webcam index");
+        assert_eq!(media.statuses()[1].index, 1);
+        assert_eq!(media.statuses()[2].index, 2);
+
+        assert!(
+            !media.set_camera_order(&["camera:b".to_string(), "camera:a".to_string()]),
+            "the same order is a no-op"
+        );
+    }
+
+    #[test]
+    fn set_camera_order_ignores_unknown_duplicate_and_non_camera_ids() {
+        let mut media = fake_hub(&[
+            ("camera:a", camera_kind("a")),
+            (
+                "file:a",
+                VideoSourceKind::File {
+                    uri: "file:///a.mp4".to_string(),
+                },
+            ),
+            ("camera:b", camera_kind("b")),
+        ]);
+
+        assert!(
+            !media.set_camera_order(&["file:a".to_string()]),
+            "a file id cannot claim a camera slot"
+        );
+        assert!(
+            media.set_camera_order(&["camera:b".to_string(), "camera:b".to_string()]),
+            "a duplicate name is collapsed, so camera:b still moves up"
+        );
+        assert_eq!(
+            media.ids(),
+            ["camera:b", "file:a", "camera:a"],
+            "duplicates collapse and unlisted cameras follow the named ones"
+        );
+
+        assert!(!media.set_camera_order(&["camera:missing".to_string()]));
+        assert_eq!(media.ids(), ["camera:b", "file:a", "camera:a"]);
+    }
+
+    #[test]
+    fn source_mode_reports_the_registered_configuration() {
+        let media = fake_hub(&[
+            ("camera:a", camera_kind("a")),
+            (
+                "file:b",
+                VideoSourceKind::File {
+                    uri: "file:///b.mp4".to_string(),
+                },
+            ),
+        ]);
+
+        assert_eq!(media.source_mode("camera:a"), Some((640, 480, 30)));
+        assert_eq!(media.source_mode("file:b"), Some((640, 480, 30)));
+        assert_eq!(media.source_mode("camera:missing"), None);
+    }
+
+    #[test]
+    fn the_status_index_is_the_camera_only_webcam_index() {
+        // A file started before the cameras used to shift every `index`, while
+        // the Webcam module indexed `camera_ids()`. The status index now counts
+        // cameras only; files report 0 ("not a Webcam source").
+        let media = fake_hub(&[
+            (
+                "file:a",
+                VideoSourceKind::File {
+                    uri: "file:///a.mp4".to_string(),
+                },
+            ),
+            ("camera:a", camera_kind("a")),
+            ("camera:b", camera_kind("b")),
+        ]);
+
+        let statuses = media.statuses();
+        assert_eq!(
+            statuses
+                .iter()
+                .map(|status| (status.source_id.as_str(), status.index))
+                .collect::<Vec<_>>(),
+            vec![("file:a", 0), ("camera:a", 1), ("camera:b", 2)]
+        );
+        assert_eq!(media.statuses()[1].to_json()["index"], json!(1));
     }
 
     #[test]

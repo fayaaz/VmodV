@@ -42,6 +42,7 @@ use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
 use crate::isf_watch::IsfWatcher;
 use crate::media::MediaHub;
+use crate::media_settings::{CameraMode, MediaSettings, plan_restore, resolve_mode};
 use crate::midi::MidiClient;
 use crate::pacing::FramePacer;
 use crate::report::AdapterSummary;
@@ -136,6 +137,13 @@ pub struct NativeApp {
     /// Cached V4L2 enumeration; rescanning every frame is 50–500 µs per camera.
     media_cameras: Vec<modv_media::video::CameraInfo>,
     last_camera_scan: Instant,
+    /// The persisted Webcam selection (ordered ids + per-camera modes).
+    media_settings: MediaSettings,
+    media_settings_path: PathBuf,
+    /// Selected cameras that were not enumerated yet; retried once a second.
+    media_restore_pending: Vec<String>,
+    /// Set after a failed settings write so a broken disk logs once.
+    media_settings_error_logged: bool,
     audio_feed: Option<AudioFeed>,
     audio_error_logged: bool,
     /// The live capture selection (the Audio panel's active choice).
@@ -247,6 +255,28 @@ impl NativeApp {
         };
         let audio_devices =
             crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
+
+        // Webcam selection: Electron persists `mediaStream` (ordered
+        // `selectedVideoSources` + per-device `videoSettings`). The native
+        // shell stores the same thing in `<userData>/native-media.json` and
+        // restores the saved order/modes once a camera enumeration sees the
+        // device, including cameras that are (re)plugged in later.
+        let media_settings_path = user_data.join(crate::media_settings::MEDIA_SETTINGS_FILENAME);
+        let media_settings = match MediaSettings::read_from(&media_settings_path) {
+            Ok(settings) => settings.unwrap_or_default(),
+            Err(error) => {
+                eprintln!("ui: WARN ignoring the saved webcam selection: {error}");
+                MediaSettings::default()
+            }
+        };
+        if !media_settings.cameras.is_empty() {
+            eprintln!(
+                "ui: INFO restoring {} saved webcam(s) when they appear: {}",
+                media_settings.cameras.len(),
+                media_settings.cameras.join(", ")
+            );
+        }
+        let media_restore_pending = media_settings.cameras.clone();
         let midi_client = MidiClient::new();
         let isf_watcher = IsfWatcher::new(&user_isf_dirs);
         if isf_watcher.is_some() {
@@ -292,6 +322,10 @@ impl NativeApp {
             last_media_health: start,
             media_cameras: Vec::new(),
             last_camera_scan: start.checked_sub(Duration::from_secs(10)).unwrap_or(start),
+            media_settings,
+            media_settings_path,
+            media_restore_pending,
+            media_settings_error_logged: false,
             audio_feed,
             audio_error_logged: false,
             audio_selection,
@@ -639,6 +673,7 @@ impl NativeApp {
         }
         if now.saturating_duration_since(self.last_camera_scan) >= Duration::from_secs(1) {
             self.media_cameras = self.media_hub.list_cameras();
+            self.restore_pending_cameras();
             self.last_camera_scan = now;
         }
         if self.isf_watcher.as_mut().is_some_and(IsfWatcher::pump) {
@@ -863,11 +898,20 @@ impl NativeApp {
     fn drain_media_actions(&mut self) {
         for action in self.ui_state.take_media_actions() {
             match action {
-                MediaAction::StartCamera { id } => {
-                    let source_id = format!("camera:{id}");
-                    let config = VideoSourceConfig::camera(&id).with_mode(1280, 720, 30);
-                    if let Err(error) = self.media_hub.start(&source_id, config) {
-                        self.record_error(format!("camera {id} failed: {error}"));
+                MediaAction::StartCamera {
+                    id,
+                    width,
+                    height,
+                    fps,
+                } => self.start_camera(&id, Some(CameraMode { width, height, fps })),
+                MediaAction::MoveCamera { id, delta } => {
+                    if self.media_settings.move_camera(&id, delta) {
+                        self.sync_camera_order();
+                        self.save_media_settings();
+                        eprintln!(
+                            "ui: INFO webcam order: {}",
+                            self.media_settings.cameras.join(", ")
+                        );
                     }
                 }
                 MediaAction::StartTestPattern => {
@@ -878,7 +922,134 @@ impl NativeApp {
                     }
                 }
                 MediaAction::Stop { source_id } => {
+                    // An explicit stop deselects a webcam: forgetting the id is
+                    // what stops the restore pass from re-opening it later.
+                    if let Some(camera_id) = source_id.strip_prefix("camera:") {
+                        self.media_restore_pending.retain(|id| id != camera_id);
+                        if self.media_settings.remove(camera_id) {
+                            self.save_media_settings();
+                        }
+                    }
                     self.media_hub.stop(&source_id);
+                }
+            }
+        }
+    }
+
+    /// Start (or restart with a new mode) a camera, remembering the choice.
+    ///
+    /// `requested` is the mode the panel asked for (all zero means "use the
+    /// saved mode"). It is validated against the advertised caps through
+    /// [`resolve_mode`], so an unadvertised mode never reaches the pipeline.
+    fn start_camera(&mut self, camera_id: &str, requested: Option<CameraMode>) {
+        let caps = self
+            .media_cameras
+            .iter()
+            .find(|camera| camera.id == camera_id)
+            .map_or(&[][..], |camera| camera.caps.as_slice());
+        let mode = match requested.filter(|mode| !mode.is_unset()) {
+            Some(requested) => resolve_mode(Some(requested), caps),
+            None => resolve_mode(self.media_settings.mode_for(camera_id), caps),
+        };
+
+        let mut changed = self.media_settings.add(camera_id);
+        changed |= self.media_settings.set_mode(camera_id, mode);
+        self.media_restore_pending.retain(|id| id != camera_id);
+
+        self.start_camera_source(camera_id, mode);
+        self.sync_camera_order();
+        if changed {
+            self.save_media_settings();
+        }
+    }
+
+    /// Start a camera pipeline at `mode`; restart it when it already runs in a
+    /// different mode.
+    fn start_camera_source(&mut self, camera_id: &str, mode: CameraMode) -> bool {
+        let source_id = format!("camera:{camera_id}");
+        let running = self.media_hub.source_mode(&source_id);
+        if running == Some((mode.width, mode.height, mode.fps)) {
+            return true;
+        }
+        if running.is_some() {
+            // A V4L2 device can only be opened once; release it before the
+            // mode change. `sync_camera_order` restores the Webcam slot after
+            // the start.
+            self.media_hub.stop(&source_id);
+        }
+
+        let config =
+            VideoSourceConfig::camera(camera_id).with_mode(mode.width, mode.height, mode.fps);
+        match self.media_hub.start(&source_id, config) {
+            Ok(_) => {
+                eprintln!(
+                    "ui: INFO webcam {camera_id} started at {}x{}@{}",
+                    mode.width, mode.height, mode.fps
+                );
+                true
+            }
+            Err(error) => {
+                self.record_error(format!("camera {camera_id} failed: {error}"));
+                false
+            }
+        }
+    }
+
+    /// Start the saved cameras that are enumerated now, keeping the rest
+    /// pending for a later scan.
+    ///
+    /// A saved mode that the camera no longer advertises is normalised by
+    /// [`plan_restore`] and rewritten, so the next launch starts directly in
+    /// the nearest still-valid mode.
+    fn restore_pending_cameras(&mut self) {
+        if self.media_restore_pending.is_empty() {
+            return;
+        }
+        let plan = plan_restore(
+            &self.media_restore_pending,
+            &self.media_settings.modes,
+            &self.media_cameras,
+        );
+        self.media_restore_pending = plan.pending;
+        if plan.starts.is_empty() {
+            return;
+        }
+
+        let mut normalised = false;
+        for start in plan.starts {
+            if self.media_settings.mode_for(&start.camera_id) != Some(start.mode) {
+                normalised |= self.media_settings.set_mode(&start.camera_id, start.mode);
+            }
+            self.start_camera_source(&start.camera_id, start.mode);
+        }
+        self.sync_camera_order();
+        if normalised {
+            self.save_media_settings();
+        }
+    }
+
+    /// Make the hub's camera order match the persisted selection.
+    ///
+    /// Only camera-like sources move (files keep their slots) and no pipeline
+    /// restarts, so the Webcam module's `camera` prop follows immediately.
+    fn sync_camera_order(&mut self) {
+        let ids = self
+            .media_settings
+            .cameras
+            .iter()
+            .map(|camera_id| format!("camera:{camera_id}"))
+            .collect::<Vec<_>>();
+        self.media_hub.set_camera_order(&ids);
+    }
+
+    /// Persist the webcam selection; a write failure is reported, never fatal.
+    fn save_media_settings(&mut self) {
+        match self.media_settings.write_to(&self.media_settings_path) {
+            Ok(()) => self.media_settings_error_logged = false,
+            Err(error) => {
+                if !self.media_settings_error_logged {
+                    self.media_settings_error_logged = true;
+                    self.record_error(format!("could not save the webcam selection: {error}"));
                 }
             }
         }

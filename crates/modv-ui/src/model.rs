@@ -332,9 +332,48 @@ pub struct MidiDeviceView {
 /// A MediaHub operation requested by the UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MediaAction {
-    StartCamera { id: String },
+    /// Start a camera (or restart it with a new mode) at `width`×`height`@`fps`.
+    /// The shell validates the mode against the advertised caps and remembers
+    /// it; all-zero fields let the shell pick the saved/default mode.
+    StartCamera {
+        id: String,
+        width: u32,
+        height: u32,
+        fps: u32,
+    },
+    /// Move a running camera one slot earlier (`-1`) or later (`1`) in the
+    /// Webcam index; the shell persists the new order.
+    MoveCamera {
+        id: String,
+        delta: i32,
+    },
     StartTestPattern,
-    Stop { source_id: String },
+    Stop {
+        source_id: String,
+    },
+}
+
+impl MediaSnapshot {
+    /// The running source for `camera_id` (`camera:<id>`), when it is running.
+    pub fn running_camera(&self, camera_id: &str) -> Option<&MediaSourceView> {
+        let source_id = format!("camera:{camera_id}");
+
+        self.sources
+            .iter()
+            .find(|source| source.source_id == source_id)
+    }
+
+    /// Running camera-like sources in Webcam-index order.
+    pub fn running_cameras(&self) -> Vec<&MediaSourceView> {
+        let mut cameras = self
+            .sources
+            .iter()
+            .filter(|source| matches!(source.kind.as_str(), "camera" | "screen" | "test-pattern"))
+            .collect::<Vec<_>>();
+
+        cameras.sort_by_key(|source| source.index);
+        cameras
+    }
 }
 
 /// One engine Input Link (audio getter, state path, MIDI or OSC).

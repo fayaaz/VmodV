@@ -1425,6 +1425,11 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
     });
     ui.separator();
     ui.label(egui::RichText::new("CAMERAS").strong().size(10.0));
+    ui.label(
+        egui::RichText::new("Ticked cameras run in order; #N is the Webcam module's Camera index.")
+            .size(9.0)
+            .color(theme::MUTED),
+    );
     if media.cameras.is_empty() {
         ui.label(
             egui::RichText::new("No cameras detected.")
@@ -1432,28 +1437,9 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                 .color(theme::MUTED),
         );
     }
+    let running = media.running_cameras();
     for camera in &media.cameras {
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(&camera.name).size(11.0));
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{}  {}x{}@{}",
-                        camera.id, camera.max_width, camera.max_height, camera.max_fps
-                    ))
-                    .monospace()
-                    .size(8.5)
-                    .color(theme::MUTED),
-                );
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Start").clicked() {
-                    state.push_media_action(MediaAction::StartCamera {
-                        id: camera.id.clone(),
-                    });
-                }
-            });
-        });
+        media_camera_row(ui, camera, &running, state);
     }
     ui.separator();
     ui.label(egui::RichText::new("SOURCES").strong().size(10.0));
@@ -1467,13 +1453,12 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
     for source in &media.sources {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{}  #{}  {}",
-                        source.source_id, source.index, source.state
-                    ))
-                    .size(10.0),
-                );
+                let title = if source.index > 0 {
+                    format!("{}  #{}  {}", source.source_id, source.index, source.state)
+                } else {
+                    format!("{}  {}", source.source_id, source.state)
+                };
+                ui.label(egui::RichText::new(title).size(10.0));
                 ui.label(
                     egui::RichText::new(format!(
                         "{}x{}  {} frames  {} dropped",
@@ -1496,6 +1481,105 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
             });
         });
     }
+}
+
+/// One camera row: checkbox (checked = running), Webcam-index badge and the
+/// reorder arrows for a running camera.
+///
+/// Checking appends the camera to the persisted selection and starts it;
+/// unchecking stops it and drops it from the selection. The arrows reorder
+/// running cameras without restarting their pipelines, so the Webcam module's
+/// `camera` prop follows immediately.
+fn media_camera_row(
+    ui: &mut egui::Ui,
+    camera: &crate::model::CameraView,
+    running: &[&crate::model::MediaSourceView],
+    state: &mut UiState,
+) {
+    let source_id = format!("camera:{}", camera.id);
+    let position = running
+        .iter()
+        .position(|source| source.source_id == source_id);
+
+    ui.horizontal(|ui| {
+        let mut checked = position.is_some();
+        let response = ui.checkbox(&mut checked, egui::RichText::new(&camera.name).size(11.0));
+        let changed = response.changed();
+        response.on_hover_text(
+            "Run this camera and add it to the Webcam order\n\
+             (the Webcam module's Camera prop indexes this list)",
+        );
+        if changed {
+            if checked {
+                state.push_media_action(MediaAction::StartCamera {
+                    id: camera.id.clone(),
+                    width: camera.max_width,
+                    height: camera.max_height,
+                    fps: camera.max_fps,
+                });
+            } else {
+                state.push_media_action(MediaAction::Stop {
+                    source_id: source_id.clone(),
+                });
+            }
+        }
+
+        if let Some(position) = position {
+            let index = running[position].index;
+            ui.label(
+                egui::RichText::new(format!("#{index}"))
+                    .monospace()
+                    .strong()
+                    .size(9.0)
+                    .color(theme::ACCENT),
+            )
+            .on_hover_text(format!("Webcam index #{index} (the module's Camera prop)"));
+            ui.label(
+                egui::RichText::new(&camera.id)
+                    .monospace()
+                    .size(8.5)
+                    .color(theme::MUTED),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let can_move_later = position + 1 < running.len();
+                if ui
+                    .add_enabled(
+                        can_move_later,
+                        egui::Button::new(egui::RichText::new("Down").size(9.0)).small(),
+                    )
+                    .on_hover_text("Move later in the Webcam order")
+                    .clicked()
+                {
+                    state.push_media_action(MediaAction::MoveCamera {
+                        id: camera.id.clone(),
+                        delta: 1,
+                    });
+                }
+                let can_move_earlier = position > 0;
+                if ui
+                    .add_enabled(
+                        can_move_earlier,
+                        egui::Button::new(egui::RichText::new("Up").size(9.0)).small(),
+                    )
+                    .on_hover_text("Move earlier in the Webcam order")
+                    .clicked()
+                {
+                    state.push_media_action(MediaAction::MoveCamera {
+                        id: camera.id.clone(),
+                        delta: -1,
+                    });
+                }
+            });
+        } else {
+            ui.label(
+                egui::RichText::new(&camera.id)
+                    .monospace()
+                    .size(8.5)
+                    .color(theme::MUTED),
+            );
+        }
+    });
 }
 
 fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
