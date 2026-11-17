@@ -76,10 +76,12 @@ are covered by these terms.
 | File | Source | Author | License |
 | --- | --- | --- | --- |
 | `src/renderer/src/application/point10/textures/pcb.jpg` | PCB photograph bundled with the Point10/Plane9 Glass Lens scene | Miguel Alba | license variant unverified — treated as **not MIT**; see the note below |
+| `src/renderer/src/application/point10/textures/dvd_logo.svg` | Wikimedia Commons DVD text logo, extruded by the DvdRoom scene | Wikimedia Commons contributors | public domain (stated in `DvdRoom.js`) |
 
-Other Point10 textures come from ambientCG (CC0) or are procedural; the Earth,
-Moon and Milky Way imagery is derived from NASA public-domain sources. Where an
-asset's provenance or license is unclear it is not relicensed under MIT.
+Other Point10 textures use ambientCG assets (CC0; e.g. `tinore`, `rubber002`,
+`moon_04`, `concrete044c`), Poly Haven skies (`stormy`, `spruit_sunrise`), or
+NASA-derived Earth/Milky Way imagery. Where an asset's provenance or license
+is unclear it is not relicensed under MIT.
 
 ## Rust engine dependencies
 
