@@ -47,6 +47,20 @@ pub struct SceneGridState {
     pub timing_edit: Option<TimingEdit>,
     /// The row-name list editor.
     pub row_names_edit: Option<Vec<String>>,
+    /// Column drag: the Scene id under the pointer.
+    pub scene_drag: Option<String>,
+    /// Column drop target highlighted while dragging.
+    pub scene_drop_target: Option<String>,
+    /// Scroll the grid to the last column after `+ Column`.
+    pub scroll_to_last_scene: bool,
+    /// Row drag: the row index under the pointer.
+    pub row_drag: Option<usize>,
+    /// Row drop target highlighted while dragging.
+    pub row_drop_target: Option<usize>,
+    /// Inline row-name editor: `(row_index, draft)`.
+    pub row_renaming: Option<(usize, String)>,
+    /// One-shot focus request for the inline row editor.
+    pub row_rename_focus: bool,
 }
 
 /// The small Scene-timing dialog's draft values.
@@ -77,6 +91,62 @@ impl SceneGridState {
     pub fn begin_rename(&mut self, scene: &SceneView) {
         self.renaming = Some((scene.id.clone(), scene.name.clone()));
         self.rename_focus = true;
+    }
+
+    /// Begin inline renaming of a row label.
+    pub fn begin_row_rename(&mut self, row: usize, draft: String) {
+        self.row_renaming = Some((row, draft));
+        self.row_rename_focus = true;
+    }
+
+    /// Begin dragging a Scene column header.
+    pub fn begin_scene_drag(&mut self, scene_id: impl Into<String>) {
+        self.scene_drag = Some(scene_id.into());
+        self.scene_drop_target = None;
+    }
+
+    pub fn cancel_scene_drag(&mut self) {
+        self.scene_drag = None;
+        self.scene_drop_target = None;
+    }
+
+    /// Finish a column drag at `to_index`. The target index comes from the
+    /// snapshot, so the engine receives the same payload as `Move left/right`.
+    pub fn drop_scene(&mut self, to_index: usize) -> Option<UiAction> {
+        let scene_id = self.scene_drag.take()?;
+        let target = self.scene_drop_target.take()?;
+        if target == scene_id {
+            return None;
+        }
+        Some(UiAction::new(
+            "scenes/moveScene",
+            serde_json::json!({ "sceneId": scene_id, "toIndex": to_index }),
+        ))
+    }
+
+    /// Begin dragging a row label.
+    pub fn begin_row_drag(&mut self, row: usize) {
+        self.row_drag = Some(row);
+        self.row_drop_target = None;
+    }
+
+    pub fn cancel_row_drag(&mut self) {
+        self.row_drag = None;
+        self.row_drop_target = None;
+    }
+
+    /// Finish a row drag over `target`: splice the row name out of `names` and
+    /// back in at the target, matching `Scenes.vue`'s `onRowDrop`.
+    pub fn drop_row(&mut self, names: &mut Vec<String>, target: usize) -> Option<UiAction> {
+        let source = self.row_drag.take()?;
+        self.row_drop_target = None;
+        if source == target || source >= names.len() {
+            return None;
+        }
+        let target = target.min(names.len().saturating_sub(1));
+        let name = names.remove(source);
+        names.insert(target, name);
+        Some(set_row_names_action(names.clone()))
     }
 
     /// Begin editing a Scene's timing override.
@@ -122,6 +192,74 @@ impl SceneGridState {
 
 /// Width/height of one Scene cell.
 const CELL_SIZE: Vec2 = Vec2::new(154.0, 76.0);
+/// Width of the row-label gutter and the column-header height.
+const ROW_LABEL_WIDTH: f32 = 96.0;
+const HEADER_HEIGHT: f32 = 20.0;
+
+/// The grid height: the tallest Scene, the named rows and the live row labels.
+fn grid_row_count(snapshot: &EngineSnapshot) -> usize {
+    snapshot
+        .scenes
+        .iter()
+        .map(|scene| scene.cells.len())
+        .max()
+        .unwrap_or(1)
+        .max(snapshot.scene_rows.len())
+        .max(1)
+}
+
+/// Row names padded/truncated to the grid height, so every row control sends a
+/// complete `rowNames` list to `scenes/setRowNames`.
+fn grid_row_names(snapshot: &EngineSnapshot, row_count: usize) -> Vec<String> {
+    let mut names = snapshot.scene_rows.clone();
+    names.resize(row_count, String::new());
+    names
+}
+
+fn row_display_name(snapshot: &EngineSnapshot, row: usize) -> String {
+    snapshot
+        .scene_rows
+        .get(row)
+        .map(|name| {
+            if name.trim().is_empty() {
+                format!("Row {}", row + 1)
+            } else {
+                name.clone()
+            }
+        })
+        .unwrap_or_else(|| format!("Row {}", row + 1))
+}
+
+/// `Scenes.vue`'s `addRow`: append a blank name and start renaming it.
+fn add_row_action(names: &[String]) -> UiAction {
+    let mut next = names.to_vec();
+    next.push(String::new());
+    set_row_names_action(next)
+}
+
+fn remove_row_from(names: &[String], row: usize) -> Option<UiAction> {
+    if row >= names.len() {
+        return None;
+    }
+    let mut next = names.to_vec();
+    next.remove(row);
+    Some(set_row_names_action(next))
+}
+
+fn set_row_names_action(names: Vec<String>) -> UiAction {
+    UiAction::new(
+        "scenes/setRowNames",
+        serde_json::json!({ "rowNames": names }),
+    )
+}
+
+/// Build the per-cell enabled toggle payload.
+pub(crate) fn set_cell_enabled_action(scene_id: &str, row: usize, enabled: bool) -> UiAction {
+    UiAction::new(
+        "scenes/setCellEnabled",
+        serde_json::json!({ "sceneId": scene_id, "rowIndex": row, "enabled": enabled }),
+    )
+}
 
 /// Draw the whole Scene grid.
 pub fn draw_scene_grid(
@@ -146,105 +284,32 @@ pub fn draw_scene_grid(
         return;
     }
 
-    performance_bar(ui, snapshot, grid, actions);
+    let row_count = grid_row_count(snapshot);
+    performance_bar(ui, snapshot, grid, row_count, actions);
     ui.separator();
 
-    let row_count = snapshot
-        .scenes
-        .iter()
-        .map(|scene| scene.cells.len())
-        .max()
-        .unwrap_or(1)
-        .max(snapshot.scene_rows.len())
-        .max(1);
-
-    egui::ScrollArea::horizontal()
-        .id_salt("scenes-grid-horizontal")
+    let row_names = grid_row_names(snapshot, row_count);
+    egui::ScrollArea::both()
+        .id_salt("scenes-grid")
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                for scene in &snapshot.scenes {
-                    ui.vertical(|ui| {
-                        let current = snapshot.performance.current_scene_id.as_deref()
-                            == Some(scene.id.as_str());
-                        let renaming = grid
-                            .renaming
-                            .as_ref()
-                            .filter(|(id, _)| id == &scene.id)
-                            .map(|(_, draft)| draft.clone());
-                        if let Some(mut draft) = renaming {
-                            let response = ui.add_sized(
-                                [CELL_SIZE.x, 20.0],
-                                egui::TextEdit::singleline(&mut draft)
-                                    .font(egui::TextStyle::Small)
-                                    .hint_text("Scene name"),
-                            );
-                            if grid.rename_focus {
-                                response.request_focus();
-                                grid.rename_focus = false;
-                            }
-                            let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
-                            let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
-                            if escape {
-                                grid.renaming = None;
-                            } else if enter || response.lost_focus() {
-                                grid.renaming = None;
-                                let name = draft.trim();
-                                if !name.is_empty() && name != scene.name {
-                                    actions.push(UiAction::new(
-                                        "scenes/updateSceneName",
-                                        serde_json::json!({
-                                            "sceneId": scene.id,
-                                            "name": name,
-                                        }),
-                                    ));
-                                }
-                            } else {
-                                grid.renaming = Some((scene.id.clone(), draft));
-                            }
-                        } else {
-                            let header = ui.add_sized(
-                                [CELL_SIZE.x, 20.0],
-                                egui::Button::new(
-                                    egui::RichText::new(&scene.name)
-                                        .size(11.0)
-                                        .color(if current {
-                                            theme::ACCENT
-                                        } else {
-                                            theme::FOREGROUND
-                                        }),
-                                )
-                                .frame(false),
-                            );
-                            if header.clicked() {
-                                actions.push(apply_scene_action(&scene.id));
-                            }
-                            if header.double_clicked() {
-                                grid.begin_rename(scene);
-                            }
-                            header.context_menu(|ui| {
-                                scene_column_menu(ui, scene, snapshot, grid, actions)
-                            });
-                        }
-
-                        for row in 0..row_count {
-                            let cell = scene.cell(row).cloned().unwrap_or_default();
-                            let _ = draw_scene_cell(
-                                ui,
-                                scene,
-                                row,
-                                &cell,
-                                snapshot,
-                                grid,
-                                live_preview,
-                                actions,
-                            );
-                            ui.add_space(2.0);
-                        }
-                    });
-                    ui.add_space(6.0);
+                row_label_column(ui, snapshot, grid, &row_names, actions);
+                let last = snapshot.scenes.len().saturating_sub(1);
+                for (index, scene) in snapshot.scenes.iter().enumerate() {
+                    draw_scene_column(
+                        ui,
+                        scene,
+                        snapshot,
+                        grid,
+                        live_preview,
+                        actions,
+                        index == last,
+                    );
                 }
             });
         });
+
+    finish_drags(ui, snapshot, grid, &row_names, actions);
 
     // A copy drag released outside every cell is cancelled without an action.
     if grid.copy_source.is_some() && ui.input(|input| input.pointer.any_released()) {
@@ -254,11 +319,404 @@ pub fn draw_scene_grid(
     scene_dialogs(ui, grid, actions);
 }
 
+/// Draw one Scene column: its header plus one cell per grid row.
+#[allow(clippy::too_many_arguments)]
+fn draw_scene_column(
+    ui: &mut egui::Ui,
+    scene: &SceneView,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    live_preview: Option<egui::TextureId>,
+    actions: &mut Vec<UiAction>,
+    is_last: bool,
+) {
+    ui.vertical(|ui| {
+        let current = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
+        let renaming = grid
+            .renaming
+            .as_ref()
+            .filter(|(id, _)| id == &scene.id)
+            .map(|(_, draft)| draft.clone());
+        if let Some(mut draft) = renaming {
+            let response = ui.add_sized(
+                [CELL_SIZE.x, HEADER_HEIGHT],
+                egui::TextEdit::singleline(&mut draft)
+                    .font(egui::TextStyle::Small)
+                    .hint_text("Scene name"),
+            );
+            if grid.rename_focus {
+                response.request_focus();
+                grid.rename_focus = false;
+            }
+            let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+            if escape {
+                grid.renaming = None;
+            } else if enter || response.lost_focus() {
+                grid.renaming = None;
+                let name = draft.trim();
+                if !name.is_empty() && name != scene.name {
+                    actions.push(UiAction::new(
+                        "scenes/updateSceneName",
+                        serde_json::json!({
+                            "sceneId": scene.id,
+                            "name": name,
+                        }),
+                    ));
+                }
+            } else {
+                grid.renaming = Some((scene.id.clone(), draft));
+            }
+        } else {
+            let (rect, header) = ui.allocate_exact_size(
+                Vec2::new(CELL_SIZE.x, HEADER_HEIGHT),
+                Sense::click_and_drag(),
+            );
+            let dragging = grid.scene_drag.as_deref() == Some(scene.id.as_str());
+            let drop_target = grid.scene_drop_target.as_deref() == Some(scene.id.as_str())
+                && grid.scene_drag.as_deref() != Some(scene.id.as_str());
+            let hovered = header.hovered();
+
+            let fill = if drop_target {
+                theme::ACCENT_DIM
+            } else if dragging {
+                theme::PANEL_ALT
+            } else if hovered {
+                Color32::from_rgb(58, 58, 58)
+            } else {
+                theme::PANEL
+            };
+            let painter = ui.painter();
+            painter.rect_filled(rect, CornerRadius::same(2), fill);
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(2),
+                Stroke::new(
+                    if drop_target || dragging || current {
+                        1.5
+                    } else {
+                        1.0
+                    },
+                    if drop_target || current {
+                        theme::ACCENT
+                    } else {
+                        theme::BORDER
+                    },
+                ),
+                StrokeKind::Inside,
+            );
+            let dot = if scene.enabled {
+                theme::OK
+            } else {
+                theme::DANGER
+            };
+            painter.circle_filled(rect.left_center() + egui::vec2(7.0, 0.0), 3.0, dot);
+            let clipped = painter.with_clip_rect(rect.shrink2(egui::vec2(16.0, 0.0)));
+            clipped.text(
+                rect.left_center() + egui::vec2(14.0, 0.0),
+                Align2::LEFT_CENTER,
+                &scene.name,
+                FontId::proportional(11.0),
+                if scene.enabled {
+                    if current {
+                        theme::ACCENT
+                    } else {
+                        theme::FOREGROUND
+                    }
+                } else {
+                    theme::MUTED
+                },
+            );
+
+            if header.clicked() {
+                actions.push(apply_scene_action(&scene.id));
+            }
+            if header.double_clicked() {
+                grid.begin_rename(scene);
+            }
+            if header.drag_started() {
+                grid.begin_scene_drag(scene.id.clone());
+            }
+            if grid.scene_drag.is_some() && !dragging && header.contains_pointer() {
+                grid.scene_drop_target = Some(scene.id.clone());
+            }
+            let header = header.on_hover_text(
+                "Apply this Scene. Drag to reorder columns; double-click to rename.",
+            );
+            header.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, true, scene.name.clone())
+            });
+            header.context_menu(|ui| scene_column_menu(ui, scene, snapshot, grid, actions));
+            if is_last && grid.scroll_to_last_scene {
+                header.scroll_to_me(Some(egui::Align::RIGHT));
+                grid.scroll_to_last_scene = false;
+            }
+        }
+
+        for row in 0..grid_row_count(snapshot) {
+            let cell = scene.cell(row).cloned().unwrap_or_default();
+            let _ = draw_scene_cell(ui, scene, row, &cell, snapshot, grid, live_preview, actions);
+            ui.add_space(2.0);
+        }
+    });
+    ui.add_space(6.0);
+}
+
+/// The fixed row-label gutter: names, inline rename, drag reorder and delete.
+fn row_label_column(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    names: &[String],
+    actions: &mut Vec<UiAction>,
+) {
+    ui.vertical(|ui| {
+        ui.allocate_ui_with_layout(
+            Vec2::new(ROW_LABEL_WIDTH, HEADER_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    egui::RichText::new("Layers")
+                        .size(10.0)
+                        .color(theme::MUTED)
+                        .strong(),
+                );
+            },
+        );
+        for (row, _) in names.iter().enumerate() {
+            row_label_cell(ui, snapshot, grid, names, row, actions);
+            ui.add_space(2.0);
+        }
+    });
+    ui.add_space(4.0);
+}
+
+fn row_label_cell(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    names: &[String],
+    row: usize,
+    actions: &mut Vec<UiAction>,
+) {
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ROW_LABEL_WIDTH, CELL_SIZE.y),
+        Sense::click_and_drag(),
+    );
+    let dragging = grid.row_drag == Some(row);
+    let drop_target = grid.row_drop_target == Some(row) && grid.row_drag != Some(row);
+    let hovered = response.hovered();
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        CornerRadius::same(2),
+        if drop_target {
+            theme::ACCENT_DIM
+        } else if dragging || hovered {
+            theme::PANEL_ALT
+        } else {
+            theme::PANEL
+        },
+    );
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(2),
+        Stroke::new(
+            if drop_target || dragging { 1.5 } else { 1.0 },
+            if drop_target {
+                theme::ACCENT
+            } else {
+                theme::BORDER
+            },
+        ),
+        StrokeKind::Inside,
+    );
+
+    let renaming = grid
+        .row_renaming
+        .as_ref()
+        .filter(|(index, _)| *index == row)
+        .map(|(_, draft)| draft.clone());
+    if let Some(mut draft) = renaming {
+        painter.text(
+            rect.left_top() + egui::vec2(6.0, 4.0),
+            Align2::LEFT_TOP,
+            format!("Row {}", row + 1),
+            FontId::monospace(9.0),
+            theme::MUTED,
+        );
+        let edit_rect = egui::Rect::from_min_size(
+            rect.left_top() + egui::vec2(4.0, 22.0),
+            Vec2::new(rect.width() - 8.0, 22.0),
+        );
+        let edit = ui.put(
+            edit_rect,
+            egui::TextEdit::singleline(&mut draft)
+                .font(egui::TextStyle::Small)
+                .hint_text("Row name"),
+        );
+        if grid.row_rename_focus {
+            edit.request_focus();
+            grid.row_rename_focus = false;
+        }
+        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        if escape {
+            grid.row_renaming = None;
+        } else if enter || edit.lost_focus() {
+            grid.row_renaming = None;
+            let mut next = names.to_vec();
+            if let Some(slot) = next.get_mut(row) {
+                *slot = draft.trim().to_string();
+            }
+            if next != names {
+                actions.push(set_row_names_action(next));
+            }
+        } else {
+            grid.row_renaming = Some((row, draft));
+        }
+        return;
+    }
+
+    painter.text(
+        rect.left_top() + egui::vec2(6.0, 4.0),
+        Align2::LEFT_TOP,
+        format!("Row {}", row + 1),
+        FontId::monospace(9.0),
+        theme::MUTED,
+    );
+    let label = snapshot
+        .scene_rows
+        .get(row)
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| row_display_name(snapshot, row));
+    let clipped = painter.with_clip_rect(rect.shrink2(egui::vec2(8.0, 2.0)));
+    clipped.text(
+        rect.left_top() + egui::vec2(6.0, 24.0),
+        Align2::LEFT_TOP,
+        label,
+        FontId::proportional(11.0),
+        theme::FOREGROUND,
+    );
+    painter.text(
+        rect.right_bottom() + egui::vec2(-8.0, -8.0),
+        Align2::RIGHT_BOTTOM,
+        "::",
+        FontId::monospace(10.0),
+        theme::MUTED,
+    );
+
+    if response.double_clicked() {
+        grid.begin_row_rename(row, names.get(row).cloned().unwrap_or_default());
+    }
+    if response.drag_started() {
+        grid.begin_row_drag(row);
+    }
+    if grid.row_drag.is_some() && grid.row_drag != Some(row) && response.contains_pointer() {
+        grid.row_drop_target = Some(row);
+    }
+    let response = response.on_hover_text("Double-click to rename. Drag to reorder rows.");
+    response.context_menu(|ui| row_label_menu(ui, names, row, grid, actions));
+}
+
+/// Resolve a column/row drag once the pointer is released.
+fn finish_drags(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    names: &[String],
+    actions: &mut Vec<UiAction>,
+) {
+    if !ui.input(|input| input.pointer.any_released()) {
+        return;
+    }
+
+    if grid.scene_drag.is_some() {
+        let target = grid
+            .scene_drop_target
+            .as_deref()
+            .and_then(|target| snapshot.scenes.iter().position(|scene| scene.id == target));
+        match target {
+            Some(index) => {
+                if let Some(action) = grid.drop_scene(index) {
+                    actions.push(action);
+                }
+            }
+            None => grid.cancel_scene_drag(),
+        }
+        grid.cancel_scene_drag();
+    }
+
+    if grid.row_drag.is_some() {
+        let mut next = names.to_vec();
+        match grid.row_drop_target {
+            Some(target) => {
+                if let Some(action) = grid.drop_row(&mut next, target) {
+                    actions.push(action);
+                }
+            }
+            None => grid.cancel_row_drag(),
+        }
+        grid.cancel_row_drag();
+    }
+}
+
+fn row_label_menu(
+    ui: &mut egui::Ui,
+    names: &[String],
+    row: usize,
+    grid: &mut SceneGridState,
+    actions: &mut Vec<UiAction>,
+) {
+    if ui.button("Rename row").clicked() {
+        grid.begin_row_rename(row, names.get(row).cloned().unwrap_or_default());
+        ui.close();
+    }
+    if row > 0 {
+        let mut next = names.to_vec();
+        if row < next.len() {
+            let name = next.remove(row);
+            next.insert(row - 1, name);
+            if ui.button("Move row up").clicked() {
+                actions.push(set_row_names_action(next));
+                ui.close();
+            }
+        }
+    }
+    if row + 1 < names.len() {
+        let mut next = names.to_vec();
+        if row < next.len() {
+            let name = next.remove(row);
+            next.insert(row + 1, name);
+            if ui.button("Move row down").clicked() {
+                actions.push(set_row_names_action(next));
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
+    if ui
+        .add_enabled(
+            row < names.len(),
+            egui::Button::new(egui::RichText::new("Delete row").color(theme::DANGER)),
+        )
+        .clicked()
+    {
+        if let Some(action) = remove_row_from(names, row) {
+            actions.push(action);
+        }
+        ui.close();
+    }
+}
+
 /// Performance-mode controls above the Scene grid.
 fn performance_bar(
     ui: &mut egui::Ui,
     snapshot: &EngineSnapshot,
     grid: &mut SceneGridState,
+    row_count: usize,
     actions: &mut Vec<UiAction>,
 ) {
     ui.horizontal_wrapped(|ui| {
@@ -323,13 +781,19 @@ fn performance_bar(
         }
         ui.separator();
         if ui.button("Row names").clicked() {
-            grid.row_names_edit = Some(snapshot.scene_rows.clone());
+            grid.row_names_edit = Some(grid_row_names(snapshot, row_count));
         }
-        if ui.button("+ Scene").clicked() {
+        if ui.button("+ Column").clicked() {
             actions.push(UiAction::new(
                 "scenes/addEmptyScene",
                 serde_json::json!({ "name": "New Scene" }),
             ));
+            grid.scroll_to_last_scene = true;
+        }
+        if ui.button("+ Row").clicked() {
+            let names = grid_row_names(snapshot, row_count);
+            actions.push(add_row_action(&names));
+            grid.begin_row_rename(names.len(), String::new());
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
@@ -414,7 +878,9 @@ fn scene_dialogs(ui: &mut egui::Ui, grid: &mut SceneGridState, actions: &mut Vec
                     .size(10.0)
                     .color(theme::MUTED),
                 );
-                for (index, name) in names.iter_mut().enumerate() {
+                let mut remove: Option<usize> = None;
+                let mut swap: Option<(usize, usize)> = None;
+                for index in 0..names.len() {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!("Row {index}"))
@@ -422,8 +888,38 @@ fn scene_dialogs(ui: &mut egui::Ui, grid: &mut SceneGridState, actions: &mut Vec
                                 .size(10.0)
                                 .color(theme::MUTED),
                         );
-                        ui.text_edit_singleline(name);
+                        ui.text_edit_singleline(&mut names[index]);
+                        if ui
+                            .add_enabled(index > 0, egui::Button::new("↑").small())
+                            .on_hover_text("Move row up")
+                            .clicked()
+                        {
+                            swap = Some((index, index - 1));
+                        }
+                        if ui
+                            .add_enabled(index + 1 < names.len(), egui::Button::new("↓").small())
+                            .on_hover_text("Move row down")
+                            .clicked()
+                        {
+                            swap = Some((index, index + 1));
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("×").color(theme::DANGER))
+                                    .small(),
+                            )
+                            .on_hover_text("Delete row")
+                            .clicked()
+                        {
+                            remove = Some(index);
+                        }
                     });
+                }
+                if let Some((from, to)) = swap {
+                    names.swap(from, to);
+                }
+                if let Some(index) = remove {
+                    names.remove(index);
                 }
                 if ui.button("Add row").clicked() {
                     names.push(String::new());
@@ -540,13 +1036,41 @@ fn draw_scene_cell(
         },
     );
 
-    // Enabled dot.
-    let dot_colour = if scene.enabled {
-        theme::OK
-    } else {
-        theme::DANGER
-    };
-    painter.circle_filled(rect.left_top() + egui::vec2(8.0, 26.0), 3.0, dot_colour);
+    // Per-cell performance flag: red = skipped by performance mode, green =
+    // eligible. This is the click target; a manual Scene/cell apply still uses
+    // a disabled cell.
+    let mut cell_dot_clicked = false;
+    if !cell.is_empty() {
+        let dot_center = rect.left_top() + egui::vec2(9.0, 27.0);
+        let dot_rect = egui::Rect::from_center_size(dot_center, Vec2::splat(14.0));
+        let dot_response = ui.interact(
+            dot_rect,
+            ui.scope_id().with(("scene-cell-enabled", &scene.id, row)),
+            Sense::click(),
+        );
+        let dot_colour = if cell.disabled {
+            theme::DANGER
+        } else {
+            theme::OK
+        };
+        painter.circle_filled(dot_center, 3.0, dot_colour);
+        if dot_response.hovered() {
+            painter.circle_stroke(dot_center, 4.5, Stroke::new(1.0, dot_colour));
+        }
+        cell_dot_clicked = dot_response.clicked()
+            || (response.clicked()
+                && response
+                    .interact_pointer_pos()
+                    .is_some_and(|position| dot_rect.contains(position)));
+        if cell_dot_clicked {
+            actions.push(set_cell_enabled_action(&scene.id, row, !cell.disabled));
+        }
+        dot_response.on_hover_text(if cell.disabled {
+            "Enable this cell in performance mode"
+        } else {
+            "Disable this cell in performance mode"
+        });
+    }
 
     // Timing badge (top-right) uses the per-Scene override when present.
     if let Some(timing) = scene.timing {
@@ -585,11 +1109,12 @@ fn draw_scene_cell(
     }
 
     // Primary click applies the Scene; a double-click on an empty cell
-    // creates the row's Group in that Scene.
-    if response.clicked() && !cell.is_empty() {
+    // creates the row's Group in that Scene. The enabled dot is a separate
+    // target and must not apply on its click.
+    if response.clicked() && !cell_dot_clicked && !cell.is_empty() {
         actions.push(apply_scene_action(&scene.id));
     }
-    if response.double_clicked() && cell.is_empty() {
+    if response.double_clicked() && !cell_dot_clicked && cell.is_empty() {
         actions.push(UiAction::new(
             "scenes/createSceneCellGroup",
             serde_json::json!({ "sceneId": scene.id, "rowIndex": row }),
@@ -655,6 +1180,20 @@ fn scene_cell_menu(
         .clicked()
     {
         actions.push(clear_cell_action(&scene.id, row));
+        ui.close();
+    }
+    if ui
+        .add_enabled(
+            !cell.is_empty(),
+            egui::Button::new(if cell.disabled {
+                "Enable cell in performance mode"
+            } else {
+                "Disable cell in performance mode"
+            }),
+        )
+        .clicked()
+    {
+        actions.push(set_cell_enabled_action(&scene.id, row, !cell.disabled));
         ui.close();
     }
     ui.separator();
@@ -874,19 +1413,19 @@ mod tests {
         // The WEBCAM row of a Scene without a WEBCAM Group is empty after the
         // named-row mapping; hovering it must not ask the engine for a
         // `preview/scene` row that cannot render.
-        let webcam = SceneCellView {
+        let empty = SceneCellView {
             row: 0,
             module_names: Vec::new(),
             disabled: false,
         };
-        assert!(!should_request_preview(&webcam, true));
-        let background = SceneCellView {
+        assert!(!should_request_preview(&empty, true));
+        let populated = SceneCellView {
             row: 1,
             module_names: vec!["Bands".to_string()],
             disabled: false,
         };
-        assert!(should_request_preview(&background, true));
-        assert!(!should_request_preview(&background, false));
+        assert!(should_request_preview(&populated, true));
+        assert!(!should_request_preview(&populated, false));
     }
 
     #[test]
@@ -899,5 +1438,77 @@ mod tests {
             clear_cell_action("scene-a", 3).payload,
             serde_json::json!({"sceneId": "scene-a", "rowIndex": 3})
         );
+        assert_eq!(
+            set_cell_enabled_action("scene-a", 2, false).payload,
+            serde_json::json!({"sceneId": "scene-a", "rowIndex": 2, "enabled": false})
+        );
+    }
+
+    #[test]
+    fn add_row_appends_a_blank_name_for_the_renamer() {
+        let names = vec!["WEBCAM".to_string(), "Effects".to_string()];
+        let action = add_row_action(&names);
+        assert_eq!(action.action, "scenes/setRowNames");
+        assert_eq!(
+            action.payload["rowNames"],
+            serde_json::json!(["WEBCAM", "Effects", ""])
+        );
+        assert_eq!(names, vec!["WEBCAM", "Effects"], "the input is not mutated");
+    }
+
+    #[test]
+    fn remove_row_splices_the_name_out() {
+        let names = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let action = remove_row_from(&names, 1).expect("row exists");
+        assert_eq!(action.payload["rowNames"], serde_json::json!(["A", "C"]));
+        assert_eq!(remove_row_from(&names, 9), None);
+    }
+
+    #[test]
+    fn row_names_pad_to_the_grid_height() {
+        let snapshot = EngineSnapshot {
+            scene_rows: vec!["Background".to_string()],
+            ..Default::default()
+        };
+        let names = grid_row_names(&snapshot, 3);
+        assert_eq!(names, vec!["Background", "", ""]);
+    }
+
+    #[test]
+    fn dropping_a_row_reorders_the_names() {
+        let mut grid = SceneGridState::default();
+        let mut names = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        grid.begin_row_drag(0);
+        grid.row_drop_target = Some(2);
+        let action = grid.drop_row(&mut names, 2).expect("row drop");
+        assert_eq!(action.action, "scenes/setRowNames");
+        assert_eq!(
+            action.payload["rowNames"],
+            serde_json::json!(["B", "C", "A"])
+        );
+        assert_eq!(names, vec!["B", "C", "A"]);
+        assert!(grid.row_drag.is_none());
+    }
+
+    #[test]
+    fn dropping_a_scene_column_emits_move_scene_with_the_target_index() {
+        let mut grid = SceneGridState::default();
+        grid.begin_scene_drag("scene-a");
+        grid.scene_drop_target = Some("scene-c".to_string());
+        let action = grid.drop_scene(2).expect("column drop");
+        assert_eq!(action.action, "scenes/moveScene");
+        assert_eq!(
+            action.payload,
+            serde_json::json!({"sceneId": "scene-a", "toIndex": 2})
+        );
+    }
+
+    #[test]
+    fn same_column_drop_does_not_emit_an_action() {
+        let mut grid = SceneGridState::default();
+        grid.begin_scene_drag("scene-a");
+        grid.scene_drop_target = Some("scene-a".to_string());
+        assert_eq!(grid.drop_scene(0), None);
+        assert!(grid.scene_drag.is_none());
     }
 }

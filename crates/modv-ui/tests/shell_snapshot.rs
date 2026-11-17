@@ -121,7 +121,7 @@ fn demo_snapshot() -> EngineSnapshot {
             SceneCellView {
                 row: 1,
                 module_names: vec!["Chromatic Line".to_string()],
-                disabled: false,
+                disabled: true,
             },
         ],
     };
