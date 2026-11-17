@@ -48,6 +48,7 @@ fn build(order: &str, enabled: bool) -> Harness<'static, UiState> {
                     &mut state.scene_grid,
                     None,
                     &mut state.actions,
+                    &mut state.layout,
                 );
             },
             state,

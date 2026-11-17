@@ -9,6 +9,7 @@
 use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec2};
 use serde_json::Value;
 
+use crate::layout::{LayoutState, WINDOW_PERFORMANCE_ROW_NAMES, WINDOW_SCENE_TIMING};
 use crate::model::{
     EngineSnapshot, PERFORMANCE_ORDERS, PreviewRequest, SceneCellView, SceneView,
     performance_order_label, scene_preview_key,
@@ -324,6 +325,7 @@ pub fn draw_scene_grid(
     grid: &mut SceneGridState,
     live_preview: Option<egui::TextureId>,
     actions: &mut Vec<UiAction>,
+    layout: &mut LayoutState,
 ) {
     if snapshot.scenes.is_empty() {
         ui.vertical_centered(|ui| {
@@ -372,7 +374,7 @@ pub fn draw_scene_grid(
         grid.cancel_copy();
     }
 
-    scene_dialogs(ui, grid, actions);
+    scene_dialogs(ui, grid, actions, layout);
 }
 
 /// Draw one Scene column: its header plus one cell per grid row.
@@ -887,46 +889,61 @@ fn performance_bar(
 }
 
 /// Modal editors for Scene timing override and performance row names.
-fn scene_dialogs(ui: &mut egui::Ui, grid: &mut SceneGridState, actions: &mut Vec<UiAction>) {
+fn scene_dialogs(
+    ui: &mut egui::Ui,
+    grid: &mut SceneGridState,
+    actions: &mut Vec<UiAction>,
+    layout: &mut LayoutState,
+) {
     if let Some(mut edit) = grid.timing_edit.take() {
         let mut open = true;
         let mut save = false;
         let mut cancel = false;
-        egui::Window::new(format!("Scene timing: {}", edit.name))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                ui.label(
-                    egui::RichText::new("Per-Scene override; reset returns to the global timing.")
-                        .size(10.0)
-                        .color(theme::MUTED),
+        let window = layout.apply_window(
+            egui::Window::new(format!("Scene timing: {}", edit.name))
+                .id(egui::Id::unique("modv-window:scene_timing"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .min_width(320.0)
+                .min_height(180.0)
+                .default_size([420.0, 240.0]),
+            WINDOW_SCENE_TIMING,
+        );
+        let response = window.show(ui.ctx(), |ui| {
+            ui.label(
+                egui::RichText::new("Per-Scene override; reset returns to the global timing.")
+                    .size(10.0)
+                    .color(theme::MUTED),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Min");
+                ui.add(
+                    egui::DragValue::new(&mut edit.min_seconds)
+                        .range(1.0..=3600.0)
+                        .speed(0.5)
+                        .suffix(" s"),
                 );
-                ui.horizontal(|ui| {
-                    ui.label("Min");
-                    ui.add(
-                        egui::DragValue::new(&mut edit.min_seconds)
-                            .range(1.0..=3600.0)
-                            .speed(0.5)
-                            .suffix(" s"),
-                    );
-                    ui.label("Max");
-                    ui.add(
-                        egui::DragValue::new(&mut edit.max_seconds)
-                            .range(2.0..=7200.0)
-                            .speed(0.5)
-                            .suffix(" s"),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Save override").clicked() {
-                        save = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
+                ui.label("Max");
+                ui.add(
+                    egui::DragValue::new(&mut edit.max_seconds)
+                        .range(2.0..=7200.0)
+                        .speed(0.5)
+                        .suffix(" s"),
+                );
             });
+            ui.horizontal(|ui| {
+                if ui.button("Save override").clicked() {
+                    save = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        if let Some(response) = response {
+            layout.record_window_rect(WINDOW_SCENE_TIMING, response.response.rect);
+        }
         if save {
             actions.push(UiAction::new(
                 "scenes/updateSceneTiming",
@@ -944,68 +961,78 @@ fn scene_dialogs(ui: &mut egui::Ui, grid: &mut SceneGridState, actions: &mut Vec
     if let Some(mut names) = grid.row_names_edit.take() {
         let mut open = true;
         let mut save = false;
-        egui::Window::new("Performance row names")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .show(ui.ctx(), |ui| {
-                ui.label(
-                    egui::RichText::new(
-                        "A named row matches its Group by name; empty names use position.",
-                    )
-                    .size(10.0)
-                    .color(theme::MUTED),
-                );
-                let mut remove: Option<usize> = None;
-                let mut swap: Option<(usize, usize)> = None;
-                for index in 0..names.len() {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("Row {index}"))
-                                .monospace()
-                                .size(10.0)
-                                .color(theme::MUTED),
-                        );
-                        ui.text_edit_singleline(&mut names[index]);
-                        if ui
-                            .add_enabled(index > 0, egui::Button::new("↑").small())
-                            .on_hover_text("Move row up")
-                            .clicked()
-                        {
-                            swap = Some((index, index - 1));
-                        }
-                        if ui
-                            .add_enabled(index + 1 < names.len(), egui::Button::new("↓").small())
-                            .on_hover_text("Move row down")
-                            .clicked()
-                        {
-                            swap = Some((index, index + 1));
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("×").color(theme::DANGER))
-                                    .small(),
-                            )
-                            .on_hover_text("Delete row")
-                            .clicked()
-                        {
-                            remove = Some(index);
-                        }
-                    });
-                }
-                if let Some((from, to)) = swap {
-                    names.swap(from, to);
-                }
-                if let Some(index) = remove {
-                    names.remove(index);
-                }
-                if ui.button("Add row").clicked() {
-                    names.push(String::new());
-                }
-                if ui.button("Save").clicked() {
-                    save = true;
-                }
-            });
+        let window = layout.apply_window(
+            egui::Window::new("Performance row names")
+                .id(egui::Id::unique("modv-window:performance_row_names"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .min_width(320.0)
+                .min_height(220.0)
+                .default_size([460.0, 360.0]),
+            WINDOW_PERFORMANCE_ROW_NAMES,
+        );
+        let response = window.show(ui.ctx(), |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "A named row matches its Group by name; empty names use position.",
+                )
+                .size(10.0)
+                .color(theme::MUTED),
+            );
+            let mut remove: Option<usize> = None;
+            let mut swap: Option<(usize, usize)> = None;
+            for index in 0..names.len() {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Row {index}"))
+                            .monospace()
+                            .size(10.0)
+                            .color(theme::MUTED),
+                    );
+                    ui.text_edit_singleline(&mut names[index]);
+                    if ui
+                        .add_enabled(index > 0, egui::Button::new("↑").small())
+                        .on_hover_text("Move row up")
+                        .clicked()
+                    {
+                        swap = Some((index, index - 1));
+                    }
+                    if ui
+                        .add_enabled(index + 1 < names.len(), egui::Button::new("↓").small())
+                        .on_hover_text("Move row down")
+                        .clicked()
+                    {
+                        swap = Some((index, index + 1));
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(egui::RichText::new("×").color(theme::DANGER))
+                                .small(),
+                        )
+                        .on_hover_text("Delete row")
+                        .clicked()
+                    {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some((from, to)) = swap {
+                names.swap(from, to);
+            }
+            if let Some(index) = remove {
+                names.remove(index);
+            }
+            if ui.button("Add row").clicked() {
+                names.push(String::new());
+            }
+            if ui.button("Save").clicked() {
+                save = true;
+            }
+        });
+        if let Some(response) = response {
+            layout.record_window_rect(WINDOW_PERFORMANCE_ROW_NAMES, response.response.rect);
+        }
         if save {
             actions.push(UiAction::new(
                 "scenes/setRowNames",

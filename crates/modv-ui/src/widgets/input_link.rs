@@ -9,6 +9,7 @@
 //! Audio / MIDI / Tween / OSC / Expression sections. Pure payload builders live
 //! in [`LinkEditor`] so the JS action shapes are unit-testable without egui.
 
+use crate::layout::WINDOW_INPUT_LINK;
 use crate::model::{EngineSnapshot, InputLinkView};
 use crate::state::{AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiState};
 use crate::theme;
@@ -160,12 +161,18 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
     let mut expression_clear = false;
     let mut evaluation_changed = false;
 
-    egui::Window::new(format!("Input link: {}", editor.title))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_width(440.0)
-        .show(ui.ctx(), |ui| {
+    let window = state.layout.apply_window(
+        egui::Window::new(format!("Input link: {}", editor.title))
+            .id(egui::Id::unique("modv-window:input_link"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .min_width(340.0)
+            .min_height(300.0)
+            .default_size([440.0, 560.0]),
+        WINDOW_INPUT_LINK,
+    );
+    let response = window.show(ui.ctx(), |ui| {
             ui.label(
                 egui::RichText::new(
                     "Inputs are created automatically for module props. This link drives the selected property.",
@@ -346,6 +353,12 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                 }
             });
         });
+
+    if let Some(response) = response {
+        state
+            .layout
+            .record_window_rect(WINDOW_INPUT_LINK, response.response.rect);
+    }
 
     if expression_save {
         let actions = editor.expression_actions();

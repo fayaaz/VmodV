@@ -99,6 +99,7 @@ fn scene_grid_row_monitor_golden() {
                     &mut state.scene_grid,
                     None,
                     &mut state.actions,
+                    &mut state.layout,
                 );
             },
             state,
@@ -143,6 +144,7 @@ fn scene_grid_row_monitor_dims_while_performance_mode_is_off() {
                     &mut state.scene_grid,
                     None,
                     &mut state.actions,
+                    &mut state.layout,
                 );
             },
             state,

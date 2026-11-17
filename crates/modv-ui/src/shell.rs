@@ -7,6 +7,10 @@
 
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, vec2};
 
+use crate::layout::{
+    LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
+    WINDOW_TEMPO,
+};
 use crate::model::{
     COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView, bpm_with_rate,
     gallery_preview_key, sample_rate_label,
@@ -20,15 +24,34 @@ use crate::widgets::input_link::{link_editor_window, link_row};
 use crate::widgets::range_control::chip;
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 
+/// The Groups panel's minimum width, matching `ui_layout::MIN_GROUPS_WIDTH`.
+const MIN_GROUPS_WIDTH: f32 = 190.0;
+/// The right tab strip's minimum width, matching `ui_layout::MIN_INSPECTOR_WIDTH`.
+const MIN_INSPECTOR_WIDTH: f32 = 232.0;
+/// The centre column's minimum width, matching `ui_layout::MIN_CENTRE_WIDTH`.
+const MIN_CENTRE_WIDTH: f32 = 360.0;
+/// The Live Output section's minimum height.
+const MIN_LIVE_HEIGHT: f32 = 120.0;
+/// The Scenes grid's minimum height.
+const MIN_SCENES_HEIGHT: f32 = 140.0;
+/// The Gallery section's minimum height.
+const MIN_GALLERY_HEIGHT: f32 = 96.0;
+
 /// Draw the complete native UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     state.sync_status(snapshot);
+    state
+        .layout
+        .tabs
+        .ensure_strip_active(&mut state.side_panel_tab);
     handle_shortcuts(ui, snapshot, state);
     menu_bar(ui, snapshot, state);
     status_bar(ui, snapshot, state);
     groups_panel(ui, snapshot, state);
     inspector_panel(ui, snapshot, state);
+    dock_panel(ui, snapshot, state);
     central_panel(ui, snapshot, state);
+    floating_tab_windows(ui.ctx(), snapshot, state);
     about_window(ui.ctx(), state);
     shortcuts_window(ui.ctx(), state);
     link_editor_window(ui, snapshot, state);
@@ -458,9 +481,12 @@ fn audio_meters(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
 }
 
 fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    egui::Panel::left("modv-groups")
-        .default_size(250.0)
-        .min_size(190.0)
+    let reserved = reserved_side_width(state);
+    let max_width = (ui.available_width() - reserved - MIN_CENTRE_WIDTH).max(MIN_GROUPS_WIDTH);
+    let response = egui::Panel::left("modv-groups")
+        .default_size(state.layout.groups_width)
+        .min_size(MIN_GROUPS_WIDTH)
+        .max_size(max_width)
         .resizable(true)
         .frame(
             egui::Frame::NONE
@@ -727,6 +753,22 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                 }
             });
         });
+    state.layout.groups_width = response.response.rect.width();
+}
+
+/// The width already reserved by the right-hand panels that are visible.
+fn reserved_side_width(state: &UiState) -> f32 {
+    let strip = if state.layout.tabs.has_strip_tabs() {
+        state.layout.inspector_width
+    } else {
+        0.0
+    };
+    let dock = if state.layout.tabs.docked_tabs().is_empty() {
+        0.0
+    } else {
+        state.layout.dock_width
+    };
+    strip + dock
 }
 
 /// One Group's module list: always visible, so every Group in the pane shows
@@ -849,9 +891,20 @@ fn group_module_list(
 }
 
 fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    egui::Panel::right("modv-inspector")
-        .default_size(320.0)
-        .min_size(232.0)
+    if !state.layout.tabs.has_strip_tabs() {
+        return;
+    }
+    let dock = if state.layout.tabs.docked_tabs().is_empty() {
+        0.0
+    } else {
+        state.layout.dock_width
+    };
+    let max_width = (ui.available_width() - state.layout.groups_width - dock - MIN_CENTRE_WIDTH)
+        .max(MIN_INSPECTOR_WIDTH);
+    let response = egui::Panel::right("modv-inspector")
+        .default_size(state.layout.inspector_width)
+        .min_size(MIN_INSPECTOR_WIDTH)
+        .max_size(max_width)
         .resizable(true)
         .frame(
             egui::Frame::NONE
@@ -859,212 +912,331 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                 .inner_margin(Margin::same(6)),
         )
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(
-                        state.side_panel_tab == SidePanelTab::Inspector,
-                        egui::RichText::new("INSPECTOR").strong().size(10.0),
-                    )
-                    .clicked()
-                {
-                    state.side_panel_tab = SidePanelTab::Inspector;
-                }
-                if ui
-                    .selectable_label(
-                        state.side_panel_tab == SidePanelTab::Media,
-                        egui::RichText::new("MEDIA").strong().size(10.0),
-                    )
-                    .clicked()
-                {
-                    state.side_panel_tab = SidePanelTab::Media;
-                }
-                if ui
-                    .selectable_label(
-                        state.side_panel_tab == SidePanelTab::Audio,
-                        egui::RichText::new("AUDIO").strong().size(10.0),
-                    )
-                    .clicked()
-                {
-                    state.side_panel_tab = SidePanelTab::Audio;
-                }
-                if ui
-                    .selectable_label(
-                        state.side_panel_tab == SidePanelTab::Info,
-                        egui::RichText::new("INFO").strong().size(10.0),
-                    )
-                    .clicked()
-                {
-                    state.side_panel_tab = SidePanelTab::Info;
-                }
-                if ui
-                    .selectable_label(
-                        state.side_panel_tab == SidePanelTab::Plugins,
-                        egui::RichText::new("PLUGINS").strong().size(10.0),
-                    )
-                    .clicked()
-                {
-                    state.side_panel_tab = SidePanelTab::Plugins;
-                }
-                if ui
-                    .selectable_label(
-                        state.side_panel_tab == SidePanelTab::Midi,
-                        egui::RichText::new("MIDI").strong().size(10.0),
-                    )
-                    .clicked()
-                {
-                    state.side_panel_tab = SidePanelTab::Midi;
-                }
-            });
-            ui.separator();
+            tab_strip(ui, snapshot, state);
+        });
+    state.layout.inspector_width = response.response.rect.width();
+}
 
-            egui::ScrollArea::vertical()
-                .id_salt("inspector-scroll")
-                .show(ui, |ui| {
-                    match state.side_panel_tab {
-                        SidePanelTab::Audio => {
-                            audio_panel(ui, snapshot, state);
-                            return;
-                        }
-                        SidePanelTab::Media => {
-                            media_panel(ui, snapshot, state);
-                            return;
-                        }
-                        SidePanelTab::Info => {
-                            info_panel(ui, snapshot);
-                            return;
-                        }
-                        SidePanelTab::Plugins => {
-                            plugins_panel(ui);
-                            return;
-                        }
-                        SidePanelTab::Midi => {
-                            midi_panel(ui, snapshot, state);
-                            return;
-                        }
-                        SidePanelTab::Inspector => {}
-                    }
-                    let Some(module_id) = state.selected_module.clone() else {
-                        inspector_empty(ui, snapshot, state);
-                        return;
-                    };
-                    let Some(module) = snapshot.module(&module_id) else {
-                        state.selected_module = None;
-                        inspector_empty(ui, snapshot, state);
-                        return;
-                    };
+/// The right-hand tab strip: one tab per placement plus a float control.
+fn tab_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for tab in SidePanelTab::ALL {
+            if state.layout.tabs.placement(tab) != TabPlacement::Tabs {
+                continue;
+            }
+            let selected = state.side_panel_tab == tab;
+            if ui
+                .selectable_label(
+                    selected,
+                    egui::RichText::new(tab.title().to_uppercase())
+                        .strong()
+                        .size(10.0),
+                )
+                .clicked()
+            {
+                state.side_panel_tab = tab;
+            }
+            if ui
+                .small_button("Detach")
+                .on_hover_text(format!("Detach {} into a floating window", tab.title()))
+                .clicked()
+            {
+                state
+                    .layout
+                    .tabs
+                    .place(tab, TabPlacement::Floating, &mut state.side_panel_tab);
+            }
+        }
+    });
+    ui.separator();
 
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(&module.module_name).strong().size(13.0));
-                        chip(ui, &module.module_type, theme::MUTED);
-                    });
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "id {}  |  group {}",
-                            short_id(&module.id),
-                            short_id(&module.group_id)
-                        ))
-                        .monospace()
-                        .size(9.0)
-                        .color(theme::MUTED),
-                    );
-                    ui.add_space(4.0);
+    let active = state.side_panel_tab;
+    egui::ScrollArea::vertical()
+        .id_salt("inspector-scroll")
+        .show(ui, |ui| {
+            tab_content(ui, snapshot, state, active);
+        });
+}
 
-                    let mut enabled = module.enabled;
-                    if ui.checkbox(&mut enabled, "Enabled").changed() {
-                        state.push_action(
-                            "modules/updateMeta",
-                            serde_json::json!({
-                                "moduleId": module.id,
-                                "metaKey": "enabled",
-                                "value": enabled,
-                            }),
-                        );
-                    }
-                    let mut alpha = module.alpha;
+/// Render one right-panel tab, wherever it is placed.
+fn tab_content(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+    tab: SidePanelTab,
+) {
+    match tab {
+        SidePanelTab::Inspector => inspector_content(ui, snapshot, state),
+        SidePanelTab::Media => media_panel(ui, snapshot, state),
+        SidePanelTab::Audio => audio_panel(ui, snapshot, state),
+        SidePanelTab::Info => info_panel(ui, snapshot),
+        SidePanelTab::Plugins => plugins_panel(ui),
+        SidePanelTab::Midi => midi_panel(ui, snapshot, state),
+    }
+}
+
+/// The Inspector tab: the selected module's meta, blend and prop editors.
+fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let Some(module_id) = state.selected_module.clone() else {
+        inspector_empty(ui, snapshot, state);
+        return;
+    };
+    let Some(module) = snapshot.module(&module_id) else {
+        state.selected_module = None;
+        inspector_empty(ui, snapshot, state);
+        return;
+    };
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(&module.module_name).strong().size(13.0));
+        chip(ui, &module.module_type, theme::MUTED);
+    });
+    ui.label(
+        egui::RichText::new(format!(
+            "id {}  |  group {}",
+            short_id(&module.id),
+            short_id(&module.group_id)
+        ))
+        .monospace()
+        .size(9.0)
+        .color(theme::MUTED),
+    );
+    ui.add_space(4.0);
+
+    let mut enabled = module.enabled;
+    if ui.checkbox(&mut enabled, "Enabled").changed() {
+        state.push_action(
+            "modules/updateMeta",
+            serde_json::json!({
+                "moduleId": module.id,
+                "metaKey": "enabled",
+                "value": enabled,
+            }),
+        );
+    }
+    let mut alpha = module.alpha;
+    if ui
+        .add(
+            egui::Slider::new(&mut alpha, 0.0..=1.0)
+                .text("Alpha")
+                .max_decimals(3),
+        )
+        .changed()
+    {
+        state.push_action(
+            "modules/updateMeta",
+            serde_json::json!({
+                "moduleId": module.id,
+                "metaKey": "alpha",
+                "value": alpha,
+            }),
+        );
+    }
+    if let Some(input_id) = &module.alpha_input_id {
+        link_row(ui, "Alpha", input_id, snapshot, state);
+    }
+    ui.horizontal(|ui| {
+        ui.label("Blend");
+        egui::ComboBox::from_id_salt(("module-blend", &module.id))
+            .selected_text(&module.composite_operation)
+            .width(130.0)
+            .show_ui(ui, |ui| {
+                for mode in COMPOSITE_OPERATIONS {
                     if ui
-                        .add(
-                            egui::Slider::new(&mut alpha, 0.0..=1.0)
-                                .text("Alpha")
-                                .max_decimals(3),
-                        )
-                        .changed()
+                        .selectable_label(module.composite_operation == *mode, *mode)
+                        .clicked()
                     {
                         state.push_action(
                             "modules/updateMeta",
                             serde_json::json!({
                                 "moduleId": module.id,
-                                "metaKey": "alpha",
-                                "value": alpha,
+                                "metaKey": "compositeOperation",
+                                "value": mode,
                             }),
                         );
                     }
-                    if let Some(input_id) = &module.alpha_input_id {
-                        link_row(ui, "Alpha", input_id, snapshot, state);
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("Blend");
-                        egui::ComboBox::from_id_salt(("module-blend", &module.id))
-                            .selected_text(&module.composite_operation)
-                            .width(130.0)
-                            .show_ui(ui, |ui| {
-                                for mode in COMPOSITE_OPERATIONS {
-                                    if ui
-                                        .selectable_label(
-                                            module.composite_operation == *mode,
-                                            *mode,
-                                        )
-                                        .clicked()
-                                    {
-                                        state.push_action(
-                                            "modules/updateMeta",
-                                            serde_json::json!({
-                                                "moduleId": module.id,
-                                                "metaKey": "compositeOperation",
-                                                "value": mode,
-                                            }),
-                                        );
-                                    }
-                                }
-                            });
-                    });
-                    if let Some(input_id) = &module.composite_operation_input_id {
-                        link_row(ui, "Blend", input_id, snapshot, state);
-                    }
-                    ui.separator();
+                }
+            });
+    });
+    if let Some(input_id) = &module.composite_operation_input_id {
+        link_row(ui, "Blend", input_id, snapshot, state);
+    }
+    ui.separator();
 
-                    if module.props.is_empty() {
-                        ui.label(
-                            egui::RichText::new("This module has no editable props.")
-                                .size(11.0)
-                                .color(theme::MUTED),
-                        );
-                    }
-                    for prop in &module.props {
-                        draw_prop(ui, &module.id, prop, snapshot, state);
-                        if let Some(input_id) = &prop.input_id {
-                            link_row(ui, &prop.name, input_id, snapshot, state);
+    if module.props.is_empty() {
+        ui.label(
+            egui::RichText::new("This module has no editable props.")
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+    }
+    for prop in &module.props {
+        draw_prop(ui, &module.id, prop, snapshot, state);
+        if let Some(input_id) = &prop.input_id {
+            link_row(ui, &prop.name, input_id, snapshot, state);
+        }
+        // The data-type component sub-inputs (Vec lanes,
+        // Color channels) are listed under their parent prop,
+        // each with its own link row — the expansion the JS
+        // InputConfig reaches through the per-component
+        // focused inputs (`ColorControl.focusInput`).
+        if !prop.components.is_empty() {
+            ui.indent(("prop-components", &prop.name), |ui| {
+                for component in &prop.components {
+                    link_row(
+                        ui,
+                        &format!("{}.{}", prop.name, component.key),
+                        &component.input_id,
+                        snapshot,
+                        state,
+                    );
+                }
+            });
+        }
+    }
+}
+
+/// The separate dock column between the centre and the right tab strip.
+///
+/// Hidden while no tab is docked. Several docked tabs stack with a header and
+/// separator each, inside one scroll area.
+fn dock_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let docked = state.layout.tabs.docked_tabs();
+    if docked.is_empty() {
+        return;
+    }
+    let max_width = (ui.available_width() - MIN_CENTRE_WIDTH).max(MIN_DOCK_WIDTH);
+    let response = egui::Panel::right("modv-dock")
+        .default_size(state.layout.dock_width)
+        .min_size(MIN_DOCK_WIDTH)
+        .max_size(max_width)
+        .resizable(true)
+        .frame(
+            egui::Frame::NONE
+                .fill(theme::PANEL_ALT)
+                .inner_margin(Margin::same(6)),
+        )
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("modv-dock-scroll")
+                .show(ui, |ui| {
+                    for (index, tab) in docked.iter().enumerate() {
+                        if index > 0 {
+                            ui.separator();
                         }
-                        // The data-type component sub-inputs (Vec lanes,
-                        // Color channels) are listed under their parent prop,
-                        // each with its own link row — the expansion the JS
-                        // InputConfig reaches through the per-component
-                        // focused inputs (`ColorControl.focusInput`).
-                        if !prop.components.is_empty() {
-                            ui.indent(("prop-components", &prop.name), |ui| {
-                                for component in &prop.components {
-                                    link_row(
-                                        ui,
-                                        &format!("{}.{}", prop.name, component.key),
-                                        &component.input_id,
-                                        snapshot,
-                                        state,
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(tab.title().to_uppercase())
+                                    .strong()
+                                    .size(10.0),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .small_button("Back to tabs")
+                                    .on_hover_text("Return this panel to the tab strip")
+                                    .clicked()
+                                {
+                                    state.layout.tabs.place(
+                                        *tab,
+                                        TabPlacement::Tabs,
+                                        &mut state.side_panel_tab,
+                                    );
+                                }
+                                if ui
+                                    .small_button("Float")
+                                    .on_hover_text("Open this panel in a floating window")
+                                    .clicked()
+                                {
+                                    state.layout.tabs.place(
+                                        *tab,
+                                        TabPlacement::Floating,
+                                        &mut state.side_panel_tab,
                                     );
                                 }
                             });
-                        }
+                        });
+                        ui.add_space(2.0);
+                        tab_content(ui, snapshot, state, *tab);
                     }
                 });
         });
+    state.layout.dock_width = response.response.rect.width();
+}
+
+/// Every tab placed in a floating window, with dock controls in its header.
+fn floating_tab_windows(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
+    for tab in state.layout.tabs.floating_tabs() {
+        let window_id = LayoutState::tab_window_id(tab);
+        let mut open = true;
+        let default_pos = [
+            240.0 + tab.index() as f32 * 26.0,
+            90.0 + tab.index() as f32 * 26.0,
+        ];
+        let window = restore_window(
+            egui::Window::new(tab.title())
+                .id(egui::Id::unique(("modv-tab-window", tab.key())))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .min_width(240.0)
+                .min_height(200.0)
+                .default_pos(default_pos)
+                .default_size([360.0, 460.0]),
+            &window_id,
+            &state.layout,
+        );
+
+        let mut dock_tabs = false;
+        let mut dock_area = false;
+        let response = window.show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Dock to tabs")
+                    .on_hover_text("Return this panel to the right-hand tab strip")
+                    .clicked()
+                {
+                    dock_tabs = true;
+                }
+                if ui
+                    .button("Dock to area")
+                    .on_hover_text("Move this panel into its own dock column")
+                    .clicked()
+                {
+                    dock_area = true;
+                }
+            });
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt(("tab-window-scroll", tab.key()))
+                .show(ui, |ui| {
+                    tab_content(ui, snapshot, state, tab);
+                });
+        });
+
+        if let Some(response) = response {
+            state
+                .layout
+                .record_window_rect(&window_id, response.response.rect);
+        }
+
+        if dock_tabs {
+            state
+                .layout
+                .tabs
+                .place(tab, TabPlacement::Tabs, &mut state.side_panel_tab);
+        } else if dock_area {
+            state
+                .layout
+                .tabs
+                .place(tab, TabPlacement::Docked, &mut state.side_panel_tab);
+        } else if !open {
+            state
+                .layout
+                .tabs
+                .place(tab, TabPlacement::Tabs, &mut state.side_panel_tab);
+        }
+    }
 }
 
 fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
@@ -2008,10 +2180,49 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             ui.add_space(4.0);
             ui.separator();
 
-            preview_panel(ui, snapshot, state);
+            // Live Output and Gallery are resizable top sections; the Scenes
+            // grid takes the remainder. The saved heights are applied as the
+            // first-show defaults and captured from the real section rects so
+            // NativeApp can persist them.
+            let total_height = ui.available_height().max(1.0);
+            let live_default = if state.layout.live_height > 0.0 {
+                state.layout.live_height
+            } else {
+                (total_height * 0.28).clamp(160.0, 260.0)
+            };
+            let live_max =
+                (total_height - MIN_GALLERY_HEIGHT - MIN_SCENES_HEIGHT).max(MIN_LIVE_HEIGHT);
+            let live = egui::Panel::top("modv-live-output")
+                .resizable(true)
+                .default_size(live_default)
+                .min_size(MIN_LIVE_HEIGHT)
+                .max_size(live_max)
+                .frame(egui::Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
+                .show(ui, |ui| {
+                    preview_panel(ui, snapshot, state);
+                });
+            state.layout.live_height = live.response.rect.height();
 
-            ui.separator();
-            gallery_strip(ui, snapshot, state);
+            let remaining = ui.available_height().max(1.0);
+            let gallery_default = if state.layout.gallery_height > 0.0 {
+                state.layout.gallery_height
+            } else {
+                (remaining * 0.46)
+                    .clamp(MIN_GALLERY_HEIGHT, 340.0)
+                    .min((remaining - MIN_SCENES_HEIGHT).max(MIN_GALLERY_HEIGHT))
+            };
+            let gallery_max = (remaining - MIN_SCENES_HEIGHT).max(MIN_GALLERY_HEIGHT);
+            let gallery = egui::Panel::top("modv-gallery")
+                .resizable(true)
+                .default_size(gallery_default)
+                .min_size(MIN_GALLERY_HEIGHT)
+                .max_size(gallery_max)
+                .frame(egui::Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
+                .show(ui, |ui| {
+                    gallery_strip(ui, snapshot, state);
+                });
+            state.layout.gallery_height = gallery.response.rect.height();
+
             ui.separator();
 
             ui.horizontal(|ui| {
@@ -2038,12 +2249,14 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                     );
                 }
             });
+            let live_preview = state.preview_texture;
             draw_scene_grid(
                 ui,
                 snapshot,
                 &mut state.scene_grid,
-                state.preview_texture,
+                live_preview,
                 &mut state.actions,
+                &mut state.layout,
             );
             state
                 .preview_requests
@@ -2069,10 +2282,12 @@ pub fn fit_preview_rect(available: egui::Vec2, resolution: [u32; 2]) -> egui::Re
 }
 
 fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    ui.label(egui::RichText::new("LIVE OUTPUT").strong().size(10.0));
+    // The section is resizable; the preview fills it and letterboxes inside.
+    // The title is painted over the image rather than allocated above it so the
+    // section's content is exactly its frame height (a layout label here makes
+    // the resizable section grow by one text row on every frame).
     let width = ui.available_width().max(120.0);
-    let max_height = (ui.available_height() * 0.28).clamp(160.0, 260.0);
-    let height = (width * 9.0 / 16.0).clamp(80.0, max_height);
+    let height = ui.available_height().max(80.0);
     let (container, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     // The container spans the full central width; the output is fitted inside
     // it and the leftover panel background forms the letterbox bars.
@@ -2101,7 +2316,7 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
     painter.text(
         image_rect.left_top() + vec2(6.0, 4.0),
         egui::Align2::LEFT_TOP,
-        "LIVE",
+        "LIVE OUTPUT",
         egui::FontId::monospace(9.0),
         theme::ACCENT,
     );
@@ -2113,13 +2328,18 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
     } else {
         16.0 / 9.0
     };
-    ui.label(
-        egui::RichText::new(format!(
-            "{}x{} ({aspect:.2}:1) compositor main texture, registered with egui-wgpu (zero readback)",
+    // Painted, not allocated: a trailing label here would make the resizable
+    // section's content one row taller than its frame and the split would
+    // creep by that row on every frame.
+    painter.text(
+        image_rect.left_bottom() + vec2(6.0, -4.0),
+        egui::Align2::LEFT_BOTTOM,
+        format!(
+            "{}x{} ({aspect:.2}:1) compositor main texture",
             snapshot.resolution[0], snapshot.resolution[1]
-        ))
-        .size(9.0)
-        .color(theme::MUTED),
+        ),
+        egui::FontId::proportional(9.0),
+        theme::MUTED,
     );
 }
 
@@ -2163,17 +2383,14 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
 
     let filtered =
         filter_gallery_modules(&snapshot.registered, state.gallery_category, &state.search);
-    // Keep the Gallery to roughly half of the height left below the preview so
-    // the Scenes panel stays on screen; the grid scrolls vertically inside it.
+    // The Gallery section is resizable: the grid fills it and scrolls
+    // vertically inside, instead of imposing its own height on the split.
     let available_height = ui.available_height().max(1.0);
-    let max_height = (available_height * 0.46)
-        .clamp(96.0, 340.0)
-        .min(available_height * 0.7);
 
     egui::ScrollArea::vertical()
         .id_salt("gallery-grid")
-        .max_height(max_height)
-        .auto_shrink([false, true])
+        .max_height(available_height)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
@@ -2420,78 +2637,91 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
     let mut open = true;
     let mut cancel = false;
     let mut execute = None;
-    egui::Window::new("Command palette")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(520.0)
-        .fixed_pos(egui::pos2(
-            ctx.content_rect().center().x - 260.0,
-            ctx.content_rect().top() + 80.0,
-        ))
-        .show(ctx, |ui| {
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut state.command_query)
-                    .hint_text("Type a command, Scene or module  (Enter to run)")
-                    .desired_width(f32::INFINITY),
+    let window = restore_window(
+        egui::Window::new("Command palette")
+            .id(egui::Id::unique("modv-window:palette"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .min_width(320.0)
+            .min_height(200.0)
+            .default_size([520.0, 380.0])
+            .default_pos(egui::pos2(
+                ctx.content_rect().center().x - 260.0,
+                ctx.content_rect().top() + 80.0,
+            )),
+        WINDOW_PALETTE,
+        &state.layout,
+    );
+    let response = window.show(ctx, |ui| {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut state.command_query)
+                .hint_text("Type a command, Scene or module  (Enter to run)")
+                .desired_width(f32::INFINITY),
+        );
+        if state.palette_focus {
+            response.request_focus();
+            state.palette_focus = false;
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
+            state.command_selection =
+                (state.command_selection + 1).min(filtered.len().saturating_sub(1));
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
+            state.command_selection = state.command_selection.saturating_sub(1);
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        }
+        ui.separator();
+        if filtered.is_empty() {
+            ui.label(
+                egui::RichText::new("No matching command")
+                    .size(11.0)
+                    .color(theme::MUTED),
             );
-            if state.palette_focus {
-                response.request_focus();
-                state.palette_focus = false;
-            }
-            if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
-                state.command_selection =
-                    (state.command_selection + 1).min(filtered.len().saturating_sub(1));
-            }
-            if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
-                state.command_selection = state.command_selection.saturating_sub(1);
-            }
-            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-                cancel = true;
-            }
-            ui.separator();
-            if filtered.is_empty() {
-                ui.label(
-                    egui::RichText::new("No matching command")
-                        .size(11.0)
-                        .color(theme::MUTED),
-                );
-            }
-            for (index, (label, _)) in filtered.iter().enumerate() {
-                let selected = index == state.command_selection;
-                if ui
-                    .selectable_label(selected, egui::RichText::new(label).size(11.0))
-                    .clicked()
-                {
-                    execute = Some(index);
-                }
-            }
-            if ui.input(|input| input.key_pressed(egui::Key::Enter))
-                && let Some((_, action)) = filtered.get(state.command_selection)
+        }
+        for (index, (label, _)) in filtered.iter().enumerate() {
+            let selected = index == state.command_selection;
+            if ui
+                .selectable_label(selected, egui::RichText::new(label).size(11.0))
+                .clicked()
             {
-                match action {
-                    PaletteAction::Action(action, payload) => {
-                        state.push_action(*action, payload.clone());
-                    }
-                    PaletteAction::Command(command) => state.queue(command.clone()),
-                    PaletteAction::AddModule(value) => {
-                        if let Some((module, group)) = value.split_once('|') {
-                            state
-                                .actions
-                                .push(UiAction::add_module_to_group(module, group));
-                        }
-                    }
-                    PaletteAction::Scene(scene_id) => {
-                        state.push_action(
-                            "scenes/applyScene",
-                            serde_json::json!({ "sceneId": scene_id }),
-                        );
-                    }
-                    PaletteAction::ShowShortcuts => state.show_shortcuts = true,
-                }
-                state.show_search = false;
+                execute = Some(index);
             }
-        });
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::Enter))
+            && let Some((_, action)) = filtered.get(state.command_selection)
+        {
+            match action {
+                PaletteAction::Action(action, payload) => {
+                    state.push_action(*action, payload.clone());
+                }
+                PaletteAction::Command(command) => state.queue(command.clone()),
+                PaletteAction::AddModule(value) => {
+                    if let Some((module, group)) = value.split_once('|') {
+                        state
+                            .actions
+                            .push(UiAction::add_module_to_group(module, group));
+                    }
+                }
+                PaletteAction::Scene(scene_id) => {
+                    state.push_action(
+                        "scenes/applyScene",
+                        serde_json::json!({ "sceneId": scene_id }),
+                    );
+                }
+                PaletteAction::ShowShortcuts => state.show_shortcuts = true,
+            }
+            state.show_search = false;
+        }
+    });
+
+    if let Some(response) = response {
+        state
+            .layout
+            .record_window_rect(WINDOW_PALETTE, response.response.rect);
+    }
 
     if let Some(index) = execute
         && let Some((_, action)) = filtered.get(index)
@@ -2523,131 +2753,186 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
 
 fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
     let mut open = state.show_bpm;
-    egui::Window::new("Tempo")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Source");
-                egui::ComboBox::from_id_salt("bpm-source")
-                    .selected_text(&state.bpm_source)
-                    .show_ui(ui, |ui| {
-                        for source in ["beatdetektor", "midi", "tap"] {
-                            if ui
-                                .selectable_label(state.bpm_source == source, source)
-                                .clicked()
-                            {
-                                state.bpm_source = source.to_string();
-                                state.push_action(
-                                    "beats/SET_BPM_SOURCE",
-                                    serde_json::json!({ "source": source }),
-                                );
-                            }
+    let window = restore_window(
+        egui::Window::new("Tempo")
+            .id(egui::Id::unique("modv-window:tempo"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .min_width(260.0)
+            .min_height(180.0)
+            .default_size([340.0, 260.0]),
+        WINDOW_TEMPO,
+        &state.layout,
+    );
+    let response = window.show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Source");
+            egui::ComboBox::from_id_salt("bpm-source")
+                .selected_text(&state.bpm_source)
+                .show_ui(ui, |ui| {
+                    for source in ["beatdetektor", "midi", "tap"] {
+                        if ui
+                            .selectable_label(state.bpm_source == source, source)
+                            .clicked()
+                        {
+                            state.bpm_source = source.to_string();
+                            state.push_action(
+                                "beats/SET_BPM_SOURCE",
+                                serde_json::json!({ "source": source }),
+                            );
                         }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label(format!("Detected {:.1} BPM", snapshot.audio.bpm));
-                ui.label(
-                    egui::RichText::new(match snapshot.audio.sample_rate {
-                        Some(rate) => format!("Capture {}", sample_rate_label(rate)),
-                        None => "Capture rate unavailable".to_string(),
-                    })
-                    .size(10.0)
-                    .color(theme::MUTED),
-                )
-                .on_hover_text("The rate the analyser and BPM detector run at");
-                if ui.button("Tap").clicked() {
-                    let now = std::time::Instant::now();
-                    state
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label(format!("Detected {:.1} BPM", snapshot.audio.bpm));
+            ui.label(
+                egui::RichText::new(match snapshot.audio.sample_rate {
+                    Some(rate) => format!("Capture {}", sample_rate_label(rate)),
+                    None => "Capture rate unavailable".to_string(),
+                })
+                .size(10.0)
+                .color(theme::MUTED),
+            )
+            .on_hover_text("The rate the analyser and BPM detector run at");
+            if ui.button("Tap").clicked() {
+                let now = std::time::Instant::now();
+                state
+                    .tap_times
+                    .retain(|tap| now.saturating_duration_since(*tap).as_secs_f64() <= 2.0);
+                state.tap_times.push(now);
+                if state.tap_times.len() >= 2 {
+                    let intervals: Vec<f64> = state
                         .tap_times
-                        .retain(|tap| now.saturating_duration_since(*tap).as_secs_f64() <= 2.0);
-                    state.tap_times.push(now);
-                    if state.tap_times.len() >= 2 {
-                        let intervals: Vec<f64> = state
-                            .tap_times
-                            .windows(2)
-                            .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64())
-                            .filter(|interval| *interval > 0.0)
-                            .collect();
-                        if !intervals.is_empty() {
-                            let average = intervals.iter().sum::<f64>() / intervals.len() as f64;
-                            let bpm = 60.0 / average;
-                            if bpm.is_finite() && (30.0..=300.0).contains(&bpm) {
-                                state.bpm_source = "tap".to_string();
-                                state.push_action(
-                                    "beats/SET_BPM_SOURCE",
-                                    serde_json::json!({ "source": "tap" }),
-                                );
-                                state.push_action(
-                                    "beats/setBpm",
-                                    serde_json::json!({ "bpm": bpm, "source": "tap" }),
-                                );
-                            }
+                        .windows(2)
+                        .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64())
+                        .filter(|interval| *interval > 0.0)
+                        .collect();
+                    if !intervals.is_empty() {
+                        let average = intervals.iter().sum::<f64>() / intervals.len() as f64;
+                        let bpm = 60.0 / average;
+                        if bpm.is_finite() && (30.0..=300.0).contains(&bpm) {
+                            state.bpm_source = "tap".to_string();
+                            state.push_action(
+                                "beats/SET_BPM_SOURCE",
+                                serde_json::json!({ "source": "tap" }),
+                            );
+                            state.push_action(
+                                "beats/setBpm",
+                                serde_json::json!({ "bpm": bpm, "source": "tap" }),
+                            );
                         }
                     }
                 }
-                if ui.button("Reset taps").clicked() {
-                    state.tap_times.clear();
-                }
-            });
-            ui.label(
-                egui::RichText::new(format!("{} tap(s) in the last 2 s", state.tap_times.len()))
-                    .size(10.0)
-                    .color(theme::MUTED),
-            );
+            }
+            if ui.button("Reset taps").clicked() {
+                state.tap_times.clear();
+            }
         });
+        ui.label(
+            egui::RichText::new(format!("{} tap(s) in the last 2 s", state.tap_times.len()))
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    });
+    if let Some(response) = response {
+        state
+            .layout
+            .record_window_rect(WINDOW_TEMPO, response.response.rect);
+    }
     state.show_bpm = open;
 }
 
 fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {
-    egui::Window::new("Keyboard shortcuts")
-        .open(&mut state.show_shortcuts)
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| {
-            let rows = [
-                ("Ctrl/Cmd+K", "Focus Gallery search"),
-                ("Ctrl/Cmd+S", "Save engine snapshot"),
-                ("Ctrl/Cmd+Enter", "Apply the selected Scene"),
-                ("1..9", "Apply Scene column 1..9"),
-                ("F1", "Show this list"),
-                ("F", "Toggle Output Window fullscreen"),
-                ("Escape", "Exit fullscreen / close dialogs"),
-                ("Ctrl+drag", "Copy a Scene cell to another Scene"),
-            ];
-            egui::Grid::new("shortcut-grid")
-                .num_columns(2)
-                .spacing([18.0, 4.0])
-                .show(ui, |ui| {
-                    for (key, action) in rows {
-                        ui.label(egui::RichText::new(key).monospace().color(theme::ACCENT));
-                        ui.label(action);
-                        ui.end_row();
-                    }
-                });
-        });
+    let window = restore_window(
+        egui::Window::new("Keyboard shortcuts")
+            .id(egui::Id::unique("modv-window:shortcuts"))
+            .open(&mut state.show_shortcuts)
+            .collapsible(false)
+            .resizable(true)
+            .min_width(300.0)
+            .min_height(220.0)
+            .default_size([440.0, 320.0]),
+        WINDOW_SHORTCUTS,
+        &state.layout,
+    );
+    let response = window.show(ctx, |ui| {
+        let rows = [
+            ("Ctrl/Cmd+K", "Focus Gallery search"),
+            ("Ctrl/Cmd+S", "Save engine snapshot"),
+            ("Ctrl/Cmd+Enter", "Apply the selected Scene"),
+            ("1..9", "Apply Scene column 1..9"),
+            ("F1", "Show this list"),
+            ("F", "Toggle Output Window fullscreen"),
+            ("Escape", "Exit fullscreen / close dialogs"),
+            ("Ctrl+drag", "Copy a Scene cell to another Scene"),
+        ];
+        egui::Grid::new("shortcut-grid")
+            .num_columns(2)
+            .spacing([18.0, 4.0])
+            .show(ui, |ui| {
+                for (key, action) in rows {
+                    ui.label(egui::RichText::new(key).monospace().color(theme::ACCENT));
+                    ui.label(action);
+                    ui.end_row();
+                }
+            });
+    });
+    if let Some(response) = response {
+        state
+            .layout
+            .record_window_rect(WINDOW_SHORTCUTS, response.response.rect);
+    }
 }
 
 fn about_window(ctx: &egui::Context, state: &mut UiState) {
-    egui::Window::new("About modV Native")
-        .open(&mut state.show_about)
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| {
-            ui.label(
-                egui::RichText::new("modV Native")
-                    .strong()
-                    .size(18.0)
-                    .color(theme::ACCENT),
-            );
-            ui.label("A native Rust rewrite of modV. The legacy Electron UI and JS engine remain available behind the environment switch until parity is signed off.");
-            ui.separator();
-            ui.label(format!("Adapter: {}", state.status.adapter));
-            ui.label(format!("Backend: {}", state.status.backend));
-            ui.label("Data formats, media layout and userData stay unchanged.");
-        });
+    let window = restore_window(
+        egui::Window::new("About modV Native")
+            .id(egui::Id::unique("modv-window:about"))
+            .open(&mut state.show_about)
+            .collapsible(false)
+            .resizable(true)
+            .min_width(320.0)
+            .min_height(200.0)
+            .default_size([420.0, 280.0]),
+        WINDOW_ABOUT,
+        &state.layout,
+    );
+    let response = window.show(ctx, |ui| {
+        ui.label(
+            egui::RichText::new("modV Native")
+                .strong()
+                .size(18.0)
+                .color(theme::ACCENT),
+        );
+        ui.label("A native Rust rewrite of modV. The legacy Electron UI and JS engine remain available behind the environment switch until parity is signed off.");
+        ui.separator();
+        ui.label(format!("Adapter: {}", state.status.adapter));
+        ui.label(format!("Backend: {}", state.status.backend));
+        ui.label("Data formats, media layout and userData stay unchanged.");
+    });
+    if let Some(response) = response {
+        state
+            .layout
+            .record_window_rect(WINDOW_ABOUT, response.response.rect);
+    }
+}
+
+/// Apply saved outer bounds to a floating window on its first show.
+///
+/// `egui::Window::show` returns the area's outer rect, which is what the shell
+/// records afterwards (title bar included).
+fn restore_window<'a>(
+    window: egui::Window<'a>,
+    id: &str,
+    layout: &LayoutState,
+) -> egui::Window<'a> {
+    if let Some(bounds) = layout.window(id) {
+        window.default_pos(bounds.pos()).default_size(bounds.size())
+    } else {
+        window
+    }
 }
 
 fn short_id(id: &str) -> &str {

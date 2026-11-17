@@ -15,6 +15,7 @@
 
 use egui::{Align2, FontId, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
+use crate::layout::WINDOW_TWEEN_CURVE;
 use crate::model::TweenView;
 use crate::state::{TweenCurveEditor, TweenHandleDrag, UiState};
 use crate::theme;
@@ -334,73 +335,81 @@ impl TweenControl {
         let min = self.min;
         let max = self.max;
 
-        egui::Window::new(format!("Tween curve · {}", editor.title))
-            .id(egui::Id::unique(("tween-curve", &input_id)))
-            .open(&mut open)
-            .default_pos([220.0, 90.0])
-            .default_size([430.0, 430.0])
-            .resizable(true)
-            .show(ctx, |ui| {
+        let window = state.layout.apply_window(
+            egui::Window::new(format!("Tween curve · {}", editor.title))
+                .id(egui::Id::unique("modv-window:tween_curve"))
+                .open(&mut open)
+                .default_pos([220.0, 90.0])
+                .default_size([430.0, 430.0])
+                .min_width(320.0)
+                .min_height(300.0)
+                .resizable(true),
+            WINDOW_TWEEN_CURVE,
+        );
+        let response = window.show(ctx, |ui| {
+            ui.label(
+                egui::RichText::new(axis.title())
+                    .size(10.0)
+                    .color(theme::MUTED),
+            );
+            curve_canvas(ui, &mut editor, min, max, &axis, &mut dispatch);
+            ui.horizontal_wrapped(|ui| {
+                for (channel, colour) in CHANNEL_COLORS
+                    .iter()
+                    .cycle()
+                    .take(editor.curve.channels())
+                    .enumerate()
+                {
+                    ui.label(
+                        egui::RichText::new(format!("ch {channel}"))
+                            .size(10.0)
+                            .color(*colour),
+                    );
+                }
                 ui.label(
-                    egui::RichText::new(axis.title())
+                    egui::RichText::new("click: add · drag: move · right-click: remove")
                         .size(10.0)
                         .color(theme::MUTED),
                 );
-                curve_canvas(ui, &mut editor, min, max, &axis, &mut dispatch);
-                ui.horizontal_wrapped(|ui| {
-                    for (channel, colour) in CHANNEL_COLORS
-                        .iter()
-                        .cycle()
-                        .take(editor.curve.channels())
-                        .enumerate()
-                    {
-                        ui.label(
-                            egui::RichText::new(format!("ch {channel}"))
-                                .size(10.0)
-                                .color(*colour),
-                        );
-                    }
-                    ui.label(
-                        egui::RichText::new("click: add · drag: move · right-click: remove")
-                            .size(10.0)
-                            .color(theme::MUTED),
-                    );
-                });
-                if !editor.json_dirty {
-                    editor.json = editor.curve.to_json();
-                }
-                let response = ui.add(
-                    egui::TextEdit::multiline(&mut editor.json)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(3)
-                        .font(egui::TextStyle::Monospace)
-                        .hint_text("{\"data\": [[0], [1]]}"),
-                );
-                if response.changed() {
-                    json_edited = true;
-                    match parse_tween_json(&editor.json) {
-                        Ok(parsed) => {
-                            match TweenCurve::from_rows(parsed.data, parsed.keyframe_times) {
-                                Some(curve) => {
-                                    editor.curve = curve;
-                                    editor.error = None;
-                                    dispatch = true;
-                                    editor.json_dirty = true;
-                                }
-                                None => {
-                                    editor.error =
-                                        Some("keyframes need two rows of equal length".to_string())
-                                }
-                            }
-                        }
-                        Err(error) => editor.error = Some(error),
-                    }
-                }
-                if let Some(error) = &editor.error {
-                    ui.colored_label(theme::DANGER, error);
-                }
             });
+            if !editor.json_dirty {
+                editor.json = editor.curve.to_json();
+            }
+            let response = ui.add(
+                egui::TextEdit::multiline(&mut editor.json)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(3)
+                    .font(egui::TextStyle::Monospace)
+                    .hint_text("{\"data\": [[0], [1]]}"),
+            );
+            if response.changed() {
+                json_edited = true;
+                match parse_tween_json(&editor.json) {
+                    Ok(parsed) => match TweenCurve::from_rows(parsed.data, parsed.keyframe_times) {
+                        Some(curve) => {
+                            editor.curve = curve;
+                            editor.error = None;
+                            dispatch = true;
+                            editor.json_dirty = true;
+                        }
+                        None => {
+                            editor.error =
+                                Some("keyframes need two rows of equal length".to_string())
+                        }
+                    },
+                    Err(error) => editor.error = Some(error),
+                }
+            }
+            if let Some(error) = &editor.error {
+                ui.colored_label(theme::DANGER, error);
+            }
+        });
 
+        if let Some(response) = response {
+            state
+                .layout
+                .record_window_rect(WINDOW_TWEEN_CURVE, response.response.rect);
+        }
         editor.open = open;
         if dispatch {
             self.apply_curve(state, &mut editor);
