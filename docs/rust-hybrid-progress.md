@@ -166,7 +166,13 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
       run the JS GPU volume simulation + raymarch (compute passes, shadow
       march, fire ramp); the puff/billboard substitutes are gone. BallOfFire
       (frozen ball, transparent overlay) registered as the 26th scene.
-      AttractorParticles remains the fragment-MRT port (structurally matching)
+      The one-time curl-noise precompute now runs with the scene's uniforms
+      written (grid dims + turbulence frequency) — the zeroed block had made
+      its `gid >= u.grid.xyz` guard reject every workgroup, leaving the field
+      empty and silently removing all thermal/ambient curl turbulence from the
+      four volume scenes (the fire puffed radially instead of trailing the
+      ball). AttractorParticles remains the fragment-MRT port (structurally
+      matching)
 - [ ] Golden images (optional; behaviour parity is the priority), warm
       cache/instance eviction
 

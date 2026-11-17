@@ -493,7 +493,21 @@ impl Point10Scene for SmokeRoom {
             .map(|vertex| vertex.position)
             .collect();
 
-        let sim = VolumeSim::new(&device, &queue, self.grid(), &emitter_positions);
+        let sim = VolumeSim::new(
+            &device,
+            &queue,
+            self.grid(),
+            &emitter_positions,
+            &VolumeUniforms::curl_precompute(
+                self.grid(),
+                [
+                    crate::point10::volume::VOLUME_WORLD_SIZE_X,
+                    crate::point10::volume::VOLUME_WORLD_SIZE_Y,
+                    crate::point10::volume::VOLUME_WORLD_SIZE_Z,
+                ],
+                TURB_FREQUENCY,
+            ),
+        );
         let stage = VolumeStage::new(&device, &queue, self.size.0, self.size.1, ctx.target_format);
 
         let glass = Material::new(

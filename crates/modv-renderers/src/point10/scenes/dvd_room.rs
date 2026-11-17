@@ -636,7 +636,21 @@ impl Point10Scene for DvdRoom {
         let emitter_positions: Vec<[f32; 3]> =
             mesh.vertices.iter().map(|vertex| vertex.position).collect();
 
-        let sim = VolumeSim::new(&device, &queue, self.grid, &emitter_positions);
+        let sim = VolumeSim::new(
+            &device,
+            &queue,
+            self.grid,
+            &emitter_positions,
+            &VolumeUniforms::curl_precompute(
+                self.grid,
+                [
+                    crate::point10::volume::VOLUME_WORLD_SIZE_X,
+                    crate::point10::volume::VOLUME_WORLD_SIZE_Y,
+                    crate::point10::volume::VOLUME_WORLD_SIZE_Z,
+                ],
+                crate::point10::scenes::smoke_room::TURB_FREQUENCY,
+            ),
+        );
         let stage = VolumeStage::new(&device, &queue, self.size.0, self.size.1, ctx.target_format);
 
         let logo = Material::new(

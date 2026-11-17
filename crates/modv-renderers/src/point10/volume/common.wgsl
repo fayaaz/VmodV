@@ -260,10 +260,12 @@ fn snoise(v: vec3<f32>) -> f32 {
 }
 
 fn snoise_vec3(x: vec3<f32>) -> vec3<f32> {
+  // Literal port of three's `snoiseVec3` (note the asymmetry: the first and
+  // third components scale the *domain*, the second scales the *result*).
   return vec3<f32>(
     snoise(x * 2.0 - 1.0),
     snoise(vec3<f32>(x.y - 19.1, x.z + 33.4, x.x + 47.2)) * 2.0 - 1.0,
-    snoise(vec3<f32>(x.z + 74.2, x.x - 124.5, x.y + 99.4)) * 2.0 - 1.0,
+    snoise(vec3<f32>(x.z + 74.2, x.x - 124.5, x.y + 99.4) * 2.0 - 1.0),
   );
 }
 

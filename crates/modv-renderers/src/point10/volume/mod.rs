@@ -45,7 +45,11 @@
 //!    at the vertex's voxel with the noise flicker and the hi-hat/snare pulse.
 //!
 //! The curl-noise field is computed once at [`VolumeSim::new`], like the JS's
-//! init-time `computeAsync(computeCurlNoisePass)`.
+//! init-time `computeAsync(computeCurlNoisePass)`. The pass reads the grid
+//! dims, the world-size ratios and `uTurbFrequency`, so the caller supplies
+//! them through [`VolumeUniforms::curl_precompute`] — the JS precomputes after
+//! its uniforms exist, and a zeroed block leaves the field empty (which
+//! silently removes every thermal/ambient curl force from the simulation).
 //!
 //! # Ping-pong without read-write storage textures
 //!
@@ -290,6 +294,23 @@ impl VolumeUniforms {
         }
     }
 
+    /// The uniform values the one-time curl-noise precompute reads: the grid
+    /// dims (the pass guard and `voxel_uvw`), the world-size ratios
+    /// (`u.world.x / u.world.y` and `u.world.z / u.world.y`) and the
+    /// turbulence frequency (`u.turb2.x`, `uTurbFrequency`).
+    ///
+    /// The JS runs `computeCurlNoisePass` once the uniforms exist, so the pass
+    /// sees the scene's real values. Pass them here as well — a zeroed block
+    /// makes the `gid >= u.grid.xyz` guard reject every workgroup and leaves
+    /// the curl field empty, which silently removes all turbulence from the
+    /// simulation.
+    pub fn curl_precompute(grid: VolumeGrid, world: [f32; 3], turb_frequency: f32) -> Self {
+        let mut uniforms = Self::for_grid(grid);
+        uniforms.world = [world[0], world[1], world[2], 0.0];
+        uniforms.turb2[0] = turb_frequency;
+        uniforms
+    }
+
     /// Write the grid dims (`u.grid.xyz`).
     pub fn set_grid(&mut self, grid: VolumeGrid) {
         self.grid[0] = grid.x as f32;
@@ -436,6 +457,12 @@ impl VolumeSim {
     /// The emitter's *world* transform comes from
     /// [`VolumeUniforms::set_emitter_model`] per frame.
     ///
+    /// `curl_uniforms` supplies the values the one-time curl pass reads (grid
+    /// dims, world-size ratios, turbulence frequency); see
+    /// [`VolumeUniforms::curl_precompute`]. The JS precomputes the field after
+    /// its uniforms are created, so the same values must be written before the
+    /// dispatch.
+    ///
     /// No `wgpu::Features` are required: `Rgba16Float` supports write-only
     /// storage texture access (`texture_storage_3d<rgba16float, write>`) on the
     /// WebGPU baseline, and the shaders never read a texture they write in the
@@ -445,6 +472,7 @@ impl VolumeSim {
         queue: &wgpu::Queue,
         grid: VolumeGrid,
         emitter: &[[f32; 3]],
+        curl_uniforms: &VolumeUniforms,
     ) -> Self {
         let velocity = [
             VolumeTexture::new(device, "point10-volume-velocity-a", grid),
@@ -467,6 +495,10 @@ impl VolumeSim {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // The curl precompute below runs before the first `write`, so stamp
+        // the scene's values now (the JS creates its uniforms before
+        // `computeAsync(computeCurlNoisePass)`).
+        queue.write_buffer(&uniforms, 0, bytemuck::bytes_of(curl_uniforms));
 
         let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("point10-volume-linear-sampler"),
@@ -988,22 +1020,40 @@ impl VolumeSim {
     /// voxels (test/debug only; x fastest, then y, then z).
     #[cfg(test)]
     pub(crate) fn read_dye(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<[f32; 4]> {
+        self.read_field(device, queue, &self.textures.dye[self.parity]._texture)
+    }
+
+    /// Read the one-time curl-noise field back (test/debug only).
+    #[cfg(test)]
+    pub(crate) fn read_curl(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<[f32; 4]> {
+        self.read_field(device, queue, &self.textures.curl._texture)
+    }
+
+    /// Read an `Rgba16Float` 3D texture back as `[x, y, z, w]` voxels
+    /// (test/debug only; x fastest, then y, then z).
+    #[cfg(test)]
+    fn read_field(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Vec<[f32; 4]> {
         let grid = self.grid;
         let unpadded = grid.x as u64 * 8;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
         let padded = unpadded.div_ceil(align) * align;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("point10-volume-dye-readback"),
+            label: Some("point10-volume-field-readback"),
             size: padded * grid.y as u64 * grid.z as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("point10-volume-dye-readback"),
+            label: Some("point10-volume-field-readback"),
         });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.textures.dye[self.parity]._texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -1326,6 +1376,26 @@ mod tests {
     }
 
     #[test]
+    fn the_curl_noise_field_is_precomputed() {
+        let Some((device, queue)) = crate::point10::test_support::gpu() else {
+            return;
+        };
+        let grid = VolumeGrid::new(8, 8, 8);
+        let curl_uniforms = VolumeUniforms::curl_precompute(grid, [16.0, 16.0, 32.0], 10.0);
+        let sim = VolumeSim::new(&device, &queue, grid, &[[0.0, 0.0, 0.0]], &curl_uniforms);
+        let field = sim.read_curl(&device, &queue);
+        let max = field
+            .iter()
+            .flat_map(|voxel| voxel.iter())
+            .fold(0.0_f32, |max, value| max.max(value.abs()));
+        assert!(
+            max > 1e-4,
+            "the curl-noise field is empty: the one-time precompute ran before \
+             the uniforms (grid dims / turbulence frequency) were written"
+        );
+    }
+
+    #[test]
     fn every_shader_parses_and_validates() {
         for (label, source) in shader_programs() {
             let module = match naga::front::wgsl::parse_str(&source) {
@@ -1363,6 +1433,10 @@ mod tests {
             "fn fire_hue(",
             "fn snoise(",
             "fn snoise_vec3(",
+            // Three scales the *domain* of the third component (the second
+            // component scales its result) — see `snoiseVec3` in
+            // `three/addons/tsl/math/curlNoise.js`.
+            "x.z + 74.2, x.x - 124.5, x.y + 99.4) * 2.0 - 1.0",
             "fn perlin_noise(",
             "const SPHERE_RADIUS: f32 = 0.9;",
         ] {

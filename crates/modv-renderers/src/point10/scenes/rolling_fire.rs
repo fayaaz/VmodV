@@ -1056,7 +1056,21 @@ impl Point10Scene for RollingFire {
             .map(|vertex| vertex.position)
             .collect();
 
-        let sim = VolumeSim::new(&device, &queue, self.grid, &emitter_positions);
+        let sim = VolumeSim::new(
+            &device,
+            &queue,
+            self.grid,
+            &emitter_positions,
+            &VolumeUniforms::curl_precompute(
+                self.grid,
+                [
+                    VOLUME_WORLD_SIZE_X,
+                    VOLUME_WORLD_SIZE_Y,
+                    VOLUME_WORLD_SIZE_Z,
+                ],
+                TURB_FREQUENCY,
+            ),
+        );
         let mut stage =
             VolumeStage::new(&device, &queue, self.size.0, self.size.1, ctx.target_format);
         stage.set_overlay(&queue, self.transparent_overlay);
