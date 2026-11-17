@@ -319,7 +319,7 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 );
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!("{} frames total", state.status.frames_presented))
+                    egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
                         .monospace()
                         .size(10.0)
                         .color(theme::MUTED),
