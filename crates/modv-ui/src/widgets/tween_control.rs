@@ -38,6 +38,11 @@ const EASINGS: &[&str] = &[
 ];
 
 impl TweenControl {
+    /// The state path `Tween.vue` links for a tween descriptor.
+    pub fn link_location(input_id: &str) -> String {
+        format!("tweens.tweens['{input_id}'].value[0]")
+    }
+
     pub fn new(
         label: impl Into<String>,
         input_id: Option<String>,
@@ -185,7 +190,7 @@ impl TweenControl {
                 "inputId": input_id,
                 "type": "state",
                 "source": "tween",
-                "location": format!("tweens.tweens['{input_id}'].value[0]"),
+                "location": Self::link_location(&input_id),
                 "min": 0,
                 "max": 1,
             }),

@@ -168,7 +168,41 @@ pub enum SidePanelTab {
     Midi,
 }
 
+/// The audio features `AudioFeatures.vue` offers, in menu order.
+///
+/// `none` removes the link; `kick` is a mutation link on `beats/SET_KICK`;
+/// every other entry is a `meyda/getFeature` getter.
+pub const AUDIO_FEATURES: &[&str] = &[
+    "none",
+    "kick",
+    "bass",
+    "mid",
+    "treble",
+    "rms",
+    "zcr",
+    "energy",
+    "spectralCentroid",
+    "spectralFlatness",
+    "spectralSlope",
+    "spectralRolloff",
+    "spectralSpread",
+    "spectralSkewness",
+    "spectralKurtosis",
+    "perceptualSpread",
+    "perceptualSharpness",
+];
+
+/// `MAX_SMOOTHING` from `application/worker/audio-features.js`.
+pub const MAX_SMOOTHING: f64 = 1.0;
+
+/// `SMOOTHING_STEP` from `application/worker/audio-features.js`.
+pub const SMOOTHING_STEP: f64 = 0.001;
+
 /// The focused-input link editor's draft values.
+///
+/// Legacy `InputConfig.vue` is a focused-input panel with Min/Max at the top
+/// and Audio/MIDI/Tween/OSC/Expression sections. The native editor keeps the
+/// same draft semantics; each section's pure payload builder is unit-tested.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkEditor {
     pub input_id: String,
@@ -180,6 +214,27 @@ pub struct LinkEditor {
     pub args: String,
     pub min: f64,
     pub max: f64,
+    /// Mutation matcher (`beats/SET_KICK` for the kick feature).
+    pub matcher: Option<Value>,
+    /// The audio feature selected in the Audio section.
+    pub feature: String,
+    /// Smoothing id carried in `args[1]` (minted client-side).
+    pub smoothing_id: Option<String>,
+    /// Smoothing amount carried in `args[2]` (`0` means no smoothing).
+    pub smoothing_value: f64,
+    /// Expression text (`"value"` is the identity/no-op).
+    pub expression: String,
+    /// The assignment id, when the input already has an expression.
+    pub expression_id: Option<String>,
+    pub evaluate_every_frame: bool,
+    /// Set after Clear so the snapshot's still-live assignment is not
+    /// re-adopted before the engine processes `expressions/remove`.
+    pub expression_cleared: bool,
+    /// The tween descriptor for this input, when one exists.
+    pub tween: Option<crate::TweenView>,
+    /// Set after Remove so a one-frame-old snapshot does not re-adopt the
+    /// tween descriptor the engine is about to drop.
+    pub tween_cleared: bool,
     pub exists: bool,
     pub error: Option<String>,
 }
@@ -195,6 +250,16 @@ impl LinkEditor {
             args: "[\"bass\"]".to_string(),
             min: 0.0,
             max: 1.0,
+            matcher: None,
+            feature: "bass".to_string(),
+            smoothing_id: None,
+            smoothing_value: 0.0,
+            expression: "value".to_string(),
+            expression_id: None,
+            evaluate_every_frame: false,
+            expression_cleared: false,
+            tween: None,
+            tween_cleared: false,
             exists: false,
             error: None,
         }
@@ -205,11 +270,40 @@ impl LinkEditor {
         title: impl Into<String>,
         link: &crate::InputLinkView,
     ) -> Self {
+        let source = link.source.clone().unwrap_or_else(|| "state".to_string());
+        let feature = if source == "meyda" {
+            link.args
+                .as_ref()
+                .and_then(|args| args.as_array())
+                .and_then(|args| args.first())
+                .and_then(|value| value.as_str())
+                .unwrap_or("none")
+                .to_string()
+        } else {
+            "none".to_string()
+        };
+        let (smoothing_id, smoothing_value) = link
+            .args
+            .as_ref()
+            .and_then(|args| args.as_array())
+            .filter(|args| args.len() > 2)
+            .map(|args| {
+                (
+                    args.get(1).and_then(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .or_else(|| value.as_u64().map(|number| number.to_string()))
+                    }),
+                    args.get(2).and_then(Value::as_f64).unwrap_or(0.0),
+                )
+            })
+            .unwrap_or((None, 0.0));
         Self {
             input_id: input_id.into(),
             title: title.into(),
             kind: link.kind.clone(),
-            source: link.source.clone().unwrap_or_else(|| "state".to_string()),
+            source,
             location: link.location.clone().unwrap_or_default(),
             args: link
                 .args
@@ -218,24 +312,294 @@ impl LinkEditor {
                 .unwrap_or_else(|| "[]".to_string()),
             min: link.min.unwrap_or(0.0),
             max: link.max.unwrap_or(1.0),
+            matcher: link.matcher.clone(),
+            feature,
+            smoothing_id,
+            smoothing_value,
+            expression: "value".to_string(),
+            expression_id: None,
+            evaluate_every_frame: false,
+            expression_cleared: false,
+            tween: None,
+            tween_cleared: false,
             exists: true,
             error: None,
         }
     }
 
-    /// The audio feature named by the getter args, if any.
-    pub fn audio_feature(&self) -> String {
-        serde_json::from_str::<Value>(&self.args)
-            .ok()
-            .and_then(|value| value.as_array()?.first()?.as_str().map(str::to_string))
-            .unwrap_or_else(|| "bass".to_string())
+    /// A complete editor draft for `input_id`, preloading its link, tween and
+    /// expression assignment from the snapshot.
+    pub fn for_input(input_id: &str, title: impl Into<String>, snapshot: &EngineSnapshot) -> Self {
+        let mut editor = match snapshot.input_links.get(input_id) {
+            Some(link) => Self::from_link(input_id, title, link),
+            None => Self::audio(input_id, title),
+        };
+        editor.tween = snapshot.tween_for_input(input_id).cloned();
+        if let Some(assignment) = snapshot.expression_for_input(input_id) {
+            editor.expression = assignment.expression.clone();
+            editor.expression_id = Some(assignment.id.clone());
+            editor.evaluate_every_frame = assignment.evaluate_every_frame;
+        }
+        editor
     }
 
+    /// The audio feature named by the getter args, if any.
+    pub fn audio_feature(&self) -> String {
+        self.feature.clone()
+    }
+
+    /// Select an audio feature, updating the kind/source/location/matcher the
+    /// JS `makeLink` branches on.
     pub fn set_audio_feature(&mut self, feature: &str) {
-        self.kind = "getter".to_string();
-        self.source = "meyda".to_string();
-        self.location = "meyda/getFeature".to_string();
-        self.args = serde_json::json!([feature]).to_string();
+        self.feature = feature.to_string();
+        match feature {
+            "none" => {
+                self.source = "meyda".to_string();
+                self.kind = "getter".to_string();
+                self.location = "meyda/getFeature".to_string();
+                self.matcher = None;
+                self.args = "[]".to_string();
+            }
+            "kick" => {
+                self.kind = "mutation".to_string();
+                self.source = "meyda".to_string();
+                self.location = "beats.kick".to_string();
+                self.matcher = Some(serde_json::json!({ "type": "beats/SET_KICK" }));
+                self.args = serde_json::json!(["kick"]).to_string();
+            }
+            _ => {
+                self.kind = "getter".to_string();
+                self.source = "meyda".to_string();
+                self.location = "meyda/getFeature".to_string();
+                self.matcher = None;
+                self.args = self.audio_args().to_string();
+            }
+        }
+    }
+
+    /// Use a state path (`Kind` is `state`; args are unused).
+    pub fn use_state(&mut self, location: impl Into<String>) {
+        self.kind = "state".to_string();
+        self.source = "state".to_string();
+        self.location = location.into();
+        self.matcher = None;
+        self.args = "[]".to_string();
+        self.feature = "none".to_string();
+    }
+
+    /// Use a MIDI state path (`midi.data.<device>.<channel>`).
+    pub fn use_midi(&mut self, location: impl Into<String>) {
+        self.use_state(location);
+        self.source = "midi".to_string();
+    }
+
+    /// Use an OSC receive path (`osc.data.<address>`).
+    pub fn use_osc(&mut self, location: impl Into<String>) {
+        self.use_state(location);
+        self.source = "osc".to_string();
+    }
+
+    /// The JS smoothing slider is inverted: `MAX_SMOOTHING - smoothingValue`.
+    pub fn smoothing_slider_value(&self) -> f64 {
+        MAX_SMOOTHING - self.smoothing_value
+    }
+
+    pub fn set_smoothing_from_slider(&mut self, slider: f64) {
+        self.smoothing_value = MAX_SMOOTHING - slider;
+    }
+
+    /// The `args` array for the selected audio feature.
+    pub fn audio_args(&self) -> Value {
+        match self.feature.as_str() {
+            "kick" => serde_json::json!(["kick"]),
+            "none" => serde_json::json!([]),
+            feature => {
+                if self.smoothing_value > 0.0
+                    && let Some(id) = &self.smoothing_id
+                {
+                    return serde_json::json!([feature, id, self.smoothing_value]);
+                }
+                serde_json::json!([feature])
+            }
+        }
+    }
+
+    /// The complete `inputs/createInputLink` payload for the current draft.
+    ///
+    /// Audio links are rebuilt from the feature/smoothing state (exactly like
+    /// `AudioFeatures.vue`'s `makeLink`), so a stale kick matcher can never
+    /// survive a switch back to a getter.
+    pub fn link_payload(&mut self) -> Result<Value, String> {
+        let args = if self.source == "meyda" {
+            if self.feature == "kick" {
+                serde_json::json!(["kick"])
+            } else {
+                if self.smoothing_value > 0.0 && self.smoothing_id.is_none() {
+                    self.smoothing_id = Some(mint_smoothing_id());
+                }
+                self.audio_args()
+            }
+        } else {
+            self.parsed_args()?
+        };
+        let mut payload = serde_json::json!({
+            "inputId": self.input_id,
+            "type": self.kind,
+            "source": self.source,
+            "min": self.min,
+            "max": self.max,
+        });
+        let object = payload.as_object_mut().expect("payload is an object");
+        if !self.location.is_empty() {
+            object.insert("location".to_string(), serde_json::json!(self.location));
+        }
+        if !args.is_null() {
+            object.insert("args".to_string(), args);
+        }
+        if self.source == "meyda" && self.feature == "kick" {
+            object.insert(
+                "match".to_string(),
+                serde_json::json!({ "type": "beats/SET_KICK" }),
+            );
+        } else if let Some(matcher) = &self.matcher {
+            object.insert("match".to_string(), matcher.clone());
+        }
+        Ok(payload)
+    }
+
+    /// Actions for the editor's Save button.
+    pub fn save_actions(&mut self) -> Result<Vec<UiAction>, String> {
+        if self.source == "meyda" && self.feature == "none" {
+            return Ok(self.remove_actions());
+        }
+        let mut actions = Vec::new();
+        let release_smoothing = self.source == "meyda"
+            && (self.feature == "kick" || self.smoothing_value <= 0.0)
+            && self.smoothing_id.is_some();
+        if release_smoothing && let Some(action) = self.release_smoothing_action() {
+            actions.push(action);
+        }
+        actions.push(UiAction::new(
+            "inputs/createInputLink",
+            self.link_payload()?,
+        ));
+        Ok(actions)
+    }
+
+    /// Actions for Remove: drop the link and release its smoothing id.
+    pub fn remove_actions(&mut self) -> Vec<UiAction> {
+        let mut actions = Vec::new();
+        if let Some(action) = self.release_smoothing_action() {
+            actions.push(action);
+        }
+        actions.push(UiAction::new(
+            "inputs/removeInputLink",
+            serde_json::json!({ "inputId": self.input_id }),
+        ));
+        self.exists = false;
+        actions
+    }
+
+    /// Zero the smoothing amount and release the minted id.
+    pub fn clear_smoothing(&mut self) -> Option<UiAction> {
+        self.smoothing_value = 0.0;
+        if self.source == "meyda" {
+            self.args = self.audio_args().to_string();
+        }
+        self.release_smoothing_action()
+    }
+
+    fn release_smoothing_action(&mut self) -> Option<UiAction> {
+        self.smoothing_id.take().map(|id| {
+            // `meyda/removeSmoothingId` takes the id itself, not an object.
+            UiAction::new("meyda/removeSmoothingId", Value::String(id))
+        })
+    }
+
+    /// Actions for the Expression section's Save button.
+    ///
+    /// `"value"` is the identity the engine removes on (`expressions.js`);
+    /// an empty source is treated the same way.
+    pub fn expression_actions(&self) -> Vec<UiAction> {
+        let expression = self.expression.trim();
+        if expression.is_empty() || expression == "value" {
+            return self.clear_expression_actions();
+        }
+        match &self.expression_id {
+            Some(id) => vec![UiAction::new(
+                "expressions/update",
+                serde_json::json!({ "id": id, "expression": self.expression }),
+            )],
+            None => vec![UiAction::new(
+                "expressions/create",
+                serde_json::json!({
+                    "expression": self.expression,
+                    "inputId": self.input_id,
+                    "evaluateEveryFrame": self.evaluate_every_frame,
+                }),
+            )],
+        }
+    }
+
+    /// Actions for the Expression section's Clear button.
+    pub fn clear_expression_actions(&self) -> Vec<UiAction> {
+        self.expression_id
+            .as_ref()
+            .map(|id| {
+                vec![UiAction::new(
+                    "expressions/remove",
+                    serde_json::json!({ "id": id }),
+                )]
+            })
+            .unwrap_or_default()
+    }
+
+    /// `expressions/updateEvaluation` when the checkbox is toggled.
+    pub fn evaluation_action(&self) -> Option<UiAction> {
+        self.expression_id.as_ref().map(|id| {
+            UiAction::new(
+                "expressions/updateEvaluation",
+                serde_json::json!({
+                    "id": id,
+                    "evaluateEveryFrame": self.evaluate_every_frame,
+                }),
+            )
+        })
+    }
+
+    /// Adopt the authoritative expression assignment for this input.
+    ///
+    /// A Clear latches `expression_cleared` until the engine drops the
+    /// assignment, so the one-frame-old snapshot cannot resurrect the
+    /// expression the user just removed.
+    pub fn sync_expression(&mut self, assignment: Option<&crate::ExpressionView>) {
+        match assignment {
+            Some(assignment) if !self.expression_cleared => {
+                if self.expression_id.is_none() {
+                    self.expression_id = Some(assignment.id.clone());
+                    if self.expression.trim() == "value" {
+                        self.expression = assignment.expression.clone();
+                    }
+                }
+                if self.expression_id.as_deref() == Some(assignment.id.as_str()) {
+                    self.evaluate_every_frame = assignment.evaluate_every_frame;
+                }
+            }
+            Some(_) => {}
+            None => {
+                self.expression_cleared = false;
+                self.expression_id = None;
+                self.evaluate_every_frame = false;
+            }
+        }
+    }
+
+    /// Clear the expression draft and wait for the engine to drop it.
+    pub fn mark_expression_cleared(&mut self) {
+        self.expression = "value".to_string();
+        self.expression_id = None;
+        self.evaluate_every_frame = false;
+        self.expression_cleared = true;
     }
 
     pub fn parsed_args(&self) -> Result<Value, String> {
@@ -245,6 +609,22 @@ impl LinkEditor {
         serde_json::from_str::<Value>(&self.args)
             .map_err(|error| format!("args must be a JSON array: {error}"))
     }
+}
+
+/// Mint a smoothing id client-side.
+///
+/// The engine's `meyda/getSmoothingId` exists but the native UI cannot await
+/// an action result; the evaluator seeds an unseen id at `0` on first use
+/// (`input_links.rs`), so a locally unique id is equivalent.
+pub fn mint_smoothing_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("native-smoothing-{nanos}-{counter}")
 }
 
 /// Status-bar values mirrored from the engine snapshot.

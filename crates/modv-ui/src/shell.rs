@@ -7,7 +7,10 @@
 
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, vec2};
 
-use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PropView, gallery_preview_key};
+use crate::model::{
+    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView,
+    gallery_preview_key,
+};
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
     GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState, filter_gallery_modules,
@@ -28,7 +31,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     central_panel(ui, snapshot, state);
     about_window(ui.ctx(), state);
     shortcuts_window(ui.ctx(), state);
-    link_editor_window(ui, state);
+    link_editor_window(ui, snapshot, state);
     bpm_window(ui.ctx(), snapshot, state);
     command_palette(ui.ctx(), snapshot, state);
 }
@@ -587,6 +590,9 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                         }),
                                     );
                                 }
+                                if let Some(input_id) = &group.alpha_input_id {
+                                    link_row(ui, "Group alpha", input_id, snapshot, state);
+                                }
 
                                 let mut hidden = group.hidden;
                                 if ui.checkbox(&mut hidden, "Hidden").changed() {
@@ -643,29 +649,11 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                     .selected_text(&group.composite_operation)
                                     .width(130.0)
                                     .show_ui(ui, |ui| {
-                                        for mode in [
-                                            "normal",
-                                            "screen",
-                                            "multiply",
-                                            "overlay",
-                                            "darken",
-                                            "lighten",
-                                            "color-dodge",
-                                            "color-burn",
-                                            "hard-light",
-                                            "soft-light",
-                                            "difference",
-                                            "exclusion",
-                                            "hue",
-                                            "saturation",
-                                            "color",
-                                            "luminosity",
-                                            "lighter",
-                                        ] {
+                                        for mode in COMPOSITE_OPERATIONS {
                                             if ui
                                                 .selectable_label(
-                                                    group.composite_operation == mode,
-                                                    mode,
+                                                    group.composite_operation == *mode,
+                                                    *mode,
                                                 )
                                                 .clicked()
                                             {
@@ -680,6 +668,9 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                             }
                                         }
                                     });
+                                if let Some(input_id) = &group.composite_operation_input_id {
+                                    link_row(ui, "Group blend", input_id, snapshot, state);
+                                }
                             });
                         }
                         ui.indent(("group-modules", &group.id), |ui| {
@@ -973,6 +964,38 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                                 "value": alpha,
                             }),
                         );
+                    }
+                    if let Some(input_id) = &module.alpha_input_id {
+                        link_row(ui, "Alpha", input_id, snapshot, state);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Blend");
+                        egui::ComboBox::from_id_salt(("module-blend", &module.id))
+                            .selected_text(&module.composite_operation)
+                            .width(130.0)
+                            .show_ui(ui, |ui| {
+                                for mode in COMPOSITE_OPERATIONS {
+                                    if ui
+                                        .selectable_label(
+                                            module.composite_operation == *mode,
+                                            *mode,
+                                        )
+                                        .clicked()
+                                    {
+                                        state.push_action(
+                                            "modules/updateMeta",
+                                            serde_json::json!({
+                                                "moduleId": module.id,
+                                                "metaKey": "compositeOperation",
+                                                "value": mode,
+                                            }),
+                                        );
+                                    }
+                                }
+                            });
+                    });
+                    if let Some(input_id) = &module.composite_operation_input_id {
+                        link_row(ui, "Blend", input_id, snapshot, state);
                     }
                     ui.separator();
 
@@ -1486,6 +1509,9 @@ fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                     "value": alpha,
                 }),
             );
+        }
+        if let Some(input_id) = &group.alpha_input_id {
+            link_row(ui, "Group alpha", input_id, snapshot, state);
         }
         let mut hidden = group.hidden;
         if ui.checkbox(&mut hidden, "Hidden").changed() {
