@@ -44,10 +44,7 @@ function credit(source) {
  */
 function ncSaSources() {
   const isf = walk(
-    path.join(
-      ROOT,
-      "src/renderer/src/application/renderers/isf/modules",
-    ),
+    path.join(ROOT, "src/renderer/src/application/renderers/isf/modules"),
     ".fs",
   );
   const shader = walk(
