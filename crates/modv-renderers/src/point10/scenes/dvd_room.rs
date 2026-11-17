@@ -22,7 +22,9 @@
 //! * the logo transform (`:410-425`): `rotation = (sin(time * 0.3) * 0.25,
 //!   faceYaw + sin(time * 0.4) * 0.5, 0)` with
 //!   `faceYaw = atan2(cam.x - pos.x, cam.z - pos.z)`, and the `1 + pop * 0.12`
-//!   scale;
+//!   scale; the logo is a child of SmokeRoom's `_boxGroup`, so the visible
+//!   mesh, the simulation seed matrix/position and both point-light origins
+//!   all carry `boxScale` while the bounce integration stays local;
 //! * the audio mapping (`:376-408`): bass mean of bins `[1, 9)`, treble mean of
 //!   the top 15%, the asymmetric `dt*16` / `dt*5` smoothing, the kick attack
 //!   (`bass > 0.07`, `bass > bassAvg * 1.4`, `time - lastBeat > 0.12`, with
@@ -390,7 +392,9 @@ impl DvdRoom {
 
     /// The bounce bounds `VOLUME_WORLD_SIZE / 2 - logoHalf` (`:351-355`).
     ///
-    /// Note the JS does **not** scale these by `boxScale`; the port keeps that.
+    /// These are local-space bounds: the JS integrates `this.pos` before
+    /// `_boxGroup.scale` is applied, so `boxScale` enlarges the world-space
+    /// travel without changing these limits.
     pub fn bounce_bounds(&self) -> [f32; 3] {
         [
             (crate::point10::volume::VOLUME_WORLD_SIZE_X / 2.0 - self.logo_half[0]).max(0.05),
@@ -424,7 +428,24 @@ impl DvdRoom {
             0.0,
         ];
         let s = 1.0 + self.pop * 0.12;
-        trs(self.position, rotation, [s, s, s])
+        mat4_mul(
+            // `_boxGroup.scale.setScalar(_boxScale)` — the logo is a child of
+            // the group in the JS, so its vertices and world position grow.
+            &scale(self.box_scale, self.box_scale, self.box_scale),
+            &trs(self.position, rotation, [s, s, s]),
+        )
+    }
+
+    /// The logo's world position (inside the scaled box group). The JS reads
+    /// it from `emitter.getWorldPosition()` for `_uSpherePosition` and both
+    /// point-light origins.
+    fn logo_world_position(&self) -> [f32; 4] {
+        [
+            self.position[0] * self.box_scale,
+            self.position[1] * self.box_scale,
+            self.position[2] * self.box_scale,
+            1.0,
+        ]
     }
 
     fn glass_model(&self) -> Mat4 {
@@ -511,11 +532,12 @@ impl DvdRoom {
     }
 
     fn glass_uniforms(&self) -> GlassUniforms {
+        let logo_pos = self.logo_world_position();
         GlassUniforms {
             view_proj: self.view_proj(),
             model: self.glass_model(),
             camera_pos: [self.camera[0], self.camera[1], self.camera[2], 1.0],
-            logo_pos: [self.position[0], self.position[1], self.position[2], 1.0],
+            logo_pos,
             fire: self.fire_light(),
             params: [self.glass_opacity(), self.time, self.smoothed_bass, 0.0],
         }
@@ -523,12 +545,13 @@ impl DvdRoom {
 
     fn logo_uniforms(&self) -> LogoUniforms {
         let colour = self.logo_colour();
+        let logo_pos = self.logo_world_position();
         LogoUniforms {
             view_proj: self.view_proj(),
             model: self.logo_model(),
             camera_pos: [self.camera[0], self.camera[1], self.camera[2], 1.0],
             colour: [colour[0], colour[1], colour[2], 1.0],
-            logo_pos: [self.position[0], self.position[1], self.position[2], 1.0],
+            logo_pos,
             fire: self.fire_light(),
             params: [
                 self.emissive_intensity(),
@@ -553,7 +576,14 @@ impl DvdRoom {
         // The grid never moves: `_afterInitVolume` pins the origin to the box
         // bottom (`DvdRoom.js:320`), unlike SmokeRoom's emitter-following one.
         uniforms.origin = [0.0, -world[1] * 0.5, 0.0, scale];
-        uniforms.sphere_pos = [self.position[0], self.position[1], self.position[2], 0.0];
+        // `this.emitter.getWorldPosition()` includes the `boxScale` group, so
+        // the seed origin and emitter matrix are world-space.
+        uniforms.sphere_pos = [
+            self.position[0] * scale,
+            self.position[1] * scale,
+            self.position[2] * scale,
+            0.0,
+        ];
         uniforms.sphere_vel = [self.velocity[0], self.velocity[1], self.velocity[2], 0.25];
         uniforms.sphere_pos[3] = self.velocity.iter().map(|v| v * v).sum::<f32>().sqrt();
         uniforms.camera = [
@@ -1299,6 +1329,69 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|error| panic!("{label} WGSL must validate: {error}"));
         }
+    }
+
+    #[test]
+    fn box_scale_scales_the_logo_emitter_and_light_but_not_the_bounce_bounds() {
+        // `DvdRoom.js` inherits SmokeRoom's `_boxGroup`, which is scaled by
+        // `boxScale`; the logo `emitter` (and the point light parented to it)
+        // lives inside that group. The bounce integration runs in the group's
+        // local space, so its bounds stay unscaled.
+        let mut scene = DvdRoom::new();
+        scene.apply_props(|key| match key {
+            "boxScale" => Some(2.0),
+            _ => None,
+        });
+        scene.position = [1.0, -2.0, 3.0];
+        scene.velocity = [1.0, 0.5, -0.25];
+        scene.pop = 0.0;
+        scene.fire_size = 1.0;
+        scene.size = (64, 64);
+        scene.camera_aspect = 1.0;
+
+        let model = scene.logo_model();
+        let basis = |column: usize| {
+            (model[0][column] * model[0][column]
+                + model[1][column] * model[1][column]
+                + model[2][column] * model[2][column])
+                .sqrt()
+        };
+        close(model[3][0], 2.0, 1e-5);
+        close(model[3][1], -4.0, 1e-5);
+        close(model[3][2], 6.0, 1e-5);
+        close(basis(0), 2.0, 1e-5);
+        close(basis(1), 2.0, 1e-5);
+        close(basis(2), 2.0, 1e-5);
+
+        let temporal = fire_temporal(&ImprovedNoise, 5.0);
+        let tick = crate::point10::volume::room::SimTick {
+            steps: 1,
+            step: 0.01,
+            start_time: 0.0,
+            turbulence: 3.0,
+            dissipation: 0.2,
+            cooling: 0.5,
+        };
+        let uniforms = scene.volume_uniforms(&temporal, &tick);
+        // The emitter's world matrix and the simulation's sphere origin are
+        // both inside the scaled group (`_uSphereMatrix`/`_uSpherePosition`).
+        assert_eq!(uniforms.emitter_model, model);
+        close(uniforms.sphere_pos[0], 2.0, 1e-5);
+        close(uniforms.sphere_pos[1], -4.0, 1e-5);
+        close(uniforms.sphere_pos[2], 6.0, 1e-5);
+        // Velocity and speed stay local, exactly like `_uSphereVelocity`.
+        assert_eq!(uniforms.sphere_vel[0..3], [1.0, 0.5, -0.25]);
+
+        // The logo/glass point light origins are world positions too.
+        close(scene.logo_uniforms().logo_pos[0], 2.0, 1e-5);
+        close(scene.glass_uniforms().logo_pos[1], -4.0, 1e-5);
+
+        // `stepBounce` is local-space; the bounds keep the unscaled world
+        // size and logo half extents.
+        let bounds = scene.bounce_bounds();
+        close(bounds[0], 6.0 - scene.logo_half_extents()[0], 1e-4);
+        close(bounds[1], 6.0 - scene.logo_half_extents()[1], 1e-4);
+        close(bounds[2], 12.0 - scene.logo_half_extents()[2], 1e-4);
     }
 
     #[test]
