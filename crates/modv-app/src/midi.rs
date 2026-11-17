@@ -142,7 +142,9 @@ impl MidiClient {
         let mut seen = HashSet::new();
         for port in &ports {
             let id = port.id();
-            let name = input.port_name(port).unwrap_or_else(|_| "MIDI input".to_string());
+            let name = input
+                .port_name(port)
+                .unwrap_or_else(|_| "MIDI input".to_string());
             let manufacturer = String::new();
             let key = format!("{id}-{name}-{manufacturer}");
             seen.insert(key.clone());
@@ -360,7 +362,6 @@ fn apply_message(store: &mut Store, key: &str, bytes: &[u8]) {
     );
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,12 +403,21 @@ mod tests {
     #[test]
     fn note_on_toggles_and_cc_normalises() {
         let (mut store, key) = store_with_device();
-                apply_message(&mut store, &key, &[0x90, 60, 100]);
-        assert_eq!(channel_value(&store, &key, 0, 144), Some(serde_json::json!(1)));
         apply_message(&mut store, &key, &[0x90, 60, 100]);
-        assert_eq!(channel_value(&store, &key, 0, 144), Some(serde_json::json!(0)));
+        assert_eq!(
+            channel_value(&store, &key, 0, 144),
+            Some(serde_json::json!(1))
+        );
+        apply_message(&mut store, &key, &[0x90, 60, 100]);
+        assert_eq!(
+            channel_value(&store, &key, 0, 144),
+            Some(serde_json::json!(0))
+        );
         apply_message(&mut store, &key, &[0xB0, 7, 64]);
-        assert_eq!(channel_value(&store, &key, 0, 176), Some(serde_json::json!(0.5039370078740157)));
+        assert_eq!(
+            channel_value(&store, &key, 0, 176),
+            Some(serde_json::json!(0.5039370078740157))
+        );
     }
 
     #[test]
@@ -420,7 +430,10 @@ mod tests {
             )
             .expect("latch");
         apply_message(&mut store, &key, &[0xB0, 7, 127]);
-        assert_eq!(channel_value(&store, &key, 0, 144), Some(serde_json::json!(1)));
+        assert_eq!(
+            channel_value(&store, &key, 0, 144),
+            Some(serde_json::json!(1))
+        );
     }
 
     #[test]

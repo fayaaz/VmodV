@@ -93,8 +93,9 @@
 //!   canvas for every image input (the JS default at
 //!   `renderers/isf/index.js:84-91`). There is no texture registry yet.
 
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
@@ -700,6 +701,16 @@ impl ModuleRegistry {
     /// is parsed with its optional `*.vs` sidecar; unreadable or unparsable
     /// files are skipped with a one-line warning and counted in the summary.
     pub fn build(isf_dir: Option<&Path>) -> Self {
+        Self::build_with_extra(isf_dir, &[])
+    }
+
+    /// Build the registry with the corpus plus user ISF directories.
+    ///
+    /// The corpus wins on a name collision; user files are appended in the
+    /// supplied order and duplicate names are dropped. This is the native
+    /// app's third-party ISF path (the pending watch/reload wrapper will call
+    /// it again when a `.fs` file changes).
+    pub fn build_with_extra(isf_dir: Option<&Path>, extra_dirs: &[PathBuf]) -> Self {
         let shader = all_shader_modules();
         // `all_modules()` builds one default instance per module (all cheap,
         // no GPU work) so the descriptors can be copied out once.
@@ -719,7 +730,12 @@ impl ModuleRegistry {
                 props: scene.props(),
             })
             .collect();
-        let isf = scan_isf_corpus(isf_dir);
+        let mut isf = scan_isf_corpus(isf_dir);
+        for dir in extra_dirs {
+            isf.extend(scan_isf_corpus(Some(dir.as_path())));
+        }
+        let mut seen = HashSet::new();
+        isf.retain(|definition| seen.insert(definition.name.clone()));
         Self {
             shader,
             two_d,

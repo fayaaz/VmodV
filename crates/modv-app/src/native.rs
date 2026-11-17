@@ -24,9 +24,10 @@ use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_pr
 use modv_render::wgpu;
 use modv_ui::{
     AudioView, CameraView, EngineHealth, EngineSnapshot, GroupView, InputLinkView, MediaAction,
-    MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
-    PreviewTexture, PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction,
-    UiCommand, UiState, gallery_preview_key, scene_preview_key,
+    MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView,
+    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView,
+    TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
+    scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -139,7 +140,13 @@ impl NativeApp {
         let media_hub = MediaHub::new();
 
         let isf_dir = resolve_isf_dir(&cli);
-        let mut store = Store::with_state_path_and_isf(cli.state.as_deref(), isf_dir.as_deref());
+        let user_data = user_data_dir();
+        let user_isf_dirs = user_isf_dirs(&user_data);
+        let mut store = Store::with_state_path_and_isf_dirs(
+            cli.state.as_deref(),
+            isf_dir.as_deref(),
+            &user_isf_dirs,
+        );
         if let Some(path) = &cli.state {
             match store.restore_from_file(path) {
                 Ok(true) => eprintln!(
@@ -219,8 +226,8 @@ impl NativeApp {
             preview_textures: HashMap::new(),
             preview_order: VecDeque::new(),
             preview_error_counts: HashMap::new(),
-            window_state: WindowState::read(&user_data_dir().join(WINDOW_STATE_FILENAME)),
-            window_state_path: user_data_dir().join(WINDOW_STATE_FILENAME),
+            window_state: WindowState::read(&user_data.join(WINDOW_STATE_FILENAME)),
+            window_state_path: user_data.join(WINDOW_STATE_FILENAME),
             window_state_dirty: false,
             last_window_state_save: start,
             window_state_error_logged: false,
@@ -1725,6 +1732,36 @@ fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
 ///
 /// An explicit engine-owned `--audio-source` wins; the renderer default is
 /// translated to the system monitor, then the default input.
+/// User ISF folders under `<userData>/media`.
+///
+/// The legacy media manager keeps third-party shaders in
+/// `<media>/<project>/isf`; scan the flat `<media>/isf` folder too. This is a
+/// startup scan; the watch/reload wrapper is still P6 work.
+fn user_isf_dirs(user_data: &Path) -> Vec<PathBuf> {
+    if let Some(dir) = std::env::var_os("MODV_USER_ISF_DIR").map(PathBuf::from) {
+        return vec![dir];
+    }
+    let media = user_data.join("media");
+    let mut dirs = Vec::new();
+    let flat = media.join("isf");
+    if flat.is_dir() {
+        dirs.push(flat);
+    }
+    if let Ok(entries) = std::fs::read_dir(&media) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                let candidate = entry.path().join("isf");
+                if candidate.is_dir() {
+                    dirs.push(candidate);
+                }
+            }
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
 /// Clamp a saved placement onto the primary monitor.
 ///
 /// The legacy `resolveWindowBounds` does this at show time; without it a window
@@ -2087,6 +2124,25 @@ mod tests {
         let id = scene.get("id").and_then(Value::as_str).unwrap();
         apply_startup_scene(&mut store, Some(id));
         assert!(!store.state().groups.is_empty(), "Scene applied by id");
+    }
+
+    #[test]
+    fn user_isf_dirs_find_flat_and_project_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "modv-user-isf-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(root.join("media/isf")).expect("flat isf");
+        std::fs::create_dir_all(root.join("media/default/isf")).expect("project isf");
+        std::fs::create_dir_all(root.join("media/default/video")).expect("other folder");
+        let dirs = user_isf_dirs(&root);
+        assert!(dirs.contains(&root.join("media/isf")));
+        assert!(dirs.contains(&root.join("media/default/isf")));
+        assert!(!dirs.contains(&root.join("media/default/video")));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

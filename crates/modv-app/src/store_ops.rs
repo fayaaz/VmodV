@@ -293,6 +293,15 @@ impl Store {
         state_path: Option<&std::path::Path>,
         isf_dir: Option<&std::path::Path>,
     ) -> Self {
+        Self::with_state_path_and_isf_dirs(state_path, isf_dir, &[])
+    }
+
+    /// [`Self::with_state_path_and_isf`] plus user ISF directories.
+    pub fn with_state_path_and_isf_dirs(
+        state_path: Option<&std::path::Path>,
+        isf_dir: Option<&std::path::Path>,
+        extra_isf_dirs: &[std::path::PathBuf],
+    ) -> Self {
         let scenes_path = state_path
             .and_then(std::path::Path::parent)
             .map(|parent| parent.join(crate::scene_ops::SCENES_STORAGE_FILENAME));
@@ -307,7 +316,7 @@ impl Store {
         Self {
             state: EngineState::new(),
             deltas: DeltaStream::new(),
-            registry: Arc::new(ModuleRegistry::build(isf_dir)),
+            registry: Arc::new(ModuleRegistry::build_with_extra(isf_dir, extra_isf_dirs)),
             scenes: crate::scene_ops::ScenesState::default(),
             scenes_path,
             applied_scene_id: None,

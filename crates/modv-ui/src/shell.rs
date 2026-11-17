@@ -1062,8 +1062,13 @@ fn midi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
     for device in &midi.devices {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(if device.connected { "●" } else { "○" })
-                    .color(if device.connected { theme::OK } else { theme::MUTED }),
+                egui::RichText::new(if device.connected { "●" } else { "○" }).color(
+                    if device.connected {
+                        theme::OK
+                    } else {
+                        theme::MUTED
+                    },
+                ),
             );
             ui.label(egui::RichText::new(&device.name).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
