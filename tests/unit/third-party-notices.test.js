@@ -9,6 +9,194 @@ const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 
 const NC_SA = /non-?commercial|by-nc-sa/i;
 
+// ————— Cargo.lock (Rust dependency inventory) —————
+
+const CARGO_LOCK_PATH = path.join(ROOT, "crates/Cargo.lock");
+
+/**
+ * `[[package]]` entries from `crates/Cargo.lock`. Entries without a `source`
+ * are the workspace's own crates (first-party), everything else comes from a
+ * registry and therefore needs a notice row.
+ */
+function cargoLockPackages() {
+  const lock = fs.readFileSync(CARGO_LOCK_PATH, "utf8");
+  const packages = [];
+  let current = null;
+  for (const line of lock.split(/\r?\n/)) {
+    if (line === "[[package]]") {
+      current = {};
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    if (line.startsWith("name = ")) {
+      current.name = JSON.parse(line.slice(7).trim());
+    } else if (line.startsWith("version = ")) {
+      current.version = JSON.parse(line.slice(10).trim());
+    } else if (line.startsWith("source = ")) {
+      current.source = JSON.parse(line.slice(9).trim());
+    } else if (line === "") {
+      if (current.name) {
+        packages.push(current);
+      }
+      current = null;
+    }
+  }
+  if (current?.name) {
+    packages.push(current);
+  }
+  return packages;
+}
+
+const cargoPackages = cargoLockPackages();
+const workspaceCrates = cargoPackages
+  .filter((p) => !p.source)
+  .map((p) => p.name);
+/** Registry packages, de-duplicated by name and sorted. */
+const rustDependencies = [
+  ...new Set(cargoPackages.filter((p) => p.source).map((p) => p.name)),
+].sort();
+
+/** The `## Rust engine dependencies` section of the notices. */
+function noticesSection(heading) {
+  const start = notices.indexOf(`## ${heading}`);
+  expect(start, `notices must have a "## ${heading}" section`).toBeGreaterThan(
+    -1,
+  );
+  const afterStart = start + heading.length;
+  const next = notices.indexOf("\n## ", afterStart);
+  return next === -1 ? notices.slice(start) : notices.slice(start, next);
+}
+
+const rustSection = noticesSection("Rust engine dependencies");
+
+/**
+ * One row per registry crate: `| `name` | SPDX licence | upstream link |`.
+ */
+function rustDependencyRows(section) {
+  const rows = new Map();
+  for (const match of section.matchAll(
+    /^\| `([^`]+)` \| (.+?) \| (https?:\/\/[^\s|]+) \|$/gm,
+  )) {
+    rows.set(match[1], { licence: match[2].trim(), url: match[3] });
+  }
+  return rows;
+}
+
+const rustRows = rustDependencyRows(rustSection);
+
+/**
+ * SPDX identifiers used by the workspace's dependency graph (plus the common
+ * permissive ids, so a new crate does not need a list edit unless it adds an
+ * identifier nobody has used yet).
+ */
+const SPDX_IDENTIFIERS = new Set([
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC-BY-3.0",
+  "CC-BY-4.0",
+  "CC0-1.0",
+  "GPL-2.0-only",
+  "ISC",
+  "LGPL-2.1-or-later",
+  "LLVM-exception",
+  "MIT",
+  "MPL-2.0",
+  "NCSA",
+  "OFL-1.1",
+  "Ubuntu-font-1.0",
+  "Unicode-DSL-1.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]);
+
+/**
+ * Validate an SPDX licence expression: identifiers joined by `AND`/`OR`, with
+ * optional parentheses and `WITH` exceptions. Anything else (free text,
+ * shorthand like `MIT/Apache-2.0`) fails.
+ */
+function isSpdxExpression(expression) {
+  const tokens = expression.match(/[()]|[^\s()]+/g) ?? [];
+  let expectAtom = true;
+  let depth = 0;
+  for (const token of tokens) {
+    if (token === "(") {
+      // Opening a group is only valid where an atom is expected.
+      if (!expectAtom) {
+        return false;
+      }
+      depth += 1;
+      continue;
+    }
+    if (token === ")") {
+      if (expectAtom || depth === 0) {
+        return false;
+      }
+      depth -= 1;
+      continue;
+    }
+    if (token === "AND" || token === "OR") {
+      if (expectAtom) {
+        return false;
+      }
+      expectAtom = true;
+      continue;
+    }
+    if (token === "WITH") {
+      // `A WITH <exception>`: an exception identifier must follow.
+      if (expectAtom) {
+        return false;
+      }
+      expectAtom = true;
+      continue;
+    }
+    if (!expectAtom || !SPDX_IDENTIFIERS.has(token)) {
+      return false;
+    }
+    expectAtom = false;
+  }
+  return !expectAtom && depth === 0;
+}
+
+/** Hosts accepted as plausible upstream links. */
+const KNOWN_FORGES =
+  /(?:^|\.)(?:github\.com|gitlab\.com|freedesktop\.org|redox-os\.org|codeberg\.org|crates\.io|docs\.rs|bitbucket\.org|sourceforge\.net)\//;
+
+function plausibleUpstream(name, url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") {
+    return false;
+  }
+  return KNOWN_FORGES.test(`${parsed.host}/`) || url.includes(name);
+}
+
+/**
+ * Licence ids that carry obligations beyond "keep the notice": copyleft or
+ * attribution terms that the notices must spell out.
+ */
+const OBLIGATION_LICENCE =
+  /MPL-2\.0|CC-BY-\d(?:\.\d)?(?:-[^ ]+)?|NCSA|OFL-1\.1|Ubuntu-font-1\.0/g;
+
+function obligationLicences(rows) {
+  const found = new Set();
+  for (const { licence } of rows.values()) {
+    for (const match of licence.matchAll(OBLIGATION_LICENCE)) {
+      found.add(match[0]);
+    }
+  }
+  return [...found];
+}
+
 function walk(dir, extension) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
@@ -141,5 +329,112 @@ describe("notices carry the corrected dependency attributions", () => {
   it("does not let the README licence badge imply MIT for bundled assets", () => {
     expect(readme).toContain("THIRD_PARTY_NOTICES.md");
     expect(readme).not.toContain("img.shields.io/github/license");
+  });
+});
+
+describe("third-party notices cover the Rust dependency graph", () => {
+  it("the Cargo.lock scanner finds the registry packages and the workspace crates", () => {
+    // Guards the scanner itself: a broken parse would make the coverage
+    // assertions below pass vacuously.
+    expect(rustDependencies.length).toBeGreaterThan(500);
+    for (const crate of ["wgpu", "winit", "naga", "tokio"]) {
+      expect(rustDependencies).toContain(crate);
+    }
+    // The workspace's own crates have no registry source and stay first-party.
+    expect(workspaceCrates).toEqual([
+      "modv-app",
+      "modv-engine",
+      "modv-ipc",
+      "modv-media",
+      "modv-render",
+      "modv-renderers",
+      "modv-ui",
+    ]);
+  });
+
+  it.each(rustDependencies.map((name) => [name]))(
+    "%s has a Rust dependency row",
+    (name) => {
+      expect(
+        rustRows.has(name),
+        `${name} is in crates/Cargo.lock but has no row in the "Rust engine dependencies" table`,
+      ).toBe(true);
+    },
+  );
+
+  it("no made-up rows: every Rust table entry resolves in Cargo.lock", () => {
+    const stale = [...rustRows.keys()].filter(
+      (name) => !rustDependencies.includes(name),
+    );
+    expect(
+      stale,
+      `rows without a Cargo.lock package (stale entries?): ${stale.join(", ")}`,
+    ).toEqual([]);
+    expect(rustRows.size).toBeGreaterThan(500);
+  });
+
+  it("the rows are sorted and one-per-crate", () => {
+    const names = [...rustRows.keys()];
+    expect(names.length, "duplicate rows").toBe(new Set(names).size);
+    const sorted = [...names].sort((a, b) => a.localeCompare(b));
+    expect(names).toEqual(sorted);
+  });
+
+  it("every row carries a valid SPDX licence expression", () => {
+    for (const [name, row] of rustRows) {
+      expect(
+        isSpdxExpression(row.licence),
+        `${name} licence "${row.licence}" is not a valid SPDX expression`,
+      ).toBe(true);
+    }
+  });
+
+  it("every row links to a plausible upstream", () => {
+    for (const [name, row] of rustRows) {
+      expect(
+        plausibleUpstream(name, row.url),
+        `${name} upstream "${row.url}" is neither a known forge nor a link containing the crate name`,
+      ).toBe(true);
+    }
+  });
+
+  it("notes the licence obligations of the copyleft and attribution crates", () => {
+    const obligations = obligationLicences(rustRows);
+    expect(
+      obligations.length,
+      "the obligation matcher found nothing — coloured (MPL-2.0) should be in the graph",
+    ).toBeGreaterThan(0);
+
+    // Bullets under the section carry the obligations, and stay tied to the
+    // crates that actually carry the licence. Wrapped bullet text is joined
+    // so a crate named on a continuation line still counts.
+    const bullets = [];
+    for (const line of rustSection.split(/\r?\n/)) {
+      if (/^- /.test(line)) {
+        bullets.push(line.trim());
+      } else if (
+        bullets.length &&
+        line.trim() &&
+        !/^[#|]/.test(line) &&
+        !/^-\s/.test(line)
+      ) {
+        bullets[bullets.length - 1] += ` ${line.trim()}`;
+      }
+    }
+    for (const id of obligations) {
+      expect(
+        bullets.some((bullet) => bullet.includes(id)),
+        `${id} crates need an obligation note`,
+      ).toBe(true);
+    }
+    for (const bullet of bullets) {
+      const names = [...rustRows.keys()].filter((name) =>
+        bullet.includes(`\`${name}\``),
+      );
+      expect(
+        names.length,
+        `obligation bullet "${bullet.slice(0, 60)}…" names no crate from the table`,
+      ).toBeGreaterThan(0);
+    }
   });
 });
