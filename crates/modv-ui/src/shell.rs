@@ -27,6 +27,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     about_window(ui.ctx(), state);
     shortcuts_window(ui.ctx(), state);
     link_editor_window(ui, state);
+    bpm_window(ui.ctx(), snapshot, state);
 }
 
 /// Keyboard shortcuts that work globally (outside text fields).
@@ -238,11 +239,20 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                             .monospace()
                             .color(if fps >= 55.0 { theme::OK } else { theme::MUTED }),
                     );
-                    ui.label(
-                        egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
-                            .monospace()
-                            .color(theme::MUTED),
-                    );
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
+                                    .monospace()
+                                    .color(theme::MUTED),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Tempo source and tap tempo")
+                        .clicked()
+                    {
+                        state.show_bpm = true;
+                    }
                     if let Some(error) = &state.last_error {
                         ui.label(
                             egui::RichText::new("engine error")
@@ -256,7 +266,7 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
         });
 }
 
-fn status_bar(ui: &mut egui::Ui, _snapshot: &EngineSnapshot, state: &mut UiState) {
+fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     egui::Panel::bottom("modv-status")
         .exact_size(22.0)
         .frame(
@@ -290,6 +300,9 @@ fn status_bar(ui: &mut egui::Ui, _snapshot: &EngineSnapshot, state: &mut UiState
                         .color(theme::MUTED),
                 );
                 ui.separator();
+                fps_sparkline(ui, state);
+                audio_meters(ui, snapshot);
+                ui.separator();
                 ui.label(
                     egui::RichText::new(if state.status.audio_active {
                         "audio: engine"
@@ -310,6 +323,71 @@ fn status_bar(ui: &mut egui::Ui, _snapshot: &EngineSnapshot, state: &mut UiState
                 });
             });
         });
+}
+
+/// A small rolling FPS graph, drawn without a plotting dependency.
+fn fps_sparkline(ui: &mut egui::Ui, state: &UiState) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(96.0, 13.0), Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, egui::CornerRadius::same(1), theme::INPUT);
+    if state.fps_history.len() < 2 {
+        return;
+    }
+    let max = state
+        .fps_history
+        .iter()
+        .copied()
+        .fold(60.0_f32, f32::max)
+        .max(1.0);
+    let step = rect.width() / (state.fps_history.len() - 1).max(1) as f32;
+    let mut previous = None;
+    for (index, fps) in state.fps_history.iter().enumerate() {
+        let x = rect.left() + index as f32 * step;
+        let y = rect.bottom() - (fps / max).clamp(0.0, 1.0) * rect.height();
+        let point = egui::pos2(x, y);
+        if let Some(previous) = previous {
+            painter.line_segment(
+                [previous, point],
+                Stroke::new(1.0, if *fps >= 55.0 { theme::OK } else { theme::ACCENT }),
+            );
+        }
+        previous = Some(point);
+    }
+    painter.text(
+        rect.right_top() + egui::vec2(-2.0, 0.0),
+        egui::Align2::RIGHT_TOP,
+        format!("{max:.0}"),
+        egui::FontId::monospace(7.0),
+        theme::MUTED,
+    );
+}
+
+fn audio_meters(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
+    for (label, value) in [
+        ("B", snapshot.audio.bass),
+        ("M", snapshot.audio.mid),
+        ("T", snapshot.audio.treble),
+    ] {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), Sense::hover());
+        let painter = ui.painter();
+        painter.rect_filled(rect, egui::CornerRadius::same(1), theme::INPUT);
+        let height = (value.clamp(0.0, 1.0) * rect.height()).max(0.5);
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left(), rect.bottom() - height),
+                rect.right_bottom(),
+            ),
+            egui::CornerRadius::same(1),
+            theme::ACCENT,
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::monospace(7.0),
+            theme::BACKGROUND,
+        );
+    }
 }
 
 fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -1605,6 +1683,81 @@ fn gallery_tile(
             ui.close();
         }
     });
+}
+
+fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let mut open = state.show_bpm;
+    egui::Window::new("Tempo")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Source");
+                egui::ComboBox::from_id_salt("bpm-source")
+                    .selected_text(&state.bpm_source)
+                    .show_ui(ui, |ui| {
+                        for source in ["beatdetektor", "midi", "tap"] {
+                            if ui
+                                .selectable_label(state.bpm_source == source, source)
+                                .clicked()
+                            {
+                                state.bpm_source = source.to_string();
+                                state.push_action(
+                                    "beats/SET_BPM_SOURCE",
+                                    serde_json::json!({ "source": source }),
+                                );
+                            }
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(format!("Detected {:.1} BPM", snapshot.audio.bpm));
+                if ui.button("Tap").clicked() {
+                    let now = std::time::Instant::now();
+                    state
+                        .tap_times
+                        .retain(|tap| now.saturating_duration_since(*tap).as_secs_f64() <= 2.0);
+                    state.tap_times.push(now);
+                    if state.tap_times.len() >= 2 {
+                        let intervals: Vec<f64> = state
+                            .tap_times
+                            .windows(2)
+                            .map(|pair| {
+                                pair[1]
+                                    .saturating_duration_since(pair[0])
+                                    .as_secs_f64()
+                            })
+                            .filter(|interval| *interval > 0.0)
+                            .collect();
+                        if !intervals.is_empty() {
+                            let average = intervals.iter().sum::<f64>() / intervals.len() as f64;
+                            let bpm = 60.0 / average;
+                            if bpm.is_finite() && (30.0..=300.0).contains(&bpm) {
+                                state.bpm_source = "tap".to_string();
+                                state.push_action(
+                                    "beats/SET_BPM_SOURCE",
+                                    serde_json::json!({ "source": "tap" }),
+                                );
+                                state.push_action(
+                                    "beats/setBpm",
+                                    serde_json::json!({ "bpm": bpm, "source": "tap" }),
+                                );
+                            }
+                        }
+                    }
+                }
+                if ui.button("Reset taps").clicked() {
+                    state.tap_times.clear();
+                }
+            });
+            ui.label(
+                egui::RichText::new(format!("{} tap(s) in the last 2 s", state.tap_times.len()))
+                    .size(10.0)
+                    .color(theme::MUTED),
+            );
+        });
+    state.show_bpm = open;
 }
 
 fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {

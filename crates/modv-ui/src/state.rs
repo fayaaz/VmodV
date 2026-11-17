@@ -4,6 +4,8 @@
 //! interaction state (selection, focus, drag sources) and the command queues
 //! the app drains after drawing.
 
+use std::collections::VecDeque;
+
 use serde_json::Value;
 
 use crate::model::{EngineSnapshot, MediaAction, PreviewRequest, PropView};
@@ -123,6 +125,9 @@ pub struct UiState {
     pub show_shortcuts: bool,
     pub search_focus: bool,
     pub link_editor: Option<LinkEditor>,
+    pub show_bpm: bool,
+    pub bpm_source: String,
+    pub tap_times: Vec<std::time::Instant>,
     pub side_panel_tab: SidePanelTab,
     /// MediaHub operations drained by the shell after drawing.
     pub media_actions: Vec<MediaAction>,
@@ -132,6 +137,8 @@ pub struct UiState {
     /// The most recent engine error rendered in the status bar/toast list.
     pub last_error: Option<String>,
     pub status: StatusState,
+    /// Rolling frame-rate history for the status sparkline.
+    pub fps_history: VecDeque<f32>,
 }
 
 /// Which panel the right side shows.
@@ -270,6 +277,9 @@ impl UiState {
             show_shortcuts: false,
             search_focus: false,
             link_editor: None,
+            show_bpm: false,
+            bpm_source: "beatdetektor".to_string(),
+            tap_times: Vec::new(),
             side_panel_tab: SidePanelTab::Inspector,
             media_actions: Vec::new(),
             p0: P0State::default(),
@@ -277,6 +287,7 @@ impl UiState {
             inspector_probe_value: 0.5,
             last_error: None,
             status: StatusState::default(),
+            fps_history: VecDeque::new(),
         }
     }
 
@@ -363,6 +374,10 @@ impl UiState {
         };
         self.output_open = snapshot.health.output_open;
         self.p0.output_window_ok = snapshot.health.output_open;
+        self.fps_history.push_back(snapshot.fps);
+        while self.fps_history.len() > 120 {
+            self.fps_history.pop_front();
+        }
         if let Some(error) = &snapshot.health.last_error {
             self.last_error = Some(error.clone());
         }
