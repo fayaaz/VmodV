@@ -146,41 +146,12 @@ impl NativeApp {
         let isf_dir = resolve_isf_dir(&cli);
         let user_data = user_data_dir();
         let user_isf_dirs = user_isf_dirs(&user_data);
-        let mut store = Store::with_state_path_and_isf_dirs(
+        let mut store = build_native_store(
             cli.state.as_deref(),
+            &user_data,
             isf_dir.as_deref(),
             &user_isf_dirs,
         );
-        if let Some(path) = &cli.state {
-            match store.restore_from_file(path) {
-                Ok(true) => eprintln!(
-                    "ui: INFO restored engine state from {} ({} groups, {} modules)",
-                    path.display(),
-                    store.state().groups.len(),
-                    store.state().modules.len()
-                ),
-                Ok(false) => eprintln!(
-                    "ui: INFO no state snapshot at {}; starting empty",
-                    path.display()
-                ),
-                Err(error) => {
-                    eprintln!(
-                        "ui: WARN could not load state snapshot {}: {error}",
-                        path.display()
-                    )
-                }
-            }
-        }
-
-        // Hydrate/seed even without an explicit --state: the native shell owns
-        // the whole state plane, so the Scenes panel must be populated on a
-        // fresh launch. Seeding is idempotent.
-        if let Err(error) = store.dispatch("scenes/hydrateScenes", serde_json::json!({})) {
-            eprintln!("ui: WARN could not hydrate Scenes: {error}");
-        }
-        if let Err(error) = store.dispatch("scenes/ensureDefaultScenes", serde_json::json!({})) {
-            eprintln!("ui: WARN could not seed default Scenes: {error}");
-        }
         eprintln!(
             "ui: INFO native shell ready ({} groups, {} modules, {} scenes, {} registered)",
             store.state().groups.len(),
@@ -1759,10 +1730,50 @@ fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
     }
 }
 
-/// The audio capture sources to try for the native shell.
+/// Build the native shell's store: restore the shared engine snapshot, then
+/// hydrate/seed the Scene list beside it.
 ///
-/// An explicit engine-owned `--audio-source` wins; the renderer default is
-/// translated to the system monitor, then the default input.
+/// The native shell has no Electron supervisor, so an absent `--state` must
+/// resolve to the supervisor's `<userData>/engine-state.json`
+/// ([`crate::cli::native_state_path`]); otherwise the store has no Scene path
+/// and `<userData>/scenes.json` — the authoritative list shared with
+/// Electron — is never read, leaving only the seeded defaults.
+fn build_native_store(
+    explicit_state: Option<&Path>,
+    user_data: &Path,
+    isf_dir: Option<&Path>,
+    user_isf_dirs: &[PathBuf],
+) -> Store {
+    let state_path = crate::cli::native_state_path(explicit_state, user_data);
+    let mut store = Store::with_state_path_and_isf_dirs(Some(&state_path), isf_dir, user_isf_dirs);
+    match store.restore_from_file(&state_path) {
+        Ok(true) => eprintln!(
+            "ui: INFO restored engine state from {} ({} groups, {} modules)",
+            state_path.display(),
+            store.state().groups.len(),
+            store.state().modules.len()
+        ),
+        Ok(false) => eprintln!(
+            "ui: INFO no state snapshot at {}; starting empty",
+            state_path.display()
+        ),
+        Err(error) => {
+            eprintln!(
+                "ui: WARN could not load state snapshot {}: {error}",
+                state_path.display()
+            )
+        }
+    }
+
+    if let Err(error) = store.dispatch("scenes/hydrateScenes", serde_json::json!({})) {
+        eprintln!("ui: WARN could not hydrate Scenes: {error}");
+    }
+    if let Err(error) = store.dispatch("scenes/ensureDefaultScenes", serde_json::json!({})) {
+        eprintln!("ui: WARN could not seed default Scenes: {error}");
+    }
+    store
+}
+
 /// User ISF folders under `<userData>/media`.
 ///
 /// The legacy media manager keeps third-party shaders in
@@ -1818,6 +1829,10 @@ fn clamp_saved_to_monitor(saved: SavedWindow, event_loop: &ActiveEventLoop) -> S
     }
 }
 
+/// The audio capture sources to try for the native shell.
+///
+/// An explicit engine-owned `--audio-source` wins; the renderer default is
+/// translated to the system monitor, then the default input.
 fn native_audio_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelection> {
     if selection.engine_owned() {
         vec![selection]
@@ -2183,5 +2198,107 @@ mod tests {
             resolve_isf_dir_from(Some(explicit)),
             Some(PathBuf::from(explicit))
         );
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn simple_scene(id: &str, name: &str) -> Value {
+        serde_json::json!({
+            "id": id,
+            "name": name,
+            "enabled": true,
+            "minSeconds": 6,
+            "maxSeconds": 12,
+            "groups": [],
+            "modules": {},
+            "inputs": { "inputs": {}, "inputLinks": {} },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+        })
+    }
+
+    fn write_scenes(dir: &Path, scenes: Vec<Value>) {
+        let document = serde_json::json!({
+            "version": 1,
+            "defaultsSeeded": true,
+            "defaultsVersion": modv_engine::default_scenes::DEFAULTS_VERSION,
+            "seededDefaultScenes": [],
+            "scenes": scenes,
+            "performance": {},
+        });
+        std::fs::write(
+            dir.join("scenes.json"),
+            serde_json::to_vec(&document).expect("scenes json"),
+        )
+        .expect("write scenes.json");
+    }
+
+    fn scene_names(store: &Store) -> Vec<&str> {
+        store
+            .scenes_state()
+            .scenes
+            .iter()
+            .filter_map(|scene| scene.get("name").and_then(Value::as_str))
+            .collect()
+    }
+
+    #[test]
+    fn native_store_reads_scenes_json_beside_the_default_state_path() {
+        // Regression: the native shell used to pass `cli.state` straight
+        // through, so without `--state` the store had no Scene path and only
+        // the 62 seeded defaults appeared — the user's own Scenes were lost.
+        let user_data = temp_dir("modv-native-scenes");
+        write_scenes(
+            &user_data,
+            vec![
+                simple_scene("scene-webcam", "WEBCAM"),
+                simple_scene("scene-earth", "Earth"),
+            ],
+        );
+
+        let store = build_native_store(None, &user_data, None, &[]);
+
+        assert_eq!(
+            scene_names(&store),
+            ["WEBCAM", "Earth"],
+            "the shared Scene list loads instead of defaults-only"
+        );
+        let _ = std::fs::remove_dir_all(&user_data);
+    }
+
+    #[test]
+    fn native_store_keeps_an_explicit_state_path() {
+        let root = temp_dir("modv-native-explicit");
+        let explicit_dir = root.join("explicit");
+        let user_data = root.join("user-data");
+        std::fs::create_dir_all(&explicit_dir).expect("explicit dir");
+        std::fs::create_dir_all(&user_data).expect("user data dir");
+        write_scenes(&explicit_dir, vec![simple_scene("scene-a", "Explicit")]);
+        write_scenes(&user_data, vec![simple_scene("scene-b", "UserData")]);
+
+        let store = build_native_store(
+            Some(&explicit_dir.join("engine-state.json")),
+            &user_data,
+            None,
+            &[],
+        );
+
+        assert_eq!(
+            scene_names(&store),
+            ["Explicit"],
+            "--state wins over the userData default"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

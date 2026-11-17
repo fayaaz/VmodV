@@ -238,6 +238,27 @@ pub fn native_bench_seconds(explicit: bool, seconds: f64) -> f64 {
     if explicit { seconds } else { 0.0 }
 }
 
+/// The engine snapshot filename inside the shared userData directory.
+///
+/// Matches `EngineSupervisor`'s `statePath` in
+/// `src/main/engine-supervisor.js`; both front ends must agree so
+/// `scenes.json` beside it is the same authoritative Scene list.
+pub const ENGINE_STATE_FILENAME: &str = "engine-state.json";
+
+/// The engine state snapshot the native shell restores from.
+///
+/// Electron's engine supervisor always spawns the engine with
+/// `--state <userData>/engine-state.json`. The native shell has no supervisor,
+/// so `--state` normally arrives unset; resolving it to the same file keeps
+/// `<userData>/scenes.json` (derived from the state file's parent by
+/// [`crate::store_ops::Store::with_state_path`]) authoritative for both front
+/// ends. An explicit `--state` always wins.
+pub fn native_state_path(explicit: Option<&Path>, user_data: &Path) -> PathBuf {
+    explicit
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| user_data.join(ENGINE_STATE_FILENAME))
+}
+
 /// Parse the process arguments.
 pub fn parse() -> Cli {
     let matches = Command::new("modv-engine")
@@ -510,6 +531,26 @@ mod tests {
         assert_eq!(native_bench_seconds(false, 10.0), 0.0);
         assert_eq!(native_bench_seconds(true, 10.0), 10.0);
         assert_eq!(native_bench_seconds(true, 0.0), 0.0);
+    }
+
+    #[test]
+    fn native_state_path_defaults_to_the_supervisors_shared_file() {
+        let user_data = Path::new("/home/user/.config/VmodV");
+        assert_eq!(
+            native_state_path(None, user_data),
+            user_data.join(ENGINE_STATE_FILENAME),
+            "the supervisor always passes <userData>/engine-state.json"
+        );
+    }
+
+    #[test]
+    fn native_state_path_keeps_an_explicit_state_flag() {
+        let user_data = Path::new("/home/user/.config/VmodV");
+        let explicit = Path::new("/tmp/engine-test/engine-state.json");
+        assert_eq!(
+            native_state_path(Some(explicit), user_data),
+            PathBuf::from(explicit)
+        );
     }
 
     #[test]
