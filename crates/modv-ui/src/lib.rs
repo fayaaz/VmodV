@@ -27,6 +27,7 @@ pub mod widgets;
 
 pub use model::{
     AudioView, EngineHealth, EngineSnapshot, GroupView, ModuleMetaView, ModuleView,
-    PerformanceView, PropView, SceneCellView, SceneView,
+    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView,
+    gallery_preview_key, scene_preview_key,
 };
 pub use state::{UiAction, UiCommand, UiState};

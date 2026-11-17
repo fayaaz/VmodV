@@ -5,6 +5,8 @@
 //! a reference to the store, so egui's immediate-mode draw calls cannot
 //! conflict with a dispatch.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 /// Everything the shell needs to draw one frame.
@@ -34,6 +36,42 @@ pub struct EngineSnapshot {
     pub applied_scene_id: Option<String>,
     /// Engine/adapter health for the status bar.
     pub health: EngineHealth,
+    /// Gallery hover previews keyed by module name.
+    pub gallery_previews: HashMap<String, PreviewTexture>,
+    /// Scene-cell hover previews keyed by [`scene_preview_key`].
+    pub scene_previews: HashMap<String, PreviewTexture>,
+}
+
+/// One uploaded preview texture (an egui texture owned by the shell).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreviewTexture {
+    pub id: egui::TextureId,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The key used by [`EngineSnapshot::scene_previews`].
+pub fn scene_preview_key(scene_id: &str, row: usize) -> String {
+    format!("scene:{scene_id}:{row}")
+}
+
+/// The key used by [`EngineSnapshot::gallery_previews`].
+pub fn gallery_preview_key(module_name: &str) -> String {
+    format!("module:{module_name}")
+}
+
+/// A hover-preview request emitted by the UI and answered by the shell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreviewRequest {
+    Module {
+        module_name: String,
+        /// Composite the preview over the live output (hover previews).
+        with_output: bool,
+    },
+    Scene {
+        scene_id: String,
+        row_index: usize,
+    },
 }
 
 impl EngineSnapshot {

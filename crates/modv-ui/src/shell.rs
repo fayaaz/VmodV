@@ -7,7 +7,7 @@
 
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, vec2};
 
-use crate::model::{EngineSnapshot, ModuleMetaView, PropView};
+use crate::model::{EngineSnapshot, ModuleMetaView, PropView, gallery_preview_key};
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{GalleryCategory, UiAction, UiCommand, UiState};
 use crate::theme;
@@ -680,6 +680,9 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                 state.preview_texture,
                 &mut state.actions,
             );
+            state
+                .preview_requests
+                .append(&mut state.scene_grid.preview_requests);
         });
 }
 
@@ -861,8 +864,8 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                             .color(theme::MUTED),
                     );
                 }
-                for (index, module) in filtered.iter().enumerate() {
-                    gallery_tile(ui, module, index == 0, snapshot, state);
+                for module in filtered {
+                    gallery_tile(ui, module, snapshot, state);
                 }
             });
         });
@@ -871,8 +874,7 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
 fn gallery_tile(
     ui: &mut egui::Ui,
     module: &ModuleMetaView,
-    live_preview: bool,
-    _snapshot: &EngineSnapshot,
+    snapshot: &EngineSnapshot,
     state: &mut UiState,
 ) {
     let size = vec2(92.0, 66.0);
@@ -887,18 +889,16 @@ fn gallery_tile(
     };
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(3), fill);
-    if live_preview && let Some(texture_id) = state.preview_texture {
+    if let Some(preview) = snapshot
+        .gallery_previews
+        .get(&gallery_preview_key(&module.name))
+    {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        painter.image(
-            texture_id,
-            rect.shrink(2.0),
-            uv,
-            Color32::from_white_alpha(170),
-        );
+        painter.image(preview.id, rect.shrink(2.0), uv, Color32::WHITE);
         painter.rect_filled(
             rect.shrink(2.0),
             CornerRadius::same(2),
-            Color32::from_black_alpha(70),
+            Color32::from_black_alpha(55),
         );
     } else {
         painter.rect_filled(
@@ -935,6 +935,13 @@ fn gallery_tile(
         theme::MUTED,
     );
 
+    if response.hovered() {
+        state.request_gallery_preview(
+            &module.name,
+            true,
+            std::time::Duration::from_millis(150),
+        );
+    }
     if response.clicked() {
         state.selected_gallery_module = Some(module.name.clone());
     }

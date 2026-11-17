@@ -9,9 +9,10 @@
 use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec2};
 use serde_json::Value;
 
-use crate::model::{EngineSnapshot, SceneCellView, SceneView};
+use crate::model::{EngineSnapshot, PreviewRequest, SceneCellView, SceneView, scene_preview_key};
 use crate::state::UiAction;
 use crate::theme;
+use crate::widgets::range_control::chip;
 
 /// A cell address inside the Scenes grid.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +35,27 @@ impl CellRef {
 pub struct SceneGridState {
     pub hovered: Option<CellRef>,
     pub copy_source: Option<CellRef>,
+    /// Hover-preview requests drained by the shell after drawing.
+    pub preview_requests: Vec<PreviewRequest>,
+    last_preview_request: Option<std::time::Instant>,
+    hover_scene: Option<(String, usize)>,
+    /// Inline Scene-name editor: `(scene_id, draft)`.
+    pub renaming: Option<(String, String)>,
+    /// One-shot focus request for the inline editor.
+    pub rename_focus: bool,
+    /// Per-Scene timing override editor.
+    pub timing_edit: Option<TimingEdit>,
+    /// The row-name list editor.
+    pub row_names_edit: Option<Vec<String>>,
+}
+
+/// The small Scene-timing dialog's draft values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimingEdit {
+    pub scene_id: String,
+    pub name: String,
+    pub min_seconds: f64,
+    pub max_seconds: f64,
 }
 
 impl SceneGridState {
@@ -48,6 +70,45 @@ impl SceneGridState {
 
     pub fn is_copying(&self) -> bool {
         self.copy_source.is_some()
+    }
+
+    /// Ask for a cell preview at most every `interval`.
+    /// Begin inline renaming of a Scene.
+    pub fn begin_rename(&mut self, scene: &SceneView) {
+        self.renaming = Some((scene.id.clone(), scene.name.clone()));
+        self.rename_focus = true;
+    }
+
+    /// Begin editing a Scene's timing override.
+    pub fn begin_timing(&mut self, scene: &SceneView, performance: &crate::PerformanceView) {
+        self.timing_edit = Some(TimingEdit {
+            scene_id: scene.id.clone(),
+            name: scene.name.clone(),
+            min_seconds: scene.timing.unwrap_or(performance.min_seconds),
+            max_seconds: scene.timing.unwrap_or(performance.max_seconds),
+        });
+    }
+
+    pub fn request_preview(
+        &mut self,
+        scene_id: &str,
+        row: usize,
+        interval: std::time::Duration,
+    ) {
+        let now = std::time::Instant::now();
+        let current = (scene_id.to_string(), row);
+        let due = self
+            .last_preview_request
+            .map(|last| now.saturating_duration_since(last) >= interval)
+            .unwrap_or(true);
+        if self.hover_scene.as_ref() != Some(&current) || due {
+            self.hover_scene = Some(current);
+            self.last_preview_request = Some(now);
+            self.preview_requests.push(PreviewRequest::Scene {
+                scene_id: scene_id.to_string(),
+                row_index: row,
+            });
+        }
     }
 
     /// Finish a copy drag over `target`. Returns the engine action, or `None`
@@ -72,7 +133,7 @@ pub fn draw_scene_grid(
     ui: &mut egui::Ui,
     snapshot: &EngineSnapshot,
     grid: &mut SceneGridState,
-    preview: Option<egui::TextureId>,
+    live_preview: Option<egui::TextureId>,
     actions: &mut Vec<UiAction>,
 ) {
     if snapshot.scenes.is_empty() {
@@ -90,6 +151,9 @@ pub fn draw_scene_grid(
         return;
     }
 
+    performance_bar(ui, snapshot, grid, actions);
+    ui.separator();
+
     let row_count = snapshot
         .scenes
         .iter()
@@ -105,32 +169,72 @@ pub fn draw_scene_grid(
             ui.horizontal_top(|ui| {
                 for scene in &snapshot.scenes {
                     ui.vertical(|ui| {
-                        // Column header: apply on click.
                         let current = snapshot.performance.current_scene_id.as_deref()
                             == Some(scene.id.as_str());
-                        let header = ui.add_sized(
-                            [CELL_SIZE.x, 20.0],
-                            egui::Button::new(egui::RichText::new(&scene.name).size(11.0).color(
-                                if current {
-                                    theme::ACCENT
-                                } else {
-                                    theme::FOREGROUND
-                                },
-                            ))
-                            .frame(false),
-                        );
-                        if header.clicked() {
-                            actions.push(UiAction::new(
-                                "scenes/applyScene",
-                                serde_json::json!({ "sceneId": scene.id }),
-                            ));
+                        let renaming = grid
+                            .renaming
+                            .as_ref()
+                            .filter(|(id, _)| id == &scene.id)
+                            .map(|(_, draft)| draft.clone());
+                        if let Some(mut draft) = renaming {
+                            let response = ui.add_sized(
+                                [CELL_SIZE.x, 20.0],
+                                egui::TextEdit::singleline(&mut draft)
+                                    .font(egui::TextStyle::Small)
+                                    .hint_text("Scene name"),
+                            );
+                            if grid.rename_focus {
+                                response.request_focus();
+                                grid.rename_focus = false;
+                            }
+                            let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                            if escape {
+                                grid.renaming = None;
+                            } else if enter || response.lost_focus() {
+                                grid.renaming = None;
+                                let name = draft.trim();
+                                if !name.is_empty() && name != scene.name {
+                                    actions.push(UiAction::new(
+                                        "scenes/updateSceneName",
+                                        serde_json::json!({
+                                            "sceneId": scene.id,
+                                            "name": name,
+                                        }),
+                                    ));
+                                }
+                            } else {
+                                grid.renaming = Some((scene.id.clone(), draft));
+                            }
+                        } else {
+                            let header = ui.add_sized(
+                                [CELL_SIZE.x, 20.0],
+                                egui::Button::new(
+                                    egui::RichText::new(&scene.name).size(11.0).color(
+                                        if current {
+                                            theme::ACCENT
+                                        } else {
+                                            theme::FOREGROUND
+                                        },
+                                    ),
+                                )
+                                .frame(false),
+                            );
+                            if header.clicked() {
+                                actions.push(apply_scene_action(&scene.id));
+                            }
+                            if header.double_clicked() {
+                                grid.begin_rename(scene);
+                            }
+                            header.context_menu(|ui| {
+                                scene_column_menu(ui, scene, snapshot, grid, actions)
+                            });
                         }
-                        header.context_menu(|ui| scene_column_menu(ui, scene, actions));
 
                         for row in 0..row_count {
                             let cell = scene.cell(row).cloned().unwrap_or_default();
                             let _ = draw_scene_cell(
-                                ui, scene, row, &cell, snapshot, grid, preview, actions,
+                                ui, scene, row, &cell, snapshot, grid, live_preview, actions,
                             );
                             ui.add_space(2.0);
                         }
@@ -144,6 +248,201 @@ pub fn draw_scene_grid(
     if grid.copy_source.is_some() && ui.input(|input| input.pointer.any_released()) {
         grid.cancel_copy();
     }
+
+    scene_dialogs(ui, grid, actions);
+}
+
+/// Performance-mode controls above the Scene grid.
+fn performance_bar(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        let label = if snapshot.performance.enabled {
+            "Stop performance"
+        } else {
+            "Start performance"
+        };
+        if ui.button(label).clicked() {
+            actions.push(UiAction::new(
+                "scenes/setPerformanceEnabled",
+                serde_json::json!({ "enabled": !snapshot.performance.enabled }),
+            ));
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("min").size(10.0).color(theme::MUTED));
+        let mut min = snapshot.performance.min_seconds;
+        let min_changed = ui
+            .add(
+                egui::DragValue::new(&mut min)
+                    .range(1.0..=3600.0)
+                    .speed(0.5)
+                    .suffix(" s"),
+            )
+            .changed();
+        ui.label(egui::RichText::new("max").size(10.0).color(theme::MUTED));
+        let mut max = snapshot.performance.max_seconds;
+        let max_changed = ui
+            .add(
+                egui::DragValue::new(&mut max)
+                    .range(2.0..=7200.0)
+                    .speed(0.5)
+                    .suffix(" s"),
+            )
+            .changed();
+        ui.label(
+            egui::RichText::new("fade")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+        let mut fade = snapshot.performance.transition_seconds;
+        let fade_changed = ui
+            .add(
+                egui::DragValue::new(&mut fade)
+                    .range(0.1..=30.0)
+                    .speed(0.05)
+                    .suffix(" s"),
+            )
+            .changed();
+        if min_changed || max_changed || fade_changed {
+            let min = if min_changed || max_changed {
+                min.max(1.0).min(max - 1.0)
+            } else {
+                snapshot.performance.min_seconds
+            };
+            actions.push(UiAction::new(
+                "scenes/updatePerformance",
+                serde_json::json!({
+                    "config": {
+                        "minSeconds": min,
+                        "maxSeconds": max.max(min + 1.0),
+                        "transitionSeconds": fade,
+                    }
+                }),
+            ));
+        }
+        ui.separator();
+        if ui.button("Row names").clicked() {
+            grid.row_names_edit = Some(snapshot.scene_rows.clone());
+        }
+        if ui.button("+ Scene").clicked() {
+            actions.push(UiAction::new(
+                "scenes/addEmptyScene",
+                serde_json::json!({ "name": "New Scene" }),
+            ));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(format!("{} Scenes", snapshot.scenes.len()))
+                    .size(10.0)
+                    .color(theme::MUTED),
+            );
+            if snapshot.performance.enabled {
+                chip(ui, "PERFORMANCE", theme::OK);
+            }
+        });
+    });
+}
+
+/// Modal editors for Scene timing override and performance row names.
+fn scene_dialogs(ui: &mut egui::Ui, grid: &mut SceneGridState, actions: &mut Vec<UiAction>) {
+    if let Some(mut edit) = grid.timing_edit.take() {
+        let mut open = true;
+        let mut save = false;
+        let mut cancel = false;
+        egui::Window::new(format!("Scene timing: {}", edit.name))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                ui.label(
+                    egui::RichText::new("Per-Scene override; reset returns to the global timing.")
+                        .size(10.0)
+                        .color(theme::MUTED),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Min");
+                    ui.add(
+                        egui::DragValue::new(&mut edit.min_seconds)
+                            .range(1.0..=3600.0)
+                            .speed(0.5)
+                            .suffix(" s"),
+                    );
+                    ui.label("Max");
+                    ui.add(
+                        egui::DragValue::new(&mut edit.max_seconds)
+                            .range(2.0..=7200.0)
+                            .speed(0.5)
+                            .suffix(" s"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Save override").clicked() {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if save {
+            actions.push(UiAction::new(
+                "scenes/updateSceneTiming",
+                serde_json::json!({
+                    "sceneId": edit.scene_id,
+                    "minSeconds": edit.min_seconds,
+                    "maxSeconds": edit.max_seconds.max(edit.min_seconds + 1.0),
+                }),
+            ));
+        } else if !cancel && open {
+            grid.timing_edit = Some(edit);
+        }
+    }
+
+    if let Some(mut names) = grid.row_names_edit.take() {
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new("Performance row names")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .show(ui.ctx(), |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "A named row matches its Group by name; empty names use position.",
+                    )
+                    .size(10.0)
+                    .color(theme::MUTED),
+                );
+                for (index, name) in names.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Row {index}"))
+                                .monospace()
+                                .size(10.0)
+                                .color(theme::MUTED),
+                        );
+                        ui.text_edit_singleline(name);
+                    });
+                }
+                if ui.button("Add row").clicked() {
+                    names.push(String::new());
+                }
+                if ui.button("Save").clicked() {
+                    save = true;
+                }
+            });
+        if save {
+            actions.push(UiAction::new(
+                "scenes/setRowNames",
+                serde_json::json!({ "rowNames": names }),
+            ));
+        } else if open {
+            grid.row_names_edit = Some(names);
+        }
+    }
 }
 
 /// Draw one Scene cell. Returns `true` when this cell owned the pointer.
@@ -155,7 +454,7 @@ fn draw_scene_cell(
     cell: &SceneCellView,
     snapshot: &EngineSnapshot,
     grid: &mut SceneGridState,
-    preview: Option<egui::TextureId>,
+    live_preview: Option<egui::TextureId>,
     actions: &mut Vec<UiAction>,
 ) -> bool {
     let (rect, response) = ui.allocate_exact_size(CELL_SIZE, Sense::click_and_drag());
@@ -193,15 +492,22 @@ fn draw_scene_cell(
         StrokeKind::Inside,
     );
 
-    // Live hover preview: the compositor's main texture, cover-cropped.
-    if hovered
-        && !cell.is_empty()
-        && let Some(texture_id) = preview
-    {
-        let inner = rect.shrink(2.0);
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        painter.image(texture_id, inner, uv, Color32::from_white_alpha(190));
-        painter.rect_filled(inner, CornerRadius::same(2), Color32::from_black_alpha(90));
+    // Hover preview: the engine's isolated Scene-cell render, falling back to
+    // the live composited frame until the first preview arrives.
+    if hovered && !cell.is_empty() {
+        let key = scene_preview_key(&scene.id, row);
+        let texture = snapshot
+            .scene_previews
+            .get(&key)
+            .map(|preview| preview.id)
+            .or(live_preview);
+        if let Some(texture_id) = texture {
+            let inner = rect.shrink(2.0);
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            painter.image(texture_id, inner, uv, Color32::from_white_alpha(210));
+            painter.rect_filled(inner, CornerRadius::same(2), Color32::from_black_alpha(70));
+        }
+        grid.request_preview(&scene.id, row, std::time::Duration::from_millis(150));
     }
 
     // Row label (top-left), scene name (bottom-left) and module summary.
@@ -273,9 +579,16 @@ fn draw_scene_cell(
         );
     }
 
-    // Primary click applies the Scene.
+    // Primary click applies the Scene; a double-click on an empty cell
+    // creates the row's Group in that Scene.
     if response.clicked() && !cell.is_empty() {
         actions.push(apply_scene_action(&scene.id));
+    }
+    if response.double_clicked() && cell.is_empty() {
+        actions.push(UiAction::new(
+            "scenes/createSceneCellGroup",
+            serde_json::json!({ "sceneId": scene.id, "rowIndex": row }),
+        ));
     }
 
     // Ctrl/Cmd+drag starts a cell copy.
@@ -370,9 +683,19 @@ fn scene_cell_menu(
     }
 }
 
-fn scene_column_menu(ui: &mut egui::Ui, scene: &SceneView, actions: &mut Vec<UiAction>) {
+fn scene_column_menu(
+    ui: &mut egui::Ui,
+    scene: &SceneView,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    actions: &mut Vec<UiAction>,
+) {
     if ui.button("Apply Scene").clicked() {
         actions.push(apply_scene_action(&scene.id));
+        ui.close();
+    }
+    if ui.button("Rename Scene").clicked() {
+        grid.begin_rename(scene);
         ui.close();
     }
     if ui.button("Capture live state into Scene").clicked() {
@@ -382,6 +705,24 @@ fn scene_column_menu(ui: &mut egui::Ui, scene: &SceneView, actions: &mut Vec<UiA
         ));
         ui.close();
     }
+    if ui
+        .button(if scene.enabled {
+            "Disable Scene"
+        } else {
+            "Enable Scene"
+        })
+        .clicked()
+    {
+        actions.push(UiAction::new(
+            "scenes/setSceneEnabled",
+            serde_json::json!({ "sceneId": scene.id, "enabled": !scene.enabled }),
+        ));
+        ui.close();
+    }
+    if ui.button("Edit timing override").clicked() {
+        grid.begin_timing(scene, &snapshot.performance);
+        ui.close();
+    }
     if ui.button("Reset timing override").clicked() {
         actions.push(UiAction::new(
             "scenes/resetSceneTiming",
@@ -389,6 +730,35 @@ fn scene_column_menu(ui: &mut egui::Ui, scene: &SceneView, actions: &mut Vec<UiA
         ));
         ui.close();
     }
+    let index = snapshot
+        .scenes
+        .iter()
+        .position(|candidate| candidate.id == scene.id)
+        .unwrap_or(0);
+    if ui
+        .add_enabled(index > 0, egui::Button::new("Move left"))
+        .clicked()
+    {
+        actions.push(UiAction::new(
+            "scenes/moveScene",
+            serde_json::json!({ "sceneId": scene.id, "toIndex": index - 1 }),
+        ));
+        ui.close();
+    }
+    if ui
+        .add_enabled(
+            index + 1 < snapshot.scenes.len(),
+            egui::Button::new("Move right"),
+        )
+        .clicked()
+    {
+        actions.push(UiAction::new(
+            "scenes/moveScene",
+            serde_json::json!({ "sceneId": scene.id, "toIndex": index + 1 }),
+        ));
+        ui.close();
+    }
+    ui.separator();
     if ui
         .button(egui::RichText::new("Remove Scene").color(theme::DANGER))
         .clicked()

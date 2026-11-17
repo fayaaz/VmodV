@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use crate::model::{EngineSnapshot, PropView};
+use crate::model::{EngineSnapshot, PreviewRequest, PropView};
 use crate::panels::scene_grid::SceneGridState;
 use crate::widgets::RangeControl;
 
@@ -108,6 +108,12 @@ pub struct UiState {
     pub commands: Vec<UiCommand>,
     pub preview_texture: Option<egui::TextureId>,
     pub preview_size: [usize; 2],
+    /// Hover-preview requests drained by the shell after drawing.
+    pub preview_requests: Vec<PreviewRequest>,
+    /// The last Gallery tile we requested a preview for, so a hover does not
+    /// enqueue one request per frame.
+    pub last_gallery_request: Option<std::time::Instant>,
+    pub gallery_hover: Option<String>,
     pub output_open: bool,
     pub show_p0: bool,
     pub show_about: bool,
@@ -157,6 +163,9 @@ impl UiState {
             commands: Vec::new(),
             preview_texture: None,
             preview_size: [0, 0],
+            preview_requests: Vec::new(),
+            last_gallery_request: None,
+            gallery_hover: None,
             output_open: false,
             show_p0: true,
             show_about: false,
@@ -190,6 +199,33 @@ impl UiState {
     /// Take the queued engine actions.
     pub fn take_actions(&mut self) -> Vec<UiAction> {
         std::mem::take(&mut self.actions)
+    }
+
+    /// Ask the shell for a Gallery preview at most every `interval`.
+    pub fn request_gallery_preview(
+        &mut self,
+        module_name: &str,
+        with_output: bool,
+        interval: std::time::Duration,
+    ) {
+        let now = std::time::Instant::now();
+        let due = self
+            .last_gallery_request
+            .map(|last| now.saturating_duration_since(last) >= interval)
+            .unwrap_or(true);
+        if self.gallery_hover.as_deref() != Some(module_name) || due {
+            self.gallery_hover = Some(module_name.to_string());
+            self.last_gallery_request = Some(now);
+            self.preview_requests.push(PreviewRequest::Module {
+                module_name: module_name.to_string(),
+                with_output,
+            });
+        }
+    }
+
+    /// The shell drains at most one preview request per frame.
+    pub fn take_preview_requests(&mut self) -> Vec<PreviewRequest> {
+        std::mem::take(&mut self.preview_requests)
     }
 
     /// Queue an application command.

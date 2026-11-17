@@ -11,7 +11,7 @@
 //! The legacy Electron app remains the shipping product; this binary is the
 //! opt-in native path (`MODV_UI=native`, `make native`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,7 +23,8 @@ use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_pr
 use modv_render::wgpu;
 use modv_ui::{
     AudioView, EngineHealth, EngineSnapshot, GroupView, ModuleMetaView, ModuleView,
-    PerformanceView, PropView, SceneCellView, SceneView, UiAction, UiCommand, UiState,
+    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView, UiAction,
+    UiCommand, UiState, gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -62,6 +63,13 @@ struct OutputWindow {
     surface: SurfaceTarget,
 }
 
+/// One uploaded egui preview texture and its pixel size.
+struct PreviewEntry {
+    handle: egui::TextureHandle,
+    width: u32,
+    height: u32,
+}
+
 /// A tessellated egui frame waiting for the present pass.
 struct PendingUiFrame {
     clipped: Vec<egui::ClippedPrimitive>,
@@ -86,6 +94,10 @@ pub struct NativeApp {
     output: Option<OutputWindow>,
     preview_id: Option<egui::TextureId>,
     preview_size: (u32, u32),
+    /// Gallery/Scene hover textures owned by the UI context.
+    preview_textures: HashMap<String, PreviewEntry>,
+    preview_order: VecDeque<String>,
+    preview_errors: HashSet<String>,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -170,6 +182,9 @@ impl NativeApp {
             output: None,
             preview_id: None,
             preview_size: (0, 0),
+            preview_textures: HashMap::new(),
+            preview_order: VecDeque::new(),
+            preview_errors: HashSet::new(),
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -450,6 +465,7 @@ impl NativeApp {
             self.update_preview_texture();
         }
         self.present();
+        self.answer_preview_requests();
 
         self.frames += 1;
         self.metric_frames += 1;
@@ -696,6 +712,112 @@ impl NativeApp {
         }
     }
 
+    /// Answer at most one queued Gallery/Scene hover preview.
+    ///
+    /// The engine's isolated preview renderers already exist; this method
+    /// uploads their RGBA result into an egui texture owned by the shell and
+    /// keeps a bounded LRU. The UI reads the texture id from the next
+    /// snapshot, so there is no IPC and no per-frame readback for a tile that
+    /// is merely visible (only the hovered tile polls).
+    fn answer_preview_requests(&mut self) {
+        let requests = self.ui_state.take_preview_requests();
+        let Some(request) = requests.into_iter().next_back() else {
+            return;
+        };
+
+        let key = match &request {
+            PreviewRequest::Module { module_name, .. } => gallery_preview_key(module_name),
+            PreviewRequest::Scene {
+                scene_id,
+                row_index,
+            } => scene_preview_key(scene_id, *row_index),
+        };
+
+        let result = {
+            let Some(compositor) = &mut self.compositor else {
+                return;
+            };
+            match request {
+                PreviewRequest::Module {
+                    module_name,
+                    with_output,
+                } => {
+                    let registry = self.store.registry_arc();
+                    compositor
+                        .render_module_preview(
+                            registry.as_ref(),
+                            &module_name,
+                            256,
+                            144,
+                            with_output,
+                        )
+                        .map(|pixels| (pixels, 256u32, 144u32))
+                }
+                PreviewRequest::Scene {
+                    scene_id,
+                    row_index,
+                } => crate::scene_preview::render_scene_preview(
+                    compositor,
+                    &self.store,
+                    &scene_id,
+                    row_index,
+                    320,
+                    180,
+                )
+                .map(|pixels| (pixels, 320u32, 180u32)),
+            }
+        };
+
+        match result {
+            Ok((pixels, width, height)) => self.upload_preview(key, pixels, width, height),
+            Err(error) => {
+                if self.preview_errors.insert(key.clone()) {
+                    eprintln!("ui: WARN preview {key} failed: {error}");
+                }
+            }
+        }
+    }
+
+    fn upload_preview(&mut self, key: String, mut pixels: Vec<u8>, width: u32, height: u32) {
+        if pixels.len() != (width as usize) * (height as usize) * 4 {
+            if self.preview_errors.insert(key.clone()) {
+                eprintln!("ui: WARN preview {key} returned {} bytes", pixels.len());
+            }
+            return;
+        }
+        // The engine's preview readbacks are premultiplied; flatten onto
+        // opaque black before handing them to egui, which expects straight
+        // alpha. This is the same flatten the main preview path applies.
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [width as usize, height as usize],
+            &pixels,
+        );
+        if let Some(entry) = self.preview_textures.get_mut(&key) {
+            entry.handle.set(image, egui::TextureOptions::LINEAR);
+        } else {
+            let handle = self
+                .egui_ctx
+                .load_texture(key.clone(), image, egui::TextureOptions::LINEAR);
+            self.preview_textures.insert(
+                key.clone(),
+                PreviewEntry {
+                    handle,
+                    width,
+                    height,
+                },
+            );
+            self.preview_order.push_back(key);
+        }
+        while self.preview_order.len() > 32 {
+            if let Some(old) = self.preview_order.pop_front() {
+                self.preview_textures.remove(&old);
+            }
+        }
+    }
+
     fn build_snapshot(&self) -> EngineSnapshot {
         let state = self.store.state();
         let registry = self.store.registry_arc();
@@ -812,6 +934,20 @@ impl NativeApp {
             mid: self.store.audio().mid,
             treble: self.store.audio().treble,
         };
+        let mut gallery_previews = HashMap::new();
+        let mut scene_previews = HashMap::new();
+        for (key, entry) in &self.preview_textures {
+            let texture = PreviewTexture {
+                id: entry.handle.id(),
+                width: entry.width,
+                height: entry.height,
+            };
+            if key.starts_with("module:") {
+                gallery_previews.insert(key.clone(), texture);
+            } else {
+                scene_previews.insert(key.clone(), texture);
+            }
+        }
         let health = EngineHealth {
             adapter: format!("{} ({})", self.adapter.name, self.adapter.device_type),
             backend: self.adapter.backend.clone(),
@@ -834,6 +970,8 @@ impl NativeApp {
             scene_rows: self.store.row_names(),
             applied_scene_id,
             health,
+            gallery_previews,
+            scene_previews,
         }
     }
 
