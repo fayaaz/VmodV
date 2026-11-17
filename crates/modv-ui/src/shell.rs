@@ -680,124 +680,11 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                             }
                                         }
                                     });
-
-                                ui.separator();
-                                let modules = snapshot.modules_in_group(&group.id);
-                                if modules.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new("empty")
-                                            .italics()
-                                            .size(10.0)
-                                            .color(theme::MUTED),
-                                    );
-                                }
-                                let module_ids: Vec<String> = group.module_ids.clone();
-                                for (module_index, module) in modules.iter().enumerate() {
-                                    let selected_module = state.selected_module.as_deref()
-                                        == Some(module.id.as_str());
-                                    ui.horizontal(|ui| {
-                                        let mut module_enabled = module.enabled;
-                                        if ui.checkbox(&mut module_enabled, "").changed() {
-                                            state.push_action(
-                                                "modules/updateMeta",
-                                                serde_json::json!({
-                                                    "moduleId": module.id,
-                                                    "metaKey": "enabled",
-                                                    "value": module_enabled,
-                                                }),
-                                            );
-                                        }
-                                        let label = format!(
-                                            "{}  ({})",
-                                            module.module_name,
-                                            short_id(&module.id)
-                                        );
-                                        if ui
-                                            .selectable_label(
-                                                selected_module,
-                                                egui::RichText::new(label).size(10.0),
-                                            )
-                                            .clicked()
-                                        {
-                                            state.selected_module = Some(module.id.clone());
-                                        }
-                                        ui.with_layout(
-                                            Layout::right_to_left(Align::Center),
-                                            |ui| {
-                                                if ui
-                                                    .small_button("x")
-                                                    .on_hover_text("Remove module")
-                                                    .clicked()
-                                                {
-                                                    state.push_action(
-                                                        "groups/REMOVE_MODULE_FROM_GROUP",
-                                                        serde_json::json!({
-                                                            "groupId": group.id,
-                                                            "moduleId": module.id,
-                                                        }),
-                                                    );
-                                                    state.push_action(
-                                                        "modules/removeActiveModule",
-                                                        serde_json::json!({
-                                                            "moduleId": module.id,
-                                                        }),
-                                                    );
-                                                }
-                                                if ui
-                                                    .add_enabled(
-                                                        module_index + 1 < modules.len(),
-                                                        egui::Button::new("v").small().frame(false),
-                                                    )
-                                                    .on_hover_text("Move module down")
-                                                    .clicked()
-                                                {
-                                                    let mut ids = module_ids.clone();
-                                                    ids.swap(module_index, module_index + 1);
-                                                    state.push_action(
-                                                        "groups/REPLACE_GROUP_MODULES",
-                                                        serde_json::json!({
-                                                            "groupId": group.id,
-                                                            "modules": ids,
-                                                        }),
-                                                    );
-                                                }
-                                                if ui
-                                                    .add_enabled(
-                                                        module_index > 0,
-                                                        egui::Button::new("^").small().frame(false),
-                                                    )
-                                                    .on_hover_text("Move module up")
-                                                    .clicked()
-                                                {
-                                                    let mut ids = module_ids.clone();
-                                                    ids.swap(module_index, module_index - 1);
-                                                    state.push_action(
-                                                        "groups/REPLACE_GROUP_MODULES",
-                                                        serde_json::json!({
-                                                            "groupId": group.id,
-                                                            "modules": ids,
-                                                        }),
-                                                    );
-                                                }
-                                                if ui
-                                                    .small_button("D")
-                                                    .on_hover_text("Duplicate module")
-                                                    .clicked()
-                                                {
-                                                    state.push_action(
-                                                        "groups/duplicateModule",
-                                                        serde_json::json!({
-                                                            "groupId": group.id,
-                                                            "moduleId": module.id,
-                                                        }),
-                                                    );
-                                                }
-                                            },
-                                        );
-                                    });
-                                }
                             });
                         }
+                        ui.indent(("group-modules", &group.id), |ui| {
+                            group_module_list(ui, snapshot, state, group, selected);
+                        });
                     }
                 });
 
@@ -816,6 +703,125 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                 }
             });
         });
+}
+
+/// One Group's module list: always visible, so every Group in the pane shows
+/// what it contains. The per-Group name/alpha/blend editors stay selected-only
+/// (they share one draft input); this list is safe to repeat per Group.
+fn group_module_list(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+    group: &crate::model::GroupView,
+    selected: bool,
+) {
+    ui.separator();
+    let modules = snapshot.modules_in_group(&group.id);
+    if modules.is_empty() {
+        if selected {
+            ui.label(
+                egui::RichText::new("empty")
+                    .italics()
+                    .size(10.0)
+                    .color(theme::MUTED),
+            );
+        }
+        return;
+    }
+    let module_ids: Vec<String> = group.module_ids.clone();
+    for (module_index, module) in modules.iter().enumerate() {
+        let selected_module = state.selected_module.as_deref() == Some(module.id.as_str());
+        ui.horizontal(|ui| {
+            let mut module_enabled = module.enabled;
+            if ui.checkbox(&mut module_enabled, "").changed() {
+                state.push_action(
+                    "modules/updateMeta",
+                    serde_json::json!({
+                        "moduleId": module.id,
+                        "metaKey": "enabled",
+                        "value": module_enabled,
+                    }),
+                );
+            }
+            let label = format!("{}  ({})", module.module_name, short_id(&module.id));
+            if ui
+                .selectable_label(selected_module, egui::RichText::new(label).size(10.0))
+                .clicked()
+            {
+                state.selected_module = Some(module.id.clone());
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .small_button("x")
+                    .on_hover_text("Remove module")
+                    .clicked()
+                {
+                    state.push_action(
+                        "groups/REMOVE_MODULE_FROM_GROUP",
+                        serde_json::json!({
+                            "groupId": group.id,
+                            "moduleId": module.id,
+                        }),
+                    );
+                    state.push_action(
+                        "modules/removeActiveModule",
+                        serde_json::json!({
+                            "moduleId": module.id,
+                        }),
+                    );
+                }
+                if ui
+                    .add_enabled(
+                        module_index + 1 < modules.len(),
+                        egui::Button::new("v").small().frame(false),
+                    )
+                    .on_hover_text("Move module down")
+                    .clicked()
+                {
+                    let mut ids = module_ids.clone();
+                    ids.swap(module_index, module_index + 1);
+                    state.push_action(
+                        "groups/REPLACE_GROUP_MODULES",
+                        serde_json::json!({
+                            "groupId": group.id,
+                            "modules": ids,
+                        }),
+                    );
+                }
+                if ui
+                    .add_enabled(
+                        module_index > 0,
+                        egui::Button::new("^").small().frame(false),
+                    )
+                    .on_hover_text("Move module up")
+                    .clicked()
+                {
+                    let mut ids = module_ids.clone();
+                    ids.swap(module_index, module_index - 1);
+                    state.push_action(
+                        "groups/REPLACE_GROUP_MODULES",
+                        serde_json::json!({
+                            "groupId": group.id,
+                            "modules": ids,
+                        }),
+                    );
+                }
+                if ui
+                    .small_button("D")
+                    .on_hover_text("Duplicate module")
+                    .clicked()
+                {
+                    state.push_action(
+                        "groups/duplicateModule",
+                        serde_json::json!({
+                            "groupId": group.id,
+                            "moduleId": module.id,
+                        }),
+                    );
+                }
+            });
+        });
+    }
 }
 
 fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
