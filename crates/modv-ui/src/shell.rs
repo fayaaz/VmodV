@@ -12,6 +12,7 @@ use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{GalleryCategory, UiAction, UiCommand, UiState};
 use crate::theme;
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
+use crate::widgets::input_link::{link_editor_window, link_row};
 use crate::widgets::range_control::chip;
 
 /// Draw the complete native UI for one frame.
@@ -25,6 +26,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     central_panel(ui, snapshot, state);
     about_window(ui.ctx(), state);
     shortcuts_window(ui.ctx(), state);
+    link_editor_window(ui, state);
 }
 
 /// Keyboard shortcuts that work globally (outside text fields).
@@ -808,6 +810,9 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                     }
                     for prop in &module.props {
                         draw_prop(ui, &module.id, prop, snapshot, state);
+                        if let Some(input_id) = &prop.input_id {
+                            link_row(ui, &prop.name, input_id, snapshot, state);
+                        }
                     }
                 });
         });

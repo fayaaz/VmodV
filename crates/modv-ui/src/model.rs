@@ -42,6 +42,8 @@ pub struct EngineSnapshot {
     pub scene_previews: HashMap<String, PreviewTexture>,
     /// Live texture sources the Inspector's texture picker can bind.
     pub texture_sources: Vec<TextureSourceView>,
+    /// Input links keyed by the input id they write to.
+    pub input_links: HashMap<String, InputLinkView>,
 }
 
 /// One uploaded preview texture (an egui texture owned by the shell).
@@ -60,6 +62,19 @@ pub fn scene_preview_key(scene_id: &str, row: usize) -> String {
 /// The key used by [`EngineSnapshot::gallery_previews`].
 pub fn gallery_preview_key(module_name: &str) -> String {
     format!("module:{module_name}")
+}
+
+/// One engine Input Link (audio getter, state path, MIDI or OSC).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InputLinkView {
+    pub input_id: String,
+    pub kind: String,
+    pub location: Option<String>,
+    pub args: Option<Value>,
+    pub source: Option<String>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub matcher: Option<Value>,
 }
 
 /// One live texture source (`group:<id>`, `isf:<id>`, `camera:<id>`, ...).

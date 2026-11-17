@@ -4,6 +4,7 @@
 //! status badges. P3 adds the remaining control types from `Control.vue`.
 
 pub mod color_control;
+pub mod input_link;
 pub mod range_control;
 pub mod texture_control;
 pub mod tween_control;

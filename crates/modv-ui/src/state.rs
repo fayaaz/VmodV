@@ -122,12 +122,92 @@ pub struct UiState {
     pub show_about: bool,
     pub show_shortcuts: bool,
     pub search_focus: bool,
+    pub link_editor: Option<LinkEditor>,
     pub p0: P0State,
     pub inspector_probe: RangeControl,
     pub inspector_probe_value: f64,
     /// The most recent engine error rendered in the status bar/toast list.
     pub last_error: Option<String>,
     pub status: StatusState,
+}
+
+/// The focused-input link editor's draft values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkEditor {
+    pub input_id: String,
+    pub title: String,
+    pub kind: String,
+    pub source: String,
+    pub location: String,
+    /// JSON array text for getter links.
+    pub args: String,
+    pub min: f64,
+    pub max: f64,
+    pub exists: bool,
+    pub error: Option<String>,
+}
+
+impl LinkEditor {
+    pub fn audio(input_id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            input_id: input_id.into(),
+            title: title.into(),
+            kind: "getter".to_string(),
+            source: "meyda".to_string(),
+            location: "meyda/getFeature".to_string(),
+            args: "[\"bass\"]".to_string(),
+            min: 0.0,
+            max: 1.0,
+            exists: false,
+            error: None,
+        }
+    }
+
+    pub fn from_link(
+        input_id: impl Into<String>,
+        title: impl Into<String>,
+        link: &crate::InputLinkView,
+    ) -> Self {
+        Self {
+            input_id: input_id.into(),
+            title: title.into(),
+            kind: link.kind.clone(),
+            source: link.source.clone().unwrap_or_else(|| "state".to_string()),
+            location: link.location.clone().unwrap_or_default(),
+            args: link
+                .args
+                .as_ref()
+                .map(|args| args.to_string())
+                .unwrap_or_else(|| "[]".to_string()),
+            min: link.min.unwrap_or(0.0),
+            max: link.max.unwrap_or(1.0),
+            exists: true,
+            error: None,
+        }
+    }
+
+    /// The audio feature named by the getter args, if any.
+    pub fn audio_feature(&self) -> String {
+        serde_json::from_str::<Value>(&self.args)
+            .ok()
+            .and_then(|value| value.as_array()?.first()?.as_str().map(str::to_string))
+            .unwrap_or_else(|| "bass".to_string())
+    }
+
+    pub fn set_audio_feature(&mut self, feature: &str) {
+        self.kind = "getter".to_string();
+        self.source = "meyda".to_string();
+        self.location = "meyda/getFeature".to_string();
+        self.args = serde_json::json!([feature]).to_string();
+    }
+
+    pub fn parsed_args(&self) -> Result<Value, String> {
+        if self.kind != "getter" {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str::<Value>(&self.args)
+            .map_err(|error| format!("args must be a JSON array: {error}"))
+    }
 }
 
 /// Status-bar values mirrored from the engine snapshot.
@@ -178,6 +258,7 @@ impl UiState {
             show_about: false,
             show_shortcuts: false,
             search_focus: false,
+            link_editor: None,
             p0: P0State::default(),
             inspector_probe,
             inspector_probe_value: 0.5,
