@@ -9,15 +9,33 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::state::SidePanelTab;
-use modv_ui::{CameraView, EngineSnapshot, MediaAction, MediaSnapshot, MediaSourceView, UiState};
+use modv_ui::{
+    CameraModeView, CameraView, EngineSnapshot, MediaAction, MediaSnapshot, MediaSourceView,
+    UiState,
+};
 
-fn camera(id: &str, name: &str, max_width: u32, max_height: u32, max_fps: u32) -> CameraView {
+fn mode(width: u32, height: u32, fps: u32) -> CameraModeView {
+    CameraModeView { width, height, fps }
+}
+
+fn camera(
+    id: &str,
+    name: &str,
+    modes: Vec<CameraModeView>,
+    selected: CameraModeView,
+) -> CameraView {
+    let max = modes
+        .iter()
+        .copied()
+        .max_by_key(|mode| (mode.pixels(), mode.fps));
     CameraView {
         id: id.to_string(),
         name: name.to_string(),
-        max_width,
-        max_height,
-        max_fps,
+        max_width: max.map_or(0, |mode| mode.width),
+        max_height: max.map_or(0, |mode| mode.height),
+        max_fps: max.map_or(0, |mode| mode.fps),
+        modes,
+        selected,
     }
 }
 
@@ -43,9 +61,29 @@ fn demo_snapshot() -> EngineSnapshot {
             available: true,
             error: None,
             cameras: vec![
-                camera("/dev/video0", "Webcam Alpha", 1920, 1080, 60),
-                camera("/dev/video1", "Webcam Beta", 1280, 720, 30),
-                camera("/dev/video2", "Webcam Gamma", 640, 480, 30),
+                camera(
+                    "/dev/video0",
+                    "Webcam Alpha",
+                    vec![
+                        mode(640, 480, 30),
+                        mode(1280, 720, 30),
+                        mode(1920, 1080, 30),
+                        mode(1920, 1080, 60),
+                    ],
+                    mode(1920, 1080, 60),
+                ),
+                camera(
+                    "/dev/video1",
+                    "Webcam Beta",
+                    vec![mode(1024, 768, 30), mode(1280, 720, 30)],
+                    mode(1280, 720, 30),
+                ),
+                camera(
+                    "/dev/video2",
+                    "Webcam Gamma",
+                    vec![mode(640, 480, 30)],
+                    mode(640, 480, 30),
+                ),
             ],
             sources: vec![
                 source("file:a", "file", 0, 1280, 720),
@@ -166,5 +204,76 @@ fn the_sources_list_shows_the_camera_only_index_and_a_stop_button() {
         harness.get_all_by_label("Stop").count(),
         3,
         "every running source has its own stop button"
+    );
+}
+
+#[test]
+fn a_checked_camera_renders_its_resolution_and_frame_rate_controls() {
+    let mut harness = build(demo_snapshot());
+    harness.run();
+
+    // The selected mode is the combo's value; the advertised choices are only
+    // rendered once the popup opens.
+    harness.get_by_value("1920×1080");
+    harness.get_by_value("60 fps");
+    harness.get_by_value("1920×1080").click();
+    harness.run();
+    harness.get_by_label("1280×720");
+    harness.get_by_label("640×480");
+    assert!(
+        harness.query_by_label("1024×768").is_none(),
+        "an unchecked camera does not show its mode controls"
+    );
+}
+
+#[test]
+fn choosing_a_resolution_queues_a_restart_at_that_mode() {
+    let mut harness = build(demo_snapshot());
+    harness.run();
+
+    harness.get_by_value("1920×1080").click();
+    harness.run();
+    harness.get_by_label("1280×720").click();
+    harness.run();
+
+    assert!(
+        harness
+            .state()
+            .media_actions
+            .contains(&MediaAction::StartCamera {
+                id: "/dev/video0".to_string(),
+                width: 1280,
+                height: 720,
+                // The preferred 60 fps is not offered at 1280×720, so the fastest
+                // advertised rate is chosen.
+                fps: 30,
+            }),
+        "choosing a resolution must restart the camera at the new mode, got {:?}",
+        harness.state().media_actions
+    );
+}
+
+#[test]
+fn choosing_a_frame_rate_queues_a_restart_at_that_rate() {
+    let mut harness = build(demo_snapshot());
+    harness.run();
+
+    harness.get_by_value("60 fps").click();
+    harness.run();
+    harness.get_by_label("30 fps").click();
+    harness.run();
+
+    assert!(
+        harness
+            .state()
+            .media_actions
+            .contains(&MediaAction::StartCamera {
+                id: "/dev/video0".to_string(),
+                width: 1920,
+                height: 1080,
+                fps: 30,
+            }),
+        "choosing a frame rate must restart the camera at the new rate, got {:?}",
+        harness.state().media_actions
     );
 }

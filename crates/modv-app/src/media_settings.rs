@@ -231,15 +231,17 @@ pub fn plan_restore(
 /// Rule: an exact match wins; otherwise the same resolution at the closest
 /// advertised frame rate; otherwise the next smaller resolution at its highest
 /// frame rate; otherwise the device's maximum mode. A camera that advertises
-/// no modes keeps its saved mode, or falls back to [`DEFAULT_MODE`].
+/// no modes falls back to [`DEFAULT_MODE`] (1280×720@30), since nothing can be
+/// validated against its caps.
 pub fn resolve_mode(saved: Option<CameraMode>, caps: &[VideoMode]) -> CameraMode {
+    if caps.is_empty() {
+        return DEFAULT_MODE;
+    }
+
     let Some(saved) = saved.filter(|mode| !mode.is_unset()) else {
         return max_mode(caps);
     };
 
-    if caps.is_empty() {
-        return saved;
-    }
     if let Some(exact) = caps.iter().find(|mode| {
         mode.width == saved.width && mode.height == saved.height && mode.fps == saved.fps
     }) {
@@ -600,7 +602,8 @@ mod tests {
             plan_restore(&saved, &BTreeMap::new(), &cameras).starts[0].mode,
             DEFAULT_MODE
         );
-        // A saved mode survives an enumeration that reports no caps.
+        // Nothing can be validated against caps that are not reported, so a
+        // saved mode also falls back to the documented 1280×720@30 default.
         assert_eq!(
             plan_restore(
                 &saved,
@@ -609,7 +612,7 @@ mod tests {
             )
             .starts[0]
                 .mode,
-            mode(800, 600, 24)
+            DEFAULT_MODE
         );
     }
 

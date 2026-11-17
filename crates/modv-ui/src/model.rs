@@ -292,6 +292,121 @@ pub struct CameraView {
     pub max_width: u32,
     pub max_height: u32,
     pub max_fps: u32,
+    /// The modes the device advertises (deduplicated, sorted). Empty when the
+    /// provider reports none.
+    pub modes: Vec<CameraModeView>,
+    /// The resolved selection: the saved mode when it is still advertised,
+    /// else the nearest advertised mode, else 1280×720@30.
+    pub selected: CameraModeView,
+}
+
+/// One advertised camera capture mode (`1920×1080` at `60 fps`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CameraModeView {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+}
+
+impl CameraModeView {
+    /// Pixel count, used for resolution ordering.
+    pub fn pixels(&self) -> u64 {
+        u64::from(self.width) * u64::from(self.height)
+    }
+
+    /// The Resolution picker's label (`1920×1080`).
+    pub fn resolution_label(&self) -> String {
+        format!("{}×{}", self.width, self.height)
+    }
+
+    /// The Frame rate picker's label (`60 fps`).
+    pub fn fps_label(&self) -> String {
+        format!("{} fps", self.fps)
+    }
+}
+
+/// The unique resolutions in `modes`, largest first.
+pub fn unique_resolutions(modes: &[CameraModeView]) -> Vec<(u32, u32)> {
+    let mut resolutions: Vec<(u32, u32)> = Vec::new();
+
+    for mode in modes {
+        if mode.width == 0 || mode.height == 0 {
+            continue;
+        }
+        let resolution = (mode.width, mode.height);
+        if !resolutions.contains(&resolution) {
+            resolutions.push(resolution);
+        }
+    }
+    resolutions.sort_by_key(|&(width, height)| {
+        std::cmp::Reverse((u64::from(width) * u64::from(height), width, height))
+    });
+
+    resolutions
+}
+
+/// The advertised rates for one resolution, fastest first.
+///
+/// `fps == 0` means the device did not report a rate, so it is not a choice.
+pub fn fps_options(modes: &[CameraModeView], width: u32, height: u32) -> Vec<u32> {
+    let mut rates = modes
+        .iter()
+        .filter(|mode| mode.width == width && mode.height == height && mode.fps > 0)
+        .map(|mode| mode.fps)
+        .collect::<Vec<_>>();
+
+    rates.sort_unstable_by(|a, b| b.cmp(a));
+    rates.dedup();
+    rates
+}
+
+/// The camera's maximum mode: highest pixel count, then highest fps.
+pub fn default_camera_mode(modes: &[CameraModeView]) -> Option<CameraModeView> {
+    modes
+        .iter()
+        .filter(|mode| mode.width > 0 && mode.height > 0)
+        .max_by_key(|mode| (mode.pixels(), mode.fps))
+        .copied()
+}
+
+/// The mode for `width`×`height`: `preferred_fps` when advertised, else the
+/// fastest rate at that resolution. `None` when the resolution is not offered.
+pub fn mode_for_resolution(
+    modes: &[CameraModeView],
+    width: u32,
+    height: u32,
+    preferred_fps: u32,
+) -> Option<CameraModeView> {
+    let candidates = modes
+        .iter()
+        .filter(|mode| mode.width == width && mode.height == height)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    if preferred_fps > 0
+        && let Some(exact) = candidates
+            .iter()
+            .find(|mode| mode.fps == preferred_fps)
+            .copied()
+    {
+        return Some(*exact);
+    }
+    if let Some(fastest) = candidates
+        .iter()
+        .filter(|mode| mode.fps > 0)
+        .max_by_key(|mode| mode.fps)
+        .copied()
+    {
+        return Some(*fastest);
+    }
+
+    Some(CameraModeView {
+        width,
+        height,
+        fps: preferred_fps.max(1),
+    })
 }
 
 /// One running media source.
@@ -1039,5 +1154,101 @@ mod tests {
         assert!(snapshot.expression_for_input("input-missing").is_none());
         assert!(snapshot.tween_for_input("input-tween").is_some());
         assert!(snapshot.tween_for_input("input-alpha").is_none());
+    }
+
+    fn mode(width: u32, height: u32, fps: u32) -> CameraModeView {
+        CameraModeView { width, height, fps }
+    }
+
+    #[test]
+    fn resolutions_are_unique_and_sorted_largest_first() {
+        let modes = vec![
+            mode(1280, 720, 30),
+            mode(1920, 1080, 30),
+            mode(1280, 720, 60),
+            mode(640, 480, 30),
+            mode(1920, 1080, 60),
+        ];
+
+        assert_eq!(
+            unique_resolutions(&modes),
+            vec![(1920, 1080), (1280, 720), (640, 480)]
+        );
+        assert_eq!(
+            unique_resolutions(&[mode(0, 0, 30)]),
+            Vec::<(u32, u32)>::new(),
+            "a zero-sized mode is not a resolution"
+        );
+        assert!(unique_resolutions(&[]).is_empty());
+    }
+
+    #[test]
+    fn frame_rates_are_unique_descending_and_ignore_the_unrated_mode() {
+        let modes = vec![
+            mode(1280, 720, 30),
+            mode(1280, 720, 60),
+            mode(1280, 720, 30),
+            mode(1280, 720, 0),
+            mode(1920, 1080, 90),
+        ];
+
+        assert_eq!(fps_options(&modes, 1280, 720), vec![60, 30]);
+        assert_eq!(fps_options(&modes, 1920, 1080), vec![90]);
+        assert_eq!(fps_options(&modes, 640, 480), Vec::<u32>::new());
+        assert_eq!(
+            fps_options(&[mode(1280, 720, 0)], 1280, 720),
+            Vec::<u32>::new(),
+            "fps 0 means the device did not advertise a rate"
+        );
+        assert!(fps_options(&[], 1280, 720).is_empty());
+    }
+
+    #[test]
+    fn the_default_mode_is_the_highest_resolution_then_rate() {
+        let modes = vec![
+            mode(1280, 720, 30),
+            mode(1920, 1080, 30),
+            mode(1920, 1080, 60),
+            mode(1280, 720, 60),
+        ];
+
+        assert_eq!(
+            default_camera_mode(&modes),
+            Some(mode(1920, 1080, 60)),
+            "resolution wins before frame rate"
+        );
+        assert_eq!(default_camera_mode(&[mode(0, 0, 30)]), None);
+        assert_eq!(default_camera_mode(&[]), None);
+    }
+
+    #[test]
+    fn choosing_a_resolution_keeps_the_rate_when_offered_else_takes_the_fastest() {
+        let modes = vec![
+            mode(1920, 1080, 60),
+            mode(1280, 720, 30),
+            mode(1280, 720, 25),
+            mode(640, 480, 0),
+        ];
+
+        assert_eq!(
+            mode_for_resolution(&modes, 1920, 1080, 30),
+            Some(mode(1920, 1080, 60)),
+            "the requested rate is not offered, so the fastest wins"
+        );
+        assert_eq!(
+            mode_for_resolution(&modes, 1920, 1080, 60),
+            Some(mode(1920, 1080, 60))
+        );
+        assert_eq!(
+            mode_for_resolution(&modes, 1280, 720, 25),
+            Some(mode(1280, 720, 25)),
+            "an advertised preferred rate is kept"
+        );
+        assert_eq!(
+            mode_for_resolution(&modes, 640, 480, 30),
+            Some(mode(640, 480, 30)),
+            "an unrated mode keeps the preferred rate"
+        );
+        assert_eq!(mode_for_resolution(&modes, 800, 600, 30), None);
     }
 }

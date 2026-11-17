@@ -1513,9 +1513,9 @@ fn media_camera_row(
             if checked {
                 state.push_media_action(MediaAction::StartCamera {
                     id: camera.id.clone(),
-                    width: camera.max_width,
-                    height: camera.max_height,
-                    fps: camera.max_fps,
+                    width: camera.selected.width,
+                    height: camera.selected.height,
+                    fps: camera.selected.fps,
                 });
             } else {
                 state.push_media_action(MediaAction::Stop {
@@ -1534,12 +1534,19 @@ fn media_camera_row(
                     .color(theme::ACCENT),
             )
             .on_hover_text(format!("Webcam index #{index} (the module's Camera prop)"));
-            ui.label(
-                egui::RichText::new(&camera.id)
-                    .monospace()
-                    .size(8.5)
-                    .color(theme::MUTED),
-            );
+        }
+        ui.label(
+            egui::RichText::new(&camera.id)
+                .monospace()
+                .size(8.5)
+                .color(theme::MUTED),
+        );
+    });
+
+    if let Some(position) = position {
+        ui.horizontal(|ui| {
+            ui.add_space(18.0);
+            media_camera_mode_controls(ui, camera, state);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_move_later = position + 1 < running.len();
@@ -1571,15 +1578,109 @@ fn media_camera_row(
                     });
                 }
             });
-        } else {
-            ui.label(
-                egui::RichText::new(&camera.id)
+        });
+    }
+}
+
+/// The Resolution and Frame rate pickers for a running camera.
+///
+/// Both lists come from the device's advertised caps
+/// ([`unique_resolutions`]/[`fps_options`]); a change queues a
+/// [`MediaAction::StartCamera`] so the shell restarts the source in the chosen
+/// mode and rewrites the saved mode. A camera that reports no caps keeps the
+/// documented 1280×720@30 fallback and says so instead of offering fake modes.
+fn media_camera_mode_controls(
+    ui: &mut egui::Ui,
+    camera: &crate::model::CameraView,
+    state: &mut UiState,
+) {
+    let resolutions = crate::model::unique_resolutions(&camera.modes);
+    if resolutions.is_empty() {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · mode not reported",
+                camera.selected.resolution_label()
+            ))
+            .monospace()
+            .size(8.5)
+            .color(theme::MUTED),
+        )
+        .on_hover_text(
+            "The camera did not advertise capture modes; the engine asks for 1280×720@30",
+        );
+        return;
+    }
+
+    let mut chosen = camera.selected;
+    let mut changed = false;
+
+    egui::ComboBox::from_id_salt(("camera-resolution", &camera.id))
+        .selected_text(
+            egui::RichText::new(chosen.resolution_label())
+                .monospace()
+                .size(9.5),
+        )
+        .width(78.0)
+        .show_ui(ui, |ui| {
+            for (width, height) in resolutions {
+                let label = crate::model::CameraModeView {
+                    width,
+                    height,
+                    fps: 0,
+                }
+                .resolution_label();
+                let selected = width == chosen.width && height == chosen.height;
+                if ui.selectable_label(selected, label).clicked()
+                    && let Some(mode) =
+                        crate::model::mode_for_resolution(&camera.modes, width, height, chosen.fps)
+                {
+                    chosen = mode;
+                    changed = true;
+                }
+            }
+        })
+        .response
+        .on_hover_text("Capture resolution");
+
+    let rates = crate::model::fps_options(&camera.modes, chosen.width, chosen.height);
+    if rates.is_empty() {
+        ui.label(
+            egui::RichText::new(format!("{} · rate not reported", chosen.fps_label()))
+                .monospace()
+                .size(8.5)
+                .color(theme::MUTED),
+        );
+    } else {
+        egui::ComboBox::from_id_salt(("camera-fps", &camera.id))
+            .selected_text(
+                egui::RichText::new(chosen.fps_label())
                     .monospace()
-                    .size(8.5)
-                    .color(theme::MUTED),
-            );
-        }
-    });
+                    .size(9.5),
+            )
+            .width(58.0)
+            .show_ui(ui, |ui| {
+                for fps in rates {
+                    if ui
+                        .selectable_label(chosen.fps == fps, format!("{fps} fps"))
+                        .clicked()
+                    {
+                        chosen.fps = fps;
+                        changed = true;
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Capture frame rate");
+    }
+
+    if changed {
+        state.push_media_action(MediaAction::StartCamera {
+            id: camera.id.clone(),
+            width: chosen.width,
+            height: chosen.height,
+            fps: chosen.fps,
+        });
+    }
 }
 
 fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {

@@ -24,11 +24,12 @@ use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_pr
 use modv_render::wgpu;
 use modv_ui::model::ExpressionView;
 use modv_ui::{
-    AudioDeviceView, AudioSelectionView, AudioView, CameraView, EngineHealth, EngineSnapshot,
-    GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView, MidiDeviceView,
-    MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest, PreviewTexture,
-    PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView, TextureSourceView,
-    TweenView, UiAction, UiCommand, UiState, gallery_preview_key, scene_preview_key,
+    AudioDeviceView, AudioSelectionView, AudioView, CameraModeView, CameraView, EngineHealth,
+    EngineSnapshot, GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView,
+    MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
+    PreviewTexture, PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView,
+    TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
+    scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -1698,12 +1699,36 @@ impl NativeApp {
                 .cloned()
                 .map(|camera| {
                     let mode = camera.max_mode();
+                    // The picker shows the resolved selection: the saved mode
+                    // when the device still advertises it, else the nearest one.
+                    let selected = crate::media_settings::resolve_mode(
+                        self.media_settings.mode_for(&camera.id),
+                        &camera.caps,
+                    );
+                    let mut modes = camera
+                        .caps
+                        .iter()
+                        .map(|mode| CameraModeView {
+                            width: mode.width,
+                            height: mode.height,
+                            fps: mode.fps,
+                        })
+                        .collect::<Vec<_>>();
+                    modes.sort_by_key(|mode| (mode.width, mode.height, mode.fps));
+                    modes.dedup();
+
                     CameraView {
                         id: camera.id,
                         name: camera.name,
                         max_width: mode.map_or(0, |mode| mode.width),
                         max_height: mode.map_or(0, |mode| mode.height),
                         max_fps: mode.map_or(0, |mode| mode.fps),
+                        modes,
+                        selected: CameraModeView {
+                            width: selected.width,
+                            height: selected.height,
+                            fps: selected.fps,
+                        },
                     }
                 })
                 .collect(),

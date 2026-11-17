@@ -256,6 +256,9 @@ impl MediaHub {
     }
 
     /// Start (or replace) `source_id`, looping video files by default.
+    ///
+    /// The returned index is the camera-only Webcam index (1-based, 0 for a
+    /// file), matching [`Self::statuses`] and the module's `camera` prop.
     pub fn start(
         &mut self,
         source_id: &str,
@@ -318,7 +321,7 @@ impl MediaHub {
         );
         self.apply_looping(source_id, looping);
 
-        let index = self.index_of(source_id).unwrap_or(1);
+        let index = self.camera_index_of(source_id).unwrap_or(0);
 
         eprintln!(
             "engine: INFO video source {source_id:?} started (index {index}, {:?} {}x{}@{})",
@@ -635,9 +638,11 @@ impl MediaHub {
         (number.round() as i64).max(1)
     }
 
-    /// 1-based position of `source_id` in the start order.
-    fn index_of(&self, source_id: &str) -> Option<usize> {
-        self.order
+    /// 1-based position of `source_id` in the camera-only Webcam order.
+    ///
+    /// `None` for a file (which the Webcam module cannot draw) or an unknown id.
+    fn camera_index_of(&self, source_id: &str) -> Option<usize> {
+        self.camera_ids()
             .iter()
             .position(|id| id == source_id)
             .map(|position| position + 1)
@@ -1270,6 +1275,32 @@ mod tests {
 
         assert!(!media.set_camera_order(&["camera:missing".to_string()]));
         assert_eq!(media.ids(), ["camera:b", "file:a", "camera:a"]);
+    }
+
+    #[test]
+    fn only_camera_like_sources_have_a_webcam_index() {
+        let media = fake_hub(&[
+            ("camera:a", camera_kind("a")),
+            (
+                "file:a",
+                VideoSourceKind::File {
+                    uri: "file:///a.mp4".to_string(),
+                },
+            ),
+            ("screen:s", VideoSourceKind::Screen { node_id: 3 }),
+            (
+                "test-pattern:smpte",
+                VideoSourceKind::TestPattern {
+                    pattern: TestPattern::Smpte,
+                },
+            ),
+        ]);
+
+        assert_eq!(media.camera_index_of("camera:a"), Some(1));
+        assert_eq!(media.camera_index_of("file:a"), None);
+        assert_eq!(media.camera_index_of("screen:s"), Some(2));
+        assert_eq!(media.camera_index_of("test-pattern:smpte"), Some(3));
+        assert_eq!(media.camera_index_of("camera:missing"), None);
     }
 
     #[test]
