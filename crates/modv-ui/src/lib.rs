@@ -14,10 +14,12 @@
 //! - [`shell`] — window chrome, menus, status bar and panel composition
 //! - [`widgets`] — the prop-driven control set
 //! - [`panels`] — dockable panel implementations
-//! - [`theme`] — the dark theme ported from the legacy CSS
+//! - [`theme`] — the black/neon-green theme and type scale
+//! - [`fonts`] — the bundled IBM Plex faces
 
 #![forbid(unsafe_code)]
 
+pub mod fonts;
 pub mod gallery_drag;
 pub mod layout;
 pub mod model;

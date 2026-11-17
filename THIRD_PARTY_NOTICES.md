@@ -83,6 +83,26 @@ Other Point10 textures use ambientCG assets (CC0; e.g. `tinore`, `rubber002`,
 NASA-derived Earth/Milky Way imagery. Where an asset's provenance or license
 is unclear it is not relicensed under MIT.
 
+## Fonts
+
+The native shell (`crates/modv-ui/assets/fonts/`) bundles four IBM Plex faces:
+IBM Plex Sans Regular and SemiBold, and IBM Plex Mono Regular and Medium. They
+are licensed under the **SIL Open Font License, Version 1.1** (OFL-1.1); the
+full licence text is included alongside them in
+`crates/modv-ui/assets/fonts/OFL.txt`. The OFL permits bundling and
+redistribution but forbids selling the fonts on their own; modified versions
+must stay under the OFL and may not use the reserved font name "Plex". The
+fonts are not relicensed under the MIT License of VmodV's own code.
+
+| Files | Family / weight | Upstream | License |
+| --- | --- | --- | --- |
+| `crates/modv-ui/assets/fonts/IBMPlexSans-Regular.ttf`, `IBMPlexSans-SemiBold.ttf` | IBM Plex Sans Regular / SemiBold | [IBM/plex](https://github.com/IBM/plex) | SIL OFL 1.1 |
+| `crates/modv-ui/assets/fonts/IBMPlexMono-Regular.ttf`, `IBMPlexMono-Medium.ttf` | IBM Plex Mono Regular / Medium | [IBM/plex](https://github.com/IBM/plex) | SIL OFL 1.1 |
+
+egui's bundled Ubuntu/Hack faces remain in the fallback chains for glyphs the
+Plex subsets do not cover; their notice is in the Rust dependency section
+(`epaint_default_fonts`).
+
 ## Rust engine dependencies
 
 The Rust workspace (`crates/`) statically links third-party crates into the
