@@ -57,11 +57,15 @@ Last updated: 2026-11-17.
   - Written verdict: **GO** for the framework, with the lavapipe content
     number (57 fps) recorded as the one caveat; the reference GPU is well
     above the 60 fps target.
-- `cargo check -p modv-app --bins` clean (apart from in-flight review fixes in
-  other files).
-- The full `modv-app` suite is not green in this working tree yet: the
-  expressions hardening and Scene-cell review fixes are landing concurrently;
-  rerun `make engine-test` after they settle.
+- `cargo test -p modv-engine --lib`: **459 passed**.
+- `cargo test -p modv-app --lib`: **414 passed** (serial; GPU-safe).
+- `cargo test -p modv-ui`: 25 unit + 3 widget smoke + 1 golden snapshot.
+- `make engine-lint` (workspace clippy `-D warnings` + fmt): clean.
+- Full workspace run: 789 passed, 1 failed — `point10::scene_tests::
+  smoke_room_volume_is_structured` (the fire covers the frame). It reproduces
+  on both radv and lavapipe with the same Point10 code as the hybrid baseline
+  (`cf9be174`); it is not introduced by the native shell. Tracked as a known
+  pre-existing GPU-test failure.
 
 ## Next slices
 
@@ -92,8 +96,29 @@ Last updated: 2026-11-17.
   strict stamped capture, default-Scene bass-link smoothing ids, image decoder
   header probe, `removeGroup` module release, stale support/docs claims, ISF
   `three` category aliases and the literal `\n` comment.
-- Still in flight: the expression sandbox AST allowlist/budget hardening
-  (uncommitted at the time of this note).
+- Expressions sandbox hardened (`b84553ac`): AST allowlist/validator replaces
+  the bypassable denylist, constructor/prototype/eval/globalThis/import/
+  require/allocating-method/BigInt/regex/loop shapes are rejected, the
+  compiled-function global is no longer discoverable, and normal preset
+  expressions are pinned. Boa 0.22 offers no wall-clock budget on the
+  compiled-handle call path; the structural caps and allowlist are the bound,
+  documented in the module.
+
+## Known issues / not yet done
+
+- **Point10 volume GPU test**: `smoke_room_volume_is_structured` fails on this
+  host on both radv and lavapipe; the scene code is unchanged from the hybrid
+  baseline. Not a native-shell regression; left for a rendering pass.
+- **P5 docking** is not started; the shell uses fixed panels.
+- **P6** has preset load/save (`--preset`) but no media watcher, file dialogs
+  or third-party ISF watch/registration.
+- **P7** has expressions + native audio but no Boa plugin host or `midir`.
+- **P9** packaging/CI and the Electron deletion are deliberately out of scope
+  for this run.
+- Native output windows are single (`output-0`); the engine `windows/*`
+  registry supports more, and the window-state map is ready for more keys.
+- There is no structured daily logger in the native shell yet; engine/app
+  lines still go to stderr.
 
 ## Constraints honoured
 
