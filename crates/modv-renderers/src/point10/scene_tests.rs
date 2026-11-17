@@ -693,6 +693,30 @@ fn dvd_room_scene() -> crate::point10::scenes::dvd_room::DvdRoom {
     crate::point10::scenes::dvd_room::DvdRoom::with_grid(volume_test_grid())
 }
 
+/// Mean composite luminance (colour × alpha — what the layer shows over
+/// black) of the dimmest and the brightest `fraction` of the frame.
+///
+/// The pair encodes "a bounded room, not a flat sheet": the fire's core must
+/// dominate the room's dim outer air. A fog constant, an ungated emissive
+/// floor or a broken density falloff saturates the volume uniformly and
+/// collapses the ratio towards one; a dead emitter collapses both to zero.
+fn luminance_extremes(pixels: &[u8], fraction: f32) -> (f32, f32) {
+    let mut values: Vec<f32> = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| {
+            (0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32)
+                * (pixel[3] as f32 / 255.0)
+        })
+        .collect();
+    values.sort_by(|a, b| a.total_cmp(b));
+    let take = ((values.len() as f32 * fraction).ceil() as usize).clamp(1, values.len());
+    let dim = values.iter().take(take).sum::<f32>() / take as f32;
+    let bright = values[values.len() - take..].iter().sum::<f32>() / take as f32;
+    (dim, bright)
+}
+
 /// Fraction of the frame that stays dark once composited over black.
 ///
 /// The JS's `alpha = max(rgb)` layer is usually semi-transparent, so the
@@ -849,13 +873,23 @@ fn smoke_room_volume_is_structured() {
         red / drawn,
         blue / drawn
     );
-    // Fills the room but leaves the frame dark around the fire (the glass box
-    // and the empty grid read as background).
-    let dark = dark_fraction(&pixels);
+    // Fills the room with a *bounded* glow. At this square frame the sim box
+    // covers the whole view (the glass top is stretched past the frame and
+    // the box's near face overflows it — the production 16:9 frame keeps
+    // dark bands at the sides), so once the curl-noise precompute actually
+    // runs — like the JS's init-time curl pass, fixed by the "real uniforms"
+    // change — the developed turbulent dye field legitimately tints every ray
+    // through the closed room, and no pixel stays dark. The old
+    // `dark_fraction > 0.15` was calibrated against the pre-curl field, which
+    // only stayed compact because the precompute never ran. The invariant
+    // the JS actually guarantees is the gradient: the fire's core is several
+    // times brighter than the room's dim bounds (measured: brightest 5% ≈
+    // 248 vs dimmest 5% ≈ 31 on lavapipe; a flat sheet scores ~1, a dead
+    // emitter ~0/0).
+    let (dim, bright) = luminance_extremes(&pixels, 0.05);
     assert!(
-        dark > 0.15,
-        "the fire covers the whole frame (only {:.0}% dark) — the room bounds are lost",
-        dark * 100.0
+        bright > dim * 3.0,
+        "the glow is a flat sheet (brightest 5% {bright:.1} vs dimmest 5% {dim:.1})"
     );
     assert_alpha_is_max_rgb(&pixels);
     assert_translucent_layer(&pixels);
