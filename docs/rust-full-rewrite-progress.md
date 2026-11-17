@@ -34,7 +34,10 @@ Last updated: 2026-11-17.
   isolated preview at most every 150 ms; the shell answers one per frame,
   uploads it to a bounded 32-entry egui texture LRU and the UI draws it. The
   live compositor main texture is registered with `egui-wgpu` directly (no
-  readback).
+  readback). The read-back pixels are premultiplied RGBA, so the upload path
+  un-premultiplies them (`modv_ui::un_premultiply_rgba`) before creating the
+  egui texture — the old flatten-to-opaque kept the alpha-scaled RGB and
+  turned transparent halos into dark fringes over light backgrounds.
 - `window_state.rs` reads/writes the same `<userData>/window-state.json` as
   the Electron app, with atomic writes and the JS normalisation rules.
 - `make native` / `make native-debug` run the native shell with the host

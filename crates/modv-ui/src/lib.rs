@@ -30,7 +30,7 @@ pub use model::{
     EngineSnapshot, ExpressionView, GroupView, InputLinkView, MediaAction, MediaSnapshot,
     MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView,
     PreviewRequest, PreviewTexture, PropComponentView, PropView, SceneCellView, SceneView,
-    TextureSourceView, TweenView, gallery_preview_key, scene_preview_key,
+    TextureSourceView, TweenView, gallery_preview_key, scene_preview_key, un_premultiply_rgba,
 };
 pub use state::{
     AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiAction, UiCommand, UiState,

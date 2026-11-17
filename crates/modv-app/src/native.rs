@@ -1091,12 +1091,15 @@ impl NativeApp {
             }
             return;
         }
-        // The engine's preview readbacks are premultiplied; flatten onto
-        // opaque black before handing them to egui, which expects straight
-        // alpha. This is the same flatten the main preview path applies.
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel[3] = 255;
-        }
+        // The engine's preview readbacks are premultiplied RGBA; egui CPU
+        // textures take straight alpha (`ColorImage::from_rgba_unmultiplied`
+        // premultiplies on upload). Undo the multiplication instead of the
+        // old flatten-to-opaque, which kept the scaled RGB with alpha forced
+        // to 255 and turned transparent halos into dark fringes over light
+        // panel backgrounds. GPU-side previews (the main output and the row
+        // monitors) skip this entirely: they are registered as native wgpu
+        // textures and egui-wgpu blends premultiplied content directly.
+        modv_ui::un_premultiply_rgba(&mut pixels);
         let image =
             egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &pixels);
         if let Some(entry) = self.preview_textures.get_mut(&key) {

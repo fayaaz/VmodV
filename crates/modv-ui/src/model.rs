@@ -229,6 +229,34 @@ pub fn gallery_preview_key(module_name: &str) -> String {
     format!("module:{module_name}")
 }
 
+/// Undo premultiplication on a tightly packed RGBA8 pixel buffer.
+///
+/// The compositor's read-backs (`Compositor::read_main_rgba8` and the
+/// isolated Gallery/Scene preview renderers) produce **premultiplied**
+/// RGBA — every RGB sample already scaled by its alpha. egui CPU textures
+/// are created from straight alpha (`ColorImage::from_rgba_unmultiplied`
+/// premultiplies on upload), so the preview upload path converts first:
+/// shipping premultiplied bytes as straight alpha (or flattening alpha to
+/// opaque, the old behaviour) renders transparent halos as dark fringes.
+///
+/// Opaque pixels are unchanged and a zero-alpha pixel stays zero (the
+/// premultiplied contract already makes it `(0,0,0,0)`). Conversion is
+/// round-to-nearest and clamped, so a malformed sample above its alpha
+/// cannot wrap.
+pub fn un_premultiply_rgba(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let alpha = pixel[3];
+        if alpha == 0 || alpha == 255 {
+            continue;
+        }
+        let alpha = u32::from(alpha);
+        for sample in pixel.iter_mut().take(3) {
+            let value = u32::from(*sample);
+            *sample = ((value * 255 + alpha / 2) / alpha).min(255) as u8;
+        }
+    }
+}
+
 /// The native MediaHub's camera and running-source state.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MediaSnapshot {
@@ -614,6 +642,83 @@ pub struct EngineHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `round(a * alpha / 255)`, the premultiplication the compositor applies.
+    fn premultiply(straight: [u8; 4]) -> [u8; 4] {
+        let alpha = u32::from(straight[3]);
+        let mut out = straight;
+        for channel in 0..3 {
+            let value = u32::from(straight[channel]);
+            out[channel] = ((value * alpha + 127) / 255).min(255) as u8;
+        }
+        out
+    }
+
+    #[test]
+    fn un_premultiply_restores_rgb_scaled_by_alpha() {
+        // Straight (200, 100, 50) at alpha 51 premultiplies exactly to
+        // (40, 20, 10): 200 * 51 / 255 == 40, no rounding on either leg.
+        let mut pixels = [40, 20, 10, 51];
+        un_premultiply_rgba(&mut pixels);
+        assert_eq!(pixels, [200, 100, 50, 51]);
+    }
+
+    #[test]
+    fn un_premultiply_keeps_opaque_pixels_unchanged() {
+        let mut pixels = [200, 100, 50, 255];
+        un_premultiply_rgba(&mut pixels);
+        assert_eq!(pixels, [200, 100, 50, 255], "alpha 255 needs no scaling");
+    }
+
+    #[test]
+    fn un_premultiply_keeps_zero_alpha_pixels_zero() {
+        let mut pixels = [0, 0, 0, 0];
+        un_premultiply_rgba(&mut pixels);
+        assert_eq!(pixels, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn un_premultiply_round_trips_a_premultiplied_preview() {
+        // The pixel-level regression the preview upload path needs: RGB
+        // scaled by alpha before the conversion is restored after it. Both
+        // legs round to nearest, so an arbitrary value can drift by ±2; the
+        // first triple is chosen to be exact on both legs.
+        for straight in [
+            [200, 100, 50, 51],
+            [255, 128, 0, 51],
+            [1, 2, 3, 51],
+            [17, 200, 99, 51],
+        ] {
+            let mut round = premultiply(straight);
+            un_premultiply_rgba(&mut round);
+            for channel in 0..4 {
+                assert!(
+                    (i16::from(round[channel]) - i16::from(straight[channel])).abs() <= 2,
+                    "channel {channel}: {round:?} did not restore {straight:?}"
+                );
+            }
+        }
+
+        // Exact round trip for the well-behaved triple: 200·51/255 == 40.
+        let mut round = premultiply([200, 100, 50, 51]);
+        un_premultiply_rgba(&mut round);
+        assert_eq!(round, [200, 100, 50, 51]);
+    }
+
+    #[test]
+    fn un_premultiply_rounds_to_nearest_and_clamps() {
+        // alpha 3: (1 * 255 + 1) / 3 == 85 (rounded to nearest).
+        let mut pixels = [1, 1, 1, 3];
+        un_premultiply_rgba(&mut pixels);
+        assert_eq!(pixels, [85, 85, 85, 3]);
+
+        // A malformed sample above its alpha clamps to 255 instead of
+        // wrapping — premultiplied input can never do this, but the helper
+        // must stay total.
+        let mut malformed = [200, 200, 200, 1];
+        un_premultiply_rgba(&mut malformed);
+        assert_eq!(malformed, [255, 255, 255, 1]);
+    }
 
     fn device(id: &str, name: &str) -> AudioDeviceView {
         AudioDeviceView {
