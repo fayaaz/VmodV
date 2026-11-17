@@ -45,6 +45,20 @@ fn every_strip_tab_has_a_detach_control() {
 }
 
 #[test]
+fn the_ndi_and_osc_tabs_sit_at_the_end_of_the_strip() {
+    let mut harness = app();
+    harness.run();
+
+    harness.get_by_label("NDI").click();
+    harness.run();
+    assert_eq!(harness.state().side_panel_tab, SidePanelTab::Ndi);
+
+    harness.get_by_label("OSC").click();
+    harness.run();
+    assert_eq!(harness.state().side_panel_tab, SidePanelTab::Osc);
+}
+
+#[test]
 fn detaching_the_inspector_floats_it_and_selects_the_next_tab() {
     let mut harness = app();
     harness.run();

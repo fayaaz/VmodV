@@ -329,8 +329,8 @@ mod tests {
 
         // Wrapping from the end of the strip reaches the first remaining tab.
         let mut layout = TabLayout::default();
-        let mut active = SidePanelTab::Midi;
-        layout.place(SidePanelTab::Midi, TabPlacement::Docked, &mut active);
+        let mut active = SidePanelTab::Osc;
+        layout.place(SidePanelTab::Osc, TabPlacement::Docked, &mut active);
         assert_eq!(active, SidePanelTab::Inspector);
     }
 
@@ -362,7 +362,7 @@ mod tests {
         assert!(!layout.has_strip_tabs());
         assert_eq!(
             active,
-            SidePanelTab::Midi,
+            SidePanelTab::Osc,
             "with no strip tab left there is nothing to fall back to; the strip hides"
         );
         assert!(layout.next_strip_tab(SidePanelTab::Inspector).is_none());

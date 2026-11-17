@@ -18,7 +18,8 @@ use crate::model::{
 };
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
-    GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState, filter_gallery_modules,
+    DEFAULT_OSC_HOST, GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState,
+    filter_gallery_modules,
 };
 use crate::theme;
 use crate::widgets::input_link::{link_editor_window, link_row};
@@ -1040,6 +1041,8 @@ fn tab_content(
         SidePanelTab::Info => info_panel(ui, snapshot),
         SidePanelTab::Plugins => plugins_panel(ui),
         SidePanelTab::Midi => midi_panel(ui, snapshot, state),
+        SidePanelTab::Ndi => ndi_panel(ui, snapshot, state),
+        SidePanelTab::Osc => osc_panel(ui, snapshot, state),
     }
 }
 
@@ -1443,6 +1446,424 @@ fn midi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
             }
         }
         ui.separator();
+    }
+}
+
+/// The NDI tab: availability, the output sender, discovery and receivers.
+///
+/// Ported from `InputDeviceConfig/NDI.vue`. The values come from the engine's
+/// `NdiRuntime` (the same state `ndi/getState` returns), refreshed at 1 Hz by
+/// `modv-app` while the tab is visible.
+fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let ndi = &snapshot.ndi;
+    let available = ndi.can_enable_output();
+
+    if let Some(warning) = ndi.availability_warning() {
+        ui.label(
+            egui::RichText::new("NDI is unavailable")
+                .strong()
+                .color(theme::DANGER),
+        );
+        ui.label(egui::RichText::new(warning).size(10.0).color(theme::MUTED));
+    }
+    if let Some(warning) = ndi.sender_warning() {
+        ui.colored_label(theme::DANGER, warning);
+    }
+
+    ui.label(egui::RichText::new("NDI OUTPUT").strong().size(9.0));
+    let output = &ndi.output;
+    let mut enabled = output.enabled;
+    if ui
+        .add_enabled(
+            available,
+            egui::Checkbox::new(&mut enabled, "Enable Output"),
+        )
+        .changed()
+    {
+        state.push_action("ndi/SET_OUTPUT_ENABLED", serde_json::json!(enabled));
+    }
+
+    let mut submitted_name = None;
+    {
+        let draft = state
+            .ndi_name_draft
+            .get_or_insert_with(|| output.name.clone());
+        ui.horizontal(|ui| {
+            ui.label("Output Name");
+            let response = ui.add_enabled(
+                !output.enabled && available,
+                egui::TextEdit::singleline(draft).desired_width(160.0),
+            );
+            if response.lost_focus() {
+                submitted_name = Some(draft.clone());
+            }
+        });
+    }
+    if let Some(name) = submitted_name {
+        if name != output.name {
+            state.push_action("ndi/SET_OUTPUT_NAME", serde_json::json!(name));
+        }
+        state.ndi_name_draft = None;
+    }
+    if output.enabled {
+        ui.label(
+            egui::RichText::new("Disable the output to rename it")
+                .size(9.0)
+                .color(theme::MUTED),
+        );
+    }
+
+    let mut follow_size = output.follow_output_size;
+    if ui
+        .add_enabled(
+            available,
+            egui::Checkbox::new(&mut follow_size, "Follow ModV output size"),
+        )
+        .changed()
+    {
+        state.push_action(
+            "ndi/SET_FOLLOW_MODV_OUTPUT_SIZE",
+            serde_json::json!(follow_size),
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label("Resolution");
+        if follow_size {
+            ui.label(egui::RichText::new(ndi.output_size_label(snapshot.resolution)).monospace());
+        } else {
+            let mut width = output.width;
+            if ui
+                .add_enabled(
+                    available,
+                    egui::DragValue::new(&mut width).range(1..=8192).speed(1.0),
+                )
+                .changed()
+            {
+                state.push_action("ndi/SET_OUTPUT_SIZE", serde_json::json!({ "width": width }));
+            }
+            ui.label("×");
+            let mut height = output.height;
+            if ui
+                .add_enabled(
+                    available,
+                    egui::DragValue::new(&mut height).range(1..=8192).speed(1.0),
+                )
+                .changed()
+            {
+                state.push_action(
+                    "ndi/SET_OUTPUT_SIZE",
+                    serde_json::json!({ "height": height }),
+                );
+            }
+        }
+    });
+
+    let mut follow_fps = output.follow_fps;
+    if ui
+        .add_enabled(
+            available,
+            egui::Checkbox::new(&mut follow_fps, "Follow ModV frame rate"),
+        )
+        .changed()
+    {
+        state.push_action("ndi/SET_FOLLOW_MODV_FPS", serde_json::json!(follow_fps));
+    }
+    ui.horizontal(|ui| {
+        ui.label("Frame rate");
+        if follow_fps {
+            ui.label(
+                egui::RichText::new(ndi.output_fps_label(f64::from(snapshot.fps)))
+                    .monospace()
+                    .size(9.5),
+            );
+        } else {
+            let mut fps = output.target_fps;
+            if ui
+                .add_enabled(
+                    available,
+                    egui::DragValue::new(&mut fps)
+                        .range(1.0..=240.0)
+                        .speed(1.0)
+                        .suffix(" fps"),
+                )
+                .changed()
+            {
+                state.push_action("ndi/SET_OUTPUT_TARGET_FPS", serde_json::json!(fps));
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        let colour = if ndi.sender.running {
+            theme::OK
+        } else {
+            theme::MUTED
+        };
+        let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+        ui.painter().circle_filled(rect.center(), 4.0, colour);
+        ui.label(
+            egui::RichText::new(ndi.sender_status_label())
+                .size(10.0)
+                .color(colour),
+        );
+    });
+    if let Some(path) = &ndi.library_path {
+        ui.label(
+            egui::RichText::new(format!("libndi: {path}"))
+                .monospace()
+                .size(8.5)
+                .color(theme::MUTED),
+        );
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new("NDI SOURCES").strong().size(9.0));
+    let mut show_local = ndi.show_local_sources;
+    if ui
+        .add_enabled(
+            available,
+            egui::Checkbox::new(&mut show_local, "Show local sources"),
+        )
+        .changed()
+    {
+        state.push_action(
+            "ndi/setDiscoveryOptions",
+            serde_json::json!({ "showLocalSources": show_local }),
+        );
+    }
+    if ui
+        .add_enabled(
+            available && !ndi.discovering,
+            egui::Button::new(ndi.discover_label()),
+        )
+        .on_hover_text("Search the network for NDI sources")
+        .clicked()
+    {
+        state.push_action("ndi/discoverSources", serde_json::json!({}));
+    }
+    if ndi.sources.is_empty() {
+        ui.label(
+            egui::RichText::new(
+                "No NDI sources yet. Click Discover Sources to search the network.",
+            )
+            .size(10.0)
+            .color(theme::MUTED),
+        );
+    }
+    for source in &ndi.sources {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(&source.name).size(11.0));
+                ui.label(
+                    egui::RichText::new(&source.url_address)
+                        .monospace()
+                        .size(8.5)
+                        .color(theme::MUTED),
+                );
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        available,
+                        egui::Button::new(egui::RichText::new("Receive source").size(9.0)).small(),
+                    )
+                    .on_hover_text("Create a receiver for this source")
+                    .clicked()
+                {
+                    state.push_action(
+                        "ndi/createReceiver",
+                        serde_json::json!({
+                            "source": {
+                                "name": source.name,
+                                "urlAddress": source.url_address,
+                            },
+                        }),
+                    );
+                }
+            });
+        });
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new("NDI RECEIVERS").strong().size(9.0));
+    if ndi.receivers.is_empty() {
+        ui.label(
+            egui::RichText::new("No NDI receivers.")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    }
+    for receiver in &ndi.receivers {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(receiver.title()).size(11.0));
+                ui.label(
+                    egui::RichText::new(receiver.status_label())
+                        .monospace()
+                        .size(8.5)
+                        .color(theme::MUTED),
+                );
+                if let Some(error) = &receiver.error {
+                    ui.colored_label(theme::DANGER, error);
+                }
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .small_button("Remove receiver")
+                    .on_hover_text("Stop consuming this source")
+                    .clicked()
+                {
+                    state.push_action(
+                        "ndi/removeReceiver",
+                        serde_json::json!({ "receiverId": receiver.id }),
+                    );
+                }
+                if ui
+                    .small_button(receiver.toggle_label())
+                    .on_hover_text(if receiver.enabled {
+                        "Stop receiving frames"
+                    } else {
+                        "Connect to the source"
+                    })
+                    .clicked()
+                {
+                    let action = if receiver.enabled {
+                        "ndi/disableReceiver"
+                    } else {
+                        "ndi/enableReceiver"
+                    };
+                    state.push_action(action, serde_json::json!({ "receiverId": receiver.id }));
+                }
+            });
+        });
+    }
+}
+
+/// The OSC tab: UDP listeners and the latest `osc.data` values.
+///
+/// Electron creates one server at startup and the Input Link OSC source reads
+/// `osc.data.<address>`; the native shell does the same and this panel makes
+/// both visible. The address tree is refreshed at 1 Hz by `modv-app` while the
+/// tab is visible.
+fn osc_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let osc = &snapshot.osc;
+
+    ui.label(egui::RichText::new("OSC LISTENERS").strong().size(9.0));
+    ui.label(
+        egui::RichText::new("Input Links with the OSC source read osc.data.<address>.")
+            .size(9.0)
+            .color(theme::MUTED),
+    );
+    if osc.servers.is_empty() {
+        ui.label(
+            egui::RichText::new("No OSC listeners.")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    }
+    for server in &osc.servers {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(server.title()).size(11.0));
+                if server.title() != server.address_label() {
+                    ui.label(
+                        egui::RichText::new(server.address_label())
+                            .monospace()
+                            .size(8.5)
+                            .color(theme::MUTED),
+                    );
+                }
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .small_button("Remove")
+                    .on_hover_text("Stop this listener")
+                    .clicked()
+                {
+                    state.push_action("osc/removeServer", serde_json::json!({ "id": server.id }));
+                }
+            });
+        });
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Host");
+        ui.add(
+            egui::TextEdit::singleline(&mut state.osc_host_draft)
+                .desired_width(90.0)
+                .hint_text(DEFAULT_OSC_HOST),
+        );
+        ui.label("Port");
+        ui.add(
+            egui::TextEdit::singleline(&mut state.osc_port_draft)
+                .desired_width(56.0)
+                .hint_text("3333"),
+        );
+        if ui
+            .button("Add listener")
+            .on_hover_text("Bind another UDP OSC listener")
+            .clicked()
+        {
+            let host = state.osc_host_draft.trim();
+            let host = if host.is_empty() {
+                DEFAULT_OSC_HOST.to_string()
+            } else {
+                host.to_string()
+            };
+            match state.osc_port_draft.trim().parse::<u16>() {
+                Ok(port) if port > 0 => {
+                    state.osc_form_error = None;
+                    state.push_action(
+                        "osc/createServer",
+                        serde_json::json!({ "host": host, "port": port }),
+                    );
+                }
+                _ => {
+                    state.osc_form_error =
+                        Some("Port must be a number between 1 and 65535.".to_string());
+                }
+            }
+        }
+    });
+    if let Some(error) = &state.osc_form_error {
+        ui.colored_label(theme::DANGER, error);
+    }
+
+    ui.separator();
+    ui.label(egui::RichText::new("RECEIVED ADDRESSES").strong().size(9.0));
+    if osc.addresses.is_empty() {
+        ui.label(
+            egui::RichText::new(
+                "No OSC messages yet. Send to a listener above and the address appears as osc.data.<address>.",
+            )
+            .size(10.0)
+            .color(theme::MUTED),
+        );
+    }
+    for address in &osc.addresses {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new(&address.state_path)
+                        .monospace()
+                        .size(9.5),
+                );
+                ui.label(
+                    egui::RichText::new(address.value_label())
+                        .size(9.0)
+                        .color(theme::MUTED),
+                );
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .small_button("Copy")
+                    .on_hover_text("Copy the state path for an Input Link")
+                    .clicked()
+                {
+                    ui.ctx().copy_text(address.state_path.clone());
+                }
+            });
+        });
     }
 }
 

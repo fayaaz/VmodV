@@ -19,17 +19,21 @@ use std::time::{Duration, Instant};
 use egui_wgpu::{Renderer as EguiRenderer, RendererOptions, ScreenDescriptor};
 use egui_winit::State as EguiWinitState;
 use modv_media::audio::engine::AudioFeed;
+use modv_media::osc::{DEFAULT_OSC_HOST, DEFAULT_OSC_PORT};
 use modv_render::Engine;
 use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_present_mode};
 use modv_render::wgpu;
 use modv_renderers::two_d::AudioFrame;
-use modv_ui::model::ExpressionView;
+use modv_ui::model::{
+    ExpressionView, NdiOutputView, NdiReceiverView, NdiSenderView, NdiSnapshot, NdiSourceView,
+    OscServerView, OscSnapshot, osc_addresses,
+};
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraModeView, CameraView, EngineHealth,
     EngineSnapshot, GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView,
     MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
     PreviewTexture, PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView,
-    TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
+    SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
     scene_preview_key,
 };
 use serde_json::Value;
@@ -72,6 +76,12 @@ pub fn run(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Result<(), Stri
 /// The output window's default geometry (logical pixels).
 const OUTPUT_WIDTH: u32 = 960;
 const OUTPUT_HEIGHT: u32 = 540;
+
+/// How often the NDI and OSC panels re-read the engine while their tab is
+/// visible. The engine runtime is cheap to read, but the panels only need to
+/// show sender/receiver/address changes at a human cadence; hidden tabs do not
+/// poll at all.
+const PANEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// One compositor-owned output window.
 struct OutputWindow {
@@ -142,6 +152,107 @@ fn negotiated_sample_rate(feed_rate: f32) -> Option<u32> {
     (rate.is_finite() && rate > 0.0).then_some(rate as u32)
 }
 
+/// Bind the default OSC listener and return its view.
+///
+/// Electron creates the same `0.0.0.0:3333` server at startup
+/// (`application/index.js:471`); without it OSC Input Links never receive in
+/// native mode. A failure (port in use, no network) is logged once and is not
+/// fatal — the rest of the shell keeps working.
+fn start_default_osc_listener(store: &mut Store) -> Vec<OscServerView> {
+    match start_osc_listener(store, DEFAULT_OSC_HOST, DEFAULT_OSC_PORT) {
+        Ok(server) => {
+            eprintln!(
+                "ui: INFO OSC listener on {} (default)",
+                server.address_label()
+            );
+            vec![server]
+        }
+        Err(error) => {
+            eprintln!(
+                "ui: WARN could not start the default OSC listener on \
+                 {DEFAULT_OSC_HOST}:{DEFAULT_OSC_PORT}: {error}"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// Bind one OSC listener through the engine's `osc/createServer` action.
+fn start_osc_listener(store: &mut Store, host: &str, port: u16) -> Result<OscServerView, String> {
+    let reply = store
+        .dispatch(
+            "osc/createServer",
+            serde_json::json!({ "host": host, "port": port }),
+        )
+        .map_err(|error| error.to_string())?;
+    OscServerView::from_create_reply(&reply)
+        .ok_or_else(|| format!("unexpected osc/createServer reply: {reply}"))
+}
+
+/// Read the engine's NDI runtime into the panel view.
+fn ndi_snapshot(store: &Store) -> NdiSnapshot {
+    let runtime = store.ndi();
+    let config = runtime.config();
+    let sender = runtime.sender_status();
+
+    NdiSnapshot {
+        available: runtime.available(),
+        library_path: runtime.library_path(),
+        output: NdiOutputView {
+            enabled: config.output_enabled,
+            name: config.output_name.clone(),
+            width: config.output_width,
+            height: config.output_height,
+            follow_output_size: config.follow_modv_output_size,
+            follow_fps: config.follow_modv_fps,
+            target_fps: config.output_target_fps,
+        },
+        sender: NdiSenderView {
+            running: sender.running,
+            unavailable: sender.unavailable,
+            error: sender.error,
+            frames_sent: sender.frames_sent,
+        },
+        discovering: runtime.discovering(),
+        show_local_sources: runtime.show_local_sources(),
+        sources: runtime
+            .sources()
+            .iter()
+            .map(|source| NdiSourceView {
+                name: source.name.clone(),
+                url_address: source.url_address.clone(),
+            })
+            .collect(),
+        receivers: runtime
+            .receivers()
+            .iter()
+            .map(|receiver| NdiReceiverView {
+                id: receiver.id.clone(),
+                source_name: receiver.source_name.clone(),
+                url_address: receiver.url_address.clone(),
+                enabled: receiver.enabled,
+                state: receiver.state.as_str().to_string(),
+                source: receiver.source.clone(),
+                error: receiver.error.clone(),
+                width: receiver.width,
+                height: receiver.height,
+                frames: receiver.frames,
+            })
+            .collect(),
+    }
+}
+
+/// Read the engine's OSC state into the panel view.
+fn osc_snapshot(store: &Store, servers: &[OscServerView]) -> OscSnapshot {
+    let state = store.state();
+    let addresses = state.osc.get("data").map(osc_addresses).unwrap_or_default();
+
+    OscSnapshot {
+        servers: servers.to_vec(),
+        addresses,
+    }
+}
+
 /// The native application state.
 pub struct NativeApp {
     cli: Cli,
@@ -201,6 +312,18 @@ pub struct NativeApp {
     audio_switch_error: Option<String>,
     audio_settings_path: PathBuf,
     midi_client: MidiClient,
+    /// Set after a failed NDI frame read-back so a broken GPU path logs once.
+    ndi_error_logged: bool,
+    /// NDI panel view, refreshed at 1 Hz while the tab is visible.
+    ndi_view: NdiSnapshot,
+    last_ndi_poll: Instant,
+    /// OSC listeners created through this shell (the startup default plus any
+    /// the user adds). `Store` keeps its `OscServer` list private, so the shell
+    /// records the `osc/createServer` replies and drops ids on removal.
+    osc_servers: Vec<OscServerView>,
+    /// OSC panel view (listeners + the latest `osc.data` leaves).
+    osc_view: OscSnapshot,
+    last_osc_poll: Instant,
     isf_dir: Option<PathBuf>,
     user_isf_dirs: Vec<PathBuf>,
     isf_watcher: Option<IsfWatcher>,
@@ -246,6 +369,14 @@ impl NativeApp {
                 .as_object()
                 .map_or(0, serde_json::Map::len)
         );
+
+        // Electron binds the default OSC listener at startup
+        // (`application/index.js:186-189`); native mode must do the same or
+        // OSC Input Links can never receive. A bind failure is reported and
+        // the shell keeps running without that listener.
+        let osc_servers = start_default_osc_listener(&mut store);
+        let ndi_view = ndi_snapshot(&store);
+        let osc_view = osc_snapshot(&store, &osc_servers);
 
         if let Some(path) = &cli.preset
             && let Err(error) = load_preset_from(path, &mut store)
@@ -403,6 +534,12 @@ impl NativeApp {
             audio_switch_error: None,
             audio_settings_path,
             midi_client,
+            ndi_error_logged: false,
+            ndi_view,
+            last_ndi_poll: start,
+            osc_servers,
+            osc_view,
+            last_osc_poll: start,
             isf_dir,
             user_isf_dirs,
             isf_watcher,
@@ -612,6 +749,15 @@ impl NativeApp {
     fn tick_engine(&mut self, dt: Duration) {
         self.pump_audio(dt);
         self.store.drain_osc();
+        // Complete any NDI discovery run / receiver status change on the UI
+        // thread; the finder and receivers run on their own threads, so this
+        // only drains a finished result and never blocks the frame.
+        self.store.poll_ndi();
+        // Native has no Vuex mirror: the delta stream only exists for the IPC
+        // bridge, which this shell does not run. Drop the records instead of
+        // letting OSC traffic and meter updates grow the queue for the whole
+        // session.
+        let _ = self.store.drain_deltas();
         self.midi_client.pump(&mut self.store);
         if self.store.scenes_tick_due() {
             let delta = dt.as_secs_f64() * 1000.0;
@@ -767,6 +913,7 @@ impl NativeApp {
         if self.done {
             return;
         }
+        self.poll_panel_views(now);
 
         let snapshot = self.build_snapshot();
         self.ui_state.sync_status(&snapshot);
@@ -775,6 +922,9 @@ impl NativeApp {
         self.capture_pending_transition();
         if let Some(compositor) = &mut self.compositor {
             compositor.sync_media(&mut self.media_hub);
+            // Upload newer frames for every enabled NDI receiver to its
+            // `ndi:<receiverId>` texture, like the media sources above.
+            compositor.sync_ndi(self.store.ndi());
         }
         let scene_transition = self.prepare_scene_transition();
         self.render_engine(scene_transition);
@@ -786,6 +936,9 @@ impl NativeApp {
             self.update_preview_texture();
         }
         self.present();
+        // The NDI sender reads the presented framebuffer back only when the
+        // configured rate is due and the output is enabled.
+        self.submit_ndi_frame();
         self.answer_preview_requests();
         self.refresh_row_monitors();
 
@@ -795,6 +948,9 @@ impl NativeApp {
         if metric_elapsed >= Duration::from_secs(1) {
             self.fps = self.metric_frames as f32 / metric_elapsed.as_secs_f32();
             self.frame_ms = 1000.0 / self.fps.max(0.001);
+            // The NDI sender follows/advertises the measured render rate when
+            // `followModVFps` is on.
+            self.store.ndi_mut().set_engine_fps(f64::from(self.fps));
             self.metric_frames = 0;
             self.last_metric = now;
         }
@@ -825,6 +981,33 @@ impl NativeApp {
             // `about_to_wait` requests the redraw when the next deadline is
             // due, instead of spinning at the display's maximum rate.
             event_loop.set_control_flow(ControlFlow::WaitUntil(self.pacer.deadline()));
+        }
+    }
+
+    /// Submit the just-presented frame to the NDI sender when it is due.
+    ///
+    /// Ported from `window.rs`: the read-back is synchronised and expensive,
+    /// so it only runs when the NDI runtime says the sender is enabled,
+    /// running and the configured frame rate has elapsed.
+    fn submit_ndi_frame(&mut self) {
+        if !self.store.ndi_mut().frame_due(Instant::now()) {
+            return;
+        }
+        let Some(compositor) = &mut self.compositor else {
+            return;
+        };
+        let size = compositor.size();
+        match compositor.read_main_rgba8() {
+            Ok(pixels) if !pixels.is_empty() => {
+                self.store.ndi_mut().submit_frame(size.0, size.1, &pixels);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                if !self.ndi_error_logged {
+                    self.ndi_error_logged = true;
+                    eprintln!("ui: WARN NDI frame read-back failed: {error}");
+                }
+            }
         }
     }
 
@@ -1146,14 +1329,82 @@ impl NativeApp {
     }
 
     fn drain_ui_actions(&mut self) {
+        let mut refresh_ndi = false;
+        let mut refresh_osc = false;
         for action in self.ui_state.take_actions() {
             if action.action == "ui/addModuleToGroup" {
                 self.add_module_to_group(&action);
                 continue;
             }
-            if let Err(error) = self.store.dispatch(&action.action, action.payload) {
-                self.record_error(format!("{} failed: {error}", action.action));
+            let action_name = action.action.as_str();
+            refresh_ndi |= action_name.starts_with("ndi/");
+            refresh_osc |= action_name.starts_with("osc/");
+            let removed_server_id = if action_name == "osc/removeServer" {
+                action
+                    .payload
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            } else {
+                None
+            };
+            match self.store.dispatch(action_name, action.payload) {
+                Ok(reply) => {
+                    if action_name == "osc/createServer" {
+                        match OscServerView::from_create_reply(&reply) {
+                            Some(server) => {
+                                eprintln!(
+                                    "ui: INFO OSC listener {} on {}",
+                                    server.title(),
+                                    server.address_label()
+                                );
+                                self.osc_servers.push(server);
+                            }
+                            None => self.record_error(format!(
+                                "osc/createServer returned an unexpected reply: {reply}"
+                            )),
+                        }
+                    } else if let Some(id) = removed_server_id {
+                        self.osc_servers.retain(|server| server.id != id);
+                    }
+                }
+                Err(error) => self.record_error(format!("{action_name} failed: {error}")),
             }
+        }
+        // The panels read a cached view; reflect a user gesture immediately
+        // instead of leaving the control stale until the next 1 Hz poll.
+        if refresh_ndi {
+            self.refresh_ndi_view();
+        }
+        if refresh_osc {
+            self.refresh_osc_view();
+        }
+    }
+
+    /// Rebuild the NDI panel view and restart its 1 Hz poll window.
+    fn refresh_ndi_view(&mut self) {
+        self.ndi_view = ndi_snapshot(&self.store);
+        self.last_ndi_poll = Instant::now();
+    }
+
+    /// Rebuild the OSC panel view and restart its 1 Hz poll window.
+    fn refresh_osc_view(&mut self) {
+        self.osc_view = osc_snapshot(&self.store, &self.osc_servers);
+        self.last_osc_poll = Instant::now();
+    }
+
+    /// Refresh the NDI/OSC panel views at 1 Hz, only while their tab is
+    /// visible (active in the strip, or docked/floating).
+    fn poll_panel_views(&mut self, now: Instant) {
+        if self.ui_state.is_tab_visible(SidePanelTab::Ndi)
+            && now.saturating_duration_since(self.last_ndi_poll) >= PANEL_POLL_INTERVAL
+        {
+            self.refresh_ndi_view();
+        }
+        if self.ui_state.is_tab_visible(SidePanelTab::Osc)
+            && now.saturating_duration_since(self.last_osc_poll) >= PANEL_POLL_INTERVAL
+        {
+            self.refresh_osc_view();
         }
     }
 
@@ -1708,6 +1959,19 @@ impl NativeApp {
                 kind: kind.to_string(),
             }
         }));
+        // NDI receivers are textures the compositor uploads as `ndi:<id>`
+        // (the legacy `outputs/ADD_AUXILLARY` group); list them so the
+        // Inspector's texture picker can bind one.
+        texture_sources.extend(
+            self.ndi_view
+                .receivers
+                .iter()
+                .map(|receiver| TextureSourceView {
+                    id: format!("ndi:{}", receiver.id),
+                    label: format!("{} (NDI)", receiver.source_name),
+                    kind: "ndi".to_string(),
+                }),
+        );
         texture_sources.extend(state.modules.values().map(|module| {
             let kind = match module
                 .meta
@@ -1909,6 +2173,8 @@ impl NativeApp {
             expressions: expression_views(state),
             media,
             midi,
+            ndi: self.ndi_view.clone(),
+            osc: self.osc_view.clone(),
             audio_devices: self.audio_devices.clone(),
             audio_selection,
         }
@@ -2921,6 +3187,46 @@ impl ApplicationHandler for NativeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_osc_listener_receives_into_the_panel_state_and_view() {
+        use std::net::UdpSocket;
+
+        let mut store = Store::new();
+        let listener = start_osc_listener(&mut store, "127.0.0.1", 0).expect("listener");
+        let servers = [listener.clone()];
+        assert!(
+            listener.port > 0,
+            "port 0 binds an ephemeral port and the reply carries it"
+        );
+
+        // A minimal OSC message: "/modv/bass" + ",f" + the f32 argument.
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("client socket");
+        let mut packet = Vec::new();
+        packet.extend_from_slice(b"/modv/bass\0\0");
+        packet.extend_from_slice(b",f\0\0");
+        packet.extend_from_slice(&0.5_f32.to_be_bytes());
+        socket
+            .send_to(&packet, ("127.0.0.1", listener.port))
+            .expect("send datagram");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            store.drain_osc();
+            let view = osc_snapshot(&store, &servers);
+            if let Some(row) = view.addresses.iter().find(|row| row.path == "modv.bass") {
+                assert_eq!(row.state_path, "osc.data.modv.bass");
+                assert_eq!(row.value_label(), "0.5");
+                break;
+            }
+            assert!(Instant::now() < deadline, "the OSC datagram never arrived");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        store
+            .dispatch("osc/removeServer", serde_json::json!({ "id": listener.id }))
+            .expect("remove listener");
+    }
 
     #[test]
     fn scene_views_flatten_group_module_names_and_null_holes() {

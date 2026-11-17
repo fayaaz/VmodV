@@ -55,10 +55,365 @@ pub struct EngineSnapshot {
     pub media: MediaSnapshot,
     /// Native MIDI input state.
     pub midi: MidiSnapshot,
+    /// Native NDI availability, output sender, discovery and receivers.
+    pub ndi: NdiSnapshot,
+    /// OSC listeners and the latest received address values.
+    pub osc: OscSnapshot,
     /// Enumerated cpal input devices for the Audio panel.
     pub audio_devices: Vec<AudioDeviceView>,
     /// The live native capture selection (the Audio panel's active choice).
     pub audio_selection: AudioSelectionView,
+}
+
+/// Native NDI state for the NDI panel.
+///
+/// `modv-app` fills this from the engine's `NdiRuntime` read accessors
+/// (`config`, `sender_status`, `sources`, `receivers`), the same state
+/// `ndi/getState` returns to the legacy renderer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NdiSnapshot {
+    /// Whether libndi loaded; every control is disabled when it did not.
+    pub available: bool,
+    /// The resolved library path, when one was found.
+    pub library_path: Option<String>,
+    /// The output sender configuration.
+    pub output: NdiOutputView,
+    /// The sender thread's status.
+    pub sender: NdiSenderView,
+    /// Whether a discovery run is in flight.
+    pub discovering: bool,
+    /// Whether discovery lists this machine's own sender.
+    pub show_local_sources: bool,
+    /// Sources found by the last completed discovery run.
+    pub sources: Vec<NdiSourceView>,
+    /// Created receivers, in creation order.
+    pub receivers: Vec<NdiReceiverView>,
+}
+
+/// The NDI output sender's configuration (`ndi.outputEnabled`, …).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NdiOutputView {
+    pub enabled: bool,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    /// Send at the compositor size instead of `width`×`height`.
+    pub follow_output_size: bool,
+    /// Send at the engine frame rate instead of `target_fps`.
+    pub follow_fps: bool,
+    pub target_fps: f64,
+}
+
+/// The NDI sender thread's reported status.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NdiSenderView {
+    pub running: bool,
+    /// libndi is missing, so no sender can run.
+    pub unavailable: bool,
+    /// Why the sender stopped, when it did.
+    pub error: Option<String>,
+    pub frames_sent: u64,
+}
+
+/// One discovered NDI source.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NdiSourceView {
+    pub name: String,
+    pub url_address: String,
+}
+
+/// One created NDI receiver and its live status.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NdiReceiverView {
+    pub id: String,
+    /// The requested source name.
+    pub source_name: String,
+    /// The requested source address (diagnostics).
+    pub url_address: String,
+    /// Whether the receiver thread should be running.
+    pub enabled: bool,
+    /// The lifecycle token: `idle`, `connecting`, `connected` or `error`.
+    pub state: String,
+    /// The connected source name, once connected.
+    pub source: Option<String>,
+    /// Why the receiver stopped, when it did.
+    pub error: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub frames: u64,
+}
+
+impl NdiSnapshot {
+    /// The warning the panel shows when libndi could not be loaded.
+    pub fn availability_warning(&self) -> Option<String> {
+        if self.available {
+            return None;
+        }
+        Some(match self.library_path.as_deref() {
+            Some(path) => format!(
+                "NDI is unavailable: libndi could not be loaded (found at {path}). \
+                 Install the NDI SDK or set MODV_NDI_LIB, then restart the engine."
+            ),
+            None => "NDI is unavailable: libndi could not be loaded. \
+                     Install the NDI SDK or set MODV_NDI_LIB, then restart the engine."
+                .to_string(),
+        })
+    }
+
+    /// The "NDI output stopped" notice, when the sender reported a failure.
+    pub fn sender_warning(&self) -> Option<String> {
+        self.sender
+            .error
+            .as_ref()
+            .map(|error| format!("NDI output stopped: {error}"))
+    }
+
+    /// The discover button's label.
+    pub fn discover_label(&self) -> &'static str {
+        if self.discovering {
+            "Discovering…"
+        } else {
+            "Discover Sources"
+        }
+    }
+
+    /// Whether the output toggle may be flipped (libndi is loaded).
+    pub fn can_enable_output(&self) -> bool {
+        self.available
+    }
+
+    /// The effective send rate: the engine rate when following it, otherwise
+    /// the configured target, clamped exactly like `NdiConfig::target_fps`.
+    pub fn target_fps(&self, engine_fps: f64) -> f64 {
+        let fps = if self.output.follow_fps {
+            engine_fps
+        } else {
+            self.output.target_fps
+        };
+        if fps.is_finite() && fps > 0.0 {
+            fps.clamp(1.0, 240.0)
+        } else {
+            60.0
+        }
+    }
+
+    /// The sender's status line (never empty).
+    pub fn sender_status_label(&self) -> String {
+        if let Some(error) = &self.sender.error {
+            return format!("Stopped: {error}");
+        }
+        if !self.available {
+            return "NDI is unavailable".to_string();
+        }
+        if self.sender.running {
+            return format!("Sending · {} frame(s)", self.sender.frames_sent);
+        }
+        if self.output.enabled {
+            "Starting…".to_string()
+        } else {
+            "Not sending".to_string()
+        }
+    }
+
+    /// The size frames are sent at (`followModVOutputSize` → the live output).
+    pub fn output_size_label(&self, resolution: [u32; 2]) -> String {
+        let (width, height) = if self.output.follow_output_size {
+            (resolution[0].max(1), resolution[1].max(1))
+        } else {
+            (self.output.width, self.output.height)
+        };
+        format!("{width}×{height}")
+    }
+
+    /// The frame rate line (`60 fps · following modV`).
+    pub fn output_fps_label(&self, engine_fps: f64) -> String {
+        let fps = self.target_fps(engine_fps);
+        if self.output.follow_fps {
+            format!("{fps:.0} fps · following modV")
+        } else {
+            format!("{fps:.0} fps")
+        }
+    }
+}
+
+impl NdiReceiverView {
+    /// The receiver's status (`connected 1920×1080`, `idle`, `error`).
+    pub fn status_label(&self) -> String {
+        let mut label = self.state.clone();
+        if self.width > 0 && self.height > 0 {
+            label.push_str(&format!(" {}×{}", self.width, self.height));
+        }
+        label
+    }
+
+    /// The enable/disable button's label.
+    pub fn toggle_label(&self) -> &'static str {
+        if self.enabled { "Disable" } else { "Enable" }
+    }
+
+    /// The row title: the requested source name, falling back to the live
+    /// source or the id so a malformed record is still identifiable.
+    pub fn title(&self) -> &str {
+        if !self.source_name.trim().is_empty() {
+            &self.source_name
+        } else if let Some(source) = &self.source {
+            source
+        } else {
+            &self.id
+        }
+    }
+}
+
+/// OSC listeners plus the latest values received under `osc.data`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OscSnapshot {
+    /// Listeners in creation order (the default server first).
+    pub servers: Vec<OscServerView>,
+    /// One row per received leaf, sorted by path.
+    pub addresses: Vec<OscAddressView>,
+}
+
+/// One bound OSC listener (`osc/addServer`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OscServerView {
+    pub id: String,
+    /// The listener label; the engine defaults it to `host:port`.
+    pub name: String,
+    /// The bound host (`0.0.0.0` for the default server).
+    pub host: String,
+    pub port: u16,
+}
+
+impl OscServerView {
+    /// `0.0.0.0:3333`.
+    pub fn address_label(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+
+    /// The row title, falling back to the bound address when unnamed.
+    pub fn title(&self) -> String {
+        if self.name.trim().is_empty() {
+            self.address_label()
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// Parse the `osc/createServer` reply (`{ id, name, host, port }`).
+    pub fn from_create_reply(value: &Value) -> Option<Self> {
+        Some(Self {
+            id: value.get("id")?.as_str()?.to_string(),
+            name: value
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            host: value.get("host")?.as_str()?.to_string(),
+            port: u16::try_from(value.get("port")?.as_u64()?).ok()?,
+        })
+    }
+}
+
+/// One received OSC address leaf under `osc.data`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OscAddressView {
+    /// The lodash path under `osc.data` (`modv.bass`, `layers.0.alpha`).
+    pub path: String,
+    /// The state path an OSC Input Link binds (`osc.data.modv.bass`).
+    pub state_path: String,
+    /// The latest message's arguments, formatted for display.
+    pub values: Vec<String>,
+}
+
+impl OscAddressView {
+    /// The received OSC address reconstructed from the path (`/modv/bass`).
+    ///
+    /// An address segment that itself contained a `/` cannot be recovered
+    /// (the store only keeps the flattened path); this is a display label,
+    /// while [`OscAddressView::state_path`] is what links bind.
+    pub fn address(&self) -> String {
+        format!("/{}", self.path.replace('.', "/"))
+    }
+
+    /// The latest values as one line (`0.5, 0.25`).
+    pub fn value_label(&self) -> String {
+        if self.values.is_empty() {
+            "(no values)".to_string()
+        } else {
+            self.values.join(", ")
+        }
+    }
+}
+
+/// Most address rows the native OSC panel lists (the engine store can hold
+/// thousands; the panel is a monitor, not a table view).
+pub const MAX_OSC_ADDRESS_ROWS: usize = 512;
+
+/// Deepest `osc.data` branch [`osc_addresses`] walks.
+pub const MAX_OSC_ADDRESS_DEPTH: usize = 24;
+
+/// Flatten the engine's `osc.data` tree into one row per received leaf.
+///
+/// The legacy store writes `set(state.data, msg[0].substring(1).replaceAll("/",
+/// "."), msg.slice(1))`, so every message is an array of argument values. A
+/// numeric path segment produces a JSON array branch; arrays whose elements
+/// are all scalars are leaves. Rows are sorted by path so the panel is stable
+/// between frames (the store's JSON map preserves arrival order).
+pub fn osc_addresses(data: &Value) -> Vec<OscAddressView> {
+    let mut rows = Vec::new();
+    let mut path = Vec::new();
+    walk_osc_data(data, &mut path, &mut rows);
+    rows.sort_by(|a, b| a.path.cmp(&b.path));
+    rows
+}
+
+fn walk_osc_data(node: &Value, path: &mut Vec<String>, rows: &mut Vec<OscAddressView>) {
+    if rows.len() >= MAX_OSC_ADDRESS_ROWS || path.len() > MAX_OSC_ADDRESS_DEPTH {
+        return;
+    }
+    match node {
+        Value::Object(map) => {
+            for (key, child) in map {
+                path.push(key.clone());
+                walk_osc_data(child, path, rows);
+                path.pop();
+            }
+        }
+        Value::Array(items) if items.iter().any(|item| item.is_object() || item.is_array()) => {
+            for (index, child) in items.iter().enumerate() {
+                path.push(index.to_string());
+                walk_osc_data(child, path, rows);
+                path.pop();
+            }
+        }
+        Value::Array(items) => {
+            if !path.is_empty() {
+                rows.push(OscAddressView {
+                    path: path.join("."),
+                    state_path: format!("osc.data.{}", path.join(".")),
+                    values: items.iter().map(osc_value_text).collect(),
+                });
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+            if !path.is_empty() {
+                rows.push(OscAddressView {
+                    path: path.join("."),
+                    state_path: format!("osc.data.{}", path.join(".")),
+                    values: vec![osc_value_text(node)],
+                });
+            }
+        }
+    }
+}
+
+/// One OSC value as a compact display string.
+fn osc_value_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// One enumerable audio input device (a cpal input from `modv-media`).

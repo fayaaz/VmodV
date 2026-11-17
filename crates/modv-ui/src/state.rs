@@ -163,6 +163,13 @@ pub struct UiState {
     pub status: StatusState,
     /// Rolling frame-rate history for the status sparkline.
     pub fps_history: VecDeque<f32>,
+    /// The NDI output-name draft. `None` seeds from the snapshot; typing goes
+    /// into the draft so a once-per-second NDI refresh cannot fight the field.
+    pub ndi_name_draft: Option<String>,
+    /// The OSC add-listener form.
+    pub osc_host_draft: String,
+    pub osc_port_draft: String,
+    pub osc_form_error: Option<String>,
 }
 
 /// Which panel the right side shows.
@@ -175,17 +182,21 @@ pub enum SidePanelTab {
     Info,
     Plugins,
     Midi,
+    Ndi,
+    Osc,
 }
 
 impl SidePanelTab {
     /// Every right-panel tab, in strip order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Inspector,
         Self::Media,
         Self::Audio,
         Self::Info,
         Self::Plugins,
         Self::Midi,
+        Self::Ndi,
+        Self::Osc,
     ];
     /// The number of right-panel tabs.
     pub const COUNT: usize = Self::ALL.len();
@@ -199,6 +210,8 @@ impl SidePanelTab {
             Self::Info => 3,
             Self::Plugins => 4,
             Self::Midi => 5,
+            Self::Ndi => 6,
+            Self::Osc => 7,
         }
     }
 
@@ -211,6 +224,8 @@ impl SidePanelTab {
             Self::Info => "info",
             Self::Plugins => "plugins",
             Self::Midi => "midi",
+            Self::Ndi => "ndi",
+            Self::Osc => "osc",
         }
     }
 
@@ -223,6 +238,8 @@ impl SidePanelTab {
             Self::Info => "Info",
             Self::Plugins => "Plugins",
             Self::Midi => "MIDI",
+            Self::Ndi => "NDI",
+            Self::Osc => "OSC",
         }
     }
 
@@ -231,6 +248,13 @@ impl SidePanelTab {
         Self::ALL.into_iter().find(|tab| tab.key() == value)
     }
 }
+
+/// The default OSC bind host the native app listens on at startup
+/// (`application/index.js` creates the same listener).
+pub const DEFAULT_OSC_HOST: &str = "0.0.0.0";
+
+/// The default OSC port (`application/index.js`).
+pub const DEFAULT_OSC_PORT: u16 = 3333;
 
 /// The audio features `AudioFeatures.vue` offers, in menu order.
 ///
@@ -810,6 +834,22 @@ impl UiState {
             last_error: None,
             status: StatusState::default(),
             fps_history: VecDeque::new(),
+            ndi_name_draft: None,
+            osc_host_draft: DEFAULT_OSC_HOST.to_string(),
+            osc_port_draft: DEFAULT_OSC_PORT.to_string(),
+            osc_form_error: None,
+        }
+    }
+
+    /// Whether `tab` is on screen this frame: the active strip tab, or a tab
+    /// placed in the dock column / a floating window (those are always shown).
+    ///
+    /// The NDI and OSC panels use this to poll the engine at 1 Hz instead of
+    /// rebuilding their view every frame while the tab is hidden.
+    pub fn is_tab_visible(&self, tab: SidePanelTab) -> bool {
+        match self.layout.tabs.placement(tab) {
+            crate::layout::TabPlacement::Tabs => self.side_panel_tab == tab,
+            crate::layout::TabPlacement::Docked | crate::layout::TabPlacement::Floating => true,
         }
     }
 
@@ -1035,6 +1075,43 @@ mod tests {
         assert!(!p0.verdict(54.9, 55.0));
         p0.output_window_ok = false;
         assert!(!p0.verdict(120.0, 55.0));
+    }
+
+    #[test]
+    fn ndi_and_osc_are_the_last_strip_tabs() {
+        assert_eq!(
+            &SidePanelTab::ALL[SidePanelTab::COUNT - 2..],
+            &[SidePanelTab::Ndi, SidePanelTab::Osc]
+        );
+        for (index, tab) in [(6, SidePanelTab::Ndi), (7, SidePanelTab::Osc)] {
+            assert_eq!(tab.index(), index);
+            assert_eq!(SidePanelTab::from_key(tab.key()), Some(tab));
+        }
+        assert_eq!(SidePanelTab::Ndi.title(), "NDI");
+        assert_eq!(SidePanelTab::Osc.title(), "OSC");
+        assert_eq!(SidePanelTab::Ndi.key(), "ndi");
+        assert_eq!(SidePanelTab::Osc.key(), "osc");
+    }
+
+    #[test]
+    fn a_tab_is_visible_when_active_in_the_strip_or_placed_elsewhere() {
+        let mut state = UiState::new();
+        assert!(state.is_tab_visible(SidePanelTab::Inspector));
+        assert!(!state.is_tab_visible(SidePanelTab::Ndi));
+
+        state.side_panel_tab = SidePanelTab::Ndi;
+        assert!(state.is_tab_visible(SidePanelTab::Ndi));
+
+        state
+            .layout
+            .tabs
+            .set_placement(SidePanelTab::Ndi, crate::layout::TabPlacement::Floating);
+        state.side_panel_tab = SidePanelTab::Inspector;
+        assert!(
+            state.is_tab_visible(SidePanelTab::Ndi),
+            "a floating/docked tab is on screen regardless of the strip selection"
+        );
+        assert!(!state.is_tab_visible(SidePanelTab::Osc));
     }
 
     #[test]
