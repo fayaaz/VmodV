@@ -39,6 +39,7 @@ use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
 use crate::media::MediaHub;
 use crate::report::AdapterSummary;
+use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
 use modv_media::video::{TestPattern, VideoSourceConfig};
@@ -309,7 +310,7 @@ impl NativeApp {
 
         // Render one frame so the main texture exists before registering it
         // with egui-wgpu. The output window opens on the next command/frame.
-        self.render_engine(0.0);
+        self.render_engine(None);
         self.update_preview_texture();
 
         if let Err(error) = self.open_output(event_loop) {
@@ -373,7 +374,7 @@ impl NativeApp {
         if let Some(compositor) = &mut self.compositor {
             compositor.resize(width, height);
         }
-        self.render_engine(0.0);
+        self.render_engine(None);
         self.update_preview_texture();
         eprintln!("ui: INFO output window opened ({width}x{height})");
         Ok(())
@@ -446,7 +447,7 @@ impl NativeApp {
         self.store.disable_engine_audio();
     }
 
-    fn frame_info(&self) -> FrameInfo {
+    fn frame_info(&self, scene_transition: Option<SceneTransitionInfo>) -> FrameInfo {
         let runtime = self.store.performance_runtime();
         FrameInfo {
             time_seconds: self.start.elapsed().as_secs_f32(),
@@ -465,15 +466,12 @@ impl NativeApp {
                     progress: transition.progress(),
                 })
                 .collect(),
-            // Whole-scene shader transitions need the outgoing-frame capture
-            // path from the engine window loop; P4 ports it with the Scenes
-            // panel. Row crossfades (the common performance transition) work.
-            scene_transition: None,
+            scene_transition,
         }
     }
 
-    fn render_engine(&mut self, _dt: f64) {
-        let info = self.frame_info();
+    fn render_engine(&mut self, scene_transition: Option<SceneTransitionInfo>) {
+        let info = self.frame_info(scene_transition);
         let state = self.store.state();
         if let Some(compositor) = &mut self.compositor
             && let Err(error) = compositor.render_frame(state, &info)
@@ -552,10 +550,12 @@ impl NativeApp {
         self.ui_state.sync_status(&snapshot);
         self.run_ui(&snapshot);
         self.drain_ui_actions();
+        self.capture_pending_transition();
         if let Some(compositor) = &mut self.compositor {
             compositor.sync_media(&mut self.media_hub);
         }
-        self.render_engine(dt.as_secs_f64());
+        let scene_transition = self.prepare_scene_transition();
+        self.render_engine(scene_transition);
         if self
             .compositor
             .as_ref()
@@ -953,6 +953,67 @@ impl NativeApp {
                 self.preview_textures.remove(&old);
             }
         }
+    }
+
+    /// Capture the outgoing frame for a starting whole-scene transition.
+    fn capture_pending_transition(&mut self) {
+        if self.store.take_pending_transition_capture().is_none() {
+            return;
+        }
+        let captured = self
+            .compositor
+            .as_mut()
+            .is_some_and(Compositor::capture_transition_source);
+        if !captured && self.store.fall_back_scene_transition_to_fade() {
+            eprintln!(
+                "ui: WARN no outgoing frame to capture; Scene transition falls back to Fade"
+            );
+        }
+    }
+
+    /// Resolve the whole-scene shader transition for this frame.
+    fn prepare_scene_transition(&mut self) -> Option<SceneTransitionInfo> {
+        let transition = self.store.performance_runtime().transition.clone()?;
+        let effect = transition.shader_effect()?;
+        let captured = self
+            .compositor
+            .as_ref()
+            .is_some_and(Compositor::has_transition_capture);
+        if !captured {
+            if self.store.fall_back_scene_transition_to_fade() {
+                eprintln!(
+                    "ui: WARN lost the captured outgoing frame; Scene transition falls back to Fade"
+                );
+            }
+            if let Some(compositor) = &mut self.compositor {
+                compositor.clear_transition_capture();
+            }
+            return None;
+        }
+        let prepared = self
+            .compositor
+            .as_mut()
+            .is_some_and(|compositor| compositor.prepare_scene_transition(&effect));
+        if !prepared {
+            if self.store.fall_back_scene_transition_to_fade() {
+                eprintln!(
+                    "ui: WARN the shader transition pipeline failed to build; Scene transition falls back to Fade"
+                );
+            }
+            if let Some(compositor) = &mut self.compositor {
+                compositor.clear_transition_capture();
+            }
+            return None;
+        }
+        Some(SceneTransitionInfo {
+            effect,
+            progress: transition.progress(),
+            from_groups: transition
+                .from
+                .iter()
+                .map(|(group_id, _)| group_id.clone())
+                .collect(),
+        })
     }
 
     fn build_snapshot(&self) -> EngineSnapshot {
@@ -1703,7 +1764,7 @@ impl ApplicationHandler for NativeApp {
                     if let Some(compositor) = &mut self.compositor {
                         compositor.resize(size.width, size.height);
                     }
-                    self.render_engine(0.0);
+                    self.render_engine(None);
                     self.update_preview_texture();
                 }
             }
