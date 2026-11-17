@@ -624,8 +624,41 @@ impl ModuleMetaView {
     }
 }
 
+/// The default Scene order (`Scenes.vue`'s `performance.order || "in-order"`).
+pub const PERFORMANCE_ORDER_IN_ORDER: &str = "in-order";
+/// Random Scene order (`Scenes.vue`'s "Random" option).
+pub const PERFORMANCE_ORDER_RANDOM: &str = "random";
+
+/// The Scene-order select's options: engine value plus visible label.
+pub const PERFORMANCE_ORDERS: [(&str, &str); 2] = [
+    (PERFORMANCE_ORDER_IN_ORDER, "In order"),
+    (PERFORMANCE_ORDER_RANDOM, "Random"),
+];
+
+/// Normalise a Scene-order string to the behaviour the engine applies.
+///
+/// The engine's pick sites treat anything other than `"random"` as in order
+/// (`crates/modv-app/src/performance.rs`), so the UI shows what will
+/// actually happen rather than an unknown saved value.
+pub fn normalize_performance_order(order: &str) -> &'static str {
+    if order == PERFORMANCE_ORDER_RANDOM {
+        PERFORMANCE_ORDER_RANDOM
+    } else {
+        PERFORMANCE_ORDER_IN_ORDER
+    }
+}
+
+/// The visible label for a Scene-order value.
+pub fn performance_order_label(order: &str) -> &'static str {
+    if normalize_performance_order(order) == PERFORMANCE_ORDER_RANDOM {
+        "Random"
+    } else {
+        "In order"
+    }
+}
+
 /// Performance-mode configuration plus the runtime Scene id.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PerformanceView {
     pub enabled: bool,
     pub current_scene_id: Option<String>,
@@ -634,6 +667,35 @@ pub struct PerformanceView {
     pub max_seconds: f64,
     pub transition_seconds: f64,
     pub allowed_transitions: Vec<String>,
+    /// Scene order used for the next-Scene pick (`"in-order"` / `"random"`).
+    pub order: String,
+}
+
+impl Default for PerformanceView {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            current_scene_id: None,
+            row_names: Vec::new(),
+            min_seconds: 0.0,
+            max_seconds: 0.0,
+            transition_seconds: 0.0,
+            allowed_transitions: Vec::new(),
+            order: PERFORMANCE_ORDER_IN_ORDER.to_string(),
+        }
+    }
+}
+
+impl PerformanceView {
+    /// The normalised Scene order the engine will use.
+    pub fn scene_order(&self) -> &'static str {
+        normalize_performance_order(&self.order)
+    }
+
+    /// The ComboBox's selected label (`In order` / `Random`).
+    pub fn scene_order_label(&self) -> &'static str {
+        performance_order_label(&self.order)
+    }
 }
 
 /// Audio analysis values shown by the meters and BPM readout.
@@ -868,6 +930,46 @@ mod tests {
             "The selected device is not currently connected"
         );
         assert_eq!(selection.active_detail(&[]), "input · alsa:gone");
+    }
+
+    #[test]
+    fn performance_scene_order_defaults_to_in_order() {
+        let performance = PerformanceView::default();
+        assert_eq!(performance.order, PERFORMANCE_ORDER_IN_ORDER);
+        assert_eq!(performance.scene_order(), "in-order");
+        assert_eq!(performance.scene_order_label(), "In order");
+    }
+
+    #[test]
+    fn unknown_scene_orders_normalise_to_the_engine_behaviour() {
+        for value in ["random", "RANDOM", "shuffle", "", "in-order"] {
+            let performance = PerformanceView {
+                order: value.to_string(),
+                ..Default::default()
+            };
+            if value == "random" {
+                assert_eq!(performance.scene_order(), "random", "value {value:?}");
+                assert_eq!(performance.scene_order_label(), "Random", "value {value:?}");
+            } else {
+                assert_eq!(performance.scene_order(), "in-order", "value {value:?}");
+                assert_eq!(
+                    performance.scene_order_label(),
+                    "In order",
+                    "value {value:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scene_order_options_match_the_legacy_select() {
+        assert_eq!(
+            PERFORMANCE_ORDERS,
+            [
+                (PERFORMANCE_ORDER_IN_ORDER, "In order"),
+                (PERFORMANCE_ORDER_RANDOM, "Random"),
+            ]
+        );
     }
 
     #[test]

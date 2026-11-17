@@ -28,10 +28,11 @@ pub mod widgets;
 pub use model::{
     AudioDeviceView, AudioSelectionView, AudioView, COMPOSITE_OPERATIONS, CameraView, EngineHealth,
     EngineSnapshot, ExpressionView, GroupView, InputLinkView, MediaAction, MediaSnapshot,
-    MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView,
+    MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView,
+    PERFORMANCE_ORDER_IN_ORDER, PERFORMANCE_ORDER_RANDOM, PERFORMANCE_ORDERS, PerformanceView,
     PreviewRequest, PreviewTexture, PropComponentView, PropView, RowMonitorView, SceneCellView,
-    SceneView, TextureSourceView, TweenView, gallery_preview_key, scene_preview_key,
-    un_premultiply_rgba,
+    SceneView, TextureSourceView, TweenView, gallery_preview_key, normalize_performance_order,
+    performance_order_label, scene_preview_key, un_premultiply_rgba,
 };
 pub use state::{
     AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiAction, UiCommand, UiState,

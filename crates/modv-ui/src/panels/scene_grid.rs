@@ -9,7 +9,10 @@
 use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec2};
 use serde_json::Value;
 
-use crate::model::{EngineSnapshot, PreviewRequest, SceneCellView, SceneView, scene_preview_key};
+use crate::model::{
+    EngineSnapshot, PERFORMANCE_ORDERS, PreviewRequest, SceneCellView, SceneView,
+    performance_order_label, scene_preview_key,
+};
 use crate::panels::row_monitor::{RowMonitorDisplay, row_monitor_display};
 use crate::state::UiAction;
 use crate::theme;
@@ -777,6 +780,33 @@ fn performance_bar(
             actions.push(UiAction::new(
                 "scenes/setPerformanceEnabled",
                 serde_json::json!({ "enabled": !snapshot.performance.enabled }),
+            ));
+        }
+        ui.separator();
+        // `sceneOrder` (`Scenes.vue`): the engine reads it on every pick, so
+        // the select stays enabled while performance mode runs and a live
+        // change applies to the next Scene.
+        ui.label(
+            egui::RichText::new("Scene order")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+        let order = snapshot.performance.scene_order();
+        let mut selected = order;
+        egui::ComboBox::from_id_salt("performance-scene-order")
+            .selected_text(performance_order_label(order))
+            .width(90.0)
+            .show_ui(ui, |ui| {
+                for (value, label) in PERFORMANCE_ORDERS {
+                    if ui.selectable_label(order == value, label).clicked() {
+                        selected = value;
+                    }
+                }
+            });
+        if selected != order {
+            actions.push(UiAction::new(
+                "scenes/updatePerformance",
+                serde_json::json!({ "order": selected }),
             ));
         }
         ui.separator();

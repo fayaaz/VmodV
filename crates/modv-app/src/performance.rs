@@ -1096,6 +1096,19 @@ mod tests {
     use modv_engine::delta::Mutation;
     use serde_json::json;
 
+    /// A unique temp directory for the `scenes.json` round-trip tests.
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "modv-{prefix}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
     fn scene(id: &str, name: &str) -> Value {
         json!({
             "id": id,
@@ -1332,6 +1345,83 @@ mod tests {
             Some("scene-c"),
             "the in-order advance skipped the disabled scene-b cell"
         );
+    }
+
+    #[test]
+    fn random_scene_order_round_trips_and_drives_the_next_pick() {
+        let dir = temp_dir("performance-order");
+        let state_path = dir.join("engine-state.json");
+        let mut store = Store::with_state_path(Some(&state_path));
+        for (id, name) in [
+            ("scene-a", "Alpha"),
+            ("scene-b", "Beta"),
+            ("scene-c", "Gamma"),
+        ] {
+            store
+                .dispatch(
+                    "scenes/loadSceneFromJson",
+                    json!({ "scene": scene(id, name), "persist": false }),
+                )
+                .expect("scene loads");
+        }
+
+        // The native UI's payload: no `config` wrapper, exactly what the
+        // order select dispatches (`performance_bar`).
+        store
+            .dispatch("scenes/updatePerformance", json!({ "order": "random" }))
+            .expect("set the order");
+        assert_eq!(
+            store.scenes_state().performance["order"],
+            json!("random"),
+            "the live config takes the new order"
+        );
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("scenes.json")).expect("scenes.json"))
+                .expect("json");
+        assert_eq!(
+            saved["performance"]["order"],
+            json!("random"),
+            "the order is persisted for the next launch"
+        );
+
+        // Reload from the saved document, exactly like a native restart.
+        let mut reloaded = Store::with_state_path(Some(&state_path));
+        reloaded
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("hydrate");
+        assert_eq!(
+            reloaded.scenes_state().performance["order"],
+            json!("random"),
+            "the order survives a restart"
+        );
+
+        // Seed 7's first roll is 0.82, so the random pool [Beta, Gamma]
+        // picks the second entry; in-order would pick Beta.
+        reloaded.performance.rng = Rng::seeded(7);
+        let row_names = reloaded.row_names();
+        assert_eq!(
+            reloaded
+                .pick_next_scene_for_row(0, Some("scene-a"), &row_names)
+                .as_deref(),
+            Some("scene-c"),
+            "the runtime pick reads the reloaded random order"
+        );
+
+        // Switching the live order at the same dispatch path the select uses
+        // applies to the next pick without a restart.
+        reloaded
+            .dispatch("scenes/updatePerformance", json!({ "order": "in-order" }))
+            .expect("set in-order");
+        reloaded.performance.rng = Rng::seeded(7);
+        assert_eq!(
+            reloaded
+                .pick_next_scene_for_row(0, Some("scene-a"), &row_names)
+                .as_deref(),
+            Some("scene-b"),
+            "in-order advances to the next candidate"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

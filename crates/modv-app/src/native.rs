@@ -2098,6 +2098,16 @@ fn performance_view(config: &Value, enabled: bool, row_names: &[String]) -> Perf
                     .collect()
             })
             .unwrap_or_default(),
+        // `sceneOrder`: the JS computed falls back to "in-order"; the engine
+        // treats every value other than "random" as in order, so the view
+        // normalises unknown values to what will actually happen.
+        order: modv_ui::model::normalize_performance_order(
+            config
+                .get("order")
+                .and_then(Value::as_str)
+                .unwrap_or("in-order"),
+        )
+        .to_string(),
     }
 }
 
@@ -2610,6 +2620,26 @@ mod tests {
         assert_eq!(view.max_seconds, 10.0);
         assert_eq!(view.transition_seconds, 1.5);
         assert_eq!(view.allowed_transitions, vec!["Fade", "Wipe"]);
+    }
+
+    #[test]
+    fn performance_view_maps_the_scene_order() {
+        // The JS `sceneOrder` computed falls back to "in-order" when the
+        // saved config has no order.
+        assert_eq!(
+            performance_view(&serde_json::json!({}), false, &[]).order,
+            "in-order"
+        );
+        assert_eq!(
+            performance_view(&serde_json::json!({ "order": "random" }), false, &[]).order,
+            "random"
+        );
+        // The engine treats anything but "random" as in order, so the view
+        // must show the behaviour that will actually happen.
+        assert_eq!(
+            performance_view(&serde_json::json!({ "order": "shuffle" }), false, &[]).order,
+            "in-order"
+        );
     }
 
     #[test]
