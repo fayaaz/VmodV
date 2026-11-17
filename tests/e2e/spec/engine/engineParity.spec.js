@@ -19,6 +19,12 @@ import os from "os";
 import path from "path";
 import { resolveLatestBuild } from "../../pageObjectModel/resolveLatestBuild";
 
+// Same baseline as the Rust registry guard
+// (`registered_module_count_matches_the_parity_baseline`): 36 shader +
+// 15 2D + 27 Point10 + 354 ISF = 432. Keep both in lockstep when the corpus
+// or catalogue changes.
+const EXPECTED_REGISTERED_MODULES = 432;
+
 async function waitForReady(page, timeout = 60_000) {
   const deadline = Date.now() + timeout;
 
@@ -62,16 +68,17 @@ test.describe("engine behaviour parity (MODV_ENGINE=1)", () => {
       // worker in legacy mode). `state/sync` arrives shortly after
       // is-modv-ready, so wait for it instead of sampling once.
       await page.waitForFunction(
-        () =>
-          Object.keys(window.modV.store.state.modules.registered || {}).length >
-          300,
+        (expected) =>
+          Object.keys(window.modV.store.state.modules.registered || {})
+            .length === expected,
+        EXPECTED_REGISTERED_MODULES,
         { timeout: 20_000 },
       );
       const registered = await page.evaluate(
         () =>
           Object.keys(window.modV.store.state.modules.registered || {}).length,
       );
-      expect(registered).toBeGreaterThan(300);
+      expect(registered).toBe(EXPECTED_REGISTERED_MODULES);
 
       // 2. Audio Input Link: apply a default Scene with a bass link, stop the
       // live analyser pump overwriting the synthetic frames, then drive the
