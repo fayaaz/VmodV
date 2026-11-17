@@ -53,12 +53,18 @@
 //! - A looped tween records frames `0..=framesRequired` and then `-1` back to
 //!   `1` (the ping-pong is done by the frame recorder, not by anime's
 //!   `direction`), giving `2 × framesRequired` frames per cycle.
-//! - Each channel is interpolated between the first and the last `data` row.
-//!   anime treats three or more rows as keyframes; that is **not** ported
-//!   because every tween modV creates (`[[0],[1]]`) has exactly two rows.
-//! - anime applies the easing at time 0 during `reset()`, so frame 0 is
-//!   `ease(0)` (not the raw start value) — this is observable with `steps()`,
-//!   where frame 0 is `1/steps` of the way rather than 0.
+//! - Each channel is sampled the way anime normalises a property array. A
+//!   two-row tween is anime's `[from, to]` shorthand (one tween over the whole
+//!   duration). Three or more rows become one tween per keyframe, each
+//!   `newDuration / rows` long: the first goes from row 0 to keyframe 0 (row
+//!   0 again), so the first `1/rows` of the run holds, then each following
+//!   segment moves through one row. The easing and `steps` quantisation are
+//!   evaluated per segment on local progress, not once across the whole run.
+//!   `data/tween-keyframe-reference.json` records the anime 3.2.2 output.
+//! - anime applies the easing at time 0 during `reset()`, so a two-row tween's
+//!   frame 0 is `ease(0)` (not the raw start value) — observable with
+//!   `steps()`, where it is `1/steps` of the way rather than 0. A 3+ row
+//!   tween's frame 0 is the raw first row because the first segment holds.
 //! - `direction: "reverse"` is effectively a no-op in anime 3.2: `seek()`
 //!   applies the reversed-time adjustment twice, which cancels for every
 //!   sample except the very first one (frame 0 keeps the reset value, which is
@@ -74,7 +80,9 @@
 //!
 //! The reference numbers in `crates/modv-engine/data/tween-reference.json`
 //! were produced by anime.js 3.2.2 itself (see the tests); every easing and
-//! frame is compared against them.
+//! frame is compared against them. `tween-keyframe-reference.json` holds the
+//! multi-keyframe (3+ `data` rows) frames from
+//! `tools/tween-keyframe-reference.mjs`.
 //!
 //! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
@@ -141,7 +149,7 @@ impl Presence {
 pub struct TweenDescriptor {
     /// Tween id (the id of the Input Link that reads it).
     pub id: String,
-    /// Keyframe rows; channel `i` of the tween is `data[0][i] .. data[last][i]`.
+    /// Keyframe rows; channel `i` is the sequence `data[row][i]`.
     pub data: Vec<Vec<f64>>,
     /// Duration in milliseconds (before the `data.length` division).
     pub duration: f64,
@@ -203,7 +211,8 @@ impl TweenDescriptor {
     /// `((60 * 60) / bpm) * bpmDivision`, everything else uses `duration`;
     /// both divide by `data.length` unless `durationAsTotalTime` is set. A
     /// falsy BPM (`0`, `NaN`) falls back to 120 like
-    /// `store.state.beats.bpm || 120`.
+    /// `store.state.beats.bpm || 120`. For 3+ rows this is the total anime
+    /// duration, which anime then splits between its keyframe tweens.
     pub fn effective_duration(&self, bpm: f64) -> f64 {
         let base = if self.use_bpm {
             let bpm = if bpm == 0.0 || bpm.is_nan() {
@@ -635,23 +644,25 @@ fn frames_required(new_duration: f64, fps: f64) -> usize {
     (required.min(MAX_TWEEN_FRAMES as f64)) as usize
 }
 
-/// The start/end value of every channel.
+/// One animated channel: its keyframe values in `data` row order.
+struct Channel {
+    values: Vec<f64>,
+}
+
+/// The per-channel keyframe values of a tween.
 struct Channels {
-    from: Vec<f64>,
-    to: Vec<f64>,
+    channels: Vec<Channel>,
 }
 
 impl Channels {
-    /// Transpose the `data` rows into per-channel start/end values.
+    /// Transpose the `data` rows into per-channel keyframe values.
     ///
     /// `tweens.js:68-83` builds `mapped[index]` from the value at `index` of
-    /// every row; anime then animates a two-entry array from its first to its
-    /// last element. Rows are rectangular in every modV tween, so channel `i`
-    /// runs from `data[0][i]` to `data[last][i]`.
+    /// every row; anime then receives that array as the property value. A row
+    /// that does not have the channel is skipped, matching the JS loop.
     fn from_data(data: &[Vec<f64>]) -> Self {
         let channel_count = data.iter().map(Vec::len).max().unwrap_or(0);
-        let mut from = Vec::with_capacity(channel_count);
-        let mut to = Vec::with_capacity(channel_count);
+        let mut channels = Vec::with_capacity(channel_count);
 
         for channel in 0..channel_count {
             let values: Vec<f64> = data
@@ -659,37 +670,112 @@ impl Channels {
                 .filter_map(|row| row.get(channel).copied())
                 .collect();
 
-            from.push(values.first().copied().unwrap_or(0.0));
-            to.push(values.last().copied().unwrap_or(0.0));
+            channels.push(Channel { values });
         }
 
-        Self { from, to }
+        Self { channels }
     }
 
-    /// The channel values at a share `progress` (0..1) of the animation.
+    /// The channel values at `time` (milliseconds) of the animation.
     ///
-    /// This is anime's `setAnimationsProgress`: `elapsed` is clamped to
-    /// `0..1`, a `NaN` elapsed (zero duration) counts as complete, and each
-    /// channel is `from + eased * (to - from)`.
-    fn sample(&self, tween: &TweenDescriptor, progress: f64) -> Vec<f64> {
-        let progress = if progress.is_nan() {
-            1.0
-        } else {
-            progress.clamp(0.0, 1.0)
-        };
-
-        let eased = if tween.steps != 0.0 && !tween.steps.is_nan() {
-            steps_ease(progress, tween.steps)
-        } else {
-            ease(&tween.easing, progress)
-        };
-
-        self.from
+    /// anime's `setAnimationsProgress`: for a two-value property array the
+    /// single tween runs over the whole duration; for three or more values it
+    /// builds one tween per keyframe (`duration / valueCount` each) and the
+    /// first one holds `data[0]`.
+    fn sample(&self, tween: &TweenDescriptor, time: f64, duration: f64) -> Vec<f64> {
+        self.channels
             .iter()
-            .zip(&self.to)
-            .map(|(from, to)| from + eased * (to - from))
+            .map(|channel| channel.sample(tween, time, duration))
             .collect()
     }
+}
+
+impl Channel {
+    /// Sample this channel at `time`.
+    ///
+    /// The two-row shape is anime's `[from, to]` shorthand: one tween over the
+    /// whole duration. Three or more rows become one tween per keyframe, each
+    /// `duration / values.len()` long; the first goes from the target's
+    /// current value (keyframe 0) to keyframe 0, so it is a hold. The easing
+    /// (and `steps` quantisation) is evaluated on the segment's local progress,
+    /// not across the whole run.
+    fn sample(&self, tween: &TweenDescriptor, time: f64, duration: f64) -> f64 {
+        let values = &self.values;
+
+        match values.len() {
+            0 => 0.0,
+            1 => values[0],
+            2 => {
+                let elapsed = normalize_elapsed(time, duration);
+                interpolate(values[0], values[1], eased(tween, elapsed))
+            }
+            count => {
+                let segment = duration / count as f64;
+                let (active, start) = active_keyframe_tween(count, segment, time);
+                let elapsed = normalize_elapsed(time - start, segment);
+                interpolate(
+                    values[active.saturating_sub(1)],
+                    values[active],
+                    eased(tween, elapsed),
+                )
+            }
+        }
+    }
+}
+
+/// The active tween index and its start time for a 3+ keyframe channel.
+///
+/// anime picks the first tween whose `end` is strictly greater than the seek
+/// time and falls back to the last tween at (or past) the instance duration
+/// (`filterArray(tweens, t => insTime < t.end)[0] || last`). The ends are
+/// accumulated (`start` is the previous end), so this reproduces anime's
+/// floating-point boundary behaviour.
+fn active_keyframe_tween(count: usize, segment: f64, time: f64) -> (usize, f64) {
+    let mut start = 0.0;
+    let mut active_start = 0.0;
+
+    for index in 0..count {
+        active_start = start;
+        let end = start + segment;
+
+        if time < end {
+            return (index, active_start);
+        }
+
+        start = end;
+    }
+
+    (count - 1, active_start)
+}
+
+/// `minMax(value, 0, duration) / duration` as anime computes `elapsed`.
+///
+/// A `NaN` elapsed (zero duration) is kept so [`eased`] can treat it as
+/// complete, like anime's `isNaN(elapsed) ? 1 : easing(elapsed)`.
+fn normalize_elapsed(value: f64, duration: f64) -> f64 {
+    if value.is_nan() || duration.is_nan() {
+        f64::NAN
+    } else {
+        min_max(value, 0.0, duration) / duration
+    }
+}
+
+/// Apply the descriptor's easing (or `steps(n)` quantisation) to `elapsed`.
+fn eased(tween: &TweenDescriptor, elapsed: f64) -> f64 {
+    if elapsed.is_nan() {
+        return 1.0;
+    }
+
+    if tween.steps != 0.0 && !tween.steps.is_nan() {
+        steps_ease(elapsed, tween.steps)
+    } else {
+        ease(&tween.easing, elapsed)
+    }
+}
+
+/// `from + progress × (to - from)`.
+fn interpolate(from: f64, to: f64, progress: f64) -> f64 {
+    from + progress * (to - from)
 }
 
 /// Pre-render the tween's frames, starting at the beginning.
@@ -728,27 +814,17 @@ fn build_frames_with_seek(
     let frames_required = frames_required(new_duration, fps);
     let channels = Channels::from_data(&tween.data);
 
-    // anime computes `elapsed = clamp(insTime, 0, duration) / duration`, so a
-    // zero duration yields `NaN`, which anime treats as "complete" (the end
-    // value).
-    let progress_of = |time: f64| {
-        if new_duration == 0.0 {
-            f64::NAN
-        } else {
-            time / new_duration
-        }
-    };
-
     // The value anime installs during `reset()`, before the first `seek(0)`
-    // runs (which does not update the target): `ease(0)` normally, `ease(1)`
-    // when the instance was created reversed.
+    // runs (which does not update the target): the start of the timeline
+    // normally, the end when the instance was created reversed.
     let reset_frame = channels.sample(
         tween,
-        progress_of(if tween.direction == "reverse" {
+        if tween.direction == "reverse" {
             new_duration
         } else {
             0.0
-        }),
+        },
+        new_duration,
     );
 
     let sample = |frame: usize| {
@@ -756,7 +832,7 @@ fn build_frames_with_seek(
             reset_frame.clone()
         } else {
             let time = (frame as f64 / frames_required as f64) * new_duration;
-            channels.sample(tween, progress_of(time))
+            channels.sample(tween, time, new_duration)
         }
     };
 
@@ -1290,8 +1366,16 @@ mod tests {
     /// whole `penner` easing catalogue.
     const REFERENCE: &str = include_str!("../data/tween-reference.json");
 
+    /// The anime.js multi-keyframe reference: frame dumps for 3..5-row tweens
+    /// (`tools/tween-keyframe-reference.mjs`).
+    const KEYFRAME_REFERENCE: &str = include_str!("../data/tween-keyframe-reference.json");
+
     fn reference() -> Value {
         serde_json::from_str(REFERENCE).expect("tween reference fixture parses")
+    }
+
+    fn keyframe_reference() -> Value {
+        serde_json::from_str(KEYFRAME_REFERENCE).expect("keyframe reference fixture parses")
     }
 
     fn descriptor_from(config: &Value) -> TweenDescriptor {
@@ -1345,6 +1429,103 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn multi_keyframe_frames_match_anime() {
+        // anime normalises a property array of 3+ values into one tween per
+        // keyframe. The reference was generated by
+        // `tools/tween-keyframe-reference.mjs` against the installed animejs
+        // 3.2.2 (same `buildFrames` frame recorder, same `Object.assign`
+        // snapshot); see `crates/modv-engine/data/tween-keyframe-reference.json`.
+        let reference = keyframe_reference();
+        assert_eq!(reference["animeVersion"], json!(ANIME_REFERENCE_VERSION));
+        assert_eq!(
+            reference["generator"],
+            json!("tools/tween-keyframe-reference.mjs")
+        );
+
+        let configs = reference["configs"].as_array().expect("configs array");
+        assert!(configs.len() >= 6, "expected the 3..5-row config set");
+
+        for entry in configs {
+            let config = &entry["config"];
+            let id = config["id"].as_str().expect("config id");
+            let fps = config["fps"].as_f64().expect("fps");
+            let bpm = config["bpm"].as_f64().expect("bpm");
+            let descriptor = descriptor_from(config);
+
+            let frames = build_tween_frames(&descriptor, fps, bpm);
+            let expected = entry["frames"].as_array().expect("frame array");
+
+            assert_eq!(frames.len(), expected.len(), "{id}: frame count");
+
+            for (index, expected_frame) in expected.iter().enumerate() {
+                let expected_channels = expected_frame.as_object().expect("frame object");
+                assert_eq!(
+                    frames[index].len(),
+                    expected_channels.len(),
+                    "{id}: channel count at frame {index}"
+                );
+
+                for (channel, value) in frames[index].iter().enumerate() {
+                    let expected_value = expected_channels[&channel.to_string()]
+                        .as_f64()
+                        .expect("numeric channel");
+                    assert!(
+                        (value - expected_value).abs() < 1e-9,
+                        "{id}: frame {index} channel {channel}: {value} != {expected_value}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multi_keyframes_hold_the_first_row_then_ease_each_segment() {
+        // What anime 3.2.2 measured for three rows: `newDuration` (1000 ms)
+        // divided by three keyframes gives three 333.33 ms tweens. Tween 0
+        // interpolates row 0 -> keyframe 0, i.e. row 0 -> row 0, so the first
+        // third is a hold; the easing then applies inside each remaining
+        // segment rather than across the whole run.
+        let reference = keyframe_reference();
+        let entry = reference["configs"]
+            .as_array()
+            .expect("configs")
+            .iter()
+            .find(|entry| entry["config"]["id"] == json!("three-row-linear-10"))
+            .expect("three-row-linear-10 config");
+        let descriptor = descriptor_from(&entry["config"]);
+        let frames = build_tween_frames(&descriptor, 10.0, 120.0);
+        let values: Vec<f64> = frames.iter().map(|frame| frame[0]).collect();
+
+        // 10 fps over the 1000 ms anime duration: t = 0,100,...,900 ms.
+        assert_eq!(values.len(), 10);
+        assert_eq!(&values[..4], &[0.0, 0.0, 0.0, 0.0]);
+        assert!((values[4] - 0.1).abs() < 1e-12);
+        assert!((values[5] - 0.25).abs() < 1e-12);
+        assert!((values[9] - 0.85).abs() < 1e-12);
+    }
+
+    #[test]
+    fn multi_keyframe_loop_ping_pongs_the_recorded_leg() {
+        let reference = keyframe_reference();
+        let entry = reference["configs"]
+            .as_array()
+            .expect("configs")
+            .iter()
+            .find(|entry| entry["config"]["id"] == json!("three-row-linear-loop-10"))
+            .expect("three-row-linear-loop-10 config");
+        let descriptor = descriptor_from(&entry["config"]);
+        let frames = build_tween_frames(&descriptor, 10.0, 120.0);
+        let values: Vec<f64> = frames.iter().map(|frame| frame[0]).collect();
+
+        // 10 recorded frames per leg, the top value once, then back down.
+        assert_eq!(values.len(), 20);
+        assert_eq!(values[10], 1.0);
+        assert_eq!(values[19], 0.0);
+        assert_eq!(values[11], values[9]);
+        assert_eq!(values[18], values[2]);
     }
 
     #[test]
