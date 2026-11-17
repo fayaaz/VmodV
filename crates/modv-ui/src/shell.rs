@@ -11,18 +11,95 @@ use crate::model::{EngineSnapshot, ModuleMetaView, PropView, gallery_preview_key
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{GalleryCategory, UiAction, UiCommand, UiState};
 use crate::theme;
-use crate::widgets::{ColorControl, RangeControl, TweenControl, VecControl};
+use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 use crate::widgets::range_control::chip;
 
 /// Draw the complete native UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     state.sync_status(snapshot);
+    handle_shortcuts(ui, snapshot, state);
     menu_bar(ui, snapshot, state);
     status_bar(ui, snapshot, state);
     groups_panel(ui, snapshot, state);
     inspector_panel(ui, snapshot, state);
     central_panel(ui, snapshot, state);
     about_window(ui.ctx(), state);
+    shortcuts_window(ui.ctx(), state);
+}
+
+/// Keyboard shortcuts that work globally (outside text fields).
+fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let typing = ui.ctx().memory(|memory| memory.focused().is_some());
+    let (save, apply, search, escape, help) = ui.input(|input| {
+        let command = input.modifiers.command || input.modifiers.ctrl;
+        (
+            command && input.key_pressed(egui::Key::S),
+            command && input.key_pressed(egui::Key::Enter),
+            command && input.key_pressed(egui::Key::K),
+            input.key_pressed(egui::Key::Escape),
+            input.key_pressed(egui::Key::F1),
+        )
+    });
+    if save {
+        state.queue(UiCommand::SaveSnapshot);
+    }
+    if search {
+        state.search_focus = true;
+    }
+    if help {
+        state.show_shortcuts = !state.show_shortcuts;
+    }
+    if escape {
+        state.show_shortcuts = false;
+        state.show_about = false;
+        state.scene_grid.renaming = None;
+        state.scene_grid.timing_edit = None;
+        state.scene_grid.row_names_edit = None;
+    }
+    if apply && !typing {
+        let scene_id = state
+            .selected_scene
+            .clone()
+            .or_else(|| snapshot.performance.current_scene_id.clone())
+            .or_else(|| snapshot.scenes.first().map(|scene| scene.id.clone()));
+        if let Some(scene_id) = scene_id {
+            state.push_action("scenes/applyScene", serde_json::json!({"sceneId": scene_id}));
+        }
+    }
+    // Number keys jump to a Scene column (1-based), matching the legacy row
+    // shortcuts' "number keys are direct selection" convention.
+    if !typing {
+        let digit = ui.input(|input| {
+            for (index, key) in [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if input.key_pressed(key) {
+                    return Some(index);
+                }
+            }
+            None
+        });
+        if let Some(index) = digit
+            && let Some(scene) = snapshot.scenes.get(index)
+        {
+            state.selected_scene = Some(scene.id.clone());
+            state.push_action(
+                "scenes/applyScene",
+                serde_json::json!({"sceneId": scene.id}),
+            );
+        }
+    }
 }
 
 fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -138,6 +215,10 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                 });
 
                 ui.menu_button("Help", |ui| {
+                    if ui.button("Keyboard shortcuts (F1)").clicked() {
+                        state.show_shortcuts = true;
+                        ui.close();
+                    }
                     if ui.button("About modV Native").clicked() {
                         state.show_about = true;
                         ui.close();
@@ -231,8 +312,8 @@ fn status_bar(ui: &mut egui::Ui, _snapshot: &EngineSnapshot, state: &mut UiState
 
 fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     egui::Panel::left("modv-groups")
-        .default_size(224.0)
-        .min_size(168.0)
+        .default_size(250.0)
+        .min_size(190.0)
         .resizable(true)
         .frame(
             egui::Frame::NONE
@@ -265,8 +346,14 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                         );
                     }
 
-                    for group in &snapshot.groups {
-                        let selected = state.selected_group.as_deref() == Some(group.id.as_str());
+                    let group_ids: Vec<String> = snapshot
+                        .groups
+                        .iter()
+                        .map(|group| group.id.clone())
+                        .collect();
+                    for (index, group) in snapshot.groups.iter().enumerate() {
+                        let selected =
+                            state.selected_group.as_deref() == Some(group.id.as_str());
                         let mut enabled = group.enabled;
                         ui.horizontal(|ui| {
                             if ui
@@ -291,7 +378,57 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                 state.selected_group = Some(group.id.clone());
                                 state.selected_module = None;
                             }
+                            if response.double_clicked() {
+                                state.group_name_draft = group.name.clone();
+                                state.group_name_draft_id = Some(group.id.clone());
+                            }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .small_button("x")
+                                    .on_hover_text("Remove Group")
+                                    .clicked()
+                                {
+                                    state.push_action(
+                                        "groups/removeGroup",
+                                        serde_json::json!({ "groupId": group.id }),
+                                    );
+                                    if state.selected_group.as_deref()
+                                        == Some(group.id.as_str())
+                                    {
+                                        state.selected_group = None;
+                                        state.selected_module = None;
+                                    }
+                                }
+                                if ui
+                                    .add_enabled(
+                                        index + 1 < snapshot.groups.len(),
+                                        egui::Button::new("v").small().frame(false),
+                                    )
+                                    .on_hover_text("Move Group down")
+                                    .clicked()
+                                {
+                                    let mut ids = group_ids.clone();
+                                    ids.swap(index, index + 1);
+                                    state.push_action(
+                                        "groups/orderByIds",
+                                        serde_json::json!({ "ids": ids }),
+                                    );
+                                }
+                                if ui
+                                    .add_enabled(
+                                        index > 0,
+                                        egui::Button::new("^").small().frame(false),
+                                    )
+                                    .on_hover_text("Move Group up")
+                                    .clicked()
+                                {
+                                    let mut ids = group_ids.clone();
+                                    ids.swap(index, index - 1);
+                                    state.push_action(
+                                        "groups/orderByIds",
+                                        serde_json::json!({ "ids": ids }),
+                                    );
+                                }
                                 ui.label(
                                     egui::RichText::new(format!("{}", group.module_count()))
                                         .monospace()
@@ -302,8 +439,150 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                         });
 
                         if selected {
-                            ui.indent(("group-modules", &group.id), |ui| {
-                                let modules = snapshot.modules_in_group(&group.id);
+                            ui.indent(("group-controls", &group.id), |ui| {
+                                if state.group_name_draft_id.as_deref()
+                                    != Some(group.id.as_str())
+                                {
+                                    state.group_name_draft = group.name.clone();
+                                    state.group_name_draft_id = Some(group.id.clone());
+                                }
+                                let name_response =
+                                    ui.add(egui::TextEdit::singleline(&mut state.group_name_draft)
+                                        .desired_width(ui.available_width() - 8.0)
+                                        .font(egui::TextStyle::Small));
+                                if name_response.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                                {
+                                    let name = state.group_name_draft.trim().to_string();
+                                    if !name.is_empty() && name != group.name {
+                                        state.push_action(
+                                            "groups/updateGroupName",
+                                            serde_json::json!({
+                                                "groupId": group.id,
+                                                "name": name,
+                                            }),
+                                        );
+                                    }
+                                    state.group_name_draft_id = None;
+                                }
+
+                                let mut alpha = group.alpha;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut alpha, 0.0..=1.0)
+                                            .text("Alpha")
+                                            .max_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    state.push_action(
+                                        "groups/UPDATE_GROUP_BY_KEY",
+                                        serde_json::json!({
+                                            "groupId": group.id,
+                                            "key": "alpha",
+                                            "value": alpha,
+                                        }),
+                                    );
+                                }
+
+                                let mut hidden = group.hidden;
+                                if ui.checkbox(&mut hidden, "Hidden").changed() {
+                                    state.push_action(
+                                        "groups/UPDATE_GROUP_BY_KEY",
+                                        serde_json::json!({
+                                            "groupId": group.id,
+                                            "key": "hidden",
+                                            "value": hidden,
+                                        }),
+                                    );
+                                }
+                                ui.horizontal(|ui| {
+                                    let mut inherit = group.inherit;
+                                    if ui
+                                        .checkbox(&mut inherit, "Inherit")
+                                        .on_hover_text(
+                                            "Inherit the previous Group's canvas",
+                                        )
+                                        .changed()
+                                    {
+                                        state.push_action(
+                                            "groups/UPDATE_GROUP_BY_KEY",
+                                            serde_json::json!({
+                                                "groupId": group.id,
+                                                "key": "inherit",
+                                                "value": inherit,
+                                            }),
+                                        );
+                                    }
+                                    let mut clearing = group.clearing;
+                                    if ui.checkbox(&mut clearing, "Clear").changed() {
+                                        state.push_action(
+                                            "groups/UPDATE_GROUP_BY_KEY",
+                                            serde_json::json!({
+                                                "groupId": group.id,
+                                                "key": "clearing",
+                                                "value": clearing,
+                                            }),
+                                        );
+                                    }
+                                    let mut pipeline = group.pipeline;
+                                    if ui.checkbox(&mut pipeline, "Pipeline").changed() {
+                                        state.push_action(
+                                            "groups/UPDATE_GROUP_BY_KEY",
+                                            serde_json::json!({
+                                                "groupId": group.id,
+                                                "key": "pipeline",
+                                                "value": pipeline,
+                                            }),
+                                        );
+                                    }
+                                });
+
+                                egui::ComboBox::from_id_salt(("group-blend", &group.id))
+                                    .selected_text(&group.composite_operation)
+                                    .width(130.0)
+                                    .show_ui(ui, |ui| {
+                                        for mode in [
+                                            "normal",
+                                            "screen",
+                                            "multiply",
+                                            "overlay",
+                                            "darken",
+                                            "lighten",
+                                            "color-dodge",
+                                            "color-burn",
+                                            "hard-light",
+                                            "soft-light",
+                                            "difference",
+                                            "exclusion",
+                                            "hue",
+                                            "saturation",
+                                            "color",
+                                            "luminosity",
+                                            "add",
+                                        ] {
+                                            if ui
+                                                .selectable_label(
+                                                    group.composite_operation == mode,
+                                                    mode,
+                                                )
+                                                .clicked()
+                                            {
+                                                state.push_action(
+                                                    "groups/UPDATE_GROUP_BY_KEY",
+                                                    serde_json::json!({
+                                                        "groupId": group.id,
+                                                        "key": "compositeOperation",
+                                                        "value": mode,
+                                                    }),
+                                                );
+                                            }
+                                        }
+                                    });
+
+                                ui.separator();
+                                let modules =
+                                    snapshot.modules_in_group(&group.id);
                                 if modules.is_empty() {
                                     ui.label(
                                         egui::RichText::new("empty")
@@ -312,23 +591,117 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                             .color(theme::MUTED),
                                     );
                                 }
-                                for module in modules {
+                                let module_ids: Vec<String> = group.module_ids.clone();
+                                for (module_index, module) in modules.iter().enumerate() {
                                     let selected_module = state.selected_module.as_deref()
                                         == Some(module.id.as_str());
-                                    let label = format!(
-                                        "{}  ({})",
-                                        module.module_name,
-                                        short_id(&module.id)
-                                    );
-                                    if ui
-                                        .selectable_label(
-                                            selected_module,
-                                            egui::RichText::new(label).size(10.0),
-                                        )
-                                        .clicked()
-                                    {
-                                        state.selected_module = Some(module.id.clone());
-                                    }
+                                    ui.horizontal(|ui| {
+                                        let mut module_enabled = module.enabled;
+                                        if ui
+                                            .checkbox(&mut module_enabled, "")
+                                            .changed()
+                                        {
+                                            state.push_action(
+                                                "modules/updateMeta",
+                                                serde_json::json!({
+                                                    "moduleId": module.id,
+                                                    "metaKey": "enabled",
+                                                    "value": module_enabled,
+                                                }),
+                                            );
+                                        }
+                                        let label = format!(
+                                            "{}  ({})",
+                                            module.module_name,
+                                            short_id(&module.id)
+                                        );
+                                        if ui
+                                            .selectable_label(
+                                                selected_module,
+                                                egui::RichText::new(label).size(10.0),
+                                            )
+                                            .clicked()
+                                        {
+                                            state.selected_module = Some(module.id.clone());
+                                        }
+                                        ui.with_layout(
+                                            Layout::right_to_left(Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .small_button("x")
+                                                    .on_hover_text("Remove module")
+                                                    .clicked()
+                                                {
+                                                    state.push_action(
+                                                        "groups/REMOVE_MODULE_FROM_GROUP",
+                                                        serde_json::json!({
+                                                            "groupId": group.id,
+                                                            "moduleId": module.id,
+                                                        }),
+                                                    );
+                                                    state.push_action(
+                                                        "modules/removeActiveModule",
+                                                        serde_json::json!({
+                                                            "moduleId": module.id,
+                                                        }),
+                                                    );
+                                                }
+                                                if ui
+                                                    .add_enabled(
+                                                        module_index + 1 < modules.len(),
+                                                        egui::Button::new("v")
+                                                            .small()
+                                                            .frame(false),
+                                                    )
+                                                    .on_hover_text("Move module down")
+                                                    .clicked()
+                                                {
+                                                    let mut ids = module_ids.clone();
+                                                    ids.swap(module_index, module_index + 1);
+                                                    state.push_action(
+                                                        "groups/REPLACE_GROUP_MODULES",
+                                                        serde_json::json!({
+                                                            "groupId": group.id,
+                                                            "modules": ids,
+                                                        }),
+                                                    );
+                                                }
+                                                if ui
+                                                    .add_enabled(
+                                                        module_index > 0,
+                                                        egui::Button::new("^")
+                                                            .small()
+                                                            .frame(false),
+                                                    )
+                                                    .on_hover_text("Move module up")
+                                                    .clicked()
+                                                {
+                                                    let mut ids = module_ids.clone();
+                                                    ids.swap(module_index, module_index - 1);
+                                                    state.push_action(
+                                                        "groups/REPLACE_GROUP_MODULES",
+                                                        serde_json::json!({
+                                                            "groupId": group.id,
+                                                            "modules": ids,
+                                                        }),
+                                                    );
+                                                }
+                                                if ui
+                                                    .small_button("D")
+                                                    .on_hover_text("Duplicate module")
+                                                    .clicked()
+                                                {
+                                                    state.push_action(
+                                                        "groups/duplicateModule",
+                                                        serde_json::json!({
+                                                            "groupId": group.id,
+                                                            "moduleId": module.id,
+                                                        }),
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    });
                                 }
                             });
                         }
@@ -434,7 +807,7 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                         );
                     }
                     for prop in &module.props {
-                        draw_prop(ui, &module.id, prop, state);
+                        draw_prop(ui, &module.id, prop, snapshot, state);
                     }
                 });
         });
@@ -508,7 +881,13 @@ fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
     );
 }
 
-fn draw_prop(ui: &mut egui::Ui, module_id: &str, prop: &PropView, state: &mut UiState) {
+fn draw_prop(
+    ui: &mut egui::Ui,
+    module_id: &str,
+    prop: &PropView,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+) {
     match prop.prop_type.as_str() {
         "float" | "int" => {
             let value = prop.value.as_f64().unwrap_or(0.0);
@@ -658,25 +1037,29 @@ fn draw_prop(ui: &mut egui::Ui, module_id: &str, prop: &PropView, state: &mut Ui
                 }
             });
         }
-        "texture" | "font" => {
+        "texture" => {
+            let mut control = TextureControl::new(&prop.name, &prop.value);
+            if let Some(value) = control.draw(ui, &snapshot.texture_sources) {
+                state.push_action(
+                    "modules/updateProp",
+                    serde_json::json!({
+                        "moduleId": module_id,
+                        "prop": prop.name,
+                        "data": { "value": value },
+                    }),
+                );
+            }
+        }
+        "font" => {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&prop.name)
                         .size(11.0)
                         .color(theme::MUTED),
                 );
-                chip(ui, &prop.prop_type, theme::MUTED);
-                let summary = match &prop.value {
-                    serde_json::Value::Object(map) => map
-                        .get("type")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("set")
-                        .to_string(),
-                    serde_json::Value::String(value) => value.clone(),
-                    _ => "unset".to_string(),
-                };
+                chip(ui, "font", theme::MUTED);
                 ui.label(
-                    egui::RichText::new(summary)
+                    egui::RichText::new(prop.value.as_str().unwrap_or("default"))
                         .monospace()
                         .size(9.0)
                         .color(theme::MUTED),
@@ -925,11 +1308,15 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             }
         }
         ui.separator();
-        ui.add(
+        let search = ui.add(
             egui::TextEdit::singleline(&mut state.search)
-                .hint_text("Search modules")
+                .hint_text("Search modules  (Ctrl+K)")
                 .desired_width(180.0),
         );
+        if state.search_focus {
+            search.request_focus();
+            state.search_focus = false;
+        }
         ui.label(
             egui::RichText::new(format!("{} registered", snapshot.registered.len()))
                 .size(10.0)
@@ -1085,6 +1472,35 @@ fn gallery_tile(
             ui.close();
         }
     });
+}
+
+fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {
+    egui::Window::new("Keyboard shortcuts")
+        .open(&mut state.show_shortcuts)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let rows = [
+                ("Ctrl/Cmd+K", "Focus Gallery search"),
+                ("Ctrl/Cmd+S", "Save engine snapshot"),
+                ("Ctrl/Cmd+Enter", "Apply the selected Scene"),
+                ("1..9", "Apply Scene column 1..9"),
+                ("F1", "Show this list"),
+                ("F", "Toggle Output Window fullscreen"),
+                ("Escape", "Exit fullscreen / close dialogs"),
+                ("Ctrl+drag", "Copy a Scene cell to another Scene"),
+            ];
+            egui::Grid::new("shortcut-grid")
+                .num_columns(2)
+                .spacing([18.0, 4.0])
+                .show(ui, |ui| {
+                    for (key, action) in rows {
+                        ui.label(egui::RichText::new(key).monospace().color(theme::ACCENT));
+                        ui.label(action);
+                        ui.end_row();
+                    }
+                });
+        });
 }
 
 fn about_window(ctx: &egui::Context, state: &mut UiState) {

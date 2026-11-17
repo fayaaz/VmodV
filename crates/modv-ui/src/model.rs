@@ -40,6 +40,8 @@ pub struct EngineSnapshot {
     pub gallery_previews: HashMap<String, PreviewTexture>,
     /// Scene-cell hover previews keyed by [`scene_preview_key`].
     pub scene_previews: HashMap<String, PreviewTexture>,
+    /// Live texture sources the Inspector's texture picker can bind.
+    pub texture_sources: Vec<TextureSourceView>,
 }
 
 /// One uploaded preview texture (an egui texture owned by the shell).
@@ -58,6 +60,15 @@ pub fn scene_preview_key(scene_id: &str, row: usize) -> String {
 /// The key used by [`EngineSnapshot::gallery_previews`].
 pub fn gallery_preview_key(module_name: &str) -> String {
     format!("module:{module_name}")
+}
+
+/// One live texture source (`group:<id>`, `isf:<id>`, `camera:<id>`, ...).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextureSourceView {
+    pub id: String,
+    pub label: String,
+    /// `group`, `isf`, `two-d`, `point10`, `camera`, `video` or `screen`.
+    pub kind: String,
 }
 
 /// A hover-preview request emitted by the UI and answered by the shell.
@@ -112,6 +123,9 @@ pub struct GroupView {
     pub hidden: bool,
     pub alpha: f32,
     pub composite_operation: String,
+    pub inherit: bool,
+    pub clearing: bool,
+    pub pipeline: bool,
     /// Module ids in group draw order.
     pub module_ids: Vec<String>,
 }

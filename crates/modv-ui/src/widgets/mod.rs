@@ -5,10 +5,12 @@
 
 pub mod color_control;
 pub mod range_control;
+pub mod texture_control;
 pub mod tween_control;
 pub mod vec_control;
 
 pub use color_control::ColorControl;
 pub use range_control::RangeControl;
+pub use texture_control::TextureControl;
 pub use tween_control::TweenControl;
 pub use vec_control::VecControl;
