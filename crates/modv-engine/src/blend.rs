@@ -111,7 +111,8 @@ pub enum BlendMode {
     Lighter,
 }
 
-/// Every blend mode token, in JS menu order, with `screen` appended after the\n/// 15 blend modes (it is a separable blend mode).
+/// Every blend mode token, in JS menu order, with `screen` appended after the
+/// 15 blend modes (it is a separable blend mode).
 pub const ALL_BLEND_MODES: &[BlendMode] = &[
     BlendMode::Normal,
     BlendMode::Multiply,

@@ -34,9 +34,10 @@
 //! | `MODV_CATEGORY` | `category`, normalised through [`normalize_module_category`] |
 //! | `ISFVSN` (effective) | `isf_version` |
 //!
-//! The category aliases are ported verbatim from `module-category.js:1-13`;
-//! an unknown or missing category yields `None`, which leaves the Gallery's
-//! type-based fallback in charge (`Gallery.vue`: ISF defaults to Effects).
+//! The category aliases are ported verbatim from `module-category.js`; an
+//! unknown or missing category yields `None`, which leaves the Gallery's
+//! type-based fallback in charge (`Gallery.vue`: ISF defaults to Effects). The
+//! retired `three` renderer's aliases are absent from both tables.
 
 #![forbid(unsafe_code)]
 
@@ -45,7 +46,8 @@ use serde_json::Value;
 
 use super::parser::{IsfDocument, IsfInput};
 
-/// `CATEGORY_ALIASES` from `module-category.js:1-13`, verbatim.
+/// `CATEGORY_ALIASES` from `module-category.js`, verbatim. The `three` aliases
+/// were removed with the renderer in both runtimes.
 pub const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("effect", "effects"),
     ("effects", "effects"),
@@ -55,9 +57,6 @@ pub const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("3d", "3d-scenes"),
     ("3d-scene", "3d-scenes"),
     ("3d-scenes", "3d-scenes"),
-    ("three", "three"),
-    ("three-js", "three"),
-    ("threejs", "three"),
 ];
 
 /// The prop type an ISF input becomes. Matches the strings
@@ -519,14 +518,12 @@ mod tests {
             normalize_module_category(Some("  EFFECTS  ")).as_deref(),
             Some("effects")
         );
-        assert_eq!(
-            normalize_module_category(Some("three-js")).as_deref(),
-            Some("three")
-        );
-        assert_eq!(
-            normalize_module_category(Some("ThreeJS")).as_deref(),
-            Some("three")
-        );
+        // The `three` renderer is gone; both runtimes dropped its aliases, so
+        // these must fall through to `None` (the Gallery's type-based
+        // fallback) instead of minting a category no Gallery section offers.
+        assert_eq!(normalize_module_category(Some("three")), None);
+        assert_eq!(normalize_module_category(Some("three-js")), None);
+        assert_eq!(normalize_module_category(Some("ThreeJS")), None);
         assert_eq!(normalize_module_category(Some("Blur")), None);
         assert_eq!(normalize_module_category(Some("   ")), None);
         assert_eq!(normalize_module_category(Some("")), None);
@@ -535,13 +532,10 @@ mod tests {
 
     #[test]
     fn category_aliases_are_the_documented_table() {
-        assert_eq!(CATEGORY_ALIASES.len(), 11);
+        assert_eq!(CATEGORY_ALIASES.len(), 8);
         for (alias, value) in CATEGORY_ALIASES {
             assert!(!alias.is_empty());
-            assert!(matches!(
-                *value,
-                "effects" | "2d-scenes" | "3d-scenes" | "three"
-            ));
+            assert!(matches!(*value, "effects" | "2d-scenes" | "3d-scenes"));
         }
     }
 }

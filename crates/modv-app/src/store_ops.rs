@@ -5702,7 +5702,7 @@ mod tests {
             .as_object()
             .expect("state/sync includes registered modules");
         assert!(
-            registered.len() >= 37 + 15 + 18,
+            registered.len() >= 36 + 15 + 27,
             "expected every built-in module, got {}",
             registered.len()
         );

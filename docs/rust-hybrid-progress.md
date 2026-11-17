@@ -23,8 +23,8 @@ Tooling: the engine builds only inside Docker (`make engine` / `engine-test` /
   bass 0.85 / mid 0.48 / treble 0.30, beat envelope 1.0, tempo 160 BPM, lane
   spread 0.42 (`MODV_AUDIO_FIXTURE=… cargo test -p modv-media --test
   audio_stream_fixture`).
-- Packaged-engine smoke (CDP, `MODV_ENGINE=1`): the Gallery renders all **429**
-  registered modules (36 shader + 15 2D + 26 Point10 + 354 ISF) with engine
+- Packaged-engine smoke (CDP, `MODV_ENGINE=1`): the Gallery renders all **432**
+  registered modules (36 shader + 15 2D + 27 Point10 + 354 ISF) with engine
   thumbnails; Scene hover previews paint the hovered cell; BPM tweens animate
   (Chromantic Line `smoothing` 0.252 → 0.209 over 0.9 s); the status bar shows
   live FPS/size and the detected BPM.
@@ -71,7 +71,7 @@ Tooling: the engine builds only inside Docker (`make engine` / `engine-test` /
 - e2e: **144/144 pass** against the packaged AppImage — the full legacy suite
   plus the engine-mode specs (`engineSkeleton`: preview frames publish, engine
   kill survived and restarted, renderer creates no WebGL/WebGPU context;
-  `engineParity`: 424 registered modules, audio-link min/max, Point10
+  `engineParity`: 432 registered modules, audio-link min/max, Point10
   transparency, output preview pixels).
 - Packaged-engine smoke (CDP against the AppImage, `MODV_ENGINE=1`): the UI
   mirror receives all **59 seeded Scenes** via `state/sync`; applying the
@@ -258,11 +258,12 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
 ## Known gaps (M7 sign-off)
 
 - **Module parity vs the legacy AppImage**: quantified in
-  [module-parity.md](./module-parity.md) — the engine registers 429 modules vs the
-  legacy renderer's 432 (missing `Point10 Earth`, `Point10 Sun`, `Cube`), plus
-  registered-but-inert gaps (Texture 2D, ISF image inputs/transitions, no
-  third-party module install path). Verified-clean areas and the fix order are
-  listed there.
+  [module-parity.md](./module-parity.md) — both runtimes register the same
+  **432** modules (36 shader + 15 2D + 27 Point10 + 354 ISF). `Point10 Earth`
+  and `Point10 Sun` are ported, and the `three` renderer/`Cube` is gone from
+  both sides; Texture 2D, ISF image inputs and ISF transitions are
+  engine-owned now. The remaining gap is third-party module loading (no engine
+  install path), plus the prop/meta hygiene items listed there.
 - **Engine stays opt-in (`MODV_ENGINE=1`).** Cameras and video files are now
   engine-owned, but engine-mode **screen capture** waits on an Electron API
   that exposes the portal PipeWire node id (the GStreamer `pipewiresrc` path is
@@ -270,7 +271,8 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   is not modelled (restart the source). The built-in `grab-canvas` plugin
   needs the worker's composited output canvas and is disabled with a reason.
 - Expressions and plugin hooks are now engine-supported; `osc` in expression
-  scope is empty until the engine owns OSC receive state. Expression source is
+  scope is still the empty object (`osc/*` listeners feed `osc.data` Input
+  Links, but expressions are not handed that state). Expression source is
   capped and a denylist rejects native allocation/loop/context escapes; the
   engine trusts user presets but not hostile shared playlists with arbitrary
   JS.
@@ -280,8 +282,10 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   default Scenes put these layers on black rows, so current content is
   unaffected (documented decision: keep the scene outputs straight until a
   composite-time premultiply flag lands).
-- Custom/third-party ISF transitions are not available: the six native
-  transitions are ported, the picker filters unknown names to Fade.
+- ISF transition-shaped modules render as Scene transitions: the six native
+  transitions plus the 27 transition-capable ISF corpus shaders; unknown names
+  still filter to Fade. Third-party ISF transition shaders follow the
+  module-loading gap above (no engine install path yet).
 - The ISF corpus translates 354/354 fragments and 36/36 vertex sidecars with
   no overrides; the override mechanism (embedded, fingerprinted, validated)
   remains for third-party shaders. The corpus gate asserts a checked-in
@@ -290,11 +294,13 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   AppImage relies on the host providing it (standard on current distros). The
   `.deb` depends on the distro's package set; `MODV_ENGINE=0` (the default)
   never launches the engine, so the legacy renderer still runs without it.
-- Engine-mode UI marks MIDI and OSC as unavailable; plugins and local-font
-  panels only get the boot warning, and the BPM panel's MIDI source remains
-  selectable (it cannot work without MIDI). Output Windows are native engine
-  windows now (see "Post-review parity fixes"), so the View menu item and the
-  `windows/createWindow` action stay enabled in both modes.
+- Engine-mode UI keeps MIDI, OSC and local fonts enabled: `midi/*`
+  device/channel state, explicit OSC listeners (`osc.data` Input Links) and
+  `fonts/SET_LOCAL_FONTS` all have engine arms, so the MIDI panel, the BPM
+  panel's MIDI source and the OSC Listen/Stop control work. Output Windows are
+  native engine windows now (see "Post-review parity fixes"), so the View menu
+  item and the `windows/createWindow` action stay enabled in both modes. The
+  boot warning names only JavaScript plugins.
 - Shader transitions freeze the outgoing frame and render at full output size
   (the JS re-renders the outgoing groups and caps the transition target at
   1920×1080): behaviour parity, not pixel parity.
@@ -444,11 +450,11 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   `groups/focusGalleryItem`), `groups/orderByIds` and
   `groups/duplicateModule` (fresh inputs, links and expressions carried over)
   are implemented, as are `beats/SET_BPM_SOURCE` (tap/MIDI BPM only applies
-  from the selected source) and `fonts/SET_LOCAL_FONTS`. Still hitting the
-  wildcard: `groups/SWAP`/`modules/SWAP`, `dataTypes/createType`, `media/*`,
-  `midi/learn`, `ndi/*`, `osc/createServer`, `scenePreview/*` and the
-  `outputs/*` auxiliary-canvas actions (`windows/createWindow` is implemented
-  natively now).
+  from the selected source), `fonts/SET_LOCAL_FONTS`, `dataTypes/createType`,
+  the `ndi/*` actions and `osc/createServer`. Still hitting the wildcard:
+  `groups/SWAP`/`modules/SWAP` (acknowledged no-ops), `media/*`, `midi/learn`,
+  `scenePreview/*` and the `outputs/*` auxiliary-canvas actions
+  (`windows/createWindow` is implemented natively now).
 - **Point10 Old Movie retired.** The sepia/scratch shader effect is removed from
   both catalogues (`Point10Effects.js` and the Rust WGSL port), leaving 30
   Point10 effects / 36 shader modules. Its only shipped preset use — Boxy
