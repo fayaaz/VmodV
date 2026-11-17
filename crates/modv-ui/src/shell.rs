@@ -145,7 +145,11 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Save snapshot").clicked() {
+                    if ui.button("Save preset").clicked() {
+                        state.queue(UiCommand::SavePreset);
+                        ui.close();
+                    }
+                    if ui.button("Save engine snapshot").clicked() {
                         state.queue(UiCommand::SaveSnapshot);
                         ui.close();
                     }

@@ -206,6 +206,9 @@ pub struct Cli {
     pub list_audio_devices: bool,
     /// Native shell only: apply this Scene name/id after seeding.
     pub apply_scene: Option<String>,
+    /// Native shell only: load a preset/Scene document at startup and use it
+    /// as the default "Save preset" target.
+    pub preset: Option<PathBuf>,
 }
 
 impl Cli {
@@ -323,6 +326,12 @@ pub fn parse() -> Cli {
                 .help("Native shell: apply this Scene name/id after seeding"),
         )
         .arg(
+            Arg::new("preset")
+                .long("preset")
+                .value_name("PATH")
+                .help("Native shell: load a preset/Scene at startup (and save back here)"),
+        )
+        .arg(
             Arg::new("emit-fixtures")
                 .long("emit-fixtures")
                 .value_name("DIR")
@@ -418,6 +427,7 @@ pub fn parse() -> Cli {
         audio_device,
         list_audio_devices: matches.get_flag("list-audio-devices"),
         apply_scene: matches.get_one::<String>("apply-scene").cloned(),
+        preset: matches.get_one::<String>("preset").map(PathBuf::from),
     }
 }
 

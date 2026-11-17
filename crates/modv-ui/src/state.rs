@@ -45,6 +45,7 @@ pub enum UiCommand {
     CloseOutputWindow,
     ToggleOutputFullscreen,
     SaveSnapshot,
+    SavePreset,
     FlushLogs,
 }
 

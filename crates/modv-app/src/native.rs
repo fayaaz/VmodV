@@ -179,6 +179,11 @@ impl NativeApp {
                 .map_or(0, serde_json::Map::len)
         );
 
+        if let Some(path) = &cli.preset
+            && let Err(error) = load_preset_from(path, &mut store)
+        {
+            eprintln!("ui: WARN could not load preset {}: {error}", path.display());
+        }
         apply_startup_scene(&mut store, cli.apply_scene.as_deref());
         let audio_feed = open_native_audio(&cli);
 
@@ -838,6 +843,7 @@ impl NativeApp {
                 UiCommand::CloseOutputWindow => self.close_output(),
                 UiCommand::ToggleOutputFullscreen => self.toggle_output_fullscreen(),
                 UiCommand::SaveSnapshot => self.save_snapshot(),
+                UiCommand::SavePreset => self.save_preset(),
                 UiCommand::FlushLogs => {}
             }
         }
@@ -1405,6 +1411,21 @@ impl NativeApp {
         self.last_error = Some(message);
     }
 
+    fn save_preset(&mut self) {
+        let path = self
+            .cli
+            .preset
+            .clone()
+            .unwrap_or_else(|| user_data_dir().join("native-preset.json"));
+        match save_preset_to(&path, &self.store) {
+            Ok(()) => eprintln!("ui: INFO preset saved to {}", path.display()),
+            Err(error) => self.record_error(format!(
+                "could not save preset {}: {error}",
+                path.display()
+            )),
+        }
+    }
+
     fn save_snapshot(&mut self) {
         let Some(path) = &self.cli.state else {
             return;
@@ -1592,6 +1613,25 @@ fn acquire_surface(
 ///
 /// Packaging moves the corpus to `resources/isf`; during development it still
 /// lives beside the legacy renderer tree. `$MODV_ISF_DIR` and `--isf-dir` win.
+/// Write the six-key preset document for `store` to `path`.
+fn save_preset_to(path: &Path, store: &Store) -> std::io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let document = store.snapshot();
+    let text = serde_json::to_string_pretty(&document).map_err(std::io::Error::other)?;
+    std::fs::write(path, text)
+}
+
+/// Load a preset/Scene document from `path` into `store`.
+fn load_preset_from(path: &Path, store: &mut Store) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let document: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    store.restore(&document).map_err(|error| error.to_string())
+}
+
 /// Apply a Scene by exact name or id after the store has seeded its defaults.
 ///
 /// Used by `modv --apply-scene <name>` for reproducible performance demos and
@@ -1944,6 +1984,43 @@ mod tests {
             native_audio_sources(AudioSourceSelection::Pipewire),
             vec![AudioSourceSelection::Pipewire]
         );
+    }
+
+    #[test]
+    fn preset_round_trip_restores_groups_and_modules() {
+        let mut store = Store::new();
+        let group = store
+            .dispatch("groups/createGroup", serde_json::json!({"name": "Round Trip"}))
+            .expect("create group");
+        let group_id = group["id"].as_str().expect("group id").to_string();
+        let module = store
+            .dispatch(
+                "modules/makeActiveModule",
+                serde_json::json!({"moduleName": "Bands"}),
+            )
+            .expect("create module");
+        let module_id = module["$id"].as_str().expect("module id").to_string();
+        store
+            .dispatch(
+                "groups/ADD_MODULE_TO_GROUP",
+                serde_json::json!({"groupId": group_id, "moduleId": module_id}),
+            )
+            .expect("add module");
+
+        let path = std::env::temp_dir().join(format!(
+            "modv-native-preset-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        save_preset_to(&path, &store).expect("save preset");
+        let mut restored = Store::new();
+        load_preset_from(&path, &mut restored).expect("load preset");
+        assert_eq!(restored.state().groups.len(), 1);
+        assert_eq!(restored.state().modules.len(), 1);
+        assert_eq!(restored.state().groups[0].name, "Round Trip");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
