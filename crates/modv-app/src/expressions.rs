@@ -30,13 +30,16 @@
 //!
 //! # Performance
 //!
-//! Compilation is a Boa parse plus wrapper evaluation; it runs only when
-//! assignments change (create/update/remove, preset or Scene load). Evaluation
-//! is one JS call with four JSON ↔ JS conversions. Expressions run on the
-//! engine's main (window/event-loop) thread, so a pathological expression is
-//! capped by the evaluator's runtime limits; ordinary expressions are
-//! nanoseconds-to-microseconds and the every-frame path evaluates each input at
-//! most once per frame.
+//! Compilation is a Boa parse for the allowlist validator, a second parse for
+//! the wrapper, and one wrapper evaluation; it runs only when assignments
+//! change (create/update/remove, preset or Scene load). Evaluation is one JS
+//! call with four JSON ↔ JS conversions. Expressions run on the engine's main
+//! (window/event-loop) thread. Hostile constructs are rejected at compile time
+//! by the engine's AST allowlist rather than by a wall-clock budget (Boa 0.22
+//! has no budgeted call path; see `modv_engine::expressions`), so a rejected
+//! assignment is reported as an [`ExpressionFailure`] and skipped. Ordinary
+//! expressions are nanoseconds-to-microseconds and the every-frame path
+//! evaluates each input at most once per frame.
 
 use std::collections::HashMap;
 
@@ -678,6 +681,66 @@ mod tests {
                 .apply("in-1", &json!(1), &json!(1), &json!({}), 0.0)
                 .unwrap(),
             Some(Value::Null)
+        );
+    }
+
+    #[test]
+    fn hostile_expressions_are_skipped_and_reported() {
+        let mut state = EngineState::new();
+        let hostile = [
+            "({}).constructor.constructor(\"return 1\")()",
+            "'x'.padStart(1e9)",
+            "'x'.repeat(1e9)",
+            "2n ** 99999999n",
+            "value.split('')",
+            "while (true) {}",
+        ];
+        for (index, source) in hostile.iter().enumerate() {
+            let id = format!("hostile-{index}");
+            state.expressions.insert(
+                id.clone(),
+                assignment(&id, &format!("in-hostile-{index}"), source),
+            );
+        }
+        let mut cache = ExpressionCache::new();
+        let failures = cache.rebuild(&state);
+        assert_eq!(failures.len(), hostile.len());
+        for index in 0..hostile.len() {
+            assert!(!cache.has(&format!("in-hostile-{index}")));
+        }
+        assert!(failures.iter().all(|failure| !failure.message.is_empty()));
+    }
+
+    #[test]
+    fn normal_math_expression_matches_the_js_store() {
+        let mut state = EngineState::new();
+        state.expressions.insert(
+            "safe".into(),
+            assignment("safe", "in-safe", "Math.sin(time) * 0.5 + value"),
+        );
+        let mut cache = ExpressionCache::new();
+        assert!(cache.rebuild(&state).is_empty());
+        assert!(cache.has("in-safe"));
+
+        // `Math.sin(0) * 0.5 + 0.25` is `0.25`; the engine must keep the same
+        // values for ordinary preset expressions after the sandbox hardening.
+        assert_eq!(
+            cache
+                .apply("in-safe", &json!(0.25), &json!(0), &json!({}), 0.0)
+                .unwrap(),
+            Some(json!(0.25))
+        );
+        assert_eq!(
+            cache
+                .apply(
+                    "in-safe",
+                    &json!(0.5),
+                    &json!(0),
+                    &json!({}),
+                    std::f64::consts::FRAC_PI_2
+                )
+                .unwrap(),
+            Some(json!(1))
         );
     }
 }
