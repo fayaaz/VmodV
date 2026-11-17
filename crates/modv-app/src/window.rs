@@ -673,10 +673,10 @@ impl WindowedApp {
         // 1. Apply control-socket mutations before rendering the frame.
         if let Some(supervisor) = &mut self.supervisor {
             supervisor.poll(&mut self.store);
-            if supervisor.take_reset_request() {
-                if let Some(compositor) = &mut self.compositor {
-                    compositor.reset();
-                }
+            if supervisor.take_reset_request()
+                && let Some(compositor) = &mut self.compositor
+            {
+                compositor.reset();
             }
         }
 
@@ -708,7 +708,8 @@ impl WindowedApp {
         // a media-directory change).
         let media_root = self.store.media_root().map(std::path::Path::to_path_buf);
         if media_root != self.applied_media_root {
-            if let (Some(compositor), Some(root)) = (self.compositor.as_mut(), media_root.as_deref())
+            if let (Some(compositor), Some(root)) =
+                (self.compositor.as_mut(), media_root.as_deref())
             {
                 compositor.set_media_root(root);
             }
@@ -837,14 +838,14 @@ impl WindowedApp {
         };
 
         // 2. Render the state into the compositor's main texture.
-        if let Some(compositor) = &mut self.compositor {
-            if let Err(error) = compositor.render_frame(self.store.state(), &frame_info) {
-                eprintln!("error: compositor frame failed: {error}");
-                self.failed = true;
-                self.fail_pending_previews();
-                event_loop.exit();
-                return;
-            }
+        if let Some(compositor) = &mut self.compositor
+            && let Err(error) = compositor.render_frame(self.store.state(), &frame_info)
+        {
+            eprintln!("error: compositor frame failed: {error}");
+            self.failed = true;
+            self.fail_pending_previews();
+            event_loop.exit();
+            return;
         }
 
         let Some(surface) = &mut self.surface else {
@@ -871,7 +872,7 @@ impl WindowedApp {
                 // time (GPU contention). Skip the frame; only repeated
                 // timeouts in a row are fatal.
                 self.consecutive_timeouts = self.consecutive_timeouts.saturating_add(1);
-                if self.consecutive_timeouts == 1 || self.consecutive_timeouts % 60 == 0 {
+                if self.consecutive_timeouts == 1 || self.consecutive_timeouts.is_multiple_of(60) {
                     eprintln!(
                         "engine: WARN surface acquire timed out ({} in a row); skipping frame",
                         self.consecutive_timeouts
@@ -946,23 +947,24 @@ impl WindowedApp {
         self.submit_ndi_frame();
 
         // 3. Publish a preview frame at the supervisor's cadence (≤ 30 fps).
-        if let Some(supervisor) = &mut self.supervisor {
-            if supervisor.preview_due() && self.compositor.is_some() {
-                let mut preview = None;
-                if let Some(ring) = supervisor.preview_ring_mut() {
-                    if let Some(compositor) = &mut self.compositor {
-                        preview = compositor.read_preview(ring).unwrap_or_else(|error| {
-                            if !self.preview_error_logged {
-                                self.preview_error_logged = true;
-                                eprintln!("engine: WARN preview read-back failed: {error}");
-                            }
-                            None
-                        });
+        if let Some(supervisor) = &mut self.supervisor
+            && supervisor.preview_due()
+            && self.compositor.is_some()
+        {
+            let mut preview = None;
+            if let Some(ring) = supervisor.preview_ring_mut()
+                && let Some(compositor) = &mut self.compositor
+            {
+                preview = compositor.read_preview(ring).unwrap_or_else(|error| {
+                    if !self.preview_error_logged {
+                        self.preview_error_logged = true;
+                        eprintln!("engine: WARN preview read-back failed: {error}");
                     }
-                }
-                if let Some(frame) = preview {
-                    supervisor.publish_preview(frame);
-                }
+                    None
+                });
+            }
+            if let Some(frame) = preview {
+                supervisor.publish_preview(frame);
             }
         }
 

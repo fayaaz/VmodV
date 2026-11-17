@@ -117,10 +117,10 @@ impl AssetLoader {
     /// fallback.
     pub fn for_assets_dir(assets_dir: Option<&Path>) -> Self {
         let mut dirs = Vec::with_capacity(3);
-        if let Some(from_env) = std::env::var_os(ASSETS_DIR_ENV) {
-            if !from_env.is_empty() {
-                dirs.push(PathBuf::from(from_env));
-            }
+        if let Some(from_env) = std::env::var_os(ASSETS_DIR_ENV)
+            && !from_env.is_empty()
+        {
+            dirs.push(PathBuf::from(from_env));
         }
         if let Some(dir) = assets_dir {
             dirs.push(dir.to_path_buf());
@@ -434,9 +434,8 @@ fn downsample_2x2(width: u32, height: u32, source: &[u8]) -> (u32, u32, Vec<u8>)
                         }
                     }
                 }
-                if count > 0 {
-                    data[((y * next_width + x) * 4) as usize + channel] =
-                        ((sum + count / 2) / count) as u8;
+                if let Some(average) = (sum + count / 2).checked_div(count) {
+                    data[((y * next_width + x) * 4) as usize + channel] = average as u8;
                 }
             }
         }
@@ -546,7 +545,14 @@ mod tests {
         assert!(pixel(4, 4)[0] < pixel(40, 4)[0]);
         // Compare as i32: a u8 + 200 can overflow in debug builds.
         assert!(i32::from(pixel(40, 40)[0]) < i32::from(pixel(40, 4)[0]) + 200);
-        assert!(image.rgba.chunks_exact(4).all(|texel| texel[3] == 255));
+        assert!(
+            image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|texel| texel[3] == 255)
+        );
     }
 
     #[test]

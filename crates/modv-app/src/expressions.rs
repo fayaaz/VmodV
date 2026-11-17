@@ -65,6 +65,7 @@ struct CompiledExpression {
     /// The source, kept for diagnostics.
     source: String,
     /// Whether the assignment should also run once per frame.
+    #[cfg_attr(not(test), allow(dead_code))]
     evaluate_every_frame: bool,
     /// The compiled function.
     handle: ExpressionHandle,
@@ -178,6 +179,7 @@ impl ExpressionCache {
     }
 
     /// Number of compiled expressions (tests/diagnostics).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn len(&self) -> usize {
         self.by_input.len()
     }
@@ -228,6 +230,7 @@ impl ExpressionCache {
     ///
     /// At most one entry per input (the first assignment wins), so the
     /// per-frame loop cannot evaluate the same target twice.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn every_frame_inputs(&self) -> Vec<String> {
         self.by_input
             .iter()
@@ -237,6 +240,7 @@ impl ExpressionCache {
     }
 
     /// The assignment id compiled for `input_id`, if any.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn assignment_id_for(&self, input_id: &str) -> Option<&str> {
         self.by_input
             .get(input_id)

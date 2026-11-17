@@ -102,15 +102,16 @@ use modv_engine::engine_state::{
     GALLERY_GROUP_NAME, GROUP_ENABLED, Group, InheritFrom, ModuleInstance,
 };
 use modv_engine::inputs::{Input, InputLink};
-use modv_engine::props::coerce_prop_value;
 use modv_engine::preset::create_preset_from_state;
+use modv_engine::props::coerce_prop_value;
 use modv_engine::scene_capture::{capture_live_state, collect_scene_groups, scene_has_groups};
 use modv_engine::scene_cells::{clear_scene_cell_modules, copy_scene_cell, merge_scene_cell};
-use modv_engine::scene_rows::get_row_label;
+use modv_engine::scene_columns::{EmptySceneOptions, create_empty_scene, move_scene_to_index};
 use modv_engine::scene_link_defaults::{
     LinkMode, default_link_for_input, default_link_tween, get_bass_link_range, get_bpm_link_range,
     is_auto_link_excluded,
 };
+use modv_engine::scene_rows::get_row_label;
 use modv_engine::scene_rows::{
     assign_scene_row_indexes, get_row_count, get_row_group_index, is_row_cell_empty,
     matches_row_name, normalize_row_names, row_family_is_shared, strict_matches_row_name,
@@ -120,9 +121,6 @@ use modv_engine::scene_timing::{
     to_finite_number,
 };
 use modv_engine::scene_transition_pick::{FADE_TRANSITION, NONE_TRANSITION};
-use modv_engine::scene_columns::{
-    EmptySceneOptions, create_empty_scene, move_scene_to_index,
-};
 use modv_engine::scenes_playlist::{
     ImportMode, export_playlist, generate_scene_id, import_playlist_with,
     normalize_performance_data, normalize_transition_list,
@@ -605,10 +603,10 @@ impl Store {
             "performance": performance,
         });
         let bytes = serde_json::to_vec(&payload).map_err(io::Error::other)?;
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         let tmp = PathBuf::from(format!("{}.tmp", path.display()));
         fs::write(&tmp, bytes)?;
@@ -804,20 +802,18 @@ impl Store {
                         .position(|group| group.id == group_id)
                 })
                 .unwrap_or(self.state.groups.len());
-            let mut insert_at = anchor;
             let mut from = Vec::new();
-            for mut group in old_groups {
+            for (insert_at, mut group) in (anchor..).zip(old_groups) {
                 // The ghost reuses the outgoing Modules but not the Group
                 // control inputs, which belong to the replaced Group.
                 for (_, key) in GROUP_CONTROL_INPUTS {
-                    if let Some(input_id) = group_input_id(&group, *key) {
+                    if let Some(input_id) = group_input_id(&group, key) {
                         self.remove_input(&input_id);
                     }
-                    set_group_input_id(&mut group, *key, None);
+                    set_group_input_id(&mut group, key, None);
                 }
                 from.push((group.id.clone(), group.alpha));
                 self.state.groups.insert(insert_at, group);
-                insert_at += 1;
             }
             if !shader {
                 for (group_id, _) in &created_alphas {
@@ -920,7 +916,7 @@ impl Store {
         let mut stale_input_ids: HashSet<String> = HashSet::new();
         if let Some(group) = &old_group {
             for (_, key) in GROUP_CONTROL_INPUTS {
-                if let Some(input_id) = group_input_id(group, *key) {
+                if let Some(input_id) = group_input_id(group, key) {
                     stale_input_ids.insert(input_id);
                 }
             }
@@ -986,7 +982,7 @@ impl Store {
             // The replaced Group's control inputs are stale; the incoming
             // Group owns fresh ones and the ghost needs none.
             for (_, key) in GROUP_CONTROL_INPUTS {
-                if let Some(input_id) = group_input_id(&old, *key) {
+                if let Some(input_id) = group_input_id(&old, key) {
                     self.remove_input(&input_id);
                 }
             }
@@ -1153,11 +1149,11 @@ impl Store {
 
         let mut updated = scene;
         if let Value::Object(object) = &mut updated {
+            object.insert("groups".to_string(), Value::Array(cleared.groups.clone()));
             object.insert(
-                "groups".to_string(),
-                Value::Array(cleared.groups.clone()),
+                "modules".to_string(),
+                Value::Object(cleared.modules.clone()),
             );
-            object.insert("modules".to_string(), Value::Object(cleared.modules.clone()));
         }
         self.scenes.scenes[index] = updated.clone();
 
@@ -1171,7 +1167,8 @@ impl Store {
                     json!({ "moduleId": module_id }),
                 )?;
             }
-            self.deltas.push("scenes/SET_ACTIVE_ROWS", self.live_scene_rows());
+            self.deltas
+                .push("scenes/SET_ACTIVE_ROWS", self.live_scene_rows());
         }
 
         self.touch_scene_list();
@@ -1206,9 +1203,12 @@ impl Store {
         else {
             return Ok(Value::Null);
         };
-        if !self.scenes.scenes.iter().any(|scene| {
-            scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str())
-        }) {
+        if !self
+            .scenes
+            .scenes
+            .iter()
+            .any(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str()))
+        {
             return Ok(Value::Null);
         }
 
@@ -1293,12 +1293,9 @@ impl Store {
         else {
             return Ok(Value::Null);
         };
-        let Some(index) = self
-            .scenes
-            .scenes
-            .iter()
-            .position(|scene| scene.get("id").and_then(Value::as_str) == Some(to_scene_id.as_str()))
-        else {
+        let Some(index) = self.scenes.scenes.iter().position(|scene| {
+            scene.get("id").and_then(Value::as_str) == Some(to_scene_id.as_str())
+        }) else {
             return Ok(Value::Null);
         };
         let to_scene = self.scenes.scenes[index].clone();
@@ -2178,7 +2175,7 @@ impl Store {
         }
 
         for (_, key) in GROUP_CONTROL_INPUTS {
-            if let Some(input_id) = group_input_id(&group, *key) {
+            if let Some(input_id) = group_input_id(&group, key) {
                 self.remove_input(&input_id);
             }
         }
@@ -2290,7 +2287,7 @@ impl Store {
                 location: Some("groups/UPDATE_GROUP_BY_KEY".to_string()),
             };
             self.insert_input(input);
-            set_group_input_id(&mut group, *key, Some(input_id.clone()));
+            set_group_input_id(&mut group, key, Some(input_id.clone()));
             if let Some(old_id) = snapshot.get(*key).and_then(Value::as_str) {
                 input_map.insert(old_id.to_string(), input_id);
             }
@@ -3074,8 +3071,8 @@ fn apply_default_scene_input_links(definition: &SceneDocument, build: &mut Scene
             continue;
         };
         let range = modv_engine::scene_link_defaults::LinkRange {
-            min: link.min.unwrap_or_else(|| target.fallback_range.min),
-            max: link.max.unwrap_or_else(|| target.fallback_range.max),
+            min: link.min.unwrap_or(target.fallback_range.min),
+            max: link.max.unwrap_or(target.fallback_range.max),
         };
         if link.source.as_deref() == Some("tween") {
             create_bpm_tween_link(
@@ -3234,10 +3231,9 @@ fn find_module_link_target(
             .groups
             .iter()
             .position(|group| group.get("name").and_then(Value::as_str) == Some(*name))
+            && !order.contains(&index)
         {
-            if !order.contains(&index) {
-                order.push(index);
-            }
+            order.push(index);
         }
     }
     for index in 0..build.groups.len() {
@@ -3327,10 +3323,9 @@ fn find_group_alpha_target(
             .groups
             .iter()
             .position(|group| group.get("name").and_then(Value::as_str) == Some(*name))
+            && !candidates.contains(&index)
         {
-            if !candidates.contains(&index) {
-                candidates.push(index);
-            }
+            candidates.push(index);
         }
     }
     for index in 0..build.groups.len() {
@@ -3341,18 +3336,18 @@ fn find_group_alpha_target(
 
     for group_index in candidates {
         let group = &build.groups[group_index];
-        if let Some(input_id) = group_control_input_id(group, "alpha") {
-            if !excluded.contains(&input_id) {
-                return Some(LinkTarget {
-                    input_id,
-                    module: None,
-                    prop_name: "alpha".to_string(),
-                    fallback_range: modv_engine::scene_link_defaults::LinkRange {
-                        min: 0.55,
-                        max: 1.0,
-                    },
-                });
-            }
+        if let Some(input_id) = group_control_input_id(group, "alpha")
+            && !excluded.contains(&input_id)
+        {
+            return Some(LinkTarget {
+                input_id,
+                module: None,
+                prop_name: "alpha".to_string(),
+                fallback_range: modv_engine::scene_link_defaults::LinkRange {
+                    min: 0.55,
+                    max: 1.0,
+                },
+            });
         }
     }
     None
@@ -3444,10 +3439,10 @@ fn collect_scoped_scene_data(
             continue;
         };
         input_links.insert(input_id.clone(), json_value(link));
-        if link.source.as_deref() == Some("tween") {
-            if let Some(tween) = find_tween(&state.tweens, input_id) {
-                tweens.push(tween);
-            }
+        if link.source.as_deref() == Some("tween")
+            && let Some(tween) = find_tween(&state.tweens, input_id)
+        {
+            tweens.push(tween);
         }
     }
 
@@ -3563,7 +3558,7 @@ fn parse_stored_scenes(stored: &Value) -> Option<ParsedStoredScenes> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let mut seeded = normalize_default_scene_names(object.get("seededDefaultScenes"));
-    let mut defaults_version = stored_version.unwrap_or_else(|| {
+    let mut defaults_version = stored_version.unwrap_or({
         if stored_seeded {
             LEGACY_DEFAULTS_VERSION
         } else {
@@ -4544,8 +4539,10 @@ mod tests {
         });
         store.scenes.scenes = vec![cmyk, mbox];
         store.scenes.defaults_version = DEFAULTS_VERSION - 1;
-        store.scenes.seeded_default_scenes =
-            vec!["Halftone Harbor".to_string(), "MBOX Light Tunnel".to_string()];
+        store.scenes.seeded_default_scenes = vec![
+            "Halftone Harbor".to_string(),
+            "MBOX Light Tunnel".to_string(),
+        ];
 
         store
             .dispatch("scenes/ensureDefaultScenes", json!({}))
@@ -4967,7 +4964,9 @@ mod tests {
         assert!(saved["maxSeconds"].is_number(), "{saved}");
         let groups = saved["groups"].as_array().expect("groups");
         assert!(
-            groups.iter().any(|group| group["name"] == json!("Background")),
+            groups
+                .iter()
+                .any(|group| group["name"] == json!("Background")),
             "the live Groups are snapshotted: {groups:?}"
         );
         let modules = saved["modules"].as_object().expect("modules");
@@ -5040,10 +5039,7 @@ mod tests {
             )
             .expect("setSceneEnabled dispatches");
         assert_eq!(disabled["enabled"], json!(false));
-        assert_eq!(
-            find_default_scene(&store, "Beta")["enabled"],
-            json!(false)
-        );
+        assert_eq!(find_default_scene(&store, "Beta")["enabled"], json!(false));
 
         // updateSceneTiming sets an explicit override, reset clears it.
         let timed = store
@@ -5066,14 +5062,20 @@ mod tests {
         // moveScene reorders the list (performance order) and returns true.
         assert_eq!(
             store
-                .dispatch("scenes/moveScene", json!({ "sceneId": "scene-b", "toIndex": 0 }))
+                .dispatch(
+                    "scenes/moveScene",
+                    json!({ "sceneId": "scene-b", "toIndex": 0 })
+                )
                 .expect("moveScene dispatches"),
             json!(true)
         );
         assert_eq!(store.scenes_state().scenes[0]["id"], json!("scene-b"));
         assert_eq!(
             store
-                .dispatch("scenes/moveScene", json!({ "sceneId": "scene-b", "toIndex": 0 }))
+                .dispatch(
+                    "scenes/moveScene",
+                    json!({ "sceneId": "scene-b", "toIndex": 0 })
+                )
                 .expect("no-op move dispatches"),
             json!(false)
         );
@@ -5101,7 +5103,10 @@ mod tests {
         let row_modules = captured["groups"][1]["modules"]
             .as_array()
             .expect("row 1 modules");
-        assert!(!row_modules.is_empty(), "the live row was captured: {captured}");
+        assert!(
+            !row_modules.is_empty(),
+            "the live row was captured: {captured}"
+        );
         let snapshots = captured["modules"].as_object().expect("modules");
         assert!(
             row_modules
@@ -5143,10 +5148,7 @@ mod tests {
     fn disable_gallery_item_modules_turns_off_enabled_gallery_modules() {
         let mut store = Store::new();
         let gallery = store
-            .dispatch(
-                "groups/createGroup",
-                json!({ "name": GALLERY_GROUP_NAME }),
-            )
+            .dispatch("groups/createGroup", json!({ "name": GALLERY_GROUP_NAME }))
             .expect("gallery group");
         let group_id = gallery["id"].as_str().expect("id").to_string();
         let mut module_ids = Vec::new();
@@ -5208,20 +5210,14 @@ mod tests {
 
         // groups/orderByIds reorders the live layer stack.
         store
-            .dispatch(
-                "groups/orderByIds",
-                json!({ "ids": [second_id, first_id] }),
-            )
+            .dispatch("groups/orderByIds", json!({ "ids": [second_id, first_id] }))
             .expect("orderByIds dispatches");
         assert_eq!(store.state().groups[0].id, second_id);
         assert_eq!(store.state().groups[1].id, first_id);
 
         // groups/focusGalleryItem keeps the focused Gallery module enabled.
         let gallery = store
-            .dispatch(
-                "groups/createGroup",
-                json!({ "name": GALLERY_GROUP_NAME }),
-            )
+            .dispatch("groups/createGroup", json!({ "name": GALLERY_GROUP_NAME }))
             .expect("gallery group");
         let gallery_id = gallery["id"].as_str().unwrap().to_string();
         let mut module_ids = Vec::new();

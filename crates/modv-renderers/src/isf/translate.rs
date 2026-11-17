@@ -747,10 +747,7 @@ pub fn translate_with_sidecar_vertex(
     // spelling.
     let varyings = source::sidecar_varyings(doc);
     let glsl = source::build_fragment_glsl_with_varyings(doc, pass_index, &varyings);
-    let fragment_wgsl = match glsl_to_wgsl(&glsl, naga::ShaderStage::Fragment) {
-        Ok(wgsl) => wgsl,
-        Err(error) => return Err(error),
-    };
+    let fragment_wgsl = glsl_to_wgsl(&glsl, naga::ShaderStage::Fragment)?;
     Ok(SidecarTranslation {
         fragment_wgsl,
         vertex_wgsl,

@@ -60,9 +60,7 @@ pub fn move_scene_to_index(
     scene_id: &str,
     to_index: Option<i64>,
 ) -> Option<Vec<Value>> {
-    let Some(to_index) = to_index else {
-        return None;
-    };
+    let to_index = to_index?;
 
     if to_index < 0 || to_index as usize >= scenes.len() {
         return None;
@@ -86,7 +84,7 @@ pub fn move_scene_to_index(
 }
 
 /// Options for [`create_empty_scene`] (`scene-columns.js:64-90`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct EmptySceneOptions<'a> {
     /// The Scene id (the JS caller supplies a fresh uuid).
     pub id: &'a str,
@@ -96,17 +94,6 @@ pub struct EmptySceneOptions<'a> {
     pub existing_names: &'a [Value],
     /// Timing defaults (`{ minSeconds, maxSeconds }`).
     pub timing: Option<&'a Value>,
-}
-
-impl Default for EmptySceneOptions<'_> {
-    fn default() -> Self {
-        Self {
-            id: "",
-            name: None,
-            existing_names: &[],
-            timing: None,
-        }
-    }
 }
 
 /// `createEmptyScene` (`scene-columns.js:64-90`).

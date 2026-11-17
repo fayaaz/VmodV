@@ -371,12 +371,12 @@ mod tests {
         0.016_344_753,
         0.013_719_702,
         0.009_337_786,
-        0.007_880_124_9,
+        0.007_880_125,
         0.008_466_897,
         0.014_645_759,
         0.018_312_491,
         0.002_646_764_8,
-        0.007_775_200_8,
+        0.007_775_201,
         0.016_361_782,
         0.016_289_346,
         0.019_193_665,
@@ -385,7 +385,7 @@ mod tests {
         0.005_446_367,
         -0.011_865_958,
         -0.000_048_683_4,
-        0.007_172_224_3,
+        0.007_172_224,
         0.007_637_715_6,
         0.015_549_507,
         0.023_626_933,
@@ -548,7 +548,7 @@ mod tests {
         let mut sim = WaveSim::new(4);
         // Raise a single texel; the step pulls its four neighbours up through
         // velocity and pulls the source down.
-        sim.state[((1 * 4 + 1) * 2) as usize] = 1.0;
+        sim.state[10] = 1.0;
 
         // Texel (0, 1)'s left neighbour wraps to (3, 1): zero, so the average
         // is (h(1,1) + h(3,1) + h(0,2) + h(0,0)) / 4 = 1/4.
@@ -562,7 +562,7 @@ mod tests {
         // average is 1/4; if v wrapped it would read (1,3) = 1 and the average
         // would be 1/2, changing the velocity.
         let mut sim = WaveSim::new(4);
-        sim.state[((0 * 4 + 1) * 2) as usize] = 1.0;
+        sim.state[2] = 1.0;
         sim.state[((3 * 4 + 1) * 2) as usize] = 1.0;
         sim.step();
         let average = 1.0 / 4.0;

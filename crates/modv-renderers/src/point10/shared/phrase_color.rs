@@ -250,9 +250,9 @@ pub fn ease_phrase_hue(displayed: f32, target: f32, dt: f32, rate: f32) -> f32 {
 /// three's `SRGBToLinear` transfer (`ColorManagement.js`).
 pub fn srgb_to_linear(value: f32) -> f32 {
     if value < 0.04045 {
-        value * 0.077_399_380_8
+        value * 0.077_399_38
     } else {
-        (value * 0.947_867_298_6 + 0.052_132_701_4).powf(2.4)
+        (value * 0.947_867_3 + 0.052_132_7).powf(2.4)
     }
 }
 
@@ -284,7 +284,7 @@ mod tests {
     fn srgb_hex_converts_like_three_color_management() {
         let base = WATER_BASE_HEX.map(srgb_hex_to_linear);
         close(base[0], [0.021_219_01, 0.201_556_25, 1.0], 1e-6);
-        close(base[1], [0.090_841_71, 0.679_542_47, 1.0], 1e-6);
+        close(base[1], [0.090_841_71, 0.679_542_5, 1.0], 1e-6);
         close(base[2], [0.262_250_66, 0.122_138_77, 1.0], 1e-6);
     }
 
@@ -302,7 +302,7 @@ mod tests {
 
         close(
             hue_rotate(base[0], 0.5),
-            [0.398_278_55, 0.314_013_24, 0.993_708_0],
+            [0.398_278_55, 0.314_013_24, 0.993_708],
             1e-5,
         );
         close(
@@ -312,7 +312,7 @@ mod tests {
         );
         close(
             hue_rotate(base[1], -1.2),
-            [0.313_359_14, 0.704_285_18, 0.943_354_5],
+            [0.313_359_14, 0.704_285_2, 0.943_354_5],
             1e-5,
         );
         close(

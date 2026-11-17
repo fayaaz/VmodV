@@ -271,10 +271,10 @@ pub fn swap(
                     if !matches!(state.get(&key), Some(Value::Array(_))) {
                         continue; // tolerate a non-array state value
                     }
-                    if let Some(existing) = swap_buf.get(&key) {
-                        if !existing.is_array() {
-                            continue; // tolerate a non-array swap value
-                        }
+                    if let Some(existing) = swap_buf.get(&key)
+                        && !existing.is_array()
+                    {
+                        continue; // tolerate a non-array swap value
                     }
 
                     let Some(Value::Array(items)) = state.shift_remove(&key) else {
@@ -299,10 +299,10 @@ pub fn swap(
                     if !matches!(state.get(&key), Some(Value::Object(_))) {
                         continue; // tolerate a non-object state value
                     }
-                    if let Some(existing) = swap_buf.get(&key) {
-                        if !existing.is_object() {
-                            continue; // tolerate a non-object swap value
-                        }
+                    if let Some(existing) = swap_buf.get(&key)
+                        && !existing.is_object()
+                    {
+                        continue; // tolerate a non-object swap value
                     }
 
                     let Some(Value::Object(mut obj)) = state.shift_remove(&key) else {
@@ -375,10 +375,10 @@ pub fn swap(
                         Some(array) => array.clone(),
                         None => continue, // tolerate a non-array swap value
                     };
-                    if let Some(existing) = state.get(&key) {
-                        if !existing.is_array() {
-                            continue; // tolerate a non-array state value
-                        }
+                    if let Some(existing) = state.get(&key)
+                        && !existing.is_array()
+                    {
+                        continue; // tolerate a non-array state value
                     }
                     // JS: swap[key].slice(0, swapIndexes[key]) — a missing index
                     // means slice(0, undefined) = the whole array.
@@ -399,10 +399,10 @@ pub fn swap(
                     swap_buf.insert(key, Value::Array(remainder));
                 }
                 Some(Restriction::ObjectKeep(keep)) => {
-                    if let Some(existing) = state.get(&key) {
-                        if !existing.is_object() {
-                            continue; // tolerate a non-object state value
-                        }
+                    if let Some(existing) = state.get(&key)
+                        && !existing.is_object()
+                    {
+                        continue; // tolerate a non-object state value
                     }
                     let swap_object = match swap_buf.get(&key) {
                         Some(Value::Object(obj)) => obj.clone(),

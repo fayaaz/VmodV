@@ -719,10 +719,10 @@ impl Store {
     ) -> Result<Value, StoreError> {
         // `groups.js:143-149`: creating a Group with an id that already exists
         // returns the existing record instead of duplicating it.
-        if let Some(id) = params.get("id").and_then(Value::as_str) {
-            if let Some(existing) = self.state.find_group(id) {
-                return Ok(json_value(existing));
-            }
+        if let Some(id) = params.get("id").and_then(Value::as_str)
+            && let Some(existing) = self.state.find_group(id)
+        {
+            return Ok(json_value(existing));
         }
 
         let id = params
@@ -913,9 +913,7 @@ impl Store {
                 .and_then(|module| module.meta.get("enabled"))
                 .is_some_and(|value| match value {
                     Value::Bool(flag) => *flag,
-                    Value::Number(number) => {
-                        number.as_f64().is_some_and(|number| number != 0.0)
-                    }
+                    Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
                     _ => false,
                 });
             if !enabled {
@@ -926,11 +924,7 @@ impl Store {
                 "metaKey": "enabled",
                 "data": false,
             });
-            self.update_meta(
-                params
-                    .as_object()
-                    .expect("meta params are an object"),
-            )?;
+            self.update_meta(params.as_object().expect("meta params are an object"))?;
         }
 
         Ok(Value::Null)
@@ -979,7 +973,11 @@ impl Store {
             let existing_value = json_value(existing);
 
             let mut pairs: Vec<(String, String)> = Vec::new();
-            for key in ["alphaInputId", "enabledInputId", "compositeOperationInputId"] {
+            for key in [
+                "alphaInputId",
+                "enabledInputId",
+                "compositeOperationInputId",
+            ] {
                 if let Some(input_id) = existing.meta.get(key).and_then(Value::as_str) {
                     pairs.push((key.to_string(), input_id.to_string()));
                 }
@@ -992,7 +990,12 @@ impl Store {
                 }
             }
 
-            Some((position, existing.module_name.clone(), existing_value, pairs))
+            Some((
+                position,
+                existing.module_name.clone(),
+                existing_value,
+                pairs,
+            ))
         })() else {
             return Ok(Value::Null);
         };
@@ -1122,10 +1125,8 @@ impl Store {
             .to_string();
         let key = device_key(&id, &name, &manufacturer);
 
-        self.midi_devices_mut().insert(
-            key,
-            Self::midi_device_record(&id, &name, &manufacturer),
-        );
+        self.midi_devices_mut()
+            .insert(key, Self::midi_device_record(&id, &name, &manufacturer));
         self.deltas.push(
             action,
             json!({ "id": id, "name": name, "manufacturer": manufacturer }),
@@ -1172,13 +1173,12 @@ impl Store {
         if !object.get("channelData").is_some_and(Value::is_object) {
             object.insert("channelData".to_string(), json!({}));
         }
-        let Some(channel_data) = object.get_mut("channelData").and_then(Value::as_object_mut) else {
+        let Some(channel_data) = object.get_mut("channelData").and_then(Value::as_object_mut)
+        else {
             return Ok(Value::Null);
         };
         let channel_key = channel.to_string();
-        let channel_entry = channel_data
-            .entry(channel_key)
-            .or_insert_with(|| json!({}));
+        let channel_entry = channel_data.entry(channel_key).or_insert_with(|| json!({}));
         if let Some(types) = channel_entry.as_object_mut() {
             types.insert(type_.to_string(), data.clone());
         }
@@ -1241,8 +1241,7 @@ impl Store {
             return Ok(Value::Null);
         };
         if self.osc_servers.remove(id).is_some() {
-            self.deltas
-                .push("osc/DELETE_SERVER", json!({ "id": id }));
+            self.deltas.push("osc/DELETE_SERVER", json!({ "id": id }));
         }
         Ok(Value::Null)
     }
@@ -1798,15 +1797,14 @@ impl Store {
 
         // `groups.js:480-499`: preserve the Gallery group when the incoming
         // list has none. A Gallery-less layout genuinely has none to preserve.
-        if !groups.iter().any(|group| group.name == GALLERY_GROUP_NAME) {
-            if let Some(gallery) = self
+        if !groups.iter().any(|group| group.name == GALLERY_GROUP_NAME)
+            && let Some(gallery) = self
                 .state
                 .groups
                 .iter()
                 .find(|group| group.name == GALLERY_GROUP_NAME)
-            {
-                groups.push(gallery.clone());
-            }
+        {
+            groups.push(gallery.clone());
         }
 
         let value = Value::Array(groups.iter().map(json_value).collect());
@@ -1849,7 +1847,10 @@ impl Store {
             .unwrap_or(false);
         let id = crate::ids::uuid_v4();
 
-        let (mut meta, mut props, status, registered) = match self.registry.meta_fields(&module_name) {
+        let (mut meta, mut props, status, registered) = match self
+            .registry
+            .meta_fields(&module_name)
+        {
             Some(registry_meta) => {
                 let props = self
                     .registry
@@ -1893,11 +1894,13 @@ impl Store {
         // `modules.js:24-27`: a duplication passes the source module so the
         // copy starts from its live props/meta; the new `$props` ids are
         // generated below and the caller remaps the links/expressions.
-        if let Some(existing) = params.get("existingModule").filter(|value| value.is_object()) {
-            if let (Value::Object(meta_map), Some(existing_meta)) = (
-                &mut meta,
-                existing.get("meta").and_then(Value::as_object),
-            ) {
+        if let Some(existing) = params
+            .get("existingModule")
+            .filter(|value| value.is_object())
+        {
+            if let (Value::Object(meta_map), Some(existing_meta)) =
+                (&mut meta, existing.get("meta").and_then(Value::as_object))
+            {
                 for (key, value) in existing_meta {
                     meta_map.insert(key.clone(), value.clone());
                 }
@@ -2290,10 +2293,10 @@ impl Store {
             self.audio.byte_frequency_data = frequency;
         }
 
-        if let Some(sample_rate) = scalar_field(bands.get("sampleRate")) {
-            if sample_rate > 0.0 {
-                self.audio.sample_rate = sample_rate;
-            }
+        if let Some(sample_rate) = scalar_field(bands.get("sampleRate"))
+            && sample_rate > 0.0
+        {
+            self.audio.sample_rate = sample_rate;
         }
 
         let features = &mut self.audio.features;
@@ -4043,14 +4046,13 @@ fn push_tween_json(tweens: &mut Value, tween: Value) {
     let id = tween.get("id").and_then(Value::as_str).map(str::to_string);
     match tweens {
         Value::Array(entries) => {
-            if let Some(id) = &id {
-                if let Some(existing) = entries
+            if let Some(id) = &id
+                && let Some(existing) = entries
                     .iter_mut()
                     .find(|entry| entry.get("id").and_then(Value::as_str) == Some(id.as_str()))
-                {
-                    *existing = tween;
-                    return;
-                }
+            {
+                *existing = tween;
+                return;
             }
             entries.push(tween);
         }
@@ -4830,8 +4832,8 @@ mod tests {
             .expect("numeric flags dispatch");
 
         let group = store.state().find_group(&id).expect("group");
-        assert_eq!(group.clearing, true);
-        assert_eq!(group.pipeline, true);
+        assert!(group.clearing);
+        assert!(group.pipeline);
         let deltas = store.drain_deltas();
         assert_eq!(deltas[0].r#type, "groups/UPDATE_GROUP");
         assert_eq!(deltas[0].payload["data"]["clearing"], json!(true));
@@ -7330,8 +7332,10 @@ mod tests {
             .expect("createInputLink");
         store.drain_deltas();
 
-        let mut audio = AudioFrame::default();
-        audio.bass = 0.5;
+        let audio = AudioFrame {
+            bass: 0.5,
+            ..Default::default()
+        };
         store.update_input_links(&audio, Duration::ZERO);
 
         let module = store.state().modules.get("m-meta").expect("module");
@@ -8207,7 +8211,10 @@ mod tests {
         // Types the engine does not own are UI-only.
         assert_eq!(
             store
-                .dispatch("dataTypes/createType", json!({ "type": "nope", "args": {} }))
+                .dispatch(
+                    "dataTypes/createType",
+                    json!({ "type": "nope", "args": {} })
+                )
                 .expect("unknown type dispatches"),
             Value::Null
         );

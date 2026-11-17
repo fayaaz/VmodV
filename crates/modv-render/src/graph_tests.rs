@@ -111,7 +111,7 @@ fn read_pixels(engine: &Engine, texture: &wgpu::Texture) -> Vec<u8> {
 }
 
 fn assert_pixels_close(actual: &[u8], expected: [u8; 4], tolerance: i16, context: &str) {
-    for (index, chunk) in actual.chunks_exact(4).enumerate() {
+    for (index, chunk) in actual.as_chunks::<4>().0.iter().enumerate() {
         for channel in 0..4 {
             let diff = chunk[channel] as i16 - expected[channel] as i16;
             assert!(

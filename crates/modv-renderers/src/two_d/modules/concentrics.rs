@@ -18,18 +18,10 @@ struct Circles {
 }
 
 /// The `Concentrics` module.
+#[derive(Default)]
 pub struct Concentrics {
     rng: SimpleRng,
     circles: Vec<Circles>,
-}
-
-impl Default for Concentrics {
-    fn default() -> Self {
-        Self {
-            rng: SimpleRng::new(),
-            circles: Vec::new(),
-        }
-    }
 }
 
 impl Concentrics {

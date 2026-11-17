@@ -566,10 +566,8 @@ impl Store {
                         .find(|scene| scene.get("id").and_then(Value::as_str) == Some(id))
                 })
                 .is_some_and(is_scene_enabled);
-            if !current_valid {
-                if let Some(scene_id) = self.pick_next_whole_scene() {
-                    self.apply_scene_action(&single_param("sceneId", &scene_id))?;
-                }
+            if !current_valid && let Some(scene_id) = self.pick_next_whole_scene() {
+                self.apply_scene_action(&single_param("sceneId", &scene_id))?;
             }
             return Ok(json!({ "enabled": true, "rows": 0 }));
         }
@@ -594,12 +592,11 @@ impl Store {
                 _ => false,
             };
 
-            if !valid {
-                if let Some(scene_id) =
+            if !valid
+                && let Some(scene_id) =
                     self.pick_next_scene_for_row(row, active_scene_id.as_deref(), &row_names)
-                {
-                    self.apply_scene_row_transition(&scene_id, row)?;
-                }
+            {
+                self.apply_scene_row_transition(&scene_id, row)?;
             }
         }
 

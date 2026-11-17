@@ -4,9 +4,9 @@
 //! The JS calls `meyda.windowing(features.buffer, windowing)` (`:75`); the
 //! window functions are reimplemented here (`meyda`'s `rect`, `hanning`,
 //! `hamming`, `blackman`, `sine`) because the Rust engine has no Meyda
-//! instance. Values are used exactly as the JS uses them (`v = buffer[i] / 100
-//! * maxHeight`, `:87`) — including the quiet output that produces, which is
-//! the module's actual look.
+//! instance. Values are used exactly as the JS uses them
+//! (`v = buffer[i] / 100 * maxHeight`, `:87`) — including the quiet output
+//! that produces, which is the module's actual look.
 
 use crate::two_d::modules::{
     DrawContext, TwoDModule, TwoDModuleMeta, TwoDProp, prop_f64, prop_i64, prop_str, prop_tween_rgb,

@@ -499,7 +499,7 @@ mod tests {
     fn performance_timing_rounds_to_tenths_and_floors_scene_minimum() {
         // scene-timing.js:88-96
         let timing = normalize_performance_timing(Some(&json!({
-            "minSeconds": 3.14159,
+            "minSeconds": std::f64::consts::PI,
             "maxSeconds": 7.25,
             "transitionSeconds": 0.049,
         })));

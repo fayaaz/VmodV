@@ -119,10 +119,6 @@ const ISF_PIPELINE_CACHE: usize = 4;
 /// Format of every preview target (the group/main format).
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// Frame-graph ids used while compositing a module onto its preview target.
-const PREVIEW_SOURCE_ID: &str = "preview:source";
-const PREVIEW_TARGET_ID: &str = "preview:target";
-
 /// Clamp one requested preview edge into `1..=MAX_PREVIEW_DIMENSION`.
 pub fn clamp_preview_dimension(value: u32) -> u32 {
     value.clamp(1, MAX_PREVIEW_DIMENSION)
@@ -359,6 +355,7 @@ struct PreviewSlot {
 }
 
 /// Per-kind isolated renderer state.
+#[allow(clippy::large_enum_variant)]
 enum PreviewState {
     /// A shader pipeline slot on the dedicated renderer plus the transparent
     /// input the shader samples as `u_modVCanvas`/`iChannel0`.
@@ -581,7 +578,7 @@ impl ModulePreviews {
         // a translucent hover tile look like the live output instead of
         // alpha-darkening every coloured pixel.
         if base.is_some() {
-            for pixel in pixels.chunks_exact_mut(4) {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel[3] = 255;
             }
         }
@@ -646,10 +643,10 @@ impl ModulePreviews {
         width: u32,
         height: u32,
     ) -> Result<usize, PreviewError> {
-        if self.slots.len() >= MAX_CACHED_PREVIEWS {
-            if let Some(mut oldest) = self.slots.pop() {
-                oldest.dispose(&mut self.shader);
-            }
+        if self.slots.len() >= MAX_CACHED_PREVIEWS
+            && let Some(mut oldest) = self.slots.pop()
+        {
+            oldest.dispose(&mut self.shader);
         }
 
         let module = build_preview_module(registry, module_name)?;
@@ -1225,9 +1222,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 fn create_scale_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("modv-preview-scale-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            [PREVIEW_QUAD_WGSL, SCALE_BODY].concat().into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl([PREVIEW_QUAD_WGSL, SCALE_BODY].concat().into()),
     });
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("modv-preview-scale-layout"),
@@ -1265,9 +1260,7 @@ fn create_scale_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu::
 fn create_overlay_pipeline(device: &wgpu::Device) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("modv-preview-overlay-shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            [PREVIEW_QUAD_WGSL, OVERLAY_BODY].concat().into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl([PREVIEW_QUAD_WGSL, OVERLAY_BODY].concat().into()),
     });
     let texture = |binding: u32| wgpu::BindGroupLayoutEntry {
         binding,

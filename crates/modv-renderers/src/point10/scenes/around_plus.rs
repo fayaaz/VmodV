@@ -341,7 +341,7 @@ pub fn build_around_torus() -> Mesh {
 
     // The InvertMesh winding flip: swap the first and third index of every
     // triangle.
-    for triangle in mesh.indices.chunks_exact_mut(3) {
+    for triangle in mesh.indices.as_chunks_mut::<3>().0 {
         triangle.swap(0, 2);
     }
 
@@ -1711,7 +1711,7 @@ mod tests {
             (0.0_f32, 0.536_549_1),
             (0.5, 0.432_125_7),
             (12.3, 0.021_938_75),
-            (137.37, 0.357_807_48),
+            (137.37, 0.357_807_5),
             (999.9, -0.292_220_85),
         ];
         for (input, expected) in cases {
@@ -1780,7 +1780,7 @@ mod tests {
         // The winding flip swapped the first and third index of every triangle.
         let first_original = {
             let mut original = mesh.indices.clone();
-            for triangle in original.chunks_exact_mut(3) {
+            for triangle in original.as_chunks_mut::<3>().0 {
                 triangle.swap(0, 2);
             }
             original

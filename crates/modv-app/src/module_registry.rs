@@ -108,8 +108,8 @@ use modv_renderers::point10::scenes::around_plus::AroundPlus;
 use modv_renderers::point10::scenes::attractor_particles::AttractorParticles;
 use modv_renderers::point10::scenes::boxy::Boxy;
 use modv_renderers::point10::scenes::color_cube::ColorCube;
-use modv_renderers::point10::scenes::earth::Earth;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
+use modv_renderers::point10::scenes::earth::Earth;
 use modv_renderers::point10::scenes::glass_lens::GlassLens;
 use modv_renderers::point10::scenes::hollow_cube::HollowCube;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
@@ -229,6 +229,7 @@ impl IsfDefinition {
 /// A new scene must be added here *and* to
 /// [`modv_renderers::point10::all_scenes`]; `every_registered_scene_constructs`
 /// fails when the two drift.
+#[allow(clippy::large_enum_variant)]
 pub enum Point10SceneKind {
     /// `Point10 Chromatic Line` (`chromatic/line.rs`).
     ChromaticLine(ChromaticLine),
@@ -299,14 +300,6 @@ impl Point10SceneKind {
                 | "Point10 Rolling Fire"
                 | "Point10 Ball Of Fire"
                 | "Point10 Smoke Room"
-        )
-    }
-
-    /// Whether this scene runs the full GPU volume simulation.
-    pub fn is_volumetric(&self) -> bool {
-        matches!(
-            self,
-            Self::DvdRoom(_) | Self::RollingFire(_) | Self::BallOfFire(_) | Self::SmokeRoom(_)
         )
     }
 
@@ -970,13 +963,13 @@ impl ModuleRegistry {
     pub fn registered_modules(&self) -> Value {
         let mut names: Vec<&str> = Vec::new();
         for module in &self.shader {
-            names.push(&module.name);
+            names.push(module.name);
         }
         for definition in &self.two_d {
-            names.push(&definition.meta.name);
+            names.push(definition.meta.name);
         }
         for definition in &self.point10 {
-            names.push(&definition.meta.name);
+            names.push(definition.meta.name);
         }
         for definition in &self.isf {
             names.push(&definition.name);

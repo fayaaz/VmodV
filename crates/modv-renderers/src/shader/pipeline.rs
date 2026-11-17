@@ -453,6 +453,7 @@ impl ShaderRenderer {
     /// [`ShaderError::PropLength`] when `params` does not encode to the
     /// module's prop layout. The pass is begun only after both checks, so a
     /// rejected frame leaves the target untouched.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         slot: usize,

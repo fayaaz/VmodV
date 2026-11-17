@@ -41,7 +41,9 @@ fn load_fixture() -> Option<Vec<f32>> {
     };
 
     let samples: Vec<f32> = bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
 
@@ -73,7 +75,7 @@ fn real_music_drives_bands_beats_and_features() {
     let mut lane_spread_max = 0.0_f32;
     let mut bpm = None;
 
-    for block in samples.chunks_exact(BLOCK_FRAMES) {
+    for block in samples.as_chunks::<BLOCK_FRAMES>().0 {
         analyser.push_mono(block);
         let snapshot = analyser.frame(BLOCK_FRAMES as f32 / SAMPLE_RATE);
         frames += 1;

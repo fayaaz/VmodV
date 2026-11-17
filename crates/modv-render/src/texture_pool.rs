@@ -178,6 +178,7 @@ impl std::fmt::Debug for PooledTexture {
 }
 
 /// LRU texture pool. See the module docs for the lifetime model.
+#[derive(Default)]
 pub struct TexturePool {
     entries: HashMap<TexturePoolKey, PoolEntry>,
     /// Monotonic clock advanced by [`TexturePool::tick`] (once per frame by the executor).
@@ -312,16 +313,6 @@ impl TexturePool {
                 break;
             };
             self.entries.remove(&oldest);
-        }
-    }
-}
-
-impl Default for TexturePool {
-    fn default() -> Self {
-        Self {
-            entries: HashMap::new(),
-            clock: 0,
-            generation: 0,
         }
     }
 }

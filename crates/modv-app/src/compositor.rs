@@ -285,6 +285,7 @@
 //! transparency — they are deliberately drawn over UI panels.
 
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1378,10 +1379,10 @@ impl Compositor {
 
     /// A media source's (or NDI receiver's) view and size.
     fn media_texture_input(&self, source_id: &str) -> Option<(wgpu::TextureView, (u32, u32))> {
-        if let Some(texture) = self.media_textures.get(source_id) {
-            if let Some(view) = texture.view.as_ref() {
-                return Some((view.clone(), texture.size));
-            }
+        if let Some(texture) = self.media_textures.get(source_id)
+            && let Some(view) = texture.view.as_ref()
+        {
+            return Some((view.clone(), texture.size));
         }
         self.ndi_texture_input(source_id)
     }
@@ -1705,18 +1706,17 @@ impl Compositor {
                     .collect();
                 if let Some(source) =
                     state.resolve_inherit_source(&group.inherit_from, position, &rendered_map)
+                    && source.id != group.id
                 {
-                    if source.id != group.id {
-                        // Both halves of a row crossfade resolve to the same
-                        // blended texture; a ghost is never the inheritable
-                        // Group itself (`loop.js:530-535`).
-                        let source_id = fades
-                            .sources
-                            .get(&source.id)
-                            .cloned()
-                            .unwrap_or_else(|| self.group_target(&source.id));
-                        self.composite(source_id, target_id.clone(), 1.0, RenderBlendMode::Normal)?;
-                    }
+                    // Both halves of a row crossfade resolve to the same
+                    // blended texture; a ghost is never the inheritable
+                    // Group itself (`loop.js:530-535`).
+                    let source_id = fades
+                        .sources
+                        .get(&source.id)
+                        .cloned()
+                        .unwrap_or_else(|| self.group_target(&source.id));
+                    self.composite(source_id, target_id.clone(), 1.0, RenderBlendMode::Normal)?;
                 }
             }
 
@@ -1739,24 +1739,24 @@ impl Compositor {
                 } else {
                     entry.1 = Some(target_id.clone());
                 }
-                if let (Some(from), Some(to)) = (entry.0.clone(), entry.1.clone()) {
-                    if let Some(fade) = fades.by_row.get(&row).cloned() {
-                        self.row_fade(
-                            &from,
-                            &to,
-                            &fade_target,
-                            fade.progress,
-                            fade.from_alpha,
-                            fade.target_alpha,
-                        )?;
-                        fades.blended.insert(row);
-                        fades
-                            .sources
-                            .insert(fade.group_id.clone(), fade_target.clone());
-                        fades
-                            .sources
-                            .insert(fade.ghost_group_id.clone(), fade_target);
-                    }
+                if let (Some(from), Some(to)) = (entry.0.clone(), entry.1.clone())
+                    && let Some(fade) = fades.by_row.get(&row).cloned()
+                {
+                    self.row_fade(
+                        &from,
+                        &to,
+                        &fade_target,
+                        fade.progress,
+                        fade.from_alpha,
+                        fade.target_alpha,
+                    )?;
+                    fades.blended.insert(row);
+                    fades
+                        .sources
+                        .insert(fade.group_id.clone(), fade_target.clone());
+                    fades
+                        .sources
+                        .insert(fade.ghost_group_id.clone(), fade_target);
                 }
             }
 
@@ -2007,10 +2007,11 @@ impl Compositor {
             instance.canvas = Some(Canvas::new(&device, &queue, width, height));
         }
         let size_changed = instance.size != Some((width, height));
-        if size_changed && instance.initialised {
-            if let Some(canvas) = instance.canvas.as_mut() {
-                canvas.resize(&device, &queue, width, height);
-            }
+        if size_changed
+            && instance.initialised
+            && let Some(canvas) = instance.canvas.as_mut()
+        {
+            canvas.resize(&device, &queue, width, height);
         }
         let Some(canvas) = instance.canvas.as_ref() else {
             return Ok(());
@@ -2479,10 +2480,10 @@ impl Compositor {
                     instance.audio = Some(audio);
                 }
             }
-            if let Some(instance) = self.isf.get_mut(module_id) {
-                if let Some(audio_textures) = instance.audio.as_mut() {
-                    audio_textures.upload(&self.queue, &frame.audio);
-                }
+            if let Some(instance) = self.isf.get_mut(module_id)
+                && let Some(audio_textures) = instance.audio.as_mut()
+            {
+                audio_textures.upload(&self.queue, &frame.audio);
             }
         }
 
@@ -2653,7 +2654,7 @@ impl Compositor {
                     self.render_blend_mode(&group.composite_operation),
                 ),
                 None => {
-                    if !(group.alpha > 0.0) {
+                    if group.alpha.is_nan() || group.alpha <= 0.0 {
                         continue;
                     }
                     (
@@ -2862,7 +2863,12 @@ impl Compositor {
     }
 
     /// Copy an ISF filter's output into `masked` with the group canvas alpha.
-    fn mask_isf_filter(&self, module: &wgpu::Texture, canvas: &wgpu::Texture, masked: &wgpu::Texture) {
+    fn mask_isf_filter(
+        &self,
+        module: &wgpu::Texture,
+        canvas: &wgpu::Texture,
+        masked: &wgpu::Texture,
+    ) {
         let module_view = module.create_view(&wgpu::TextureViewDescriptor::default());
         let canvas_view = canvas.create_view(&wgpu::TextureViewDescriptor::default());
         let masked_view = masked.create_view(&wgpu::TextureViewDescriptor::default());
@@ -4095,7 +4101,7 @@ mod tests {
             (SIZE * SIZE * 4) as usize,
             "{context}: unexpected read-back length"
         );
-        for (index, chunk) in actual.chunks_exact(4).enumerate() {
+        for (index, chunk) in actual.as_chunks::<4>().0.iter().enumerate() {
             for channel in 0..4 {
                 let diff = chunk[channel] as i16 - expected[channel] as i16;
                 assert!(
@@ -4294,7 +4300,11 @@ mod tests {
         let pixels = preview_pixels(&mut compositor);
         assert_eq!(pixels.len(), (PREVIEW_WIDTH * PREVIEW_HEIGHT * 4) as usize);
         assert!(
-            pixels.chunks_exact(4).all(|pixel| pixel == [0, 0, 0, 255]),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel == &[0, 0, 0, 255]),
             "an empty (transparent) frame must preview as opaque black"
         );
 
@@ -4578,6 +4588,7 @@ void main() {
     // ————————————————— 2D module path —————————————————
 
     /// A group holding `module_ids`, all render flags explicit.
+    #[allow(clippy::too_many_arguments)]
     fn group_with(
         id: &str,
         name: &str,
@@ -4623,7 +4634,12 @@ void main() {
     }
 
     fn lit_pixels(pixels: &[u8]) -> usize {
-        pixels.chunks_exact(4).filter(|pixel| pixel[3] > 0).count()
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] > 0)
+            .count()
     }
 
     fn read_group_texture(compositor: &Compositor, group_id: &str) -> Vec<u8> {
@@ -5154,11 +5170,15 @@ void main() {
         assert_eq!(pixels.len(), (48 * 32 * 4) as usize);
         let first = &pixels[0..3];
         assert!(
-            pixels.chunks_exact(4).any(|chunk| chunk[0..3] != first[..]),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|chunk| chunk[0..3] != first[..]),
             "the inverted test card is uniform"
         );
         assert!(
-            pixels.chunks_exact(4).any(|chunk| chunk[3] > 0),
+            pixels.as_chunks::<4>().0.iter().any(|chunk| chunk[3] > 0),
             "the effect preview is fully transparent"
         );
 
@@ -5238,14 +5258,23 @@ void main() {
 
         let background = [0_u8, 200, 40, 255];
         let corner = &pixels[0..4];
-        assert_eq!(corner, background, "the live output is not behind the preview");
+        assert_eq!(
+            corner, background,
+            "the live output is not behind the preview"
+        );
         assert!(
-            pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 255),
             "withOutput previews must be flattened over opaque black"
         );
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| pixel[0..4] != background),
             "Ball drew nothing over the live output"
         );
@@ -5295,11 +5324,15 @@ void main() {
         // (for an invert over an opaque card) opaque.
         let first = &pixels[0..3];
         assert!(
-            pixels.chunks_exact(4).any(|chunk| chunk[0..3] != first[..]),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|chunk| chunk[0..3] != first[..]),
             "the ISF filter preview is uniform/blank"
         );
         assert!(
-            pixels.chunks_exact(4).all(|chunk| chunk[3] > 0),
+            pixels.as_chunks::<4>().0.iter().all(|chunk| chunk[3] > 0),
             "Color Invert over an opaque card should be opaque"
         );
     }
@@ -5525,8 +5558,18 @@ void main() {
             dark, bright,
             "changing the FFT bin the shader samples must change the output"
         );
-        let dark_luma: u64 = dark.chunks_exact(4).map(|p| u64::from(p[0])).sum();
-        let bright_luma: u64 = bright.chunks_exact(4).map(|p| u64::from(p[0])).sum();
+        let dark_luma: u64 = dark
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u64::from(p[0]))
+            .sum();
+        let bright_luma: u64 = bright
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u64::from(p[0]))
+            .sum();
         assert!(
             bright_luma > dark_luma,
             "the brighter FFT bin must raise the sampled channel"
@@ -5607,7 +5650,7 @@ void main() {
         .expect("group texture reads back");
 
         assert!(
-            pixels.chunks_exact(4).all(|pixel| pixel[3] == 0),
+            pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0),
             "an ISF filter turned the transparent group canvas opaque"
         );
     }
@@ -5769,7 +5812,12 @@ void main() {
         );
         // Inverted yellow is uniform; the checkerboard (and its inversion) is
         // not, so the bound frame must contain more than one colour.
-        let distinct: HashSet<&[u8]> = bound.chunks_exact(4).collect();
+        let distinct: HashSet<&[u8]> = bound
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| chunk.as_slice())
+            .collect();
         assert!(
             distinct.len() > 1,
             "the module-output binding produced a uniform frame, so it sampled the canvas"
@@ -5906,13 +5954,20 @@ void main() {
             blurred = compositor.read_main_rgba8().expect("main reads back");
         }
 
-        assert!(lit_pixels(&blurred) > 0, "Edge Blur produced an empty frame");
+        assert!(
+            lit_pixels(&blurred) > 0,
+            "Edge Blur produced an empty frame"
+        );
         assert_ne!(
             sharp, blurred,
             "Edge Blur did not change the image (its vertex varyings were lost)"
         );
         assert!(
-            blurred.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            blurred
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 255),
             "Edge Blur punched holes in an opaque frame"
         );
     }
@@ -6508,7 +6563,7 @@ void main(void) {
             (width * height) as usize,
             "the unaligned upload covers every pixel"
         );
-        for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(
                 &pixel[0..4],
                 &[255, 255, 255, 255],

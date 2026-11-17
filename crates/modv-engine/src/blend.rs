@@ -150,42 +150,6 @@ pub const ALL_BLEND_MODES: &[BlendMode] = &[
 pub struct UnknownBlendMode(pub String);
 
 impl BlendMode {
-    /// Parse a blend mode token from `composite-operations.js`.
-    pub fn from_str(s: &str) -> Result<BlendMode, UnknownBlendMode> {
-        match s {
-            "normal" => Ok(BlendMode::Normal),
-            "multiply" => Ok(BlendMode::Multiply),
-            "overlay" => Ok(BlendMode::Overlay),
-            "darken" => Ok(BlendMode::Darken),
-            "lighten" => Ok(BlendMode::Lighten),
-            "color-dodge" => Ok(BlendMode::ColorDodge),
-            "color-burn" => Ok(BlendMode::ColorBurn),
-            "hard-light" => Ok(BlendMode::HardLight),
-            "soft-light" => Ok(BlendMode::SoftLight),
-            "difference" => Ok(BlendMode::Difference),
-            "exclusion" => Ok(BlendMode::Exclusion),
-            "hue" => Ok(BlendMode::Hue),
-            "saturation" => Ok(BlendMode::Saturation),
-            "color" => Ok(BlendMode::Color),
-            "luminosity" => Ok(BlendMode::Luminosity),
-            "screen" => Ok(BlendMode::Screen),
-            "clear" => Ok(BlendMode::Clear),
-            "copy" => Ok(BlendMode::Copy),
-            "destination" => Ok(BlendMode::Destination),
-            "source-over" => Ok(BlendMode::SourceOver),
-            "destination-over" => Ok(BlendMode::DestinationOver),
-            "source-in" => Ok(BlendMode::SourceIn),
-            "destination-in" => Ok(BlendMode::DestinationIn),
-            "source-out" => Ok(BlendMode::SourceOut),
-            "destination-out" => Ok(BlendMode::DestinationOut),
-            "source-atop" => Ok(BlendMode::SourceAtop),
-            "destination-atop" => Ok(BlendMode::DestinationAtop),
-            "xor" => Ok(BlendMode::Xor),
-            "lighter" => Ok(BlendMode::Lighter),
-            other => Err(UnknownBlendMode(other.to_string())),
-        }
-    }
-
     /// The canonical token, exactly as used in presets and
     /// `composite-operations.js`.
     pub fn as_str(&self) -> &'static str {
@@ -301,13 +265,45 @@ impl std::str::FromStr for BlendMode {
     type Err = UnknownBlendMode;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        BlendMode::from_str(s)
+        match s {
+            "normal" => Ok(BlendMode::Normal),
+            "multiply" => Ok(BlendMode::Multiply),
+            "overlay" => Ok(BlendMode::Overlay),
+            "darken" => Ok(BlendMode::Darken),
+            "lighten" => Ok(BlendMode::Lighten),
+            "color-dodge" => Ok(BlendMode::ColorDodge),
+            "color-burn" => Ok(BlendMode::ColorBurn),
+            "hard-light" => Ok(BlendMode::HardLight),
+            "soft-light" => Ok(BlendMode::SoftLight),
+            "difference" => Ok(BlendMode::Difference),
+            "exclusion" => Ok(BlendMode::Exclusion),
+            "hue" => Ok(BlendMode::Hue),
+            "saturation" => Ok(BlendMode::Saturation),
+            "color" => Ok(BlendMode::Color),
+            "luminosity" => Ok(BlendMode::Luminosity),
+            "screen" => Ok(BlendMode::Screen),
+            "clear" => Ok(BlendMode::Clear),
+            "copy" => Ok(BlendMode::Copy),
+            "destination" => Ok(BlendMode::Destination),
+            "source-over" => Ok(BlendMode::SourceOver),
+            "destination-over" => Ok(BlendMode::DestinationOver),
+            "source-in" => Ok(BlendMode::SourceIn),
+            "destination-in" => Ok(BlendMode::DestinationIn),
+            "source-out" => Ok(BlendMode::SourceOut),
+            "destination-out" => Ok(BlendMode::DestinationOut),
+            "source-atop" => Ok(BlendMode::SourceAtop),
+            "destination-atop" => Ok(BlendMode::DestinationAtop),
+            "xor" => Ok(BlendMode::Xor),
+            "lighter" => Ok(BlendMode::Lighter),
+            other => Err(UnknownBlendMode(other.to_string())),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     /// The exact tokens from composite-operations.js, in order.
     const SEPARABLE_TOKENS: [&str; 16] = [
@@ -356,7 +352,7 @@ mod tests {
             assert_eq!(BlendMode::from_str(mode.as_str()).unwrap(), mode);
             assert_eq!(mode.to_string(), *token);
             assert_eq!(
-                BlendMode::from_str(&token.to_string())
+                BlendMode::from_str(token)
                     .map(|m| m.as_str().to_string())
                     .unwrap(),
                 token.to_string()
@@ -368,10 +364,7 @@ mod tests {
     fn unknown_token_errors_with_the_token() {
         let err = BlendMode::from_str("plus-lighter").unwrap_err();
         assert_eq!(err.0, "plus-lighter");
-        assert_eq!(
-            err.to_string(),
-            "unknown blend mode: \"plus-lighter\""
-        );
+        assert_eq!(err.to_string(), "unknown blend mode: \"plus-lighter\"");
 
         assert!(BlendMode::from_str("").is_err());
         assert!(BlendMode::from_str("NORMAL").is_err());

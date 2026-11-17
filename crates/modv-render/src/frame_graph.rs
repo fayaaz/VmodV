@@ -652,6 +652,7 @@ impl Executor {
     /// scratch **directly into `target`** — no feedback, no copy-back. The
     /// caller assigns `target` to both group ids (the "two ids" rule,
     /// `loop.js:530-535`).
+    #[allow(clippy::too_many_arguments)]
     fn run_row_fade(
         &mut self,
         from: &TextureId,

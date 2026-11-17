@@ -13,14 +13,9 @@ use crate::two_d::modules::{
 };
 
 /// The `Pixelate` module.
+#[derive(Default)]
 pub struct Pixelate {
     scratch: Option<Canvas>,
-}
-
-impl Default for Pixelate {
-    fn default() -> Self {
-        Self { scratch: None }
-    }
 }
 
 impl TwoDModule for Pixelate {
@@ -99,7 +94,7 @@ impl TwoDModule for Pixelate {
         } else {
             (width / pixel_amount, height / pixel_amount)
         };
-        if !(w > 0.0) || !(h > 0.0) || !w.is_finite() || !h.is_finite() {
+        if w <= 0.0 || h <= 0.0 || !w.is_finite() || !h.is_finite() {
             return;
         }
 

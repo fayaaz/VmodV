@@ -735,7 +735,7 @@ pub fn rgba_to_bgra_frame(
 
     let mut bgra = Vec::with_capacity(row_bytes * height as usize);
     for row in pixels.chunks_exact(stride).take(height as usize) {
-        for pixel in row[..row_bytes].chunks_exact(4) {
+        for pixel in row[..row_bytes].as_chunks::<4>().0 {
             bgra.push(pixel[2]); // B
             bgra.push(pixel[1]); // G
             bgra.push(pixel[0]); // R

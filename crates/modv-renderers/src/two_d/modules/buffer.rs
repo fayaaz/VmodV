@@ -23,6 +23,7 @@ use crate::two_d::modules::{
 };
 
 /// The `Buffer` module.
+#[derive(Default)]
 pub struct Buffer {
     /// The scratch canvas acting as the module's buffer output.
     buffer: Option<Canvas>,
@@ -33,17 +34,6 @@ pub struct Buffer {
     /// The most recent `bufferId` (kept for the engine's output naming; see
     /// the module docs).
     buffer_id: String,
-}
-
-impl Default for Buffer {
-    fn default() -> Self {
-        Self {
-            buffer: None,
-            captured: false,
-            last_trigger: false,
-            buffer_id: String::new(),
-        }
-    }
 }
 
 impl TwoDModule for Buffer {
@@ -137,9 +127,7 @@ impl TwoDModule for Buffer {
                 should_capture = true;
             }
             self.last_trigger = trigger;
-        } else if capture_mode == "once" && !self.captured {
-            should_capture = true;
-        } else if capture_mode == "continuous" {
+        } else if (capture_mode == "once" && !self.captured) || capture_mode == "continuous" {
             should_capture = true;
         }
 

@@ -491,7 +491,7 @@ fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool
 pub fn stroke_geometry(points: &[[f32; 2]], closed: bool, half_width: f32) -> Vec<[f32; 2]> {
     let points = dedupe(points);
     let mut out = Vec::new();
-    if points.len() < 2 || !(half_width > 0.0) {
+    if points.len() < 2 || half_width.is_nan() || half_width <= 0.0 {
         return out;
     }
     let width = half_width.max(0.01);
@@ -542,7 +542,7 @@ pub fn disc(out: &mut Vec<[f32; 2]>, centre: [f32; 2], radius: f32, segments: us
 
 /// Transform the four corners of a rectangle and emit two triangles.
 pub fn rect_geometry(x: f32, y: f32, width: f32, height: f32, transform: &Affine) -> Vec<[f32; 2]> {
-    if !(width > 0.0) || !(height > 0.0) {
+    if width.is_nan() || width <= 0.0 || height.is_nan() || height <= 0.0 {
         return Vec::new();
     }
     let p0 = transform.transform_point([x, y]);

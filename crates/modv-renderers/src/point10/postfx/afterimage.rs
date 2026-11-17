@@ -236,11 +236,11 @@ impl AfterimagePass {
         if self.needs_clear {
             // A fresh texture is undefined in wgpu; three explicitly clears both
             // targets on activation for the same reason.
-            for index in 0..2 {
+            for slot in &self.history {
                 let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("point10-postfx-afterimage-clear"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.history[index].view,
+                        view: &slot.view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {

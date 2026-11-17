@@ -554,7 +554,12 @@ mod tests {
     }
 
     fn lit_pixels(pixels: &[u8]) -> usize {
-        pixels.chunks_exact(4).filter(|pixel| pixel[3] > 0).count()
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] > 0)
+            .count()
     }
 
     /// Materialise a seeded `Store` with the default Scene list.
@@ -777,7 +782,7 @@ mod tests {
 
         assert_eq!(pixels.len(), (64 * 64 * 4) as usize);
         assert!(
-            pixels.chunks_exact(4).any(|pixel| pixel[3] == 0),
+            pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 0),
             "the cell background must stay transparent"
         );
         assert!(lit_pixels(&pixels) > 0, "Ball drew nothing");

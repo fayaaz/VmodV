@@ -976,7 +976,7 @@ fn remove_declaration_lines(source: &str, names: &[String]) -> String {
                 .next()
                 .unwrap_or("")
                 .to_string();
-            if names.iter().any(|name| *name == base) {
+            if names.contains(&base) {
                 continue;
             }
         }
@@ -1032,18 +1032,13 @@ fn strip_version_120_branch(source: &str) -> String {
         if let Some(condition) = trimmed.strip_prefix("#if") {
             let condition = condition.trim();
             if condition.contains("__VERSION__") {
-                let legacy = condition.contains("<=")
-                    || condition.contains('<')
-                    || condition.contains("==");
+                let legacy =
+                    condition.contains("<=") || condition.contains('<') || condition.contains("==");
                 // `__VERSION__ <= 120` / `< 300` is false for 450; `>=`/`>`
                 // guards keep the first branch.
                 let keep_first = !legacy;
                 guard = Some(keep_first);
-                if keep_first {
-                    continue;
-                } else {
-                    continue;
-                }
+                continue;
             }
         } else if guard.is_some() && trimmed.starts_with("#else") {
             let keep_first = guard == Some(true);
@@ -1145,11 +1140,9 @@ fn rewrite_vertex_body(doc: &IsfDocument) -> RewrittenBody {
     // before naga preprocesses it, so both branches would consume locations
     // and push the live outputs past the pipeline's 15-variable limit (Edge
     // Blur). Drop the branch the 450 front-end will not compile.
-    let legacy = strip_version_120_branch(doc.vertex_source.as_deref().unwrap_or(DEFAULT_VERTEX_BODY));
-    let mut body = rewrite_vertex_source(
-        &legacy,
-        &texture_inputs(doc),
-    );
+    let legacy =
+        strip_version_120_branch(doc.vertex_source.as_deref().unwrap_or(DEFAULT_VERTEX_BODY));
+    let mut body = rewrite_vertex_source(&legacy, &texture_inputs(doc));
     for (original, sanitised) in body_input_renames(doc) {
         body = replace_ident(&body, &original, &sanitised);
     }
@@ -2942,12 +2935,14 @@ mod tests {
         // from `gl_FragCoord`. WebGL's origin is bottom-left, so the pixel
         // coordinate has to be flipped to match the bottom-left vertex
         // shader; otherwise the whole image is upside down.
-        let shader =
-            "void main() { vec2 p = gl_FragCoord.xy / RENDERSIZE; gl_FragColor = vec4(p, 0.0, 1.0); }";
+        let shader = "void main() { vec2 p = gl_FragCoord.xy / RENDERSIZE; gl_FragColor = vec4(p, 0.0, 1.0); }";
         let glsl = build_fragment_glsl(&doc(shader), 0);
         assert!(glsl.contains("RENDERSIZE.y - gl_FragCoord.y"), "{glsl}");
         assert!(glsl.contains("#define isf_FragCoord (floor(isf_gl_frag_coord().xy))"));
-        assert!(glsl.contains("isf_gl_frag_coord().xy / RENDERSIZE"), "{glsl}");
+        assert!(
+            glsl.contains("isf_gl_frag_coord().xy / RENDERSIZE"),
+            "{glsl}"
+        );
         assert!(!glsl.contains("p = gl_FragCoord.xy"), "{glsl}");
     }
 

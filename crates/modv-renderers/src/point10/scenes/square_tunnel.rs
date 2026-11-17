@@ -113,7 +113,7 @@ pub fn square_tunnel_drive(bass: f32, beat: f32, dt: f32, perm: f32) -> SquareTu
         0.0
     };
     let step = if dt.is_finite() {
-        dt.min(MAX_DT).max(0.0)
+        dt.clamp(0.0, MAX_DT)
     } else {
         0.0
     };
@@ -653,7 +653,7 @@ mod tests {
         assert_eq!(levels[8].0, 1);
         for (size, data) in &levels {
             assert_eq!(data.len(), (size * size * 4) as usize, "level {size}");
-            for pixel in data.chunks_exact(4) {
+            for pixel in data.as_chunks::<4>().0 {
                 assert_eq!(pixel[3], 255, "mips must keep the texture opaque");
             }
         }
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn pi_constant_matches_the_preset_define() {
         let pi = crate::point10::shared::p9_glsl::PI;
-        assert!((pi - 3.141_592_7).abs() < 1e-6);
+        assert_eq!(pi, std::f32::consts::PI);
         assert_eq!(TUNNEL_SIZE, 2.0);
     }
 }

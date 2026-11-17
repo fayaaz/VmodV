@@ -1146,16 +1146,19 @@ mod tests {
         }
         bridge.update(0.1, Some(&payload), &Default::default());
         scene.update(0.1, &bridge);
-        assert!(scene.pop > 0.5, "a bass attack pops the logo (pop {})", scene.pop);
+        assert!(
+            scene.pop > 0.5,
+            "a bass attack pops the logo (pop {})",
+            scene.pop
+        );
         assert!(scene.burst > 0.0, "a bass attack bursts the logo speed");
 
         // The model scale carries the pop into the drawn geometry
         // (`Mat4` is column-major, so column 0's length is the x scale).
         let model = scene.logo_model();
-        let scale_x = (model[0][0] * model[0][0]
-            + model[1][0] * model[1][0]
-            + model[2][0] * model[2][0])
-            .sqrt();
+        let scale_x =
+            (model[0][0] * model[0][0] + model[1][0] * model[1][0] + model[2][0] * model[2][0])
+                .sqrt();
         assert!(scale_x > 1.05, "logo scale must pulse (got {scale_x})");
     }
 

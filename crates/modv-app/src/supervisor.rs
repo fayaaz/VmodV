@@ -235,10 +235,10 @@ impl EngineSupervisor {
         self.frames_presented += 1;
         self.frames_since_save += 1;
 
-        if self.frames_since_save >= SNAPSHOT_SAVE_EVERY_FRAMES {
-            if let Err(error) = self.save_snapshot(store) {
-                eprintln!("engine: WARN could not save snapshot: {error}");
-            }
+        if self.frames_since_save >= SNAPSHOT_SAVE_EVERY_FRAMES
+            && let Err(error) = self.save_snapshot(store)
+        {
+            eprintln!("engine: WARN could not save snapshot: {error}");
         }
     }
 
@@ -300,10 +300,10 @@ impl EngineSupervisor {
                     self.broadcast_deltas(store);
                     // A deferred request is answered by the window loop after
                     // it has rendered (it owns the compositor).
-                    if let Reply::Now(response) = reply {
-                        if let Err(error) = self.server.send_response(frame.client, &response) {
-                            eprintln!("engine: WARN could not send response: {error}");
-                        }
+                    if let Reply::Now(response) = reply
+                        && let Err(error) = self.server.send_response(frame.client, &response)
+                    {
+                        eprintln!("engine: WARN could not send response: {error}");
                     }
                 }
                 Ok(_) | Err(_) => {
@@ -567,11 +567,7 @@ impl EngineSupervisor {
         while let Some(pick) = self.pending_portal.pop_front() {
             match pick.rx.try_recv() {
                 Ok(Ok(stream)) => {
-                    let response = self.start_picked_screen(
-                        pick.id,
-                        &pick.source_id,
-                        stream,
-                    );
+                    let response = self.start_picked_screen(pick.id, &pick.source_id, stream);
                     if let Err(error) = self.server.send_response(pick.client, &response) {
                         eprintln!("engine: WARN could not send screen-pick response: {error}");
                     }
@@ -998,7 +994,7 @@ impl EngineSupervisor {
     fn preview_ready_event(&mut self) -> io::Result<Event> {
         let ring = self
             .ensure_preview()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "preview ring unavailable"))?;
+            .ok_or_else(|| io::Error::other("preview ring unavailable"))?;
         Ok(Event::new("preview/ready", ring.handshake()))
     }
 
@@ -1156,9 +1152,7 @@ mod tests {
                             return (payload, events);
                         }
                         if kind == KIND_EVENT {
-                            if let Ok(event) = serde_json::from_slice::<Event>(&payload) {
-                                events.push(event);
-                            }
+                            events.extend(serde_json::from_slice::<Event>(&payload).ok());
                         }
                     }
                 }

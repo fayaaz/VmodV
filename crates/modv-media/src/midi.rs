@@ -319,9 +319,7 @@ impl MidiState {
     /// The device state, creating it with the store defaults if this is the
     /// first message from that device (see the module docs).
     pub fn ensure_device(&mut self, key: &str) -> &mut MidiDeviceState {
-        self.devices
-            .entry(key.to_string())
-            .or_insert_with(MidiDeviceState::new)
+        self.devices.entry(key.to_string()).or_default()
     }
 
     /// Looks a device up without creating it.
@@ -374,10 +372,7 @@ pub fn apply_raw_message_at(
     now_seconds: f64,
 ) -> Vec<MidiEvent> {
     let learning = state.learning;
-    let device_state = state
-        .devices
-        .entry(device.to_string())
-        .or_insert_with(MidiDeviceState::new);
+    let device_state = state.devices.entry(device.to_string()).or_default();
 
     // Clock: transport, not input data (`setup-midi.js:38-81`). It never
     // touches `channelData`; a device that does not listen for the clock

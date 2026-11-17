@@ -626,7 +626,7 @@ impl Canvas {
     /// commands recorded so far this frame), so earlier draws survive outside
     /// the rect and the current clip still applies.
     pub fn clear_rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
-        if !(width > 0.0) || !(height > 0.0) {
+        if width.is_nan() || width <= 0.0 || height.is_nan() || height <= 0.0 {
             return;
         }
         self.push_solid_rect(
@@ -859,7 +859,7 @@ impl Canvas {
         dw: f32,
         dh: f32,
     ) -> Option<[([f32; 2], [f32; 2]); 4]> {
-        if !(dw > 0.0) || !(dh > 0.0) {
+        if dw.is_nan() || dw <= 0.0 || dh.is_nan() || dh <= 0.0 {
             return None;
         }
         let transform = &self.state.transform;
@@ -1310,8 +1310,7 @@ impl Canvas {
         let bind_groups: Vec<wgpu::BindGroup> = self
             .commands
             .iter()
-            .enumerate()
-            .map(|(_, command)| {
+            .map(|command| {
                 let (view, sampler) = match &command.source {
                     CommandSource::White => (&self.white_view, &self.nearest_sampler),
                     CommandSource::External(view) => {

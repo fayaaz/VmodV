@@ -408,16 +408,15 @@ mod tests {
         assert_eq!(payload.sample_rate, SAMPLE_RATE as f32);
         // 800 new samples at 48 kHz; the first 224 read as silence.
         let new = 800;
-        for index in 0..AUDIO_SAMPLES {
+        for (index, sample) in payload.wave.iter().enumerate().take(AUDIO_SAMPLES) {
             let expected = if index < AUDIO_SAMPLES - new {
                 0.0
             } else {
                 sine.sample_at((index - (AUDIO_SAMPLES - new)) as u64)
             };
             assert!(
-                (payload.wave[index] - expected).abs() < 1e-6,
-                "sample {index}: {} != {expected}",
-                payload.wave[index]
+                (sample - expected).abs() < 1e-6,
+                "sample {index}: {sample} != {expected}"
             );
         }
         // The damping-2 lane (band 1 for a 440 Hz tone) is the band read.

@@ -293,10 +293,10 @@ pub fn normalize_scene_document(scene: &Value) -> Option<Value> {
     let mut modules = Map::new();
 
     for layer in layers {
-        if let Some(layer_id) = layer.get("$id").filter(|id| is_truthy(id)) {
-            if let Some(layer_id) = layer_id.as_str() {
-                modules.insert(layer_id.to_string(), layer.clone());
-            }
+        if let Some(layer_id) = layer.get("$id").filter(|id| is_truthy(id))
+            && let Some(layer_id) = layer_id.as_str()
+        {
+            modules.insert(layer_id.to_string(), layer.clone());
         }
     }
 
@@ -360,12 +360,12 @@ fn playlist_scenes(playlist: &Value) -> Result<&Vec<Value>, PlaylistError> {
         return Err(PlaylistError::NotAnObject);
     };
 
-    if let Some(Value::String(kind)) = object.get("type") {
-        if kind != SCENES_PLAYLIST_TYPE {
-            return Err(PlaylistError::WrongType {
-                found: kind.clone(),
-            });
-        }
+    if let Some(Value::String(kind)) = object.get("type")
+        && kind != SCENES_PLAYLIST_TYPE
+    {
+        return Err(PlaylistError::WrongType {
+            found: kind.clone(),
+        });
     }
 
     object
@@ -552,7 +552,7 @@ mod tests {
     fn export_normalizes_the_performance_timing() {
         let exported = export_playlist(
             &[],
-            &json!({"minSeconds": 0.2, "maxSeconds": 3.14159, "transitionSeconds": 0.04}),
+            &json!({"minSeconds": 0.2, "maxSeconds": std::f64::consts::PI, "transitionSeconds": 0.04}),
         );
 
         assert_eq!(exported["performance"]["minSeconds"], json!(1));

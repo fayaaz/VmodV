@@ -51,10 +51,10 @@
 #![forbid(unsafe_code)]
 
 /// `#define PI 3.14159265358979323846` (`P9Glsl.js:6`).
-pub const PI: f32 = 3.141_592_653_589_793;
+pub const PI: f32 = std::f32::consts::PI;
 
 /// `#define PI2 6.28318530717958623200` (`P9Glsl.js:7`).
-pub const PI2: f32 = 6.283_185_307_179_586;
+pub const PI2: f32 = std::f32::consts::TAU;
 
 /// WGSL port of the `P9Glsl` helpers the batch-2 scenes use.
 ///

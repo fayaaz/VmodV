@@ -130,8 +130,8 @@
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::{
-    FULLSCREEN_TRIANGLE_WGSL, Point10Scene, SceneContext, SceneMeta, SceneProp, ScenePropKind,
-    frame_dt, read_scene_props, scene_props_with_levers,
+    FULLSCREEN_TRIANGLE_WGSL, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt,
+    read_scene_props, scene_props_with_levers,
 };
 
 // ---------------------------------------------------------------------------
@@ -280,7 +280,10 @@ pub const SUN: SunPreset = SunPreset {
 /// `f32::max` drops NaN); an infinite scale stays infinite, matching JS.
 pub fn sun_surface_level(bass: f32, scale: f32) -> f32 {
     let b = if bass.is_finite() { bass.max(0.0) } else { 0.0 };
-    let level = SUN.surface.ceiling.min(b * SUN.surface.gain + SUN.surface.floor);
+    let level = SUN
+        .surface
+        .ceiling
+        .min(b * SUN.surface.gain + SUN.surface.floor);
 
     level * scale.max(0.0)
 }
@@ -288,7 +291,10 @@ pub fn sun_surface_level(bass: f32, scale: f32) -> f32 {
 /// `sunCoronaLevel(bass, scale = 1)` — same clamping, `SUN.corona` bounds.
 pub fn sun_corona_level(bass: f32, scale: f32) -> f32 {
     let b = if bass.is_finite() { bass.max(0.0) } else { 0.0 };
-    let level = SUN.corona.ceiling.min(b * SUN.corona.gain + SUN.corona.floor);
+    let level = SUN
+        .corona
+        .ceiling
+        .min(b * SUN.corona.gain + SUN.corona.floor);
 
     level * scale.max(0.0)
 }
@@ -416,11 +422,10 @@ pub fn build_sphere(
                 radius * cos_theta,
                 radius * sin_phi * sin_theta,
             ];
-            let length = (position[0] * position[0]
-                + position[1] * position[1]
-                + position[2] * position[2])
-                .sqrt()
-                .max(1e-9);
+            let length =
+                (position[0] * position[0] + position[1] * position[1] + position[2] * position[2])
+                    .sqrt()
+                    .max(1e-9);
             vertices.push(SunVertex {
                 position,
                 normal: [
@@ -724,12 +729,7 @@ impl Sun {
     fn camera_matrix(&self) -> [[f32; 4]; 4] {
         use crate::point10::scenes::cube_mesh::{look_at, mat4_mul, perspective};
         let aspect = self.size.0 as f32 / self.size.1.max(1) as f32;
-        let projection = perspective(
-            SUN.fov.to_radians(),
-            aspect,
-            SUN.near,
-            SUN.far,
-        );
+        let projection = perspective(SUN.fov.to_radians(), aspect, SUN.near, SUN.far);
         let view = look_at(SUN.camera_position, SUN.camera_look_at, [0.0, 1.0, 0.0]);
         mat4_mul(&projection, &view)
     }
@@ -794,6 +794,7 @@ impl Sun {
 
 /// Create the five mips, the aux, the fullscreen targets and the matching
 /// bind groups for `size`.
+#[allow(clippy::too_many_arguments)]
 fn build_targets(
     device: &wgpu::Device,
     size: (u32, u32),
@@ -812,7 +813,8 @@ fn build_targets(
     let (sun_texture, sun_view) = create_target(device, "point10-sun-target", size.0, size.1);
     let (corona_texture, corona_view) =
         create_target(device, "point10-sun-corona-target", size.0, size.1);
-    let (tint_texture, tint_view) = create_target(device, "point10-sun-tint-target", size.0, size.1);
+    let (tint_texture, tint_view) =
+        create_target(device, "point10-sun-tint-target", size.0, size.1);
     let (blur_aux_texture, blur_aux_view) =
         create_target(device, "point10-sun-blur-aux", half_w, half_h);
 
@@ -820,16 +822,10 @@ fn build_targets(
     for i in 0..5_u32 {
         let w = (half_w >> i).max(2);
         let h = (half_h >> i).max(2);
-        mips.push(create_target(
-            device,
-            &format!("point10-sun-mip-{i}"),
-            w,
-            h,
-        ));
+        mips.push(create_target(device, &format!("point10-sun-mip-{i}"), w, h));
     }
-    let mips: [(wgpu::Texture, wgpu::TextureView); 5] = mips
-        .try_into()
-        .expect("five mips were pushed");
+    let mips: [(wgpu::Texture, wgpu::TextureView); 5] =
+        mips.try_into().expect("five mips were pushed");
 
     let copy_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("point10-sun-copy-uniforms"),
@@ -1014,10 +1010,7 @@ fn build_targets(
 /// (`Sun.js:511-514` — the fullscreen passes cover the destination
 /// 1:1, so `uv = position / resolution`).
 fn write_pass_uniforms(gpu: &SunGpu, size: (u32, u32), ray_weight: f32, brightness: f32) {
-    let half = [
-        (size.0 >> 1).max(2) as f32,
-        (size.1 >> 1).max(2) as f32,
-    ];
+    let half = [(size.0 >> 1).max(2) as f32, (size.1 >> 1).max(2) as f32];
     let full = [size.0 as f32, size.1 as f32];
     let write = |buffer: &wgpu::Buffer, value: SunPassUniforms| {
         gpu.queue
@@ -1067,7 +1060,8 @@ impl Point10Scene for Sun {
         self.size = (ctx.width.max(1), ctx.height.max(1));
         let size = self.size;
 
-        let (sphere_vertices, sphere_indices) = build_sphere(SUN.radius, SUN.segments, SUN.segments);
+        let (sphere_vertices, sphere_indices) =
+            build_sphere(SUN.radius, SUN.segments, SUN.segments);
         let (ring_vertices, ring_indices) =
             build_ring(SUN.ring_inner, SUN.ring_outer, SUN.ring_segments, 1);
 
@@ -1225,16 +1219,18 @@ impl Point10Scene for Sun {
             source: wgpu::ShaderSource::Wgsl(corona_wgsl().into()),
         });
 
-        let surface_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("point10-sun-surface-pipeline-layout"),
-            bind_group_layouts: &[Some(&surface_layout)],
-            immediate_size: 0,
-        });
-        let corona_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("point10-sun-corona-pipeline-layout"),
-            bind_group_layouts: &[Some(&corona_layout)],
-            immediate_size: 0,
-        });
+        let surface_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("point10-sun-surface-pipeline-layout"),
+                bind_group_layouts: &[Some(&surface_layout)],
+                immediate_size: 0,
+            });
+        let corona_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("point10-sun-corona-pipeline-layout"),
+                bind_group_layouts: &[Some(&corona_layout)],
+                immediate_size: 0,
+            });
 
         let surface_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("point10-sun-surface-pipeline"),
@@ -1439,16 +1435,15 @@ impl Point10Scene for Sun {
         self.time += dt;
         self.audio.update(dt, audio);
 
-        let bass = self.audio.band(
-            -1,
-            SUN.surface.damping,
-            SUN.surface.band,
-            0.1,
-        );
+        let bass = self
+            .audio
+            .band(-1, SUN.surface.damping, SUN.surface.band, 0.1);
         // `Sun.js:423`: `sunSurfaceLevel(bass, 1)` — no brightness lever here.
         self.surface_level = sun_surface_level(bass, 1.0);
 
-        let corona_bass = self.audio.band(-1, SUN.corona.damping, SUN.corona.band, 0.05);
+        let corona_bass = self
+            .audio
+            .band(-1, SUN.corona.damping, SUN.corona.band, 0.05);
         self.corona_level = sun_corona_level(corona_bass, self.corona_scale);
 
         self.ray_weight = sun_ray_weight(self.rays_scale);
@@ -1514,10 +1509,7 @@ impl Point10Scene for Sun {
             pass.draw(0..3, 0..1);
         }
 
-        let half = [
-            (self.size.0 >> 1).max(2),
-            (self.size.1 >> 1).max(2),
-        ];
+        let half = [(self.size.0 >> 1).max(2), (self.size.1 >> 1).max(2)];
         for i in 0..4_u32 {
             let from_index = i;
             let to_index = i + 1;
@@ -1533,8 +1525,11 @@ impl Point10Scene for Sun {
                 texel: [spread / to_width as f32, 0.0],
                 _pad: [0.0; 2],
             };
-            gpu.queue
-                .write_buffer(&gpu.targets.blur_uniforms, 0, bytemuck::bytes_of(&horizontal));
+            gpu.queue.write_buffer(
+                &gpu.targets.blur_uniforms,
+                0,
+                bytemuck::bytes_of(&horizontal),
+            );
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("point10-sun-blur-horizontal"),
@@ -1916,6 +1911,7 @@ fn screen_wgsl() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::point10::ScenePropKind;
     use crate::point10::audio_bridge::{AUDIO_SAMPLES, BandPayload};
     use crate::point10::test_support::{TestTarget, any_lit, gpu};
     use crate::point10::{MAX_FRAME_SECONDS, audio_bridge::AudioBridge};
@@ -2076,7 +2072,10 @@ mod tests {
 
         // The responsiveness levers precede the scene schema.
         assert_eq!(props[0].name, "gain");
-        assert_eq!(props.len(), crate::point10::audio_bridge::RESPONSIVENESS_PROPS.len() + 4);
+        assert_eq!(
+            props.len(),
+            crate::point10::audio_bridge::RESPONSIVENESS_PROPS.len() + 4
+        );
     }
 
     #[test]
@@ -2146,7 +2145,11 @@ mod tests {
         assert_eq!(vertices.len(), 33 * 33);
         assert!(!indices.is_empty());
         assert!(indices.len() % 3 == 0);
-        assert!(indices.iter().all(|index| (*index as usize) < vertices.len()));
+        assert!(
+            indices
+                .iter()
+                .all(|index| (*index as usize) < vertices.len())
+        );
 
         for vertex in &vertices {
             let length = (vertex.normal[0] * vertex.normal[0]
@@ -2165,7 +2168,7 @@ mod tests {
 
         // Every non-degenerate triangle's geometric normal agrees with the
         // vertex normals (outward winding).
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let [a, b, c] = [
                 vertices[triangle[0] as usize],
                 vertices[triangle[1] as usize],
@@ -2177,12 +2180,9 @@ mod tests {
             let bx = c.position[0] - a.position[0];
             let by = c.position[1] - a.position[1];
             let bz = c.position[2] - a.position[2];
-            let cross = [
-                ay * bz - az * by,
-                az * bx - ax * bz,
-                ax * by - ay * bx,
-            ];
-            let cross_length = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+            let cross = [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx];
+            let cross_length =
+                (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
             assert!(cross_length > 0.0, "degenerate triangle {triangle:?}");
 
             let shaded = [
@@ -2203,7 +2203,11 @@ mod tests {
         let (vertices, indices) = build_ring(SUN.ring_inner, SUN.ring_outer, SUN.ring_segments, 1);
         assert_eq!(vertices.len(), 2 * (SUN.ring_segments as usize + 1));
         assert_eq!(indices.len(), SUN.ring_segments as usize * 6);
-        assert!(indices.iter().all(|index| (*index as usize) < vertices.len()));
+        assert!(
+            indices
+                .iter()
+                .all(|index| (*index as usize) < vertices.len())
+        );
 
         for vertex in &vertices {
             assert_eq!(vertex.position[2], 0.0, "ring not planar: {vertex:?}");
@@ -2212,7 +2216,7 @@ mod tests {
             let radius = (vertex.position[0] * vertex.position[0]
                 + vertex.position[1] * vertex.position[1])
                 .sqrt();
-            assert!(radius >= SUN.ring_inner - 1e-5 && radius <= SUN.ring_outer + 1e-5);
+            assert!((SUN.ring_inner - 1e-5..=SUN.ring_outer + 1e-5).contains(&radius));
 
             // three's uv formula maps [-outer, +outer] onto [0, 1].
             assert!((0.0..=1.0).contains(&vertex.uv[0]));
@@ -2223,8 +2227,7 @@ mod tests {
         let inner_radius = vertices[..(SUN.ring_segments as usize + 1)]
             .iter()
             .map(|vertex| {
-                (vertex.position[0] * vertex.position[0]
-                    + vertex.position[1] * vertex.position[1])
+                (vertex.position[0] * vertex.position[0] + vertex.position[1] * vertex.position[1])
                     .sqrt()
             })
             .fold(f32::INFINITY, f32::min);
@@ -2422,12 +2425,7 @@ mod tests {
         queue.submit(Some(encoder.finish()));
 
         let pixels = target.read(&device, &queue);
-        for (x, y) in [
-            (0, 0),
-            (SIZE - 1, 0),
-            (0, SIZE - 1),
-            (SIZE - 1, SIZE - 1),
-        ] {
+        for (x, y) in [(0, 0), (SIZE - 1, 0), (0, SIZE - 1), (SIZE - 1, SIZE - 1)] {
             let index = ((y * SIZE + x) * 4) as usize;
             assert_eq!(
                 pixels[index..index + 4],
@@ -2470,12 +2468,7 @@ mod tests {
         queue.submit(Some(encoder.finish()));
 
         let pixels = target.read(&device, &queue);
-        for (x, y) in [
-            (0, 0),
-            (SIZE - 1, 0),
-            (0, SIZE - 1),
-            (SIZE - 1, SIZE - 1),
-        ] {
+        for (x, y) in [(0, 0), (SIZE - 1, 0), (0, SIZE - 1), (SIZE - 1, SIZE - 1)] {
             let index = ((y * SIZE + x) * 4) as usize;
             assert!(
                 pixels[index + 3] <= 4,
@@ -2494,4 +2487,3 @@ mod tests {
         );
     }
 }
-

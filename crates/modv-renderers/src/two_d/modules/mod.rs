@@ -367,19 +367,19 @@ pub trait TwoDModule: Send {
 pub fn all_modules() -> Vec<Box<dyn TwoDModule>> {
     vec![
         Box::new(Ball::default()),
-        Box::new(Text::default()),
+        Box::new(Text),
         Box::new(Polygon::default()),
-        Box::new(Texture2d::default()),
+        Box::new(Texture2d),
         Box::new(Buffer::default()),
         Box::new(Concentrics::default()),
         Box::new(XDrips::default()),
         Box::new(Line::default()),
         Box::new(Pixelate::default()),
-        Box::new(Waveform::default()),
+        Box::new(Waveform),
         Box::new(GridStretch::default()),
-        Box::new(Bar::default()),
-        Box::new(Webcam::default()),
-        Box::new(Smear::default()),
+        Box::new(Bar),
+        Box::new(Webcam),
+        Box::new(Smear),
         Box::new(Counter::default()),
     ]
 }
@@ -476,10 +476,10 @@ pub fn prop_tween_rgb(props: &Value, name: &str, default: [f32; 4], time_ms: f32
     let Some(control) = props.get(name) else {
         return default;
     };
-    if let Some(value) = control.get("value") {
-        if let Some(rgba) = rgb_triplet(value) {
-            return rgba;
-        }
+    if let Some(value) = control.get("value")
+        && let Some(rgba) = rgb_triplet(value)
+    {
+        return rgba;
     }
     // Tween props whose value has not been pushed by the (JS) tween engine yet:
     // advance through the palette ring on the frame clock. The JS tween is a

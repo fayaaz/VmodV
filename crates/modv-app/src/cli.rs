@@ -455,13 +455,13 @@ pub fn resolve_isf_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
 fn development_isf_dir() -> Option<PathBuf> {
     let relative = Path::new("src/renderer/src/application/renderers/isf/modules/isf");
     let mut candidates = Vec::new();
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(binary_dir) = executable.parent() {
-            // `crates/target/release` → repository root.
-            candidates.push(binary_dir.join("..").join("..").join("..").join(relative));
-            // `<repo>/target/release` (workspace target at the repository root).
-            candidates.push(binary_dir.join("..").join("..").join(relative));
-        }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(binary_dir) = executable.parent()
+    {
+        // `crates/target/release` → repository root.
+        candidates.push(binary_dir.join("..").join("..").join("..").join(relative));
+        // `<repo>/target/release` (workspace target at the repository root).
+        candidates.push(binary_dir.join("..").join("..").join(relative));
     }
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(cwd.join(relative));

@@ -408,10 +408,10 @@ impl Point10Scene for Wormhole {
         self.upload_uniforms();
 
         // `this._bloomPass.strength = BLOOM.strength * this.bloomScale`
-        if let Some(gpu) = self.gpu.as_mut() {
-            if let Some(bloom) = gpu.composer.bloom_mut() {
-                bloom.set_strength(BLOOM_STRENGTH * self.bloom_scale);
-            }
+        if let Some(gpu) = self.gpu.as_mut()
+            && let Some(bloom) = gpu.composer.bloom_mut()
+        {
+            bloom.set_strength(BLOOM_STRENGTH * self.bloom_scale);
         }
     }
 

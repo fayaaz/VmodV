@@ -27,18 +27,10 @@ struct BallState {
 }
 
 /// The `Ball` module.
+#[derive(Default)]
 pub struct Ball {
     rng: SimpleRng,
     balls: Vec<BallState>,
-}
-
-impl Default for Ball {
-    fn default() -> Self {
-        Self {
-            rng: SimpleRng::new(),
-            balls: Vec::new(),
-        }
-    }
 }
 
 impl Ball {
@@ -180,8 +172,7 @@ impl TwoDModule for Ball {
         let colour = prop_tween_rgb(ctx.props, "color", [1.0, 1.0, 1.0, 1.0], ctx.delta);
         let amount = prop_i64(ctx.props, "amount", 10).clamp(0, 300) as usize;
 
-        for index in 0..amount.min(self.balls.len()) {
-            let ball = &self.balls[index];
+        for ball in self.balls.iter().take(amount) {
             // `drawBall` (`Ball.js:214-229`).
             let radius = (ball.radius + ball.radius * analysed).round();
             if radius < 0.5 || !radius.is_finite() {

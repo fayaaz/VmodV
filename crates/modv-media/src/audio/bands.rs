@@ -530,11 +530,7 @@ impl AudioBands {
         let cells = self.band_cells(n, input.sample_rate).to_vec();
 
         for (c, &(a, b)) in cells.iter().enumerate() {
-            let mut sum = 0.0f32;
-
-            for i in a..=b {
-                sum += self.freq_mag[i];
-            }
+            let sum: f32 = self.freq_mag[a..=b].iter().sum();
 
             let target = sum / (b - a + 1) as f32;
             let g = self.grid[c];
@@ -547,11 +543,7 @@ impl AudioBands {
         }
 
         for (b, &[lo, hi]) in BAND_CELLS.iter().enumerate() {
-            let mut sum = 0.0f32;
-
-            for c in lo..=hi {
-                sum += self.grid[c];
-            }
+            let sum: f32 = self.grid[lo..=hi].iter().sum();
 
             self.bands[b] = sum / (hi - lo + 1) as f32;
         }

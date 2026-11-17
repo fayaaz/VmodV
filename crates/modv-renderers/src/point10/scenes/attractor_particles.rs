@@ -457,13 +457,13 @@ pub fn step_particle(
     let speed = length(next_velocity);
     if speed > params.max_speed {
         let scale = params.max_speed / speed;
-        for channel in 0..3 {
-            next_velocity[channel] *= scale;
+        for value in &mut next_velocity {
+            *value *= scale;
         }
     }
     let keep = 1.0 - params.damping;
-    for channel in 0..3 {
-        next_velocity[channel] *= keep;
+    for value in &mut next_velocity {
+        *value *= keep;
     }
 
     let mut next_position = [

@@ -23,15 +23,9 @@ const MODULE_SIZE: u32 = 128;
 
 /// Minimal `std`-only `block_on`, same approach as `modv-render/src/device.rs`.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    use std::task::{Context, Poll, Wake};
+    use std::task::{Context, Poll};
 
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: std::sync::Arc<Self>) {}
-    }
-
-    let waker = std::sync::Arc::new(NoopWaker).into();
-    let mut cx = Context::from_waker(&waker);
+    let mut cx = Context::from_waker(std::task::Waker::noop());
     let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut cx) {
@@ -90,7 +84,12 @@ fn assert_close(actual: [u8; 4], expected: [u8; 4], tolerance: i16, context: &st
 }
 
 fn any_opaque(canvas: &Canvas) -> bool {
-    canvas.read_pixels().chunks_exact(4).any(|p| p[3] > 0)
+    canvas
+        .read_pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|p| p[3] > 0)
 }
 
 /// A solid RGBA texture plus its view.
@@ -734,7 +733,9 @@ fn ear_clipping_covers_convex_polygons() {
     let triangles = path::ear_clip(&square);
     assert_eq!(triangles.len(), 6, "two triangles");
     let area: f32 = triangles
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|triangle| path::signed_area(triangle).abs() / 2.0)
         .sum();
     assert!((area - 100.0).abs() < 1e-3, "area {area}");
@@ -753,7 +754,9 @@ fn ear_clipping_handles_concave_polygons() {
     ];
     let triangles = path::ear_clip(&shape);
     let area: f32 = triangles
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|triangle| path::signed_area(triangle).abs() / 2.0)
         .sum();
     assert!((area - 75.0).abs() < 1e-3, "area {area}");
@@ -764,7 +767,9 @@ fn stroke_geometry_makes_a_quad_per_segment() {
     let triangles = path::stroke_geometry(&[[0.0, 0.0], [10.0, 0.0]], false, 1.0);
     assert_eq!(triangles.len(), 6, "one segment, two triangles");
     let area: f32 = triangles
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|triangle| path::signed_area(triangle).abs() / 2.0)
         .sum();
     // 10 px long, 2 px wide.
@@ -801,7 +806,9 @@ fn circle_subpath_triangulates_as_a_fan() {
     let triangles = path::triangulate_subpath(&path.subpaths[0]);
     assert!(triangles.len() >= 3 * 8);
     let area: f32 = triangles
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|triangle| path::signed_area(triangle).abs() / 2.0)
         .sum();
     // A 32-gon inscribed in a radius-10 circle ≈ π·100.

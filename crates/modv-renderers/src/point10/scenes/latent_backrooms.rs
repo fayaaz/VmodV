@@ -235,7 +235,7 @@ pub fn clamp(value: f32, low: f32, high: f32) -> f32 {
 
 /// `hash(seed)` (`:122`).
 pub fn hash(seed: f32) -> f32 {
-    fract((seed * 127.1 + 311.7).sin() * 43_758.545_3)
+    fract((seed * 127.1 + 311.7).sin() * 43_758.547)
 }
 
 /// `finite(v, fallback)`.

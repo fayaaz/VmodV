@@ -530,12 +530,11 @@ where
             .iter()
             .find(|scene| scene.get("id").and_then(Value::as_str) == Some(pending_id));
 
-        if let Some(pending) = pending {
-            if is_scene_enabled(pending)
-                && !is_row_cell_empty(pending, args.row_index, args.row_names)
-            {
-                return Some(pending);
-            }
+        if let Some(pending) = pending
+            && is_scene_enabled(pending)
+            && !is_row_cell_empty(pending, args.row_index, args.row_names)
+        {
+            return Some(pending);
         }
     }
 
@@ -943,11 +942,11 @@ mod tests {
         // scene-rows.test.js:206-211
         let cam2 = group("Webcam 2", json!([]));
         assert_eq!(
-            assign_scene_row_indexes(&[cam2.clone()], &names(&["webcam"])),
+            assign_scene_row_indexes(std::slice::from_ref(&cam2), &names(&["webcam"])),
             vec![Some(0)]
         );
         assert_eq!(
-            assign_scene_row_indexes(&[cam2.clone()], &names(&["Webcam 2"])),
+            assign_scene_row_indexes(std::slice::from_ref(&cam2), &names(&["Webcam 2"])),
             vec![Some(0)]
         );
         assert_eq!(
@@ -961,7 +960,7 @@ mod tests {
         // scene-rows.test.js:213-218
         let fx = group("Effects", json!([]));
         assert_eq!(
-            assign_scene_row_indexes(&[fx.clone()], &names(&["Effects", "effects2"])),
+            assign_scene_row_indexes(std::slice::from_ref(&fx), &names(&["Effects", "effects2"])),
             vec![Some(0)]
         );
         assert_eq!(
@@ -1660,7 +1659,7 @@ mod tests {
     #[test]
     fn forces_at_the_per_cell_target_before_the_maximum() {
         // scene-rows.test.js:672-682
-        assert_eq!(should(6.0, 5.0, 10.0, Some(6.0), false, 0.0).forced, true);
+        assert!(should(6.0, 5.0, 10.0, Some(6.0), false, 0.0).forced);
     }
 
     #[test]

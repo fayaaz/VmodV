@@ -738,11 +738,7 @@ impl IsfRuntime {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(
-            &vertex_buffer,
-            0,
-            bytemuck::cast_slice(&SIDECAR_VERTICES),
-        );
+        queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&SIDECAR_VERTICES));
 
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("modV ISF blit layout"),
@@ -1072,7 +1068,6 @@ impl IsfRuntime {
     }
 
     /// Get (or create) the fragment pipeline for one target format.
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn fragment_pipeline(
         &mut self,
@@ -1677,7 +1672,10 @@ mod tests {
             compiled += 1;
         }
 
-        assert!(compiled >= 30, "only {compiled} vertex sidecars were compiled");
+        assert!(
+            compiled >= 30,
+            "only {compiled} vertex sidecars were compiled"
+        );
     }
 
     #[test]
@@ -1694,15 +1692,10 @@ mod tests {
         void main() { gl_FragColor = vec4(texOffsets[0], 0.0, 1.0); }"#;
         let vertex = r#"varying vec2 texOffsets[5];
         void main() { isf_vertShaderInit(); texOffsets[0] = isf_FragNormCoord; }"#;
-        let document =
-            parse_isf(fragment, Some(vertex)).expect("the sidecar test shader parses");
+        let document = parse_isf(fragment, Some(vertex)).expect("the sidecar test shader parses");
 
         runtime
-            .compile(
-                &document,
-                "sidecar-test",
-                wgpu::TextureFormat::Rgba8Unorm,
-            )
+            .compile(&document, "sidecar-test", wgpu::TextureFormat::Rgba8Unorm)
             .expect("a sidecar vertex shader compiles with matching varyings");
     }
 

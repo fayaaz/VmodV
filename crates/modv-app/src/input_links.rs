@@ -168,10 +168,10 @@ pub fn evaluate_input_links(
                 }
                 None => continue,
             }
-        } else if let LinkTarget::Group { group_id, .. } = &target {
-            if state.find_group(group_id).is_none() {
-                continue;
-            }
+        } else if let LinkTarget::Group { group_id, .. } = &target
+            && state.find_group(group_id).is_none()
+        {
+            continue;
         }
 
         let raw = match link.kind {
@@ -264,13 +264,12 @@ pub(crate) fn link_target(
     if let (Some(group_id), Some(key)) = (
         data.get("groupId").and_then(Value::as_str),
         data.get("key").and_then(Value::as_str),
-    ) {
-        if state.find_group(group_id).is_some() {
-            return Some(LinkTarget::Group {
-                group_id: group_id.to_string(),
-                key: key.to_string(),
-            });
-        }
+    ) && state.find_group(group_id).is_some()
+    {
+        return Some(LinkTarget::Group {
+            group_id: group_id.to_string(),
+            key: key.to_string(),
+        });
     }
 
     None
@@ -461,11 +460,9 @@ fn parse_path(path: &str) -> Vec<PathSegment> {
 
                 // `['0']` is an object key (MIDI channel/type maps use string
                 // keys); only an unquoted `[0]` is an array index.
-                if !quoted {
-                    if let Ok(index) = inside.parse::<usize>() {
-                        segments.push(PathSegment::Index(index));
-                        continue;
-                    }
+                if !quoted && let Ok(index) = inside.parse::<usize>() {
+                    segments.push(PathSegment::Index(index));
+                    continue;
                 }
                 if !inside.is_empty() {
                     segments.push(PathSegment::Key(inside));
@@ -513,10 +510,10 @@ fn resolve_state_path(state: &EngineState, beats: &BeatsState, path: &str) -> Op
 /// object keyed by id or an array searched by `id`.
 fn resolve_tween(tweens: &Value, rest: &[PathSegment]) -> Option<f64> {
     let mut rest = rest;
-    if let Some((PathSegment::Key(key), tail)) = rest.split_first() {
-        if key == "tweens" {
-            rest = tail;
-        }
+    if let Some((PathSegment::Key(key), tail)) = rest.split_first()
+        && key == "tweens"
+    {
+        rest = tail;
     }
     let (PathSegment::Key(id), tail) = rest.split_first()? else {
         return None;

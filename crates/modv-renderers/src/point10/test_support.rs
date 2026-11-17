@@ -13,15 +13,9 @@
 
 /// Minimal `std`-only `block_on`, same approach as `modv-render/src/device.rs`.
 pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    use std::task::{Context, Poll, Wake};
+    use std::task::{Context, Poll};
 
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: std::sync::Arc<Self>) {}
-    }
-
-    let waker = std::sync::Arc::new(NoopWaker).into();
-    let mut cx = Context::from_waker(&waker);
+    let mut cx = Context::from_waker(std::task::Waker::noop());
     let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut cx) {
@@ -170,12 +164,14 @@ impl TestTarget {
 /// True when any pixel has non-zero alpha — a Point10 scene's "something was
 /// drawn" check (scenes clear to transparent black).
 pub(crate) fn any_visible(pixels: &[u8]) -> bool {
-    pixels.chunks_exact(4).any(|pixel| pixel[3] > 0)
+    pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0)
 }
 
 /// True when any pixel carries visible RGB and alpha.
 pub(crate) fn any_lit(pixels: &[u8]) -> bool {
     pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|pixel| pixel[3] > 0 && (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) > 0)
 }

@@ -95,7 +95,7 @@ pub fn tunnel_drive(bass: f32, mid: f32, dt: f32, perm: f32) -> LightTunnelDrive
     let bass = if bass.is_finite() { bass.max(0.0) } else { 0.0 };
     let mid = if mid.is_finite() { mid.max(0.0) } else { 0.0 };
     let step = if dt.is_finite() {
-        dt.min(MAX_DT).max(0.0)
+        dt.clamp(0.0, MAX_DT)
     } else {
         0.0
     };
@@ -328,10 +328,10 @@ impl Point10Scene for LightTunnel {
         self.upload_uniforms();
 
         // `this._bloomPass.strength = BLOOM.strength * this.bloomScale`
-        if let Some(gpu) = self.gpu.as_mut() {
-            if let Some(bloom) = gpu.composer.bloom_mut() {
-                bloom.set_strength(BLOOM_STRENGTH * self.bloom_scale);
-            }
+        if let Some(gpu) = self.gpu.as_mut()
+            && let Some(bloom) = gpu.composer.bloom_mut()
+        {
+            bloom.set_strength(BLOOM_STRENGTH * self.bloom_scale);
         }
     }
 

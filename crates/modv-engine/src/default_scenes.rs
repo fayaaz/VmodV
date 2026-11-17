@@ -69,10 +69,8 @@ pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
 
 /// Modules removed from the defaults whose Scenes must be rebuilt
 /// (`default-scenes.js:44`).
-pub const REMOVED_DEFAULT_SCENE_MODULES: &[&str] = &[
-    "Point10 Cube Floor",
-    "Point10 Geometric Tunnel",
-];
+pub const REMOVED_DEFAULT_SCENE_MODULES: &[&str] =
+    &["Point10 Cube Floor", "Point10 Geometric Tunnel"];
 
 /// Default Scenes retired without a replacement (`default-scenes.js:49-58`).
 pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
@@ -569,10 +567,10 @@ pub fn get_default_scenes_to_remove_with(
             continue;
         }
 
-        if let Some(seeded) = &seeded {
-            if !seeded.contains(&key) {
-                continue;
-            }
+        if let Some(seeded) = &seeded
+            && !seeded.contains(&key)
+        {
+            continue;
         }
 
         seen.insert(key);
@@ -1209,7 +1207,7 @@ mod tests {
     #[test]
     fn adds_the_version_7_circular_mountain_scene() {
         // default-scenes.test.js:307-359
-        assert!(batch(7).len() >= 1);
+        assert!(!batch(7).is_empty());
 
         let scene = scene_by_name("Circular Mountain");
         assert_eq!(scene.introduced_version, 7);
@@ -1922,7 +1920,8 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
+        let plan =
+            get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()
@@ -2054,7 +2053,8 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
+        let plan =
+            get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()
@@ -2108,7 +2108,8 @@ mod tests {
         let scenes: Vec<Value> = names.iter().map(|name| seeded(name)).collect();
         let seeded_names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
 
-        let plan = get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
+        let plan =
+            get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
         let replaced: Vec<&str> = plan
             .replacements
             .iter()

@@ -198,7 +198,7 @@ impl MeydaExtractor {
     /// As [`Self::new`].
     pub fn with_window(fft_size: usize, sample_rate: f32, window: WindowFunction) -> Self {
         assert!(
-            fft_size >= 4 && fft_size % 2 == 0,
+            fft_size >= 4 && fft_size.is_multiple_of(2),
             "MeydaExtractor requires an even fft_size >= 4, got {fft_size}"
         );
 
@@ -352,8 +352,8 @@ impl MeydaExtractor {
 
     /// `extractors/loudness.ts` and the two perceptual extractors built on it.
     fn loudness(&self, amp_spectrum: &[f64]) -> Loudness {
-        let mut specific = vec![0.0f64; NUMBER_OF_BARK_BANDS];
-        let mut limits = vec![0usize; NUMBER_OF_BARK_BANDS + 1];
+        let mut specific = [0.0f64; NUMBER_OF_BARK_BANDS];
+        let mut limits = [0usize; NUMBER_OF_BARK_BANDS + 1];
         let last_bark = self.bark_scale[amp_spectrum.len() - 1] as f64;
 
         limits[0] = 0;
@@ -561,7 +561,7 @@ mod tests {
         // A full-scale sine's RMS is 1/sqrt(2); the 440 Hz tone is not bin
         // centred, but RMS is time-domain and unaffected by the FFT.
         assert!((features.rms - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-2);
-        assert!((features.rms - 0.70710678).abs() < 1e-2);
+        assert!((features.rms - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-2);
     }
 
     #[test]

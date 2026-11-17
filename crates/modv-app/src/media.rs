@@ -220,11 +220,13 @@ impl MediaHub {
     }
 
     /// Whether capture can start (GStreamer initialised).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_available(&self) -> bool {
         self.init.is_ok()
     }
 
     /// Why capture is unavailable, when it is.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn init_error(&self) -> Option<&str> {
         self.init.as_ref().err().map(String::as_str)
     }
@@ -358,11 +360,13 @@ impl MediaHub {
     }
 
     /// How many sources are registered (running or restarting).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn len(&self) -> usize {
         self.order.len()
     }
 
     /// Whether no source is registered.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()
     }
@@ -537,7 +541,8 @@ impl MediaHub {
     /// Port of `selectWebcamSource` (`media-inputs.js:150-158`): indexes below
     /// 1 clamp to the first source, an out-of-range index falls back to the
     /// first source, and an empty list resolves to `None`.
-    pub fn select_source_id<'a>(order: &'a [String], index: i64) -> Option<&'a str> {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn select_source_id(order: &[String], index: i64) -> Option<&str> {
         if order.is_empty() {
             return None;
         }
@@ -808,7 +813,7 @@ pub(crate) fn padded_rows<'a>(frame: &'a VideoFrame, scratch: &'a mut Vec<u8>) -
     let row = frame.width as usize * 4;
     let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
 
-    if row % alignment == 0 {
+    if row.is_multiple_of(alignment) {
         return (&frame.rgba, row as u32);
     }
 

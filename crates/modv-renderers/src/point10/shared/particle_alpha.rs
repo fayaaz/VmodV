@@ -223,7 +223,9 @@ mod tests {
             previous = alpha;
         }
 
-        assert!(PARTICLE_SPRITE_INNER > 0.0 && PARTICLE_SPRITE_INNER < 1.0);
+        const {
+            assert!(PARTICLE_SPRITE_INNER > 0.0 && PARTICLE_SPRITE_INNER < 1.0);
+        }
     }
 
     #[test]

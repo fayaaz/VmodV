@@ -171,7 +171,7 @@ pub fn boxy_drive(bass: f32, mid: f32, dt: f32, perm: f32) -> BoxyDrive {
     let bass = if bass.is_finite() { bass.max(0.0) } else { 0.0 };
     let mid = if mid.is_finite() { mid.max(0.0) } else { 0.0 };
     let step = if dt.is_finite() {
-        dt.max(0.0).min(MAX_DT)
+        dt.clamp(0.0, MAX_DT)
     } else {
         0.0
     };

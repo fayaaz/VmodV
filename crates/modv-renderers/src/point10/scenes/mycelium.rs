@@ -438,10 +438,10 @@ impl Point10Scene for Mycelium {
 
         self.upload_uniforms();
 
-        if let Some(gpu) = self.gpu.as_mut() {
-            if let Some(bloom) = gpu.composer.bloom_mut() {
-                bloom.set_strength(self.drive.bloom_strength);
-            }
+        if let Some(gpu) = self.gpu.as_mut()
+            && let Some(bloom) = gpu.composer.bloom_mut()
+        {
+            bloom.set_strength(self.drive.bloom_strength);
         }
     }
 

@@ -66,15 +66,9 @@ impl std::error::Error for EngineError {}
 /// poll loop suffices. The no-op waker never needs to be woken on that
 /// path; a pending future would be re-polled after a yield.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    use std::task::{Context, Poll, Wake};
+    use std::task::{Context, Poll};
 
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: std::sync::Arc<Self>) {}
-    }
-
-    let waker = std::sync::Arc::new(NoopWaker).into();
-    let mut cx = Context::from_waker(&waker);
+    let mut cx = Context::from_waker(std::task::Waker::noop());
     let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut cx) {

@@ -426,9 +426,9 @@ impl AudioBridge {
         };
 
         for damping in 0..LANES_PER_BAND {
-            for band in 0..3 {
+            for (band, gain) in band_gain.iter().enumerate() {
                 let index = damping * 3 + band;
-                let target = clamp01(src_lanes[index] * band_gain[band]);
+                let target = clamp01(src_lanes[index] * *gain);
                 self.lanes[index] += (target - self.lanes[index]) * k;
             }
         }
@@ -516,7 +516,7 @@ impl AudioBridge {
         self.bin_band_key = Some(key);
         self.bin_band = vec![0_u8; n];
 
-        for index in 0..n {
+        for (index, slot) in self.bin_band.iter_mut().enumerate() {
             let hz = (index as f32 * sample_rate) / 2.0 / n as f32;
             let mut cell = 15;
             for candidate in 0..16 {
@@ -525,7 +525,7 @@ impl AudioBridge {
                     break;
                 }
             }
-            self.bin_band[index] = band_of_cell(cell) as u8;
+            *slot = band_of_cell(cell) as u8;
         }
     }
 

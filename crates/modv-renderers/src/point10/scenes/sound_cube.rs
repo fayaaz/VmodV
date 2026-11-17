@@ -171,7 +171,7 @@ pub fn sound_cube_feedback(trail_scale: f32) -> SoundCubeFeedback {
 /// speeds.
 pub fn advance_sound_cube_rotation(rotation: [f32; 3], dt: f32, spin_scale: f32) -> [f32; 3] {
     let step = if dt.is_finite() {
-        dt.max(0.0).min(MAX_DT)
+        dt.clamp(0.0, MAX_DT)
     } else {
         0.0
     };

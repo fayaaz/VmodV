@@ -15,14 +15,9 @@ use crate::two_d::modules::{
 };
 
 /// The `Grid Stretch` module.
+#[derive(Default)]
 pub struct GridStretch {
     scratch: Option<Canvas>,
-}
-
-impl Default for GridStretch {
-    fn default() -> Self {
-        Self { scratch: None }
-    }
 }
 
 impl TwoDModule for GridStretch {

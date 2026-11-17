@@ -102,25 +102,24 @@ pub fn coerce_prop_value(schema: &PropSchema, value: &serde_json::Value) -> serd
 
     let mut out = value.clone();
 
-    if schema.strict {
-        if let (Some(min), Some(max)) = (schema.min, schema.max) {
-            if let Some(n) = as_number {
-                let clamped = n.max(min).min(max);
-                out = number_or_input(clamped, value);
-            }
-        }
+    if schema.strict
+        && let (Some(min), Some(max)) = (schema.min, schema.max)
+        && let Some(n) = as_number
+    {
+        let clamped = n.max(min).min(max);
+        out = number_or_input(clamped, value);
     }
 
-    if schema.abs {
-        if let Some(n) = out.as_f64().filter(|n| n.is_finite()) {
-            out = number_or_input(n.abs(), value);
-        }
+    if schema.abs
+        && let Some(n) = out.as_f64().filter(|n| n.is_finite())
+    {
+        out = number_or_input(n.abs(), value);
     }
 
-    if schema.type_ == "int" {
-        if let Some(n) = out.as_f64().filter(|n| n.is_finite()) {
-            out = number_or_input(js_round(n), value);
-        }
+    if schema.type_ == "int"
+        && let Some(n) = out.as_f64().filter(|n| n.is_finite())
+    {
+        out = number_or_input(js_round(n), value);
     }
 
     out

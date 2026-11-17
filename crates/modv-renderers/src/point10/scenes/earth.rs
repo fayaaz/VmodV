@@ -145,7 +145,7 @@
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::postfx::{Composer, ToneMapping};
 use crate::point10::scenes::cube_mesh::{
-    self, Mat4, Vertex, create_depth, mat4_mul, perspective, look_at,
+    self, Mat4, Vertex, create_depth, look_at, mat4_mul, perspective,
 };
 use crate::point10::shared::assets::{ColourSpace, Wrap, load_texture};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
@@ -634,7 +634,12 @@ impl Earth {
             0,
             bytemuck::bytes_of(&SurfaceUniforms {
                 view_proj: self.view_proj,
-                camera_pos: [self.camera_pos[0], self.camera_pos[1], self.camera_pos[2], 0.0],
+                camera_pos: [
+                    self.camera_pos[0],
+                    self.camera_pos[1],
+                    self.camera_pos[2],
+                    0.0,
+                ],
                 g_in1: [self.phase, 0.0, 0.0, 0.0],
                 g_in2: [self.sun_pos[0], self.sun_pos[1], self.sun_pos[2], 0.0],
                 g_in3: [self.lights, 0.0, 0.0, 0.0],
@@ -645,7 +650,12 @@ impl Earth {
             0,
             bytemuck::bytes_of(&AtmosphereUniforms {
                 view_proj: self.view_proj,
-                camera_pos: [self.camera_pos[0], self.camera_pos[1], self.camera_pos[2], 0.0],
+                camera_pos: [
+                    self.camera_pos[0],
+                    self.camera_pos[1],
+                    self.camera_pos[2],
+                    0.0,
+                ],
                 g_in2: [self.sun_pos[0], self.sun_pos[1], self.sun_pos[2], 0.0],
                 u_atmosphere: self.atmosphere_scale,
                 _pad: [0.0; 3],
@@ -675,14 +685,16 @@ impl Point10Scene for Earth {
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
-                let device = ctx.device.clone();
+        let device = ctx.device.clone();
         let queue = ctx.queue.clone();
         self.size = (ctx.width, ctx.height);
 
         let (planet_mesh, planet_count) = {
-            let (vertices, indices) =
-                build_sphere(EARTH.radius, PLANET_SEGMENTS, PLANET_SEGMENTS);
-            (vertex_and_index_buffers(&device, "point10-earth-planet", &vertices, &indices), indices.len() as u32)
+            let (vertices, indices) = build_sphere(EARTH.radius, PLANET_SEGMENTS, PLANET_SEGMENTS);
+            (
+                vertex_and_index_buffers(&device, "point10-earth-planet", &vertices, &indices),
+                indices.len() as u32,
+            )
         };
         let (sky_vertices, sky_indices) =
             build_sphere(EARTH.sky_radius, SKY_SEGMENTS, SKY_SEGMENTS);
@@ -699,11 +711,38 @@ impl Point10Scene for Earth {
         let loader = ctx.asset_loader();
         // `configureTexture` sets RepeatWrapping on all four (`:414-422`);
         // the panorama also wraps in longitude for the equirect lookup.
-        let earth = load_texture(&device, &queue, &loader, "earth.jpg", ColourSpace::Srgb, Wrap::Repeat);
-        let lights = load_texture(&device, &queue, &loader, "earthlights.jpg", ColourSpace::Srgb, Wrap::Repeat);
-        let clouds = load_texture(&device, &queue, &loader, "earthcloud.jpg", ColourSpace::Srgb, Wrap::Repeat);
-        let panorama =
-            load_texture(&device, &queue, &loader, "wilkyway_panorama.jpg", ColourSpace::Srgb, Wrap::Repeat);
+        let earth = load_texture(
+            &device,
+            &queue,
+            &loader,
+            "earth.jpg",
+            ColourSpace::Srgb,
+            Wrap::Repeat,
+        );
+        let lights = load_texture(
+            &device,
+            &queue,
+            &loader,
+            "earthlights.jpg",
+            ColourSpace::Srgb,
+            Wrap::Repeat,
+        );
+        let clouds = load_texture(
+            &device,
+            &queue,
+            &loader,
+            "earthcloud.jpg",
+            ColourSpace::Srgb,
+            Wrap::Repeat,
+        );
+        let panorama = load_texture(
+            &device,
+            &queue,
+            &loader,
+            "wilkyway_panorama.jpg",
+            ColourSpace::Srgb,
+            Wrap::Repeat,
+        );
 
         let surface_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("point10-earth-surface-shader"),
@@ -791,38 +830,74 @@ impl Point10Scene for Earth {
             "point10-earth-atmosphere-uniforms",
             std::mem::size_of::<AtmosphereUniforms>(),
         );
-        let sky_uniforms = make_uniforms("point10-earth-sky-uniforms", std::mem::size_of::<SkyUniforms>());
-        let sun_uniforms = make_uniforms("point10-earth-sun-uniforms", std::mem::size_of::<SunUniforms>());
+        let sky_uniforms = make_uniforms(
+            "point10-earth-sky-uniforms",
+            std::mem::size_of::<SkyUniforms>(),
+        );
+        let sun_uniforms = make_uniforms(
+            "point10-earth-sun-uniforms",
+            std::mem::size_of::<SunUniforms>(),
+        );
 
         let surface_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("point10-earth-surface-bind-group"),
             layout: &surface_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: surface_uniforms.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&earth.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&lights.view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&clouds.view) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&earth.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: surface_uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&earth.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&lights.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&clouds.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&earth.sampler),
+                },
             ],
         });
         let atmosphere_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("point10-earth-atmosphere-bind-group"),
             layout: &atmosphere_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: atmosphere_uniforms.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: atmosphere_uniforms.as_entire_binding(),
+            }],
         });
         let sky_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("point10-earth-sky-bind-group"),
             layout: &sky_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: sky_uniforms.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&panorama.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&panorama.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: sky_uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&panorama.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&panorama.sampler),
+                },
             ],
         });
         let sun_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("point10-earth-sun-bind-group"),
             layout: &sun_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: sun_uniforms.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: sun_uniforms.as_entire_binding(),
+            }],
         });
 
         let pipeline_layout = |label: &str, layout: &wgpu::BindGroupLayout| {
@@ -833,9 +908,12 @@ impl Point10Scene for Earth {
             })
         };
 
-        let planet_layout = pipeline_layout("point10-earth-planet-pipeline-layout", &surface_layout);
-        let atmosphere_pipeline_layout =
-            pipeline_layout("point10-earth-atmosphere-pipeline-layout", &atmosphere_layout);
+        let planet_layout =
+            pipeline_layout("point10-earth-planet-pipeline-layout", &surface_layout);
+        let atmosphere_pipeline_layout = pipeline_layout(
+            "point10-earth-atmosphere-pipeline-layout",
+            &atmosphere_layout,
+        );
         let sky_pipeline_layout = pipeline_layout("point10-earth-sky-pipeline-layout", &sky_layout);
         let sun_pipeline_layout = pipeline_layout("point10-earth-sun-pipeline-layout", &sun_layout);
 
@@ -922,19 +1000,19 @@ impl Point10Scene for Earth {
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
 
-        let (depth, depth_view) = create_depth(
-            &device,
-            "point10-earth-depth",
-            self.size.0,
-            self.size.1,
-        );
+        let (depth, depth_view) =
+            create_depth(&device, "point10-earth-depth", self.size.0, self.size.1);
 
         // `RenderPass → UnrealBloomPass(0.2, 0.85, 0) → OutputPass` with ACES
         // (`Earth.js:530/547-553`) and no sRGB transfer
         // (`outputColorSpace = LinearSRGBColorSpace`, `:534`).
         let mut composer =
             Composer::new(&device, &queue, self.size.0, self.size.1, ctx.target_format);
-        composer.enable_bloom(EARTH.bloom_strength, EARTH.bloom_radius, EARTH.bloom_threshold);
+        composer.enable_bloom(
+            EARTH.bloom_strength,
+            EARTH.bloom_radius,
+            EARTH.bloom_threshold,
+        );
         composer.set_encode_srgb(false);
         composer
             .output_mut()
@@ -981,12 +1059,8 @@ impl Point10Scene for Earth {
         self.size = (width.max(1), height.max(1));
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.composer.resize(self.size.0, self.size.1);
-            let (depth, depth_view) = create_depth(
-                &gpu.device,
-                "point10-earth-depth",
-                self.size.0,
-                self.size.1,
-            );
+            let (depth, depth_view) =
+                create_depth(&gpu.device, "point10-earth-depth", self.size.0, self.size.1);
             gpu.depth = depth;
             gpu.depth_view = depth_view;
         }
@@ -1005,24 +1079,33 @@ impl Point10Scene for Earth {
         let mid = self.audio.band(-1, 1, 1, 1.0);
         self.lights = earth_light_level(f64::from(mid), f64::from(self.lights_scale)) as f32;
 
-        let cam = [pose.position[0] as f32, pose.position[1] as f32, pose.position[2] as f32];
-        let look = [pose.look_at[0] as f32, pose.look_at[1] as f32, pose.look_at[2] as f32];
+        let cam = [
+            pose.position[0] as f32,
+            pose.position[1] as f32,
+            pose.position[2] as f32,
+        ];
+        let look = [
+            pose.look_at[0] as f32,
+            pose.look_at[1] as f32,
+            pose.look_at[2] as f32,
+        ];
         self.camera_pos = cam;
         self.sun_pos = [sun[0] as f32, sun[1] as f32, sun[2] as f32];
 
         // `camera.lookAt(...)` + `matrixWorldInverse` (`:609-617`).
         let aspect = self.aspect();
-        let projection =
-            perspective(EARTH.fov.to_radians(), aspect, EARTH.near, EARTH.far);
+        let projection = perspective(EARTH.fov.to_radians(), aspect, EARTH.near, EARTH.far);
         let view = look_at(cam, look, [0.0, 1.0, 0.0]);
         self.view_proj = mat4_mul(&projection, &view);
 
         // `renderer.toneMappingExposure = brightnessScale` (`:627-628`).
-        if let Some(gpu) = self.gpu.as_mut() {
-            if self.exposure != self.brightness_scale {
-                gpu.composer.output_mut().set_exposure(self.brightness_scale);
-                self.exposure = self.brightness_scale;
-            }
+        if let Some(gpu) = self.gpu.as_mut()
+            && self.exposure != self.brightness_scale
+        {
+            gpu.composer
+                .output_mut()
+                .set_exposure(self.brightness_scale);
+            self.exposure = self.brightness_scale;
         }
         self.upload_uniforms();
     }
@@ -1548,7 +1631,10 @@ mod tests {
     #[test]
     fn value_noise2_is_deterministic_and_bounded() {
         for probe in [(3.5, 7.25), (-11.0, 2.0), (0.0, 0.0), (123.4, -56.7)] {
-            assert_eq!(value_noise2(probe.0, probe.1), value_noise2(probe.0, probe.1));
+            assert_eq!(
+                value_noise2(probe.0, probe.1),
+                value_noise2(probe.0, probe.1)
+            );
         }
         // Value noise maps into [-1, 1): assert with a grid sweep.
         let mut x = -12.0;
@@ -1556,7 +1642,10 @@ mod tests {
             let mut y = -8.0;
             while y < 8.0 {
                 let value = value_noise2(x, y);
-                assert!((-1.0..=1.0).contains(&value), "value_noise2({x}, {y}) = {value}");
+                assert!(
+                    (-1.0..=1.0).contains(&value),
+                    "value_noise2({x}, {y}) = {value}"
+                );
                 y += 0.37;
             }
             x += 0.29;
@@ -1647,11 +1736,17 @@ mod tests {
             [99.99902065507035, 0.0, 0.4425697988050785],
         );
         // `Math.max(0, NaN) === NaN`.
-        assert!(earth_sun_position(10.0, f64::NAN).iter().all(|v| v.is_nan() || *v == 0.0));
+        assert!(
+            earth_sun_position(10.0, f64::NAN)
+                .iter()
+                .all(|v| v.is_nan() || *v == 0.0)
+        );
         // NaN time propagates.
-        assert!(earth_sun_position(f64::NAN, 1.0)
-            .iter()
-            .all(|v| v.is_nan() || *v == 0.0));
+        assert!(
+            earth_sun_position(f64::NAN, 1.0)
+                .iter()
+                .all(|v| v.is_nan() || *v == 0.0)
+        );
     }
 
     #[test]
@@ -1715,7 +1810,7 @@ mod tests {
             assert!(outward > 0.0, "inward normal at {vertex:?}");
             assert!((length3(vertex.normal) - 1.0).abs() < 1e-6);
         }
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let [a, b, c] = [
                 vertices[triangle[0] as usize],
                 vertices[triangle[1] as usize],
@@ -1747,7 +1842,11 @@ mod tests {
         let count = PLANET_SEGMENTS + 1;
         assert_eq!(vertices.len(), count * count);
         assert_eq!(indices.len(), PLANET_SEGMENTS * PLANET_SEGMENTS * 6);
-        assert!(indices.iter().all(|index| (*index as usize) < vertices.len()));
+        assert!(
+            indices
+                .iter()
+                .all(|index| (*index as usize) < vertices.len())
+        );
         // The top row maps v = 0 (the zenith) in this port's upload space.
         assert_eq!(vertices[0].uv, [0.0, 0.0]);
         assert!((vertices[count * count - 1].uv[1] - 1.0).abs() < 1e-6);
@@ -1772,11 +1871,24 @@ mod tests {
         let names: Vec<&str> = props.iter().map(|prop| prop.name).collect();
         assert_eq!(
             &names[..6],
-            &["gain", "smoothing", "bassGain", "midGain", "trebleGain", "useAgc"]
+            &[
+                "gain",
+                "smoothing",
+                "bassGain",
+                "midGain",
+                "trebleGain",
+                "useAgc"
+            ]
         );
         assert_eq!(
             &names[6..],
-            &["spinSpeed", "sunSpeed", "nightLights", "atmosphere", "brightness"]
+            &[
+                "spinSpeed",
+                "sunSpeed",
+                "nightLights",
+                "atmosphere",
+                "brightness"
+            ]
         );
         let earth_props = &props[6..];
         assert_eq!(
@@ -1793,11 +1905,14 @@ mod tests {
             ]
         );
         assert_eq!(
-            earth_props
-                .iter()
-                .map(|p| p.label)
-                .collect::<Vec<_>>(),
-            ["Spin Speed", "Sun Orbit", "Night Lights", "Atmosphere", "Brightness"]
+            earth_props.iter().map(|p| p.label).collect::<Vec<_>>(),
+            [
+                "Spin Speed",
+                "Sun Orbit",
+                "Night Lights",
+                "Atmosphere",
+                "Brightness"
+            ]
         );
     }
 
@@ -1884,7 +1999,11 @@ mod tests {
 
         scene.update(1.0 / 60.0, &bridge);
         assert!(scene.phase() > 10.0);
-        assert!(scene.lights() > 0.2, "lights must respond to input {0}", scene.lights());
+        assert!(
+            scene.lights() > 0.2,
+            "lights must respond to input {0}",
+            scene.lights()
+        );
         let sun = scene.sun_position();
         assert_eq!(sun[1], 0.0);
         assert!((sun[0].hypot(sun[2]) - EARTH.sun_distance as f32).abs() < 1e-3);
@@ -1944,7 +2063,10 @@ mod tests {
             "pow(1.0 + (G * G) - 2.0 * G * fCos, 1.5)",
             "c = c * vec4<f32>(u.u_atmosphere);",
         ] {
-            assert!(atmosphere.contains(needle), "atmosphere shader lost {needle}");
+            assert!(
+                atmosphere.contains(needle),
+                "atmosphere shader lost {needle}"
+            );
         }
 
         let sky = sky_wgsl();
@@ -2022,7 +2144,9 @@ mod tests {
         let centre = ((SIZE as usize / 2) * SIZE as usize + SIZE as usize / 2) * 4;
         assert_eq!(pixels[centre + 3], 255, "centre pixel must be opaque");
         assert!(
-            pixels[centre..centre + 3].iter().any(|&channel| channel > 0),
+            pixels[centre..centre + 3]
+                .iter()
+                .any(|&channel| channel > 0),
             "centre pixel must not be black"
         );
         // Everything outside the planet is the sky — an alpha ≤ 1 blended
