@@ -62,7 +62,7 @@ GUI_RUN_ARGS_X11 := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(X11_G
 .DEFAULT_GOAL := build
 RUST_IMAGE ?= modv-rust:local
 CARGO_VOLUME ?= modv-cargo
-# Native AppImage version (the crates are 0.1.0); packaging metadata only.
+# Native installer version (the crates are 0.1.0); packaging metadata only.
 NATIVE_VERSION ?= 0.1.0
 
 # Building the engine and the installers needs several GB of BuildKit cache.
@@ -71,7 +71,7 @@ NATIVE_VERSION ?= 0.1.0
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-native clean docker-deps docker-node-modules docker-reset install dev dev-native native native-debug lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
+.PHONY: build appimage appimage-native native-deb native-deb-check clean docker-deps docker-node-modules docker-reset install dev dev-native native native-debug lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -95,11 +95,11 @@ build: disk-guard
 		--output type=local,dest="$(DIST_DIR)" \
 		$(DOCKER_BUILD_ARGS) .
 
-# AppImage-only variant of `build`. The deb packaging step is by far the
-# slowest part (~70s vs ~2s for the AppImage), so this skips it for local runs.
+# Native AppImage: reusable Rust toolchain image + cargo cache, no Electron.
 appimage-native: disk-guard docker-cargo-volume
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
+		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		-e HOME=/tmp \
 		-e CARGO_HOME=/cargo \
@@ -109,6 +109,37 @@ appimage-native: disk-guard docker-cargo-volume
 		-w /app \
 		$(RUST_IMAGE) \
 		bash /app/tools/native-appimage.sh
+
+# Native Debian package. Reuses the `appimage-native` Dockerised Rust toolchain
+# and cargo cache; the script builds the release `modv` binary, assembles the
+# package tree and verifies the result with tools/native-deb-check.sh.
+native-deb: disk-guard docker-cargo-volume
+	mkdir -p "$(DIST_DIR)"
+	$(DOCKER) run --rm \
+		--ulimit core=0 \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		-e HOME=/tmp \
+		-e CARGO_HOME=/cargo \
+		-e APP_VERSION=$(NATIVE_VERSION) \
+		-e DIST_DIR=$(DIST_DIR) \
+		-v "$(CURDIR)":/app \
+		-v "$(CARGO_VOLUME)":/cargo \
+		-w /app \
+		$(RUST_IMAGE) \
+		bash /app/tools/native-deb.sh
+
+# Re-run the metadata/file-list/binary checks on an already-built package.
+native-deb-check: docker-rust
+	mkdir -p "$(DIST_DIR)"
+	$(DOCKER) run --rm \
+		--ulimit core=0 \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		-e APP_VERSION=$(NATIVE_VERSION) \
+		-e DIST_DIR=$(DIST_DIR) \
+		-v "$(CURDIR)":/app \
+		-w /app \
+		$(RUST_IMAGE) \
+		bash /app/tools/native-deb-check.sh
 
 appimage: disk-guard
 	mkdir -p "$(DIST_DIR)"
