@@ -179,6 +179,7 @@ impl NativeApp {
                 .map_or(0, serde_json::Map::len)
         );
 
+        apply_startup_scene(&mut store, cli.apply_scene.as_deref());
         let audio_feed = open_native_audio(&cli);
 
         let egui_ctx = egui::Context::default();
@@ -1591,6 +1592,43 @@ fn acquire_surface(
 ///
 /// Packaging moves the corpus to `resources/isf`; during development it still
 /// lives beside the legacy renderer tree. `$MODV_ISF_DIR` and `--isf-dir` win.
+/// Apply a Scene by exact name or id after the store has seeded its defaults.
+///
+/// Used by `modv --apply-scene <name>` for reproducible performance demos and
+/// P0 frame traces; a no-op when the query is absent.
+fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
+    let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) else {
+        return;
+    };
+    let Some(scene) = store
+        .scenes_state()
+        .scenes
+        .iter()
+        .find(|scene| {
+            scene.get("id").and_then(Value::as_str) == Some(query)
+                || scene.get("name").and_then(Value::as_str) == Some(query)
+        })
+        .cloned()
+    else {
+        eprintln!("ui: WARN --apply-scene: no Scene named or id {query:?}");
+        return;
+    };
+    let Some(scene_id) = scene.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    match store.dispatch(
+        "scenes/applyScene",
+        serde_json::json!({ "sceneId": scene_id }),
+    ) {
+        Ok(_) => eprintln!(
+            "ui: INFO applied Scene {:?} ({} groups)",
+            scene.get("name").and_then(Value::as_str).unwrap_or(scene_id),
+            store.state().groups.len()
+        ),
+        Err(error) => eprintln!("ui: WARN --apply-scene failed: {error}"),
+    }
+}
+
 /// The audio capture sources to try for the native shell.
 ///
 /// An explicit engine-owned `--audio-source` wins; the renderer default is
@@ -1906,6 +1944,26 @@ mod tests {
             native_audio_sources(AudioSourceSelection::Pipewire),
             vec![AudioSourceSelection::Pipewire]
         );
+    }
+
+    #[test]
+    fn apply_startup_scene_resolves_names_and_ids() {
+        let mut store = Store::new();
+        store
+            .dispatch("scenes/ensureDefaultScenes", serde_json::json!({}))
+            .expect("seed defaults");
+        let scene = store
+            .scenes_state()
+            .scenes
+            .first()
+            .cloned()
+            .expect("at least one default Scene");
+        let name = scene.get("name").and_then(Value::as_str).unwrap();
+        apply_startup_scene(&mut store, Some(name));
+        assert!(!store.state().groups.is_empty(), "Scene applied by name");
+        let id = scene.get("id").and_then(Value::as_str).unwrap();
+        apply_startup_scene(&mut store, Some(id));
+        assert!(!store.state().groups.is_empty(), "Scene applied by id");
     }
 
     #[test]

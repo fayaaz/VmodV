@@ -204,6 +204,8 @@ pub struct Cli {
     pub audio_device: Option<String>,
     /// Print the host's audio input devices (`--list-audio-devices`) and exit.
     pub list_audio_devices: bool,
+    /// Native shell only: apply this Scene name/id after seeding.
+    pub apply_scene: Option<String>,
 }
 
 impl Cli {
@@ -315,6 +317,12 @@ pub fn parse() -> Cli {
                 .help("Reserved for M1: state snapshot path"),
         )
         .arg(
+            Arg::new("apply-scene")
+                .long("apply-scene")
+                .value_name("NAME")
+                .help("Native shell: apply this Scene name/id after seeding"),
+        )
+        .arg(
             Arg::new("emit-fixtures")
                 .long("emit-fixtures")
                 .value_name("DIR")
@@ -409,6 +417,7 @@ pub fn parse() -> Cli {
         audio_source,
         audio_device,
         list_audio_devices: matches.get_flag("list-audio-devices"),
+        apply_scene: matches.get_one::<String>("apply-scene").cloned(),
     }
 }
 
