@@ -95,11 +95,12 @@ test.describe("engine skeleton (MODV_ENGINE=1)", () => {
       // Chromium throttled it, `meyda/SET_BANDS` would stop and every
       // audio-reactive scene would freeze (the DVD logo's beat pulse
       // included). The main window must opt out of background throttling.
-      const mainWindowThrottling = await app.evaluate(
-        ({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows()
-            .filter((window) => window.webContents.getURL().includes("index.html"))
-            .map((window) => window.webContents.getBackgroundThrottling()),
+      const mainWindowThrottling = await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .filter((window) =>
+            window.webContents.getURL().includes("index.html"),
+          )
+          .map((window) => window.webContents.getBackgroundThrottling()),
       );
       expect(mainWindowThrottling).toEqual([false]);
 
