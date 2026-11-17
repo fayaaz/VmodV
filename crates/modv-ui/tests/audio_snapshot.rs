@@ -11,7 +11,9 @@
 
 use egui_kittest::Harness;
 use modv_ui::state::SidePanelTab;
-use modv_ui::{AudioDeviceView, AudioSelectionView, EngineHealth, EngineSnapshot, UiState};
+use modv_ui::{
+    AudioDeviceView, AudioSelectionView, AudioView, EngineHealth, EngineSnapshot, UiState,
+};
 
 fn audio_snapshot() -> EngineSnapshot {
     EngineSnapshot {
@@ -38,8 +40,13 @@ fn audio_snapshot() -> EngineSnapshot {
         audio_selection: AudioSelectionView {
             source: "pipewire".to_string(),
             device: None,
-            capture_sample_rate: None,
+            capture_sample_rate: Some(48_000),
             error: None,
+        },
+        audio: AudioView {
+            bpm: 128.0,
+            sample_rate: Some(48_000),
+            ..Default::default()
         },
         health: EngineHealth {
             adapter: "RADV GFX1201".to_string(),

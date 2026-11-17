@@ -238,6 +238,18 @@ pub fn sample_rate_label(hz: u32) -> String {
     }
 }
 
+/// The tempo readout with the live capture rate appended (`BPM 128 · 48 kHz`).
+///
+/// The status bar, the Tempo window and the Info panel all use this formatter,
+/// so the BPM shown next to a capture rate is always the rate analysis is
+/// running at. A silent engine (`None`) keeps the bare `BPM 128`.
+pub fn bpm_with_rate(bpm: f64, capture_rate: Option<u32>) -> String {
+    match capture_rate.filter(|rate| *rate > 0) {
+        Some(rate) => format!("BPM {bpm:.0} · {}", sample_rate_label(rate)),
+        None => format!("BPM {bpm:.0}"),
+    }
+}
+
 /// One uploaded preview texture (an egui texture owned by the shell).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PreviewTexture {
@@ -894,6 +906,9 @@ pub struct AudioView {
     pub bass: f32,
     pub mid: f32,
     pub treble: f32,
+    /// The live capture feed's negotiated rate in Hz (the rate the analyser,
+    /// BPM detector and bands run at), `None` when capture is silent.
+    pub sample_rate: Option<u32>,
 }
 
 /// Status-bar health information.
@@ -1172,6 +1187,26 @@ mod tests {
         );
         assert_eq!(monitor.capture_rate(&[]), Some(48_000));
         assert_eq!(AudioSelectionView::default().capture_rate(&[]), None);
+    }
+
+    #[test]
+    fn bpm_readouts_append_the_live_capture_rate() {
+        assert_eq!(bpm_with_rate(128.0, Some(48_000)), "BPM 128 · 48 kHz");
+        assert_eq!(
+            bpm_with_rate(128.4, Some(44_100)),
+            "BPM 128 · 44.1 kHz",
+            "a genuinely fractional negotiated rate keeps its decimal"
+        );
+        assert_eq!(
+            bpm_with_rate(174.0, None),
+            "BPM 174",
+            "silent capture shows the tempo without a rate"
+        );
+        assert_eq!(
+            bpm_with_rate(120.0, Some(0)),
+            "BPM 120",
+            "an unknown rate is omitted rather than rendered as 0 Hz"
+        );
     }
 
     #[test]

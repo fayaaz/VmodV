@@ -153,6 +153,7 @@ fn demo_snapshot() -> EngineSnapshot {
             bass: 0.42,
             mid: 0.31,
             treble: 0.18,
+            sample_rate: Some(48_000),
         },
         resolution: [960, 540],
         fps: 60.0,
@@ -165,7 +166,7 @@ fn demo_snapshot() -> EngineSnapshot {
             last_error: None,
             frames_presented: 120,
             output_open: true,
-            audio_active: false,
+            audio_active: true,
         },
         audio_devices: vec![AudioDeviceView {
             id: "alsa:builtin".to_string(),
@@ -176,7 +177,7 @@ fn demo_snapshot() -> EngineSnapshot {
         audio_selection: AudioSelectionView {
             source: "pipewire".to_string(),
             device: None,
-            capture_sample_rate: None,
+            capture_sample_rate: Some(48_000),
             error: None,
         },
         ..Default::default()

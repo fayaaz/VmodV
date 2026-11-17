@@ -8,8 +8,8 @@
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, vec2};
 
 use crate::model::{
-    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView,
-    gallery_preview_key,
+    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView, bpm_with_rate,
+    gallery_preview_key, sample_rate_label,
 };
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
@@ -260,13 +260,16 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
-                                    .monospace()
-                                    .color(theme::MUTED),
+                                egui::RichText::new(bpm_with_rate(
+                                    state.status.bpm,
+                                    snapshot.audio.sample_rate,
+                                ))
+                                .monospace()
+                                .color(theme::MUTED),
                             )
                             .frame(false),
                         )
-                        .on_hover_text("Tempo source and tap tempo")
+                        .on_hover_text(bpm_hover(snapshot.audio.sample_rate))
                         .clicked()
                     {
                         state.show_bpm = true;
@@ -282,6 +285,33 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                 });
             });
         });
+}
+
+/// The BPM button's tooltip: the rate analysis is running at, and how to open
+/// the full tempo window. The rate is the live feed's negotiated rate and is
+/// omitted (with an explicit note) while capture is silent.
+fn bpm_hover(capture_rate: Option<u32>) -> String {
+    match capture_rate {
+        Some(rate) => format!(
+            "Detected tempo · audio analysis runs at {} · click to open the tempo window",
+            sample_rate_label(rate)
+        ),
+        None => {
+            "Detected tempo · audio capture is silent · click to open the tempo window".to_string()
+        }
+    }
+}
+
+/// The shared audio-path summary (`engine · 48 kHz` / `engine` / `silent`).
+///
+/// The status bar prefixes it with `audio: ` and the Info panel wraps it in
+/// parentheses, so both always report the same live capture rate.
+fn audio_status_text(active: bool, capture_rate: Option<u32>) -> String {
+    match (active, capture_rate) {
+        (true, Some(rate)) => format!("engine · {}", sample_rate_label(rate)),
+        (true, None) => "engine".to_string(),
+        (false, _) => "silent".to_string(),
+    }
 }
 
 fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -322,21 +352,24 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 );
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
-                        .monospace()
-                        .size(10.0)
-                        .color(theme::MUTED),
-                );
+                    egui::RichText::new(bpm_with_rate(
+                        state.status.bpm,
+                        snapshot.audio.sample_rate,
+                    ))
+                    .monospace()
+                    .size(10.0)
+                    .color(theme::MUTED),
+                )
+                .on_hover_text(bpm_hover(snapshot.audio.sample_rate));
                 ui.separator();
                 fps_sparkline(ui, state);
                 audio_meters(ui, snapshot);
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(if state.status.audio_active {
-                        "audio: engine"
-                    } else {
-                        "audio: silent"
-                    })
+                    egui::RichText::new(format!(
+                        "audio: {}",
+                        audio_status_text(state.status.audio_active, snapshot.audio.sample_rate)
+                    ))
                     .size(10.0)
                     .color(theme::MUTED),
                 );
@@ -1069,15 +1102,14 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
             ui.label(format!(
                 "{}  ({})",
                 snapshot.audio_selection.describe(),
-                if snapshot.health.audio_active {
-                    "engine"
-                } else {
-                    "silent"
-                }
+                audio_status_text(snapshot.health.audio_active, snapshot.audio.sample_rate)
             ));
             ui.end_row();
             ui.label(egui::RichText::new("Tempo").color(theme::MUTED));
-            ui.label(format!("{:.0} BPM", snapshot.audio.bpm));
+            ui.label(bpm_with_rate(
+                snapshot.audio.bpm,
+                snapshot.audio.sample_rate,
+            ));
             ui.end_row();
             ui.label(egui::RichText::new("Scenes").color(theme::MUTED));
             ui.label(format!(
@@ -2517,6 +2549,15 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
             });
             ui.horizontal(|ui| {
                 ui.label(format!("Detected {:.1} BPM", snapshot.audio.bpm));
+                ui.label(
+                    egui::RichText::new(match snapshot.audio.sample_rate {
+                        Some(rate) => format!("Capture {}", sample_rate_label(rate)),
+                        None => "Capture rate unavailable".to_string(),
+                    })
+                    .size(10.0)
+                    .color(theme::MUTED),
+                )
+                .on_hover_text("The rate the analyser and BPM detector run at");
                 if ui.button("Tap").clicked() {
                     let now = std::time::Instant::now();
                     state

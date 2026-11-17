@@ -31,12 +31,13 @@ fn demo_snapshot() -> EngineSnapshot {
         ],
         audio: AudioView {
             bpm: 128.0,
+            sample_rate: Some(48_000),
             ..Default::default()
         },
         audio_selection: AudioSelectionView {
             source: "pipewire".to_string(),
             device: None,
-            capture_sample_rate: None,
+            capture_sample_rate: Some(48_000),
             error: None,
         },
         health: EngineHealth {
@@ -67,7 +68,7 @@ fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
     harness.get_by_label("IN USE");
     harness.get_by_label("System audio");
     harness.get_by_label("Captures what your speakers play");
-    harness.get_by_label("PipeWire monitor · pipewire");
+    harness.get_by_label("PipeWire monitor · 48 kHz · pipewire");
 
     // The two source groups, with the default input sorted first.
     harness.get_by_label("OUTPUT MONITOR");
@@ -80,7 +81,9 @@ fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
     // 44.1 kHz `default_input_config()` heuristic.
     assert_eq!(harness.get_all_by_label("2 ch · 48 kHz").count(), 1);
     harness.get_by_label("4 ch · 48 kHz");
-    harness.get_by_label("audio: engine");
+    harness.get_by_label("audio: engine · 48 kHz");
+    // The status bar and the menu bar both carry the tempo + rate readout.
+    assert_eq!(harness.get_all_by_label("BPM 128 · 48 kHz").count(), 2);
 }
 
 #[test]
@@ -89,7 +92,7 @@ fn the_active_banner_resolves_the_selected_device() {
     snapshot.audio_selection = AudioSelectionView {
         source: "input".to_string(),
         device: Some("alsa:usb".to_string()),
-        capture_sample_rate: None,
+        capture_sample_rate: Some(48_000),
         error: None,
     };
     let mut state = UiState::new();

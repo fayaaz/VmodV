@@ -31,9 +31,10 @@ pub use model::{
     MediaAction, MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView,
     ModuleView, PERFORMANCE_ORDER_IN_ORDER, PERFORMANCE_ORDER_RANDOM, PERFORMANCE_ORDERS,
     PerformanceView, PreviewRequest, PreviewTexture, PropComponentView, PropView, RowMonitorView,
-    SceneCellView, SceneView, TextureSourceView, TweenView, default_camera_mode, fps_options,
-    gallery_preview_key, mode_for_resolution, normalize_performance_order, performance_order_label,
-    sample_rate_label, scene_preview_key, un_premultiply_rgba, unique_resolutions,
+    SceneCellView, SceneView, TextureSourceView, TweenView, bpm_with_rate, default_camera_mode,
+    fps_options, gallery_preview_key, mode_for_resolution, normalize_performance_order,
+    performance_order_label, sample_rate_label, scene_preview_key, un_premultiply_rgba,
+    unique_resolutions,
 };
 pub use state::{
     AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, TweenCurveEditor, TweenHandleDrag,

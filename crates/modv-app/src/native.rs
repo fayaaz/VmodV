@@ -22,6 +22,7 @@ use modv_media::audio::engine::AudioFeed;
 use modv_render::Engine;
 use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_present_mode};
 use modv_render::wgpu;
+use modv_renderers::two_d::AudioFrame;
 use modv_ui::model::ExpressionView;
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraModeView, CameraView, EngineHealth,
@@ -105,6 +106,41 @@ struct PendingUiFrame {
     free: Vec<egui::TextureId>,
 }
 
+/// The negotiated analysis rate of the running native capture feed.
+///
+/// Every rate readout in the shell — the Audio panel's active banner and
+/// picker, the status bar, the Tempo window and the Info panel — reads this
+/// cache, so it reports the rate capture actually negotiated
+/// ([`AudioFeed::sample_rate`]) instead of cpal's 44.1 kHz
+/// `default_input_config()` heuristic. It is `None` whenever no feed is
+/// running (a failed pump, a stopped capture, or a startup without a device),
+/// which is exactly when the UI omits the rate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AudioCaptureRate(Option<u32>);
+
+impl AudioCaptureRate {
+    /// Adopt the rate of a newly opened feed. A non-finite/zero rate is
+    /// reported as unknown rather than rendered as `0 Hz`.
+    fn opened(&mut self, feed_rate: f32) {
+        self.0 = negotiated_sample_rate(feed_rate);
+    }
+
+    /// Forget the rate once the feed stops; the UI then omits it.
+    fn stopped(&mut self) {
+        self.0 = None;
+    }
+
+    fn get(self) -> Option<u32> {
+        self.0
+    }
+}
+
+/// `AudioFeed::sample_rate()` is an `f32`; the UI renders whole hertz.
+fn negotiated_sample_rate(feed_rate: f32) -> Option<u32> {
+    let rate = feed_rate.round();
+    (rate.is_finite() && rate > 0.0).then_some(rate as u32)
+}
+
 /// The native application state.
 pub struct NativeApp {
     cli: Cli,
@@ -148,6 +184,8 @@ pub struct NativeApp {
     media_settings_error_logged: bool,
     audio_feed: Option<AudioFeed>,
     audio_error_logged: bool,
+    /// The running feed's negotiated rate, the only rate the UI renders.
+    audio_capture_rate: AudioCaptureRate,
     /// The live capture selection (the Audio panel's active choice).
     audio_selection: AudioSourceSelection,
     audio_device: Option<String>,
@@ -255,6 +293,10 @@ impl NativeApp {
                 audio_plan.first().and_then(|(_, device)| device.clone()),
             ),
         };
+        let mut audio_capture_rate = AudioCaptureRate::default();
+        if let Some(feed) = &audio_feed {
+            audio_capture_rate.opened(feed.sample_rate());
+        }
         let audio_devices =
             crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
 
@@ -330,6 +372,7 @@ impl NativeApp {
             media_settings_error_logged: false,
             audio_feed,
             audio_error_logged: false,
+            audio_capture_rate,
             audio_selection,
             audio_device,
             audio_devices,
@@ -569,6 +612,7 @@ impl NativeApp {
             eprintln!("ui: WARN native audio capture stopped ({error}); engine is silent");
         }
         self.audio_feed = None;
+        self.audio_capture_rate.stopped();
         self.store.disable_engine_audio();
     }
 
@@ -1154,6 +1198,7 @@ impl NativeApp {
                 if let Some(mut previous) = self.audio_feed.replace(feed) {
                     previous.stop();
                 }
+                self.audio_capture_rate.opened(sample_rate);
                 self.audio_selection = selection;
                 self.audio_device = requested_device;
                 self.audio_switch_error = None;
@@ -1592,13 +1637,12 @@ impl NativeApp {
             &row_names,
         );
         let applied_scene_id = performance.current_scene_id.clone();
-        let audio = AudioView {
-            bpm: self.store.bpm(),
-            kick: self.store.kick(),
-            bass: self.store.audio().bass,
-            mid: self.store.audio().mid,
-            treble: self.store.audio().treble,
-        };
+        let audio = audio_view(
+            self.store.bpm(),
+            self.store.kick(),
+            self.store.audio(),
+            self.audio_capture_rate.get(),
+        );
         let mut texture_sources = state
             .groups
             .iter()
@@ -1792,12 +1836,12 @@ impl NativeApp {
             output_open: self.output.is_some(),
             audio_active: self.store.engine_audio_active(),
         };
-        let audio_selection = AudioSelectionView {
-            source: self.audio_selection.as_str().to_string(),
-            device: self.audio_device.clone(),
-            capture_sample_rate: None,
-            error: self.audio_switch_error.clone(),
-        };
+        let audio_selection = audio_selection_view(
+            self.audio_selection,
+            self.audio_device.clone(),
+            self.audio_switch_error.clone(),
+            self.audio_capture_rate.get(),
+        );
 
         EngineSnapshot {
             groups,
@@ -1967,7 +2011,40 @@ impl NativeApp {
         if let Some(mut feed) = self.audio_feed.take() {
             feed.stop();
         }
+        self.audio_capture_rate.stopped();
         self.close_output();
+    }
+}
+
+/// The Audio panel/status-bar read model for one frame.
+///
+/// `capture_rate` is [`AudioCaptureRate::get`]: the live feed's negotiated
+/// rate, or `None` when the engine is silent. It is the same value the Audio
+/// panel banner and the BPM readouts render, so the tempo indicator can never
+/// disagree with the picker about what rate analysis is running at.
+fn audio_view(bpm: f64, kick: bool, audio: &AudioFrame, capture_rate: Option<u32>) -> AudioView {
+    AudioView {
+        bpm,
+        kick,
+        bass: audio.bass,
+        mid: audio.mid,
+        treble: audio.treble,
+        sample_rate: capture_rate,
+    }
+}
+
+/// The Audio panel's live selection, including the running feed's rate.
+fn audio_selection_view(
+    selection: AudioSourceSelection,
+    device: Option<String>,
+    error: Option<String>,
+    capture_rate: Option<u32>,
+) -> AudioSelectionView {
+    AudioSelectionView {
+        source: selection.as_str().to_string(),
+        device,
+        capture_sample_rate: capture_rate,
+        error,
     }
 }
 
@@ -2909,6 +2986,75 @@ mod tests {
         assert!(
             open_native_audio(&[]).is_none(),
             "no plan entry means no capture attempt"
+        );
+    }
+
+    #[test]
+    fn the_live_capture_rate_follows_the_feed_and_clears_when_it_stops() {
+        let mut rate = AudioCaptureRate::default();
+        assert_eq!(rate.get(), None, "no feed, no rate");
+
+        // `AudioFeed::new` is the device-free seam: it carries the negotiated
+        // rate the capture-backed constructors get from cpal/PipeWire.
+        let feed = AudioFeed::new(48_000.0);
+        rate.opened(feed.sample_rate());
+        assert_eq!(rate.get(), Some(48_000));
+
+        rate.opened(44_100.0);
+        assert_eq!(
+            rate.get(),
+            Some(44_100),
+            "a device that genuinely negotiates 44.1 kHz is reported as such"
+        );
+
+        rate.stopped();
+        assert_eq!(rate.get(), None, "a stopped feed has no negotiated rate");
+
+        rate.opened(f32::NAN);
+        assert_eq!(rate.get(), None, "a broken rate is unknown, not 0 Hz");
+        rate.opened(0.0);
+        assert_eq!(rate.get(), None);
+        rate.opened(48_000.4);
+        assert_eq!(rate.get(), Some(48_000), "f32 feed rates round to hertz");
+    }
+
+    #[test]
+    fn the_snapshot_publishes_the_live_rate_to_the_audio_views_and_clears_it() {
+        let feed = AudioFeed::new(48_000.0);
+        let mut rate = AudioCaptureRate::default();
+        rate.opened(feed.sample_rate());
+        let frame = AudioFrame::default();
+
+        let audio = audio_view(128.0, false, &frame, rate.get());
+        assert_eq!(
+            audio.sample_rate,
+            Some(48_000),
+            "the BPM indicator reads the feed's negotiated rate"
+        );
+
+        let selection =
+            audio_selection_view(AudioSourceSelection::Pipewire, None, None, rate.get());
+        assert_eq!(
+            selection.capture_sample_rate,
+            Some(48_000),
+            "the active banner reads the same live rate for the monitor"
+        );
+        assert_eq!(
+            selection.active_detail(&[]),
+            "PipeWire monitor · 48 kHz · pipewire"
+        );
+
+        // `pump_audio` stops a failed feed and the cache clears with it: every
+        // surface must drop the rate rather than keep showing the last one.
+        rate.stopped();
+        let silent = audio_view(128.0, false, &frame, rate.get());
+        assert_eq!(silent.sample_rate, None);
+        let silent_selection =
+            audio_selection_view(AudioSourceSelection::Pipewire, None, None, rate.get());
+        assert_eq!(silent_selection.capture_sample_rate, None);
+        assert_eq!(
+            silent_selection.active_detail(&[]),
+            "PipeWire monitor · pipewire"
         );
     }
 
