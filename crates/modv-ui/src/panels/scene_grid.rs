@@ -1044,6 +1044,68 @@ fn scene_dialogs(
     }
 }
 
+/// The visual treatment of the per-cell performance toggle.
+///
+/// Enabled cells keep the green dot and their normal chrome. Disabled cells
+/// get a red dot, a red border and left stripe, a dimming scrim over the hover
+/// preview and an `OFF` chip, so the skipped state is unmistakable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellEnableStyle {
+    pub marker: Color32,
+    pub border: Option<Color32>,
+    pub scrim: Option<Color32>,
+    pub chip: Option<&'static str>,
+}
+
+/// Resolve the enabled/disabled decoration for one Scene cell.
+pub fn cell_enable_style(disabled: bool) -> CellEnableStyle {
+    if disabled {
+        CellEnableStyle {
+            marker: theme::DANGER,
+            border: Some(theme::DANGER),
+            scrim: Some(Color32::from_black_alpha(150)),
+            chip: Some("OFF"),
+        }
+    } else {
+        CellEnableStyle {
+            marker: theme::OK,
+            border: None,
+            scrim: None,
+            chip: None,
+        }
+    }
+}
+
+/// The dot in a cell's top-left corner, as its own widget.
+///
+/// The dot used to be a bare `ui.interact` rectangle painted over the cell's
+/// click-and-drag response, which let the cell win the press. A real widget
+/// registered after the cell receives the click, and its hit area is larger
+/// than the painted dot so it is easy to hit.
+struct CellEnableDot {
+    disabled: bool,
+}
+
+impl egui::Widget for CellEnableDot {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
+        let style = cell_enable_style(self.disabled);
+        let centre = rect.center();
+        let painter = ui.painter();
+        painter.circle_filled(centre, 3.5, style.marker);
+        if response.hovered() {
+            painter.circle_stroke(centre, 5.5, Stroke::new(1.0, style.marker));
+        }
+        let label = if self.disabled {
+            "Enable this cell in performance mode"
+        } else {
+            "Disable this cell in performance mode"
+        };
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        response.on_hover_text(label)
+    }
+}
+
 /// Hover previews are requested only for cells that hold a Group. An empty
 /// cell has no renderable row, and requesting one only earns the engine's
 /// "has no renderable Group at row N" warning.
@@ -1072,6 +1134,7 @@ fn draw_scene_cell(
 
     let current = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
     let copying = grid.copy_source.as_ref() == Some(&target);
+    let enable_style = cell_enable_style(cell.disabled);
     let fill = if copying || current {
         theme::ACCENT_DIM
     } else if hovered {
@@ -1080,9 +1143,11 @@ fn draw_scene_cell(
         theme::PANEL
     };
 
-    let painter = ui.painter();
+    let painter = ui.painter().clone();
     painter.rect_filled(rect, CornerRadius::same(0), fill);
-    let border = if copying || current {
+    let border = if let Some(colour) = enable_style.border {
+        colour
+    } else if copying || current {
         theme::ACCENT
     } else if hovered {
         theme::MUTED
@@ -1114,6 +1179,24 @@ fn draw_scene_cell(
         grid.request_preview(&scene.id, row, std::time::Duration::from_millis(150));
     }
 
+    // Disabled state is painted after the hover preview so the preview cannot
+    // hide it: a dimming scrim, a red border and a red left stripe.
+    if let Some(scrim) = enable_style.scrim {
+        let border = enable_style.border.unwrap_or(theme::DANGER);
+        painter.rect_filled(rect.shrink(2.0), CornerRadius::same(0), scrim);
+        painter.rect_filled(
+            egui::Rect::from_min_size(rect.left_top(), egui::vec2(3.0, rect.height())),
+            CornerRadius::same(0),
+            border,
+        );
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(0),
+            Stroke::new(2.0, border),
+            StrokeKind::Inside,
+        );
+    }
+
     // Row label (top-left), scene name (bottom-left) and module summary.
     let row_name = snapshot
         .scene_rows
@@ -1140,39 +1223,24 @@ fn draw_scene_cell(
     );
 
     // Per-cell performance flag: red = skipped by performance mode, green =
-    // eligible. This is the click target; a manual Scene/cell apply still uses
-    // a disabled cell.
+    // eligible. The dot is a real widget registered after the cell (and after
+    // its preview), so it reliably receives the click; a manual Scene/cell
+    // apply still uses a disabled cell. `enabled` is the *new* enabled state
+    // for `scenes/setCellEnabled`, so it is `cell.disabled`, not its negation.
+    let dot_hit =
+        egui::Rect::from_center_size(rect.left_top() + egui::vec2(10.0, 27.0), Vec2::splat(20.0));
     let mut cell_dot_clicked = false;
     if !cell.is_empty() {
-        let dot_center = rect.left_top() + egui::vec2(9.0, 27.0);
-        let dot_rect = egui::Rect::from_center_size(dot_center, Vec2::splat(14.0));
-        let dot_response = ui.interact(
-            dot_rect,
-            ui.scope_id().with(("scene-cell-enabled", &scene.id, row)),
-            Sense::click(),
+        let dot_response = ui.put(
+            dot_hit,
+            CellEnableDot {
+                disabled: cell.disabled,
+            },
         );
-        let dot_colour = if cell.disabled {
-            theme::DANGER
-        } else {
-            theme::OK
-        };
-        painter.circle_filled(dot_center, 3.0, dot_colour);
-        if dot_response.hovered() {
-            painter.circle_stroke(dot_center, 4.5, Stroke::new(1.0, dot_colour));
-        }
-        cell_dot_clicked = dot_response.clicked()
-            || (response.clicked()
-                && response
-                    .interact_pointer_pos()
-                    .is_some_and(|position| dot_rect.contains(position)));
+        cell_dot_clicked = dot_response.clicked();
         if cell_dot_clicked {
-            actions.push(set_cell_enabled_action(&scene.id, row, !cell.disabled));
+            actions.push(set_cell_enabled_action(&scene.id, row, cell.disabled));
         }
-        dot_response.on_hover_text(if cell.disabled {
-            "Enable this cell in performance mode"
-        } else {
-            "Disable this cell in performance mode"
-        });
     }
 
     // Timing badge (top-right) uses the per-Scene override when present.
@@ -1192,6 +1260,21 @@ fn draw_scene_cell(
         );
     }
 
+    if let Some(chip) = enable_style.chip {
+        let chip_rect = egui::Rect::from_min_size(
+            rect.left_top() + egui::vec2(23.0, 20.0),
+            egui::vec2(27.0, 13.0),
+        );
+        painter.rect_filled(chip_rect, CornerRadius::same(0), theme::DANGER);
+        painter.text(
+            chip_rect.center(),
+            Align2::CENTER_CENTER,
+            chip,
+            FontId::monospace(9.5),
+            theme::BACKGROUND,
+        );
+    }
+
     if copying {
         let label = egui::Rect::from_min_size(
             rect.right_bottom() + egui::vec2(-44.0, -17.0),
@@ -1208,12 +1291,17 @@ fn draw_scene_cell(
     }
 
     // Primary click applies the Scene; a double-click on an empty cell
-    // creates the row's Group in that Scene. The enabled dot is a separate
-    // target and must not apply on its click.
-    if response.clicked() && !cell_dot_clicked && !cell.is_empty() {
+    // creates the row's Group in that Scene. The enabled dot owns presses
+    // inside its (enlarged) hit area, so the cell must never apply or start a
+    // copy from there.
+    let press_on_dot = !cell.is_empty()
+        && response
+            .interact_pointer_pos()
+            .is_some_and(|position| dot_hit.contains(position));
+    if response.clicked() && !cell_dot_clicked && !cell.is_empty() && !press_on_dot {
         actions.push(apply_scene_action(&scene.id));
     }
-    if response.double_clicked() && !cell_dot_clicked && cell.is_empty() {
+    if response.double_clicked() && !cell_dot_clicked && cell.is_empty() && !press_on_dot {
         actions.push(UiAction::new(
             "scenes/createSceneCellGroup",
             serde_json::json!({ "sceneId": scene.id, "rowIndex": row }),
@@ -1222,7 +1310,7 @@ fn draw_scene_cell(
 
     // Ctrl/Cmd+drag starts a cell copy.
     let copy_modifier = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
-    if response.drag_started() && copy_modifier {
+    if response.drag_started() && copy_modifier && !press_on_dot {
         grid.begin_copy(target.clone());
     }
     if grid.copy_source.is_some()
@@ -1292,7 +1380,8 @@ fn scene_cell_menu(
         )
         .clicked()
     {
-        actions.push(set_cell_enabled_action(&scene.id, row, !cell.disabled));
+        // `enabled` is the new state, so a disabled cell toggles back on.
+        actions.push(set_cell_enabled_action(&scene.id, row, cell.disabled));
         ui.close();
     }
     ui.separator();
