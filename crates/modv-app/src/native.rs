@@ -42,6 +42,7 @@ use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
 use crate::isf_watch::IsfWatcher;
 use crate::media::MediaHub;
 use crate::midi::MidiClient;
+use crate::pacing::FramePacer;
 use crate::report::AdapterSummary;
 use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
@@ -136,6 +137,8 @@ pub struct NativeApp {
     frames: u64,
     start: Instant,
     last_frame: Instant,
+    /// Redraw cadence, paced to the engine's configured FPS.
+    pacer: FramePacer,
     last_metric: Instant,
     metric_frames: u32,
     fps: f32,
@@ -240,6 +243,7 @@ impl NativeApp {
 
         let egui_ctx = egui::Context::default();
         modv_ui::theme::apply(&egui_ctx);
+        let target_fps = store.target_fps();
 
         Self {
             bench_deadline: cli.bench_deadline(),
@@ -287,6 +291,7 @@ impl NativeApp {
             frames: 0,
             start,
             last_frame: start,
+            pacer: FramePacer::new(start, target_fps),
             last_metric: start,
             metric_frames: 0,
             fps: 0.0,
@@ -383,7 +388,7 @@ impl NativeApp {
             eprintln!("ui: WARN could not open the output window: {error}");
         }
 
-        event_loop.set_control_flow(ControlFlow::Poll);
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.pacer.deadline()));
         if let Some(window) = &self.ui_window {
             window.request_redraw();
         }
@@ -592,6 +597,17 @@ impl NativeApp {
             return;
         }
         let now = Instant::now();
+        // Pace the whole shell to the engine's configured FPS. The worker
+        // renders at `fps/SET_FPS` (60 by default) and advances tween frames,
+        // audio smoothing and canvas feedback once per paced frame; rendering
+        // as fast as the GPU allows made those systems run several times too
+        // fast, so visuals changed speed with the host frame rate.
+        self.pacer.set_fps(self.store.target_fps());
+        if !self.pacer.due(now) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.pacer.deadline()));
+            return;
+        }
+        self.pacer.advance(now);
         let dt = if self.frames == 0 {
             Duration::from_secs_f64(1.0 / 60.0)
         } else {
@@ -664,8 +680,10 @@ impl NativeApp {
             .unwrap_or(false);
         if reached_frames || reached_deadline {
             self.finish_and_exit(event_loop);
-        } else if let Some(window) = &self.ui_window {
-            window.request_redraw();
+        } else {
+            // `about_to_wait` requests the redraw when the next deadline is
+            // due, instead of spinning at the display's maximum rate.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.pacer.deadline()));
         }
     }
 
@@ -2190,12 +2208,18 @@ impl ApplicationHandler for NativeApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if !self.done
-            && !self.failed
-            && let Some(window) = &self.ui_window
-        {
-            window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.done || self.failed {
+            return;
+        }
+        self.pacer.set_fps(self.store.target_fps());
+        let now = Instant::now();
+        if self.pacer.due(now) {
+            if let Some(window) = &self.ui_window {
+                window.request_redraw();
+            }
+        } else {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.pacer.deadline()));
         }
     }
 }

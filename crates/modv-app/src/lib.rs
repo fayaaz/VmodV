@@ -20,6 +20,7 @@ pub mod module_preview;
 pub mod module_registry;
 pub mod native;
 pub mod ndi_runtime;
+pub mod pacing;
 pub mod performance;
 pub mod report;
 pub mod scene_ops;

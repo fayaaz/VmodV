@@ -394,6 +394,16 @@ impl Store {
         &self.state
     }
 
+    /// The configured render frame rate (`fps/SET_FPS`, default 60).
+    ///
+    /// The native shell paces its redraw loop to this value, mirroring the
+    /// worker's `requestAnimationFrame` interval, so per-frame animation work
+    /// (tween frames, smoothing, feedback) runs at the same wall-clock speed
+    /// regardless of GPU throughput.
+    pub fn target_fps(&self) -> f64 {
+        self.fps
+    }
+
     /// The current audio frame (read-only; the compositor clones it into
     /// [`crate::compositor::FrameInfo`]).
     pub fn audio(&self) -> &AudioFrame {
@@ -5688,6 +5698,23 @@ mod tests {
             expected < 100,
             "the bpm-less rebuild is the ~480 ms fallback, not a 57 s one ({expected} frames)"
         );
+    }
+
+    #[test]
+    fn target_fps_follows_set_fps_and_defaults_to_sixty() {
+        let mut store = Store::new();
+        assert_eq!(store.target_fps(), 60.0);
+
+        store
+            .dispatch("fps/SET_FPS", json!({ "fps": 30 }))
+            .expect("set fps");
+        assert_eq!(store.target_fps(), 30.0);
+
+        // Invalid values are ignored, leaving the previous target.
+        store
+            .dispatch("fps/SET_FPS", json!({ "fps": 0 }))
+            .expect("ignored set fps");
+        assert_eq!(store.target_fps(), 30.0);
     }
 
     #[test]
