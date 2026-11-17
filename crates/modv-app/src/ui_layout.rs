@@ -478,9 +478,11 @@ mod tests {
 
     #[test]
     fn a_normal_window_keeps_panel_minimums_and_a_full_centre() {
-        let mut layout = LayoutSettings::default();
-        layout.groups_width = 1.0;
-        layout.inspector_width = 1.0;
+        let layout = LayoutSettings {
+            groups_width: 1.0,
+            inspector_width: 1.0,
+            ..Default::default()
+        };
 
         let clamped = layout.clamp_to(1280.0, 800.0);
         assert_eq!(clamped.groups_width, MIN_GROUPS_WIDTH);
@@ -490,8 +492,11 @@ mod tests {
             1280.0 - MIN_GROUPS_WIDTH - MIN_INSPECTOR_WIDTH
         );
 
-        layout.groups_width = 5000.0;
-        layout.inspector_width = 5000.0;
+        let layout = LayoutSettings {
+            groups_width: 5000.0,
+            inspector_width: 5000.0,
+            ..Default::default()
+        };
         let clamped = layout.clamp_to(1280.0, 800.0);
         assert_eq!(
             clamped.groups_width,
@@ -536,9 +541,11 @@ mod tests {
 
     #[test]
     fn section_heights_leave_the_scenes_minimum_and_the_gallery_yields_first() {
-        let mut layout = LayoutSettings::default();
-        layout.live_height = 200.0;
-        layout.gallery_height = 1000.0;
+        let layout = LayoutSettings {
+            live_height: 200.0,
+            gallery_height: 1000.0,
+            ..Default::default()
+        };
         let clamped = layout.clamp_to(1280.0, 900.0);
         assert_eq!(clamped.live_height, 200.0);
         assert_eq!(clamped.gallery_height, 560.0);
@@ -548,16 +555,21 @@ mod tests {
             "Scenes keeps its minimum height"
         );
 
-        layout.live_height = 800.0;
-        layout.gallery_height = 400.0;
+        let layout = LayoutSettings {
+            live_height: 800.0,
+            gallery_height: 400.0,
+            ..Default::default()
+        };
         let clamped = layout.clamp_to(1280.0, 900.0);
         assert_eq!(clamped.gallery_height, 0.0, "the Gallery yields first");
         assert_eq!(clamped.live_height, 760.0);
         assert_eq!(900.0 - clamped.live_height - clamped.gallery_height, 140.0);
 
-        let mut tiny = LayoutSettings::default();
-        tiny.live_height = 300.0;
-        tiny.gallery_height = 300.0;
+        let tiny = LayoutSettings {
+            live_height: 300.0,
+            gallery_height: 300.0,
+            ..Default::default()
+        };
         let clamped = tiny.clamp_to(1280.0, 200.0);
         assert_eq!(clamped.gallery_height, 0.0);
         assert_eq!(clamped.live_height, 60.0);
@@ -566,11 +578,14 @@ mod tests {
 
     #[test]
     fn automatic_section_heights_stay_automatic() {
-        let mut layout = LayoutSettings::default();
+        let layout = LayoutSettings::default();
         assert_eq!(layout.clamp_to(1280.0, 800.0).live_height, 0.0);
         assert_eq!(layout.clamp_to(1280.0, 800.0).gallery_height, 0.0);
 
-        layout.live_height = 40.0;
+        let layout = LayoutSettings {
+            live_height: 40.0,
+            ..Default::default()
+        };
         assert_eq!(
             layout.clamp_to(1280.0, 800.0).live_height,
             MIN_LIVE_HEIGHT,
@@ -580,27 +595,23 @@ mod tests {
 
     #[test]
     fn window_bounds_clamp_on_screen_and_invalid_entries_are_dropped() {
-        let mut layout = LayoutSettings::default();
-        layout
-            .windows
-            .insert("tempo".to_string(), bounds(5000.0, -10.0, 900.0, 700.0));
-        layout
-            .windows
-            .insert("palette".to_string(), bounds(10.0, 10.0, 50.0, 20.0));
-        layout.windows.insert(
-            "scene_timing".to_string(),
-            bounds(50.0, 60.0, 5000.0, 5000.0),
-        );
-        layout
-            .windows
-            .insert("about".to_string(), bounds(f32::NAN, 0.0, 300.0, 200.0));
-        layout
-            .windows
-            .insert("shortcuts".to_string(), bounds(0.0, 0.0, -10.0, 200.0));
-        layout.windows.insert(
-            "performance_row_names".to_string(),
-            bounds(0.0, 0.0, 300.0, 0.0),
-        );
+        let layout = LayoutSettings {
+            windows: BTreeMap::from([
+                ("tempo".to_string(), bounds(5000.0, -10.0, 900.0, 700.0)),
+                ("palette".to_string(), bounds(10.0, 10.0, 50.0, 20.0)),
+                (
+                    "scene_timing".to_string(),
+                    bounds(50.0, 60.0, 5000.0, 5000.0),
+                ),
+                ("about".to_string(), bounds(f32::NAN, 0.0, 300.0, 200.0)),
+                ("shortcuts".to_string(), bounds(0.0, 0.0, -10.0, 200.0)),
+                (
+                    "performance_row_names".to_string(),
+                    bounds(0.0, 0.0, 300.0, 0.0),
+                ),
+            ]),
+            ..Default::default()
+        };
 
         let clamped = layout.clamp_to(1000.0, 800.0);
 
@@ -678,12 +689,14 @@ mod tests {
     #[test]
     fn a_write_never_persists_non_finite_geometry() {
         let (directory, path) = temp_path();
-        let mut layout = LayoutSettings::default();
-        layout.groups_width = f32::NAN;
-        layout.windows.insert(
-            "tempo".to_string(),
-            bounds(f32::NAN, f32::NAN, f32::NAN, f32::NAN),
-        );
+        let layout = LayoutSettings {
+            groups_width: f32::NAN,
+            windows: BTreeMap::from([(
+                "tempo".to_string(),
+                bounds(f32::NAN, f32::NAN, f32::NAN, f32::NAN),
+            )]),
+            ..Default::default()
+        };
 
         layout.write_to(&path).expect("write layout");
         let loaded = LayoutSettings::read_from(&path)
