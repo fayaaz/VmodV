@@ -124,7 +124,6 @@ pub struct NativeApp {
     audio_selection: AudioSourceSelection,
     audio_device: Option<String>,
     audio_devices: Vec<AudioDeviceView>,
-    last_audio_scan: Instant,
     /// The last failed live switch, shown in the Audio panel.
     audio_switch_error: Option<String>,
     audio_settings_path: PathBuf,
@@ -279,7 +278,6 @@ impl NativeApp {
             audio_selection,
             audio_device,
             audio_devices,
-            last_audio_scan: start,
             audio_switch_error: None,
             audio_settings_path,
             midi_client,
@@ -477,7 +475,6 @@ impl NativeApp {
 
     fn tick_engine(&mut self, dt: Duration) {
         self.pump_audio(dt);
-        self.refresh_audio_devices_if_due();
         self.store.drain_osc();
         self.midi_client.pump(&mut self.store);
         if self.store.scenes_tick_due() {
@@ -1002,18 +999,15 @@ impl NativeApp {
         }
     }
 
-    /// Re-enumerate cpal inputs for the Audio panel (hot-plug refreshes once a
-    /// second and the panel's Refresh button forces it).
+    /// Re-enumerate cpal inputs for the Audio panel.
+    ///
+    /// Enumeration probes every ALSA/JACK/OSS backend and is both slow and
+    /// noisy on hosts without a configured server, so it runs on demand (the
+    /// panel's Refresh button) rather than once a second. A periodic poll
+    /// flooded stderr with backend errors and exhausted pthread keys.
     fn refresh_audio_devices(&mut self) {
         self.audio_devices =
             crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
-        self.last_audio_scan = Instant::now();
-    }
-
-    fn refresh_audio_devices_if_due(&mut self) {
-        if self.last_audio_scan.elapsed() >= Duration::from_secs(1) {
-            self.refresh_audio_devices();
-        }
     }
 
     /// Answer at most one queued Gallery/Scene hover preview.
