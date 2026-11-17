@@ -27,6 +27,15 @@ function topLevelSection(name) {
   return body.join("\n");
 }
 
+describe("deb runtime dependencies", () => {
+  it("declares the GStreamer PipeWire plugin used by screen capture", () => {
+    const debSection = topLevelSection("deb");
+
+    expect(debSection).toMatch(/depends:/);
+    expect(debSection).toMatch(/^\s+-\s+gstreamer1\.0-pipewire\s*$/m);
+  });
+});
+
 describe("AppImage launch flags", () => {
   it("disables the Chromium sandbox by default", () => {
     const appImageSection = topLevelSection("appImage");
