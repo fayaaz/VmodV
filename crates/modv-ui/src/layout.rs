@@ -203,9 +203,9 @@ pub struct LayoutState {
 }
 
 /// Default dock column width.
-pub const DEFAULT_DOCK_WIDTH: f32 = 300.0;
+pub const DEFAULT_DOCK_WIDTH: f32 = 320.0;
 /// Minimum dock column width.
-pub const MIN_DOCK_WIDTH: f32 = 232.0;
+pub const MIN_DOCK_WIDTH: f32 = 250.0;
 
 /// Stable window ids used as `LayoutState::windows` / `LayoutSettings::windows`
 /// keys.
@@ -221,8 +221,8 @@ pub const WINDOW_INPUT_LINK: &str = "input_link";
 impl Default for LayoutState {
     fn default() -> Self {
         Self {
-            groups_width: 250.0,
-            inspector_width: 320.0,
+            groups_width: 270.0,
+            inspector_width: 340.0,
             live_height: 0.0,
             gallery_height: 0.0,
             dock_width: DEFAULT_DOCK_WIDTH,

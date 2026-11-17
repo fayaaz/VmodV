@@ -14,7 +14,7 @@ use modv_ui::{EngineSnapshot, TabPlacement, UiState};
 fn app() -> Harness<'static, UiState> {
     let snapshot = EngineSnapshot::default();
     let state = UiState::new();
-    Harness::builder()
+    let harness = Harness::builder()
         .with_size([1280.0, 800.0])
         .with_accessibility_check(false)
         .build_ui_state(
@@ -22,7 +22,9 @@ fn app() -> Harness<'static, UiState> {
                 modv_ui::shell::draw(ui, &snapshot, state);
             },
             state,
-        )
+        );
+    modv_ui::theme::apply(&harness.ctx);
+    harness
 }
 
 fn detach_buttons(harness: &Harness<'_, UiState>) -> usize {
@@ -248,7 +250,7 @@ fn dragging_the_groups_splitter_updates_the_remembered_width() {
         "dragging the Groups splitter widens the panel and updates the layout: {before} -> {after}"
     );
     assert!(
-        after >= 190.0,
+        after >= 210.0,
         "the Groups panel keeps its minimum width: {after}"
     );
 }

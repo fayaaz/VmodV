@@ -170,8 +170,8 @@ impl RangeControl {
         let mut changed = false;
         ui.horizontal(|ui| {
             ui.add_sized(
-                [86.0, 18.0],
-                egui::Label::new(egui::RichText::new(&self.label).size(11.0))
+                [96.0, 20.0],
+                egui::Label::new(egui::RichText::new(&self.label).size(13.0))
                     .truncate()
                     .sense(Sense::click()),
             )
@@ -184,12 +184,13 @@ impl RangeControl {
                 theme::badge(ui, "T", theme::TWEEN).on_hover_text("Tween assigned");
             }
 
-            let value_width = 66.0;
-            let slider_width = (ui.available_width() - value_width - 8.0).max(48.0);
+            let value_width = 74.0;
+            let reset_width = if self.default.is_some() { 22.0 } else { 0.0 };
+            let slider_width = (ui.available_width() - value_width - reset_width - 8.0).max(60.0);
             let slider = egui::Slider::new(&mut self.value, self.min..=self.max)
                 .show_value(false)
                 .trailing_fill(true);
-            if ui.add_sized([slider_width, 18.0], slider).changed() {
+            if ui.add_sized([slider_width, 20.0], slider).changed() {
                 changed = true;
             }
 
@@ -211,7 +212,7 @@ impl RangeControl {
                     format!(" {}", self.unit)
                 });
             if ui
-                .add_sized([value_width, 18.0], drag)
+                .add_sized([value_width, 20.0], drag)
                 .on_hover_text("Drag to scrub; click to type")
                 .changed()
             {
@@ -239,14 +240,14 @@ impl RangeControl {
 pub fn chip(ui: &mut egui::Ui, text: &str, colour: Color32) -> egui::Response {
     let galley = ui
         .painter()
-        .layout_no_wrap(text.to_string(), FontId::monospace(9.0), colour);
+        .layout_no_wrap(text.to_string(), FontId::monospace(11.0), colour);
     let size = galley.size() + egui::vec2(8.0, 3.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(2), colour.gamma_multiply(0.18));
+    painter.rect_filled(rect, CornerRadius::same(0), colour.gamma_multiply(0.18));
     painter.rect_stroke(
         rect,
-        CornerRadius::same(2),
+        CornerRadius::same(0),
         Stroke::new(1.0, colour.gamma_multiply(0.5)),
         StrokeKind::Inside,
     );
@@ -254,7 +255,7 @@ pub fn chip(ui: &mut egui::Ui, text: &str, colour: Color32) -> egui::Response {
         rect.center(),
         Align2::CENTER_CENTER,
         text,
-        FontId::monospace(9.0),
+        FontId::monospace(11.0),
         colour,
     );
     response

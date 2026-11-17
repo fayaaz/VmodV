@@ -8,11 +8,11 @@
 //!
 //! ```json
 //! {
-//!   "groups_width": 250.0,
-//!   "inspector_width": 320.0,
+//!   "groups_width": 270.0,
+//!   "inspector_width": 340.0,
 //!   "live_height": 0.0,
 //!   "gallery_height": 0.0,
-//!   "dock_width": 300.0,
+//!   "dock_width": 320.0,
 //!   "tabs": { "inspector": "docked", "media": "floating" },
 //!   "windows": {
 //!     "tempo": { "x": 40.0, "y": 60.0, "width": 320.0, "height": 200.0 }
@@ -45,20 +45,20 @@ use modv_ui::state::SidePanelTab;
 pub const LAYOUT_SETTINGS_FILENAME: &str = "native-layout.json";
 
 /// The Groups panel's default width (logical points), matching the shell's
-/// current `egui::Panel::left("modv-groups").default_size(250.0)`.
-pub const DEFAULT_GROUPS_WIDTH: f32 = 250.0;
+/// current `egui::Panel::left("modv-groups").default_size(270.0)`.
+pub const DEFAULT_GROUPS_WIDTH: f32 = 270.0;
 /// The Inspector panel's default width (logical points), matching the shell's
-/// current `egui::Panel::right("modv-inspector").default_size(320.0)`.
-pub const DEFAULT_INSPECTOR_WIDTH: f32 = 320.0;
+/// current `egui::Panel::right("modv-inspector").default_size(340.0)`.
+pub const DEFAULT_INSPECTOR_WIDTH: f32 = 340.0;
 /// The dock column's default width.
-pub const DEFAULT_DOCK_WIDTH: f32 = 300.0;
+pub const DEFAULT_DOCK_WIDTH: f32 = 320.0;
 
-/// The Groups panel's minimum width (`min_size(190.0)`).
-pub const MIN_GROUPS_WIDTH: f32 = 190.0;
-/// The Inspector panel's minimum width (`min_size(232.0)`).
-pub const MIN_INSPECTOR_WIDTH: f32 = 232.0;
+/// The Groups panel's minimum width (`min_size(210.0)`).
+pub const MIN_GROUPS_WIDTH: f32 = 210.0;
+/// The Inspector panel's minimum width (`min_size(250.0)`).
+pub const MIN_INSPECTOR_WIDTH: f32 = 250.0;
 /// The dock column's minimum width.
-pub const MIN_DOCK_WIDTH: f32 = 232.0;
+pub const MIN_DOCK_WIDTH: f32 = 250.0;
 /// The centre column's minimum width: below this the Live Output/Gallery no
 /// longer render usefully.
 pub const MIN_CENTRE_WIDTH: f32 = 360.0;
@@ -530,11 +530,11 @@ mod tests {
         let (directory, path) = temp_path();
         let layout = LayoutSettings::default();
 
-        assert_eq!(layout.groups_width, 250.0);
-        assert_eq!(layout.inspector_width, 320.0);
+        assert_eq!(layout.groups_width, 270.0);
+        assert_eq!(layout.inspector_width, 340.0);
         assert_eq!(layout.live_height, 0.0, "0 means the automatic split");
         assert_eq!(layout.gallery_height, 0.0);
-        assert_eq!(layout.dock_width, 300.0);
+        assert_eq!(layout.dock_width, 320.0);
         assert!(layout.tabs.is_empty(), "every tab starts in the strip");
         assert!(layout.windows.is_empty());
 

@@ -80,7 +80,7 @@ impl TweenControl {
         ui.horizontal_wrapped(|ui| {
             ui.add_sized(
                 [82.0, 18.0],
-                egui::Label::new(egui::RichText::new(&self.label).size(11.0))
+                egui::Label::new(egui::RichText::new(&self.label).size(13.0))
                     .truncate()
                     .sense(Sense::click()),
             )
@@ -89,7 +89,7 @@ impl TweenControl {
                 (None, _) => {
                     ui.label(
                         egui::RichText::new("no input (module has no $props entry)")
-                            .size(10.0)
+                            .size(12.0)
                             .color(theme::MUTED),
                     );
                 }
@@ -190,7 +190,7 @@ impl TweenControl {
                     .changed();
                 ui.label(
                     egui::RichText::new(format!("{} frames", view.frames))
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED),
                 )
                 .on_hover_text("Pre-rendered playback frames (read-only)");
@@ -349,7 +349,7 @@ impl TweenControl {
         let response = window.show(ctx, |ui| {
             ui.label(
                 egui::RichText::new(axis.title())
-                    .size(10.0)
+                    .size(12.0)
                     .color(theme::MUTED),
             );
             curve_canvas(ui, &mut editor, min, max, &axis, &mut dispatch);
@@ -362,13 +362,13 @@ impl TweenControl {
                 {
                     ui.label(
                         egui::RichText::new(format!("ch {channel}"))
-                            .size(10.0)
+                            .size(12.0)
                             .color(*colour),
                     );
                 }
                 ui.label(
                     egui::RichText::new("click: add · drag: move · right-click: remove")
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED),
                 );
             });
@@ -526,15 +526,15 @@ fn draw_curve(
     axis: &TweenAxis,
 ) {
     let painter = ui.painter_at(outer);
-    painter.rect_filled(outer, egui::CornerRadius::same(2), theme::INPUT);
+    painter.rect_filled(outer, egui::CornerRadius::same(0), theme::INPUT);
     painter.rect_stroke(
         outer,
-        egui::CornerRadius::same(2),
+        egui::CornerRadius::same(0),
         Stroke::new(1.0, theme::BORDER),
         StrokeKind::Inside,
     );
 
-    let tick_font = FontId::proportional(9.0);
+    let tick_font = FontId::proportional(11.0);
     for tick in &axis.ticks {
         let progress = if axis.total > 0.0 {
             tick / axis.total

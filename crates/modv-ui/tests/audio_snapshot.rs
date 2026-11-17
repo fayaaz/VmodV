@@ -78,6 +78,7 @@ fn audio_panel_snapshot() {
             },
             state,
         );
+    modv_ui::theme::apply(&harness.ctx);
     harness.run();
     harness.snapshot("audio_panel");
 }

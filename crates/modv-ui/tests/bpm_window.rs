@@ -36,7 +36,7 @@ fn snapshot(bpm: f64, capture_rate: Option<u32>) -> EngineSnapshot {
 }
 
 fn harness(snapshot: EngineSnapshot, state: UiState) -> Harness<'static, UiState> {
-    Harness::builder()
+    let harness = Harness::builder()
         .with_size([1280.0, 800.0])
         .with_accessibility_check(false)
         .build_ui_state(
@@ -44,7 +44,9 @@ fn harness(snapshot: EngineSnapshot, state: UiState) -> Harness<'static, UiState
                 modv_ui::shell::draw(ui, &snapshot, state);
             },
             state,
-        )
+        );
+    modv_ui::theme::apply(&harness.ctx);
+    harness
 }
 
 #[test]

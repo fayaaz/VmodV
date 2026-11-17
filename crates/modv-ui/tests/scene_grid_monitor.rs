@@ -104,6 +104,7 @@ fn scene_grid_row_monitor_golden() {
             },
             state,
         );
+    modv_ui::theme::apply(&harness.ctx);
     harness.run();
     harness.snapshot("scene_grid_row_monitor");
 }
@@ -149,6 +150,7 @@ fn scene_grid_row_monitor_dims_while_performance_mode_is_off() {
             },
             state,
         );
+    modv_ui::theme::apply(&harness.ctx);
     harness.run();
     harness.snapshot("scene_grid_row_monitor_dimmed");
 }

@@ -204,6 +204,7 @@ fn shell_snapshot() {
             },
             state,
         );
+    modv_ui::theme::apply(&harness.ctx);
     harness.run();
     harness.snapshot("shell");
 }

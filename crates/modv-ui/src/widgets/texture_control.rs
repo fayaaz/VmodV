@@ -48,7 +48,7 @@ impl TextureControl {
         ui.horizontal(|ui| {
             ui.add_sized(
                 [82.0, 18.0],
-                egui::Label::new(egui::RichText::new(&self.label).size(11.0))
+                egui::Label::new(egui::RichText::new(&self.label).size(13.0))
                     .truncate()
                     .sense(Sense::click()),
             )
@@ -73,7 +73,7 @@ impl TextureControl {
             "inherit" => {
                 ui.label(
                     egui::RichText::new("inherits the canvas below")
-                        .size(9.0)
+                        .size(11.0)
                         .color(theme::MUTED),
                 );
             }
@@ -149,13 +149,13 @@ pub fn source_chip(ui: &mut egui::Ui, source: &TextureSourceView) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(2),
+        egui::CornerRadius::same(0),
         Stroke::new(1.0, theme::BORDER),
         StrokeKind::Inside,
     );
     ui.label(
         egui::RichText::new(format!("{}: {}", source.kind, source.label))
-            .size(9.0)
+            .size(11.0)
             .color(theme::MUTED),
     );
 }

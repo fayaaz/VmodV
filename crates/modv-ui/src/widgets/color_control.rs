@@ -57,7 +57,7 @@ impl ColorControl {
         ui.horizontal(|ui| {
             ui.add_sized(
                 [82.0, 18.0],
-                egui::Label::new(egui::RichText::new(&self.label).size(11.0))
+                egui::Label::new(egui::RichText::new(&self.label).size(13.0))
                     .truncate()
                     .sense(Sense::click()),
             )
@@ -72,7 +72,7 @@ impl ColorControl {
                 ui.label(
                     egui::RichText::new(*channel)
                         .monospace()
-                        .size(9.0)
+                        .size(11.0)
                         .color(theme::MUTED),
                 );
                 if ui

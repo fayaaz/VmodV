@@ -27,9 +27,9 @@ use crate::widgets::range_control::chip;
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 
 /// The Groups panel's minimum width, matching `ui_layout::MIN_GROUPS_WIDTH`.
-const MIN_GROUPS_WIDTH: f32 = 190.0;
+const MIN_GROUPS_WIDTH: f32 = 210.0;
 /// The right tab strip's minimum width, matching `ui_layout::MIN_INSPECTOR_WIDTH`.
-const MIN_INSPECTOR_WIDTH: f32 = 232.0;
+const MIN_INSPECTOR_WIDTH: f32 = 250.0;
 /// The centre column's minimum width, matching `ui_layout::MIN_CENTRE_WIDTH`.
 const MIN_CENTRE_WIDTH: f32 = 360.0;
 /// The Live Output section's minimum height.
@@ -148,11 +148,11 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
 
 fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     egui::Panel::top("modv-menu")
-        .exact_size(28.0)
+        .exact_size(32.0)
         .frame(
             egui::Frame::NONE
-                .fill(theme::PANEL_ALT)
-                .inner_margin(Margin::symmetric(8, 3)),
+                .fill(theme::PANEL)
+                .inner_margin(Margin::symmetric(8, 4)),
         )
         .show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -160,7 +160,7 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                     egui::RichText::new("VmodV")
                         .strong()
                         .color(theme::ACCENT)
-                        .size(13.0),
+                        .size(15.0),
                 );
                 chip(ui, "NATIVE", theme::ACCENT);
                 ui.separator();
@@ -341,18 +341,18 @@ fn audio_status_text(active: bool, capture_rate: Option<u32>) -> String {
 
 fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     egui::Panel::bottom("modv-status")
-        .exact_size(22.0)
+        .exact_size(26.0)
         .frame(
             egui::Frame::NONE
                 .fill(theme::PANEL)
-                .inner_margin(Margin::symmetric(8, 2)),
+                .inner_margin(Margin::symmetric(8, 3)),
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("{:.1} FPS", state.status.fps))
                         .monospace()
-                        .size(10.0)
+                        .size(12.0)
                         .color(if state.status.fps >= 55.0 {
                             theme::OK
                         } else {
@@ -362,7 +362,7 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 ui.label(
                     egui::RichText::new(format!("{:.1} ms", state.status.frame_ms))
                         .monospace()
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED),
                 );
                 ui.separator();
@@ -372,7 +372,7 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                         state.status.resolution[0], state.status.resolution[1]
                     ))
                     .monospace()
-                    .size(10.0)
+                    .size(12.0)
                     .color(theme::MUTED),
                 );
                 ui.separator();
@@ -382,7 +382,7 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                         snapshot.audio.sample_rate,
                     ))
                     .monospace()
-                    .size(10.0)
+                    .size(12.0)
                     .color(theme::MUTED),
                 )
                 .on_hover_text(bpm_hover(snapshot.audio.sample_rate));
@@ -395,13 +395,13 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                         "audio: {}",
                         audio_status_text(state.status.audio_active, snapshot.audio.sample_rate)
                     ))
-                    .size(10.0)
+                    .size(12.0)
                     .color(theme::MUTED),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(&state.status.backend)
-                            .size(10.0)
+                            .size(12.0)
                             .color(theme::MUTED),
                     )
                     .on_hover_text(&state.status.adapter);
@@ -412,9 +412,9 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
 
 /// A small rolling FPS graph, drawn without a plotting dependency.
 fn fps_sparkline(ui: &mut egui::Ui, state: &UiState) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(96.0, 13.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(112.0, 17.0), Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, egui::CornerRadius::same(1), theme::INPUT);
+    painter.rect_filled(rect, egui::CornerRadius::same(0), theme::INPUT);
     if state.fps_history.len() < 2 {
         return;
     }
@@ -449,7 +449,7 @@ fn fps_sparkline(ui: &mut egui::Ui, state: &UiState) {
         rect.right_top() + egui::vec2(-2.0, 0.0),
         egui::Align2::RIGHT_TOP,
         format!("{max:.0}"),
-        egui::FontId::monospace(7.0),
+        egui::FontId::monospace(9.0),
         theme::MUTED,
     );
 }
@@ -460,23 +460,23 @@ fn audio_meters(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
         ("M", snapshot.audio.mid),
         ("T", snapshot.audio.treble),
     ] {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(13.0, 16.0), Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, egui::CornerRadius::same(1), theme::INPUT);
+        painter.rect_filled(rect, egui::CornerRadius::same(0), theme::INPUT);
         let height = (value.clamp(0.0, 1.0) * rect.height()).max(0.5);
         painter.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(rect.left(), rect.bottom() - height),
                 rect.right_bottom(),
             ),
-            egui::CornerRadius::same(1),
+            egui::CornerRadius::same(0),
             theme::ACCENT,
         );
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             label,
-            egui::FontId::monospace(7.0),
+            egui::FontId::monospace(9.0),
             theme::BACKGROUND,
         );
     }
@@ -497,7 +497,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("GROUPS").strong().size(10.0));
+                ui.label(egui::RichText::new("GROUPS").strong().size(12.0));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .small_button("+")
@@ -516,7 +516,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                     if snapshot.groups.is_empty() {
                         ui.label(
                             egui::RichText::new("No Groups. Apply a Scene or create one.")
-                                .size(11.0)
+                                .size(13.0)
                                 .color(theme::MUTED),
                         );
                     }
@@ -546,7 +546,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                             }
                             let response = ui.selectable_label(
                                 selected,
-                                egui::RichText::new(&group.name).size(11.0),
+                                egui::RichText::new(&group.name).size(13.0),
                             );
                             if response.clicked() {
                                 state.selected_group = Some(group.id.clone());
@@ -600,7 +600,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                 ui.label(
                                     egui::RichText::new(format!("{}", group.module_count()))
                                         .monospace()
-                                        .size(9.0)
+                                        .size(11.0)
                                         .color(theme::MUTED),
                                 );
                             });
@@ -797,19 +797,19 @@ fn paint_gallery_drop_target(ui: &egui::Ui, rect: egui::Rect, module_name: &str)
     let painter = ui.painter();
     painter.rect_filled(
         rect,
-        CornerRadius::same(3),
+        CornerRadius::same(0),
         theme::ACCENT.gamma_multiply(0.18),
     );
     painter.rect_stroke(
         rect,
-        CornerRadius::same(3),
+        CornerRadius::same(0),
         Stroke::new(1.5, theme::ACCENT),
         StrokeKind::Inside,
     );
 
     let galley = painter.layout_no_wrap(
         format!("Add {module_name}"),
-        egui::FontId::proportional(9.0),
+        egui::FontId::proportional(11.0),
         theme::BACKGROUND,
     );
     let chip_size = galley.size() + vec2(8.0, 4.0);
@@ -820,7 +820,7 @@ fn paint_gallery_drop_target(ui: &egui::Ui, rect: egui::Rect, module_name: &str)
         ),
         chip_size,
     );
-    painter.rect_filled(chip, CornerRadius::same(3), theme::ACCENT);
+    painter.rect_filled(chip, CornerRadius::same(0), theme::ACCENT);
     painter.galley(chip.min + vec2(4.0, 2.0), galley, theme::BACKGROUND);
 }
 
@@ -856,7 +856,7 @@ fn group_module_list(
             ui.label(
                 egui::RichText::new("empty")
                     .italics()
-                    .size(10.0)
+                    .size(12.0)
                     .color(theme::MUTED),
             );
         }
@@ -879,7 +879,7 @@ fn group_module_list(
             }
             let label = format!("{}  ({})", module.module_name, short_id(&module.id));
             if ui
-                .selectable_label(selected_module, egui::RichText::new(label).size(10.0))
+                .selectable_label(selected_module, egui::RichText::new(label).size(12.0))
                 .clicked()
             {
                 state.selected_module = Some(module.id.clone());
@@ -976,7 +976,7 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
         .resizable(true)
         .frame(
             egui::Frame::NONE
-                .fill(theme::PANEL)
+                .fill(theme::STRIP_FILL)
                 .inner_margin(Margin::same(6)),
         )
         .show(ui, |ui| {
@@ -999,7 +999,7 @@ fn tab_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
                     selected,
                     egui::RichText::new(tab.title().to_uppercase())
                         .strong()
-                        .size(10.0),
+                        .size(12.0),
                 )
                 .clicked()
             {
@@ -1059,7 +1059,7 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
     };
 
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(&module.module_name).strong().size(13.0));
+        ui.label(egui::RichText::new(&module.module_name).strong().size(15.0));
         chip(ui, &module.module_type, theme::MUTED);
     });
     ui.label(
@@ -1069,7 +1069,7 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
             short_id(&module.group_id)
         ))
         .monospace()
-        .size(9.0)
+        .size(11.0)
         .color(theme::MUTED),
     );
     ui.add_space(4.0);
@@ -1137,7 +1137,7 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
     if module.props.is_empty() {
         ui.label(
             egui::RichText::new("This module has no editable props.")
-                .size(11.0)
+                .size(13.0)
                 .color(theme::MUTED),
         );
     }
@@ -1199,7 +1199,7 @@ fn dock_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                             ui.label(
                                 egui::RichText::new(tab.title().to_uppercase())
                                     .strong()
-                                    .size(10.0),
+                                    .size(12.0),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui
@@ -1313,7 +1313,7 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
     ui.label(
         egui::RichText::new("modV Native")
             .strong()
-            .size(14.0)
+            .size(16.0)
             .color(theme::ACCENT),
     );
     ui.label(format!("Rust {}", env!("CARGO_PKG_VERSION")));
@@ -1367,7 +1367,7 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
     } else {
         ui.label(
             egui::RichText::new("No engine errors this session.")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     }
@@ -1375,7 +1375,7 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
         egui::RichText::new(
             "Presets, Scenes, playlists and the media directory stay in the shared VmodV userData tree.",
         )
-        .size(9.0)
+        .size(11.0)
         .color(theme::MUTED),
     );
 }
@@ -1389,20 +1389,20 @@ fn midi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 .color(theme::DANGER),
         );
         if let Some(error) = &midi.error {
-            ui.label(egui::RichText::new(error).size(10.0).color(theme::MUTED));
+            ui.label(egui::RichText::new(error).size(12.0).color(theme::MUTED));
         }
         return;
     }
     ui.label(
         egui::RichText::new(format!("{} MIDI input(s)", midi.devices.len()))
-            .size(10.0)
+            .size(12.0)
             .color(theme::MUTED),
     );
     ui.separator();
     if midi.devices.is_empty() {
         ui.label(
             egui::RichText::new("No MIDI devices detected. Hot-plug is polled at 1 Hz.")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     }
@@ -1417,12 +1417,12 @@ fn midi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                     },
                 ),
             );
-            ui.label(egui::RichText::new(&device.name).size(11.0));
+            ui.label(egui::RichText::new(&device.name).size(13.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(if device.connected { "live" } else { "gone" })
                         .monospace()
-                        .size(8.0)
+                        .size(10.0)
                         .color(theme::MUTED),
                 );
             });
@@ -1464,13 +1464,13 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
                 .strong()
                 .color(theme::DANGER),
         );
-        ui.label(egui::RichText::new(warning).size(10.0).color(theme::MUTED));
+        ui.label(egui::RichText::new(warning).size(12.0).color(theme::MUTED));
     }
     if let Some(warning) = ndi.sender_warning() {
         ui.colored_label(theme::DANGER, warning);
     }
 
-    ui.label(egui::RichText::new("NDI OUTPUT").strong().size(9.0));
+    ui.label(egui::RichText::new("NDI OUTPUT").strong().size(11.0));
     let output = &ndi.output;
     let mut enabled = output.enabled;
     if ui
@@ -1508,7 +1508,7 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
     if output.enabled {
         ui.label(
             egui::RichText::new("Disable the output to rename it")
-                .size(9.0)
+                .size(11.0)
                 .color(theme::MUTED),
         );
     }
@@ -1574,7 +1574,7 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
             ui.label(
                 egui::RichText::new(ndi.output_fps_label(f64::from(snapshot.fps)))
                     .monospace()
-                    .size(9.5),
+                    .size(11.5),
             );
         } else {
             let mut fps = output.target_fps;
@@ -1603,7 +1603,7 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
         ui.painter().circle_filled(rect.center(), 4.0, colour);
         ui.label(
             egui::RichText::new(ndi.sender_status_label())
-                .size(10.0)
+                .size(12.0)
                 .color(colour),
         );
     });
@@ -1611,13 +1611,13 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
         ui.label(
             egui::RichText::new(format!("libndi: {path}"))
                 .monospace()
-                .size(8.5)
+                .size(10.5)
                 .color(theme::MUTED),
         );
     }
 
     ui.separator();
-    ui.label(egui::RichText::new("NDI SOURCES").strong().size(9.0));
+    ui.label(egui::RichText::new("NDI SOURCES").strong().size(11.0));
     let mut show_local = ndi.show_local_sources;
     if ui
         .add_enabled(
@@ -1646,18 +1646,18 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
             egui::RichText::new(
                 "No NDI sources yet. Click Discover Sources to search the network.",
             )
-            .size(10.0)
+            .size(12.0)
             .color(theme::MUTED),
         );
     }
     for source in &ndi.sources {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(&source.name).size(11.0));
+                ui.label(egui::RichText::new(&source.name).size(13.0));
                 ui.label(
                     egui::RichText::new(&source.url_address)
                         .monospace()
-                        .size(8.5)
+                        .size(10.5)
                         .color(theme::MUTED),
                 );
             });
@@ -1665,7 +1665,7 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
                 if ui
                     .add_enabled(
                         available,
-                        egui::Button::new(egui::RichText::new("Receive source").size(9.0)).small(),
+                        egui::Button::new(egui::RichText::new("Receive source").size(11.0)).small(),
                     )
                     .on_hover_text("Create a receiver for this source")
                     .clicked()
@@ -1685,22 +1685,22 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
     }
 
     ui.separator();
-    ui.label(egui::RichText::new("NDI RECEIVERS").strong().size(9.0));
+    ui.label(egui::RichText::new("NDI RECEIVERS").strong().size(11.0));
     if ndi.receivers.is_empty() {
         ui.label(
             egui::RichText::new("No NDI receivers.")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     }
     for receiver in &ndi.receivers {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(receiver.title()).size(11.0));
+                ui.label(egui::RichText::new(receiver.title()).size(13.0));
                 ui.label(
                     egui::RichText::new(receiver.status_label())
                         .monospace()
-                        .size(8.5)
+                        .size(10.5)
                         .color(theme::MUTED),
                 );
                 if let Some(error) = &receiver.error {
@@ -1748,28 +1748,28 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
 fn osc_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     let osc = &snapshot.osc;
 
-    ui.label(egui::RichText::new("OSC LISTENERS").strong().size(9.0));
+    ui.label(egui::RichText::new("OSC LISTENERS").strong().size(11.0));
     ui.label(
         egui::RichText::new("Input Links with the OSC source read osc.data.<address>.")
-            .size(9.0)
+            .size(11.0)
             .color(theme::MUTED),
     );
     if osc.servers.is_empty() {
         ui.label(
             egui::RichText::new("No OSC listeners.")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     }
     for server in &osc.servers {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(server.title()).size(11.0));
+                ui.label(egui::RichText::new(server.title()).size(13.0));
                 if server.title() != server.address_label() {
                     ui.label(
                         egui::RichText::new(server.address_label())
                             .monospace()
-                            .size(8.5)
+                            .size(10.5)
                             .color(theme::MUTED),
                     );
                 }
@@ -1830,13 +1830,17 @@ fn osc_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
     }
 
     ui.separator();
-    ui.label(egui::RichText::new("RECEIVED ADDRESSES").strong().size(9.0));
+    ui.label(
+        egui::RichText::new("RECEIVED ADDRESSES")
+            .strong()
+            .size(11.0),
+    );
     if osc.addresses.is_empty() {
         ui.label(
             egui::RichText::new(
                 "No OSC messages yet. Send to a listener above and the address appears as osc.data.<address>.",
             )
-            .size(10.0)
+            .size(12.0)
             .color(theme::MUTED),
         );
     }
@@ -1846,11 +1850,11 @@ fn osc_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
                 ui.label(
                     egui::RichText::new(&address.state_path)
                         .monospace()
-                        .size(9.5),
+                        .size(11.5),
                 );
                 ui.label(
                     egui::RichText::new(address.value_label())
-                        .size(9.0)
+                        .size(11.0)
                         .color(theme::MUTED),
                 );
             });
@@ -1871,13 +1875,13 @@ fn plugins_panel(ui: &mut egui::Ui) {
     ui.label(
         egui::RichText::new("JavaScript plugins")
             .strong()
-            .size(11.0),
+            .size(13.0),
     );
     ui.label(
         egui::RichText::new(
             "D5 keeps plugins, but the native shell has not landed the sandboxed Boa host yet. The switch is deliberately disabled until the consent flow and restricted host API exist; the legacy Electron build remains available for grab-canvas.",
         )
-        .size(10.0)
+        .size(12.0)
         .color(theme::MUTED),
     );
     ui.add_enabled(
@@ -1885,7 +1889,7 @@ fn plugins_panel(ui: &mut egui::Ui) {
         egui::Checkbox::new(&mut false, "Enable JavaScript plugins (advanced)"),
     );
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Bundled plugins").strong().size(10.0));
+    ui.label(egui::RichText::new("Bundled plugins").strong().size(12.0));
     ui.add_enabled(
         false,
         egui::Checkbox::new(&mut false, "grab-canvas  (not ported)"),
@@ -1895,7 +1899,7 @@ fn plugins_panel(ui: &mut egui::Ui) {
         egui::RichText::new(
             "Expressions already run in-engine through Boa; this panel is only about the opt-in plugin host.",
         )
-        .size(9.0)
+        .size(11.0)
         .color(theme::MUTED),
     );
 }
@@ -1909,18 +1913,18 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
         ui.colored_label(theme::DANGER, error);
         ui.label(
             egui::RichText::new("The previous source is still running.")
-                .size(9.0)
+                .size(11.0)
                 .color(theme::MUTED),
         );
     }
 
     ui.separator();
-    ui.label(egui::RichText::new("OUTPUT MONITOR").strong().size(9.0));
+    ui.label(egui::RichText::new("OUTPUT MONITOR").strong().size(11.0));
     ui.label(
         egui::RichText::new(
             "Capture what this machine is playing (PipeWire system audio loopback).",
         )
-        .size(9.0)
+        .size(11.0)
         .color(theme::MUTED),
     );
     if audio_choice_row(
@@ -1938,7 +1942,7 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
 
     ui.separator();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("INPUT DEVICES").strong().size(9.0));
+        ui.label(egui::RichText::new("INPUT DEVICES").strong().size(11.0));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let count = snapshot.audio_devices.len();
             ui.label(
@@ -1947,7 +1951,7 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                     if count == 1 { "" } else { "s" }
                 ))
                 .monospace()
-                .size(9.0)
+                .size(11.0)
                 .color(theme::MUTED),
             );
         });
@@ -1956,7 +1960,7 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
         egui::RichText::new(
             "Microphones and audio interfaces. The system default follows hot-plug.",
         )
-        .size(9.0)
+        .size(11.0)
         .color(theme::MUTED),
     );
     if audio_choice_row(
@@ -1974,7 +1978,7 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
     if snapshot.audio_devices.is_empty() {
         ui.label(
             egui::RichText::new("No usable input devices found. Connect one and Refresh.")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     }
@@ -2000,7 +2004,7 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
         }
         ui.label(
             egui::RichText::new("Re-scans ALSA/PipeWire inputs")
-                .size(9.0)
+                .size(11.0)
                 .color(theme::MUTED),
         );
     });
@@ -2023,7 +2027,7 @@ fn audio_active_banner(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
             1.0,
             if live { theme::OK } else { theme::BORDER },
         ))
-        .corner_radius(CornerRadius::same(3))
+        .corner_radius(CornerRadius::same(0))
         .inner_margin(Margin::symmetric(8, 7))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -2034,22 +2038,22 @@ fn audio_active_banner(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
                     egui::RichText::new(state)
                         .strong()
                         .monospace()
-                        .size(9.0)
+                        .size(11.0)
                         .color(colour),
                 );
                 ui.label(
                     egui::RichText::new(selection.active_label(&snapshot.audio_devices))
                         .strong()
-                        .size(13.0),
+                        .size(15.0),
                 );
             });
             ui.label(
-                egui::RichText::new(selection.active_subtitle(&snapshot.audio_devices)).size(10.0),
+                egui::RichText::new(selection.active_subtitle(&snapshot.audio_devices)).size(12.0),
             );
             ui.label(
                 egui::RichText::new(selection.active_detail(&snapshot.audio_devices))
                     .monospace()
-                    .size(8.5)
+                    .size(10.5)
                     .color(theme::MUTED),
             );
         });
@@ -2071,14 +2075,14 @@ fn audio_choice_row(
         } else {
             Color32::TRANSPARENT
         })
-        .corner_radius(CornerRadius::same(2))
+        .corner_radius(CornerRadius::same(0))
         .inner_margin(Margin::symmetric(4, 3))
         .show(ui, |ui| {
-            let response = ui.radio(selected, egui::RichText::new(title).size(11.0));
+            let response = ui.radio(selected, egui::RichText::new(title).size(13.0));
             clicked = response.clicked();
             response.on_hover_text(hover);
             if !detail.is_empty() {
-                ui.label(egui::RichText::new(detail).size(8.5).color(theme::MUTED))
+                ui.label(egui::RichText::new(detail).size(10.5).color(theme::MUTED))
                     .on_hover_text(hover);
             }
         });
@@ -2094,7 +2098,7 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                 .color(theme::DANGER),
         );
         if let Some(error) = &media.error {
-            ui.label(egui::RichText::new(error).size(10.0).color(theme::MUTED));
+            ui.label(egui::RichText::new(error).size(12.0).color(theme::MUTED));
         }
         return;
     }
@@ -2111,21 +2115,21 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                 media.cameras.len(),
                 media.sources.len()
             ))
-            .size(10.0)
+            .size(12.0)
             .color(theme::MUTED),
         );
     });
     ui.separator();
-    ui.label(egui::RichText::new("CAMERAS").strong().size(10.0));
+    ui.label(egui::RichText::new("CAMERAS").strong().size(12.0));
     ui.label(
         egui::RichText::new("Ticked cameras run in order; #N is the Webcam module's Camera index.")
-            .size(9.0)
+            .size(11.0)
             .color(theme::MUTED),
     );
     if media.cameras.is_empty() {
         ui.label(
             egui::RichText::new("No cameras detected.")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     }
@@ -2134,11 +2138,11 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
         media_camera_row(ui, camera, &running, state);
     }
     ui.separator();
-    ui.label(egui::RichText::new("SOURCES").strong().size(10.0));
+    ui.label(egui::RichText::new("SOURCES").strong().size(12.0));
     if media.sources.is_empty() {
         ui.label(
             egui::RichText::new("No running sources.")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     }
@@ -2150,14 +2154,14 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                 } else {
                     format!("{}  {}", source.source_id, source.state)
                 };
-                ui.label(egui::RichText::new(title).size(10.0));
+                ui.label(egui::RichText::new(title).size(12.0));
                 ui.label(
                     egui::RichText::new(format!(
                         "{}x{}  {} frames  {} dropped",
                         source.width, source.height, source.frames, source.dropped
                     ))
                     .monospace()
-                    .size(8.5)
+                    .size(10.5)
                     .color(theme::MUTED),
                 );
                 if let Some(error) = &source.last_error {
@@ -2195,7 +2199,7 @@ fn media_camera_row(
 
     ui.horizontal(|ui| {
         let mut checked = position.is_some();
-        let response = ui.checkbox(&mut checked, egui::RichText::new(&camera.name).size(11.0));
+        let response = ui.checkbox(&mut checked, egui::RichText::new(&camera.name).size(13.0));
         let changed = response.changed();
         response.on_hover_text(
             "Run this camera and add it to the Webcam order\n\
@@ -2222,7 +2226,7 @@ fn media_camera_row(
                 egui::RichText::new(format!("#{index}"))
                     .monospace()
                     .strong()
-                    .size(9.0)
+                    .size(11.0)
                     .color(theme::ACCENT),
             )
             .on_hover_text(format!("Webcam index #{index} (the module's Camera prop)"));
@@ -2230,7 +2234,7 @@ fn media_camera_row(
         ui.label(
             egui::RichText::new(&camera.id)
                 .monospace()
-                .size(8.5)
+                .size(10.5)
                 .color(theme::MUTED),
         );
     });
@@ -2245,7 +2249,7 @@ fn media_camera_row(
                 if ui
                     .add_enabled(
                         can_move_later,
-                        egui::Button::new(egui::RichText::new("Down").size(9.0)).small(),
+                        egui::Button::new(egui::RichText::new("Down").size(11.0)).small(),
                     )
                     .on_hover_text("Move later in the Webcam order")
                     .clicked()
@@ -2259,7 +2263,7 @@ fn media_camera_row(
                 if ui
                     .add_enabled(
                         can_move_earlier,
-                        egui::Button::new(egui::RichText::new("Up").size(9.0)).small(),
+                        egui::Button::new(egui::RichText::new("Up").size(11.0)).small(),
                     )
                     .on_hover_text("Move earlier in the Webcam order")
                     .clicked()
@@ -2294,7 +2298,7 @@ fn media_camera_mode_controls(
                 camera.selected.resolution_label()
             ))
             .monospace()
-            .size(8.5)
+            .size(10.5)
             .color(theme::MUTED),
         )
         .on_hover_text(
@@ -2310,7 +2314,7 @@ fn media_camera_mode_controls(
         .selected_text(
             egui::RichText::new(chosen.resolution_label())
                 .monospace()
-                .size(9.5),
+                .size(11.5),
         )
         .width(78.0)
         .show_ui(ui, |ui| {
@@ -2339,7 +2343,7 @@ fn media_camera_mode_controls(
         ui.label(
             egui::RichText::new(format!("{} · rate not reported", chosen.fps_label()))
                 .monospace()
-                .size(8.5)
+                .size(10.5)
                 .color(theme::MUTED),
         );
     } else {
@@ -2347,7 +2351,7 @@ fn media_camera_mode_controls(
             .selected_text(
                 egui::RichText::new(chosen.fps_label())
                     .monospace()
-                    .size(9.5),
+                    .size(11.5),
             )
             .width(58.0)
             .show_ui(ui, |ui| {
@@ -2378,14 +2382,14 @@ fn media_camera_mode_controls(
 fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     ui.label(
         egui::RichText::new("Select a Module in the Groups panel.")
-            .size(11.0)
+            .size(13.0)
             .color(theme::MUTED),
     );
     ui.add_space(8.0);
 
     if let Some(group) = state.selected_group(snapshot) {
-        ui.label(egui::RichText::new("GROUP").strong().size(10.0));
-        ui.label(egui::RichText::new(&group.name).size(12.0));
+        ui.label(egui::RichText::new("GROUP").strong().size(12.0));
+        ui.label(egui::RichText::new(&group.name).size(14.0));
         let mut alpha = group.alpha;
         if ui
             .add(
@@ -2554,7 +2558,7 @@ fn draw_prop(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&prop.name)
-                        .size(11.0)
+                        .size(13.0)
                         .color(theme::MUTED),
                 );
                 chip(ui, "palette", theme::TWEEN);
@@ -2566,7 +2570,7 @@ fn draw_prop(
                         let [r, g, b, a] = control.rgba;
                         ui.painter().rect_filled(
                             rect,
-                            egui::CornerRadius::same(2),
+                            egui::CornerRadius::same(0),
                             egui::Color32::from_rgba_unmultiplied(
                                 (r.clamp(0.0, 1.0) * 255.0) as u8,
                                 (g.clamp(0.0, 1.0) * 255.0) as u8,
@@ -2595,14 +2599,14 @@ fn draw_prop(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&prop.name)
-                        .size(11.0)
+                        .size(13.0)
                         .color(theme::MUTED),
                 );
                 chip(ui, "font", theme::MUTED);
                 ui.label(
                     egui::RichText::new(prop.value.as_str().unwrap_or("default"))
                         .monospace()
-                        .size(9.0)
+                        .size(11.0)
                         .color(theme::MUTED),
                 );
             });
@@ -2638,14 +2642,18 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                 ui.label(
                     egui::RichText::new("modV Native")
                         .strong()
-                        .size(18.0)
+                        .size(20.0)
                         .color(theme::FOREGROUND),
                 );
-                ui.label(
-                    egui::RichText::new("egui + wgpu + in-process engine")
-                        .size(11.0)
-                        .color(theme::MUTED),
-                );
+                // The subtitle is decoration; drop it rather than let it
+                // collide with the right-hand buttons in a narrow centre.
+                if ui.available_width() > 640.0 {
+                    ui.label(
+                        egui::RichText::new("egui + wgpu + in-process engine")
+                            .size(13.0)
+                            .color(theme::MUTED),
+                    );
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Open output").clicked() {
                         state.queue(UiCommand::OpenOutputWindow);
@@ -2714,10 +2722,10 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("SCENES").strong().size(10.0));
+                ui.label(egui::RichText::new("SCENES").strong().size(12.0));
                 ui.label(
                     egui::RichText::new(format!("{} saved", snapshot.scenes.len()))
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED),
                 );
                 if !snapshot.scene_rows.is_empty() {
@@ -2732,7 +2740,7 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                                 .collect::<Vec<_>>()
                                 .join(" | ")
                         ))
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED),
                     );
                 }
@@ -2782,7 +2790,7 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
     let image_rect =
         fit_preview_rect(container.size(), snapshot.resolution).translate(container.min.to_vec2());
     let painter = ui.painter();
-    painter.rect_filled(image_rect, CornerRadius::same(2), theme::INPUT);
+    painter.rect_filled(image_rect, CornerRadius::same(0), theme::INPUT);
     if let Some(texture_id) = state.preview_texture {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         painter.image(texture_id, image_rect.shrink(1.0), uv, Color32::WHITE);
@@ -2791,13 +2799,13 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             image_rect.center(),
             egui::Align2::CENTER_CENTER,
             "Waiting for the first composited frame",
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(14.0),
             theme::MUTED,
         );
     }
     painter.rect_stroke(
         image_rect,
-        CornerRadius::same(2),
+        CornerRadius::same(0),
         Stroke::new(1.0, theme::BORDER),
         StrokeKind::Inside,
     );
@@ -2805,7 +2813,7 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         image_rect.left_top() + vec2(6.0, 4.0),
         egui::Align2::LEFT_TOP,
         "LIVE OUTPUT",
-        egui::FontId::monospace(9.0),
+        egui::FontId::monospace(11.0),
         theme::ACCENT,
     );
     if response.hovered() {
@@ -2826,19 +2834,19 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             "{}x{} ({aspect:.2}:1) compositor main texture",
             snapshot.resolution[0], snapshot.resolution[1]
         ),
-        egui::FontId::proportional(9.0),
+        egui::FontId::proportional(11.0),
         theme::MUTED,
     );
 }
 
 fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("GALLERY").strong().size(10.0));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new("GALLERY").strong().size(12.0));
         for category in GalleryCategory::ALL {
             if ui
                 .selectable_label(
                     state.gallery_category == category,
-                    egui::RichText::new(category.label()).size(10.0),
+                    egui::RichText::new(category.label()).size(12.0),
                 )
                 .clicked()
             {
@@ -2846,27 +2854,23 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             }
         }
         ui.separator();
-        let search = ui.add(
-            egui::TextEdit::singleline(&mut state.search)
-                .hint_text("Search modules  (Ctrl+K)")
-                .desired_width(180.0),
-        );
+        let search_width = (ui.available_width() - 120.0).clamp(140.0, 220.0);
+        let search = ui
+            .add(
+                egui::TextEdit::singleline(&mut state.search)
+                    .hint_text("Search modules  (Ctrl+K)")
+                    .desired_width(search_width),
+            )
+            .on_hover_text("Double-click a tile to add it to the selected Group");
         if state.search_focus {
             search.request_focus();
             state.search_focus = false;
         }
         ui.label(
             egui::RichText::new(format!("{} registered", snapshot.registered.len()))
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new("double-click a tile to add it to the selected Group")
-                    .size(9.0)
-                    .color(theme::MUTED),
-            );
-        });
     });
 
     let filtered =
@@ -2885,7 +2889,7 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                 if filtered.is_empty() {
                     ui.label(
                         egui::RichText::new("No modules match this filter.")
-                            .size(10.0)
+                            .size(12.0)
                             .color(theme::MUTED),
                     );
                 }
@@ -2922,7 +2926,7 @@ fn gallery_tile(
         theme::PANEL
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(3), fill);
+    painter.rect_filled(rect, CornerRadius::same(0), fill);
     if let Some(preview) = snapshot
         .gallery_previews
         .get(&gallery_preview_key(&module.name))
@@ -2931,19 +2935,15 @@ fn gallery_tile(
         painter.image(preview.id, rect.shrink(2.0), uv, Color32::WHITE);
         painter.rect_filled(
             rect.shrink(2.0),
-            CornerRadius::same(2),
+            CornerRadius::same(0),
             Color32::from_black_alpha(55),
         );
     } else {
-        painter.rect_filled(
-            rect.shrink(2.0),
-            CornerRadius::same(2),
-            Color32::from_rgb(28, 30, 36),
-        );
+        painter.rect_filled(rect.shrink(2.0), CornerRadius::same(0), theme::PANEL_ALT);
     }
     painter.rect_stroke(
         rect,
-        CornerRadius::same(3),
+        CornerRadius::same(0),
         Stroke::new(
             1.0,
             if selected || dragging {
@@ -2960,7 +2960,7 @@ fn gallery_tile(
     let name_strip = gallery_name_strip(rect);
     let name_galley = painter.layout_no_wrap(
         module.name.clone(),
-        egui::FontId::proportional(10.0),
+        egui::FontId::proportional(12.0),
         theme::FOREGROUND,
     );
     let name_layout = gallery_name_layout(&module.name, name_galley.size().x, name_strip.width());
@@ -3007,7 +3007,7 @@ fn gallery_tile(
         rect.left_top() + vec2(5.0, 4.0),
         egui::Align2::LEFT_TOP,
         truncate(&module.module_type, 8),
-        egui::FontId::monospace(8.0),
+        egui::FontId::monospace(10.0),
         theme::MUTED,
     );
 
@@ -3036,7 +3036,7 @@ fn gallery_tile(
                 "{} | {} {}",
                 module.module_type, module.author, module.version
             ))
-            .size(9.0)
+            .size(11.0)
             .color(theme::MUTED),
         );
         ui.separator();
@@ -3177,14 +3177,14 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
         if filtered.is_empty() {
             ui.label(
                 egui::RichText::new("No matching command")
-                    .size(11.0)
+                    .size(13.0)
                     .color(theme::MUTED),
             );
         }
         for (index, (label, _)) in filtered.iter().enumerate() {
             let selected = index == state.command_selection;
             if ui
-                .selectable_label(selected, egui::RichText::new(label).size(11.0))
+                .selectable_label(selected, egui::RichText::new(label).size(13.0))
                 .clicked()
             {
                 execute = Some(index);
@@ -3292,7 +3292,7 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
                     Some(rate) => format!("Capture {}", sample_rate_label(rate)),
                     None => "Capture rate unavailable".to_string(),
                 })
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
             )
             .on_hover_text("The rate the analyser and BPM detector run at");
@@ -3332,7 +3332,7 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
         });
         ui.label(
             egui::RichText::new(format!("{} tap(s) in the last 2 s", state.tap_times.len()))
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
     });
@@ -3403,7 +3403,7 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
         ui.label(
             egui::RichText::new("modV Native")
                 .strong()
-                .size(18.0)
+                .size(20.0)
                 .color(theme::ACCENT),
         );
         ui.label("A native Rust rewrite of modV. The legacy Electron UI and JS engine remain available behind the environment switch until parity is signed off.");

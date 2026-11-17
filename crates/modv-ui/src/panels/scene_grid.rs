@@ -221,7 +221,7 @@ fn draw_row_monitor(ui: &mut egui::Ui, snapshot: &EngineSnapshot, row: usize, ce
         ROW_MONITOR_THUMB,
     );
     let painter = ui.painter();
-    painter.rect_filled(thumb, CornerRadius::same(2), theme::INPUT);
+    painter.rect_filled(thumb, CornerRadius::same(0), theme::INPUT);
     match (display, monitor.and_then(|view| view.texture)) {
         (RowMonitorDisplay::Monitor { alpha }, Some(texture)) => {
             let fitted =
@@ -240,14 +240,14 @@ fn draw_row_monitor(ui: &mut egui::Ui, snapshot: &EngineSnapshot, row: usize, ce
                 thumb.center(),
                 Align2::CENTER_CENTER,
                 "no layer",
-                FontId::proportional(7.0),
+                FontId::proportional(9.0),
                 theme::MUTED,
             );
         }
     }
     painter.rect_stroke(
         thumb,
-        CornerRadius::same(2),
+        CornerRadius::same(0),
         Stroke::new(1.0, theme::BORDER),
         StrokeKind::Inside,
     );
@@ -330,7 +330,7 @@ pub fn draw_scene_grid(
     if snapshot.scenes.is_empty() {
         ui.vertical_centered(|ui| {
             ui.add_space(24.0);
-            ui.label(egui::RichText::new("No Scenes yet").size(14.0));
+            ui.label(egui::RichText::new("No Scenes yet").size(16.0));
             ui.label(egui::RichText::new("Add a Scene or load the defaults.").color(theme::MUTED));
             if ui.button("Add empty Scene").clicked() {
                 actions.push(UiAction::new(
@@ -440,15 +440,15 @@ fn draw_scene_column(
             } else if dragging {
                 theme::PANEL_ALT
             } else if hovered {
-                Color32::from_rgb(58, 58, 58)
+                theme::BORDER
             } else {
                 theme::PANEL
             };
             let painter = ui.painter();
-            painter.rect_filled(rect, CornerRadius::same(2), fill);
+            painter.rect_filled(rect, CornerRadius::same(0), fill);
             painter.rect_stroke(
                 rect,
-                CornerRadius::same(2),
+                CornerRadius::same(0),
                 Stroke::new(
                     if drop_target || dragging || current {
                         1.5
@@ -474,7 +474,7 @@ fn draw_scene_column(
                 rect.left_center() + egui::vec2(14.0, 0.0),
                 Align2::LEFT_CENTER,
                 &scene.name,
-                FontId::proportional(11.0),
+                FontId::proportional(13.0),
                 if scene.enabled {
                     if current {
                         theme::ACCENT
@@ -535,7 +535,7 @@ fn row_label_column(
             |ui| {
                 ui.label(
                     egui::RichText::new("Layers")
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED)
                         .strong(),
                 );
@@ -567,7 +567,7 @@ fn row_label_cell(
     let painter = ui.painter();
     painter.rect_filled(
         rect,
-        CornerRadius::same(2),
+        CornerRadius::same(0),
         if drop_target {
             theme::ACCENT_DIM
         } else if dragging || hovered {
@@ -578,7 +578,7 @@ fn row_label_cell(
     );
     painter.rect_stroke(
         rect,
-        CornerRadius::same(2),
+        CornerRadius::same(0),
         Stroke::new(
             if drop_target || dragging { 1.5 } else { 1.0 },
             if drop_target {
@@ -600,7 +600,7 @@ fn row_label_cell(
             rect.left_top() + egui::vec2(6.0, 4.0),
             Align2::LEFT_TOP,
             format!("Row {}", row + 1),
-            FontId::monospace(9.0),
+            FontId::monospace(11.0),
             theme::MUTED,
         );
         let edit_rect = egui::Rect::from_min_size(
@@ -640,7 +640,7 @@ fn row_label_cell(
         rect.left_top() + egui::vec2(6.0, 4.0),
         Align2::LEFT_TOP,
         format!("Row {}", row + 1),
-        FontId::monospace(9.0),
+        FontId::monospace(11.0),
         theme::MUTED,
     );
     let label = snapshot
@@ -655,7 +655,7 @@ fn row_label_cell(
         rect.left_top() + egui::vec2(6.0, 24.0),
         Align2::LEFT_TOP,
         label,
-        FontId::proportional(11.0),
+        FontId::proportional(13.0),
         theme::FOREGROUND,
     );
 
@@ -790,7 +790,7 @@ fn performance_bar(
         // change applies to the next Scene.
         ui.label(
             egui::RichText::new("Scene order")
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
         );
         let order = snapshot.performance.scene_order();
@@ -812,7 +812,7 @@ fn performance_bar(
             ));
         }
         ui.separator();
-        ui.label(egui::RichText::new("min").size(10.0).color(theme::MUTED));
+        ui.label(egui::RichText::new("min").size(12.0).color(theme::MUTED));
         let mut min = snapshot.performance.min_seconds;
         let min_changed = ui
             .add(
@@ -822,7 +822,7 @@ fn performance_bar(
                     .suffix(" s"),
             )
             .changed();
-        ui.label(egui::RichText::new("max").size(10.0).color(theme::MUTED));
+        ui.label(egui::RichText::new("max").size(12.0).color(theme::MUTED));
         let mut max = snapshot.performance.max_seconds;
         let max_changed = ui
             .add(
@@ -832,7 +832,7 @@ fn performance_bar(
                     .suffix(" s"),
             )
             .changed();
-        ui.label(egui::RichText::new("fade").size(10.0).color(theme::MUTED));
+        ui.label(egui::RichText::new("fade").size(12.0).color(theme::MUTED));
         let mut fade = snapshot.performance.transition_seconds;
         let fade_changed = ui
             .add(
@@ -878,7 +878,7 @@ fn performance_bar(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(format!("{} Scenes", snapshot.scenes.len()))
-                    .size(10.0)
+                    .size(12.0)
                     .color(theme::MUTED),
             );
             if snapshot.performance.enabled {
@@ -913,7 +913,7 @@ fn scene_dialogs(
         let response = window.show(ui.ctx(), |ui| {
             ui.label(
                 egui::RichText::new("Per-Scene override; reset returns to the global timing.")
-                    .size(10.0)
+                    .size(12.0)
                     .color(theme::MUTED),
             );
             ui.horizontal(|ui| {
@@ -977,7 +977,7 @@ fn scene_dialogs(
                 egui::RichText::new(
                     "A named row matches its Group by name; empty names use position.",
                 )
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
             );
             let mut remove: Option<usize> = None;
@@ -987,7 +987,7 @@ fn scene_dialogs(
                     ui.label(
                         egui::RichText::new(format!("Row {index}"))
                             .monospace()
-                            .size(10.0)
+                            .size(12.0)
                             .color(theme::MUTED),
                     );
                     ui.text_edit_singleline(&mut names[index]);
@@ -1072,10 +1072,8 @@ fn draw_scene_cell(
 
     let current = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
     let copying = grid.copy_source.as_ref() == Some(&target);
-    let fill = if copying {
+    let fill = if copying || current {
         theme::ACCENT_DIM
-    } else if current {
-        Color32::from_rgb(34, 32, 18)
     } else if hovered {
         theme::PANEL_ALT
     } else {
@@ -1083,17 +1081,17 @@ fn draw_scene_cell(
     };
 
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(3), fill);
+    painter.rect_filled(rect, CornerRadius::same(0), fill);
     let border = if copying || current {
         theme::ACCENT
     } else if hovered {
-        Color32::from_rgb(96, 96, 96)
+        theme::MUTED
     } else {
         theme::BORDER
     };
     painter.rect_stroke(
         rect,
-        CornerRadius::same(3),
+        CornerRadius::same(0),
         Stroke::new(if copying || current { 1.5 } else { 1.0 }, border),
         StrokeKind::Inside,
     );
@@ -1111,7 +1109,7 @@ fn draw_scene_cell(
             let inner = rect.shrink(2.0);
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             painter.image(texture_id, inner, uv, Color32::from_white_alpha(210));
-            painter.rect_filled(inner, CornerRadius::same(2), Color32::from_black_alpha(70));
+            painter.rect_filled(inner, CornerRadius::same(0), Color32::from_black_alpha(70));
         }
         grid.request_preview(&scene.id, row, std::time::Duration::from_millis(150));
     }
@@ -1126,14 +1124,14 @@ fn draw_scene_cell(
         rect.left_top() + egui::vec2(6.0, 3.0),
         Align2::LEFT_TOP,
         row_name,
-        FontId::proportional(9.0),
+        FontId::proportional(11.0),
         theme::MUTED,
     );
     painter.text(
         rect.left_bottom() + egui::vec2(6.0, -5.0),
         Align2::LEFT_BOTTOM,
         cell.label(),
-        FontId::proportional(10.0),
+        FontId::proportional(12.0),
         if cell.is_empty() {
             theme::MUTED
         } else {
@@ -1184,16 +1182,12 @@ fn draw_scene_cell(
             rect.right_top() + egui::vec2(-54.0, 4.0),
             egui::vec2(48.0, 14.0),
         );
-        painter.rect_filled(
-            chip_rect,
-            CornerRadius::same(2),
-            Color32::from_rgb(38, 38, 38),
-        );
+        painter.rect_filled(chip_rect, CornerRadius::same(0), theme::PANEL_ALT);
         painter.text(
             chip_rect.center(),
             Align2::CENTER_CENTER,
             label,
-            FontId::monospace(8.5),
+            FontId::monospace(10.5),
             theme::MUTED,
         );
     }
@@ -1203,12 +1197,12 @@ fn draw_scene_cell(
             rect.right_bottom() + egui::vec2(-44.0, -17.0),
             egui::vec2(38.0, 13.0),
         );
-        painter.rect_filled(label, CornerRadius::same(2), theme::ACCENT_DIM);
+        painter.rect_filled(label, CornerRadius::same(0), theme::ACCENT_DIM);
         painter.text(
             label.center(),
             Align2::CENTER_CENTER,
             "COPY",
-            FontId::monospace(8.0),
+            FontId::monospace(10.0),
             theme::ACCENT,
         );
     }

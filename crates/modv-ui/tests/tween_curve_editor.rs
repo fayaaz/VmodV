@@ -45,7 +45,7 @@ fn editor_state() -> UiState {
 
 fn harness(state: UiState) -> Harness<'static, UiState> {
     let view = view();
-    Harness::builder()
+    let harness = Harness::builder()
         .with_size([900.0, 700.0])
         .with_accessibility_check(false)
         .build_ui_state(
@@ -70,7 +70,9 @@ fn harness(state: UiState) -> Harness<'static, UiState> {
                 control.draw(ui, state);
             },
             state,
-        )
+        );
+    modv_ui::theme::apply(&harness.ctx);
+    harness
 }
 
 #[test]
