@@ -12,21 +12,23 @@ Last updated: 2026-11-17.
 | Milestone | Status | Notes |
 | --- | --- | --- |
 | P0 — framework spike | **GO (with one caveat)** | `modv-ui` + real `modv` binary; shared `wgpu` device, egui native-texture preview, output window, RangeControl/Scene-cell probes, kittest golden. Release evidence recorded below; lavapipe reaches 128 fps empty / 57 fps with a default Scene (below the 60 fps content target). |
-| P1 — app shell | **Partial** | winit UI window, output window, menus, status bar, theme, `window-state.json` persistence + monitor clamping, shortcuts, About/Shortcuts/Tempo/Command-palette windows, golden snapshot. Logging, splash, native file dialogs remain. |
+| P1 — app shell | **Partial** | winit UI window, output window, File/Edit/Scene/View/Help menus, status bar, theme, `window-state.json` persistence + monitor clamping, keyboard shortcuts (Ctrl+K/S/Enter, 1–9, F1, F, Escape, Ctrl+drag), About/Shortcuts/Tempo/Command-palette/Scene-timing/row-names/tween-curve/input-link windows, golden snapshot. Undo/redo are disabled and Preferences is a stub; logging, splash and native file dialogs remain. |
 | P2 — engine in-process | **Core done** | The shell owns `Store` + `Compositor` + `MediaHub` directly; the UI reads an `EngineSnapshot` and emits actions. No IPC, no Vuex mirror, no preview ring on this path. Engine-owned PipeWire/cpal audio is live. `modv-engine` headless still uses the socket. |
-| P3 — controls | **Partial** | RangeControl, checkbox, enum, text, colour (RGBA), vec2/3/4, tween, texture picker, event button, prop reset, focused-input link editor. Palette editor, font registry, video transport and the 2D vector pad remain. |
-| P4 — panels | **Partial** | Groups/Modules, Gallery (hover previews), Scenes (performance controls, rename, timing, row names, cell copy), Inspector, Media (cameras/sources/test pattern), Info, Plugins, BPM/tap, status graph/meters, Ctrl+K palette. MIDI/NDI/OSC panels and the full media-manager/ISF watcher remain. |
-| P5 — docking | Not started | `egui_tiles` is the P0 choice (egui 0.37-compatible). Current layout is fixed panels. |
-| P6 — media manager | **Partial** | `MediaHub` is owned by the native shell (cameras/test pattern/source status), user ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Media-manager file dialogs, project profiles and the full media-tree watch remain. |
-| P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits flags. The opt-in Boa plugin host (D5) remains. |
-| P8/P9 — parity/packaging | **Started (P8); native AppImage + .deb** | First `docs/native-parity-map.md`. `make appimage-native` and `make native-deb` build the native installers in Docker (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. Flatpak, the 2.0.0 version bump, switching the nightly release to Rust and deleting Electron remain. |
+| P3 — controls | **Partial** | RangeControl (slider, typed value, reset, E/T badges), checkbox, enum, text, colour (RGBA), vec2/3/4 lane controls, tween control + keyframe curve editor, texture picker, event button, palette swatch preview (read-only), font value (read-only), focused-input link editor. The palette editor, font registry, video transport and the 2D vector pad remain. |
+| P4 — panels | **Partial** | Groups/Modules, Gallery (All/sections/search, hover previews, drag-to-Group, marquee names), Scenes (performance start/stop, in-order/random, min/max/fade, row monitors, row names/timing/copy, per-cell disable), Inspector incl. the focused Input Link editor with Audio/MIDI/Tween/OSC/State/Expression, Media (ordered/remembered/restored cameras, resolution/FPS, test pattern, source status), NDI, OSC, MIDI, Audio, Info, Plugins (deliberately disabled), BPM/tap, status graph/meters and the Ctrl+K palette. Native file/screen media pickers and the media-manager dialogs remain. |
+| P5 — docking | **Done (custom layout)** | Resizable Groups/Inspector/dock/centre sections; every right-panel tab detaches to the strip, a dock column or an in-app floating window; panel sizes, dock width, tab placements and window bounds persist to `<userData>/native-layout.json` (atomic, debounced, clamped). This is the hand-rolled `LayoutState`/`LayoutSettings` model, not `egui_tiles`. |
+| P6 — media manager | **Partial** | `MediaHub` is owned by the native shell: camera panel (ordered/remembered/restored inputs + resolution/FPS), test pattern and source status, with engine `media/start-file`/`start-screen` plumbing. User ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Native file/screen pickers, media-manager file dialogs, project profiles and the full media-tree watch remain. |
+| P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits the four device flags. The opt-in Boa plugin host (D5) remains; the Plugins panel is deliberately disabled until it lands. |
+| P8/P9 — parity/packaging | **Started (P8); native AppImage + .deb + CI** | `docs/native-parity-map.md` refreshed. `make appimage-native` and `make native-deb` build the native installers in Docker (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. Electron remains the default release. Flatpak, the 2.0.0 version bump, switching the nightly release to Rust and deleting Electron remain. |
 
 ## What exists today
 
 - `crates/modv-ui` — egui UI crate: `EngineSnapshot` read models, `UiState`
-  action/command queues, theme, shell, Groups/Gallery/Scenes/Inspector,
-  RangeControl, ColorControl, VecControl, TweenControl, TextureControl and
-  `egui_kittest` smoke tests.
+  action/command queues, theme, shell, resizable/dockable layout, Groups,
+  Gallery (drag sources), the Scenes grid with row monitors, Inspector, Media,
+  Audio, MIDI, NDI, OSC, Info, Plugins, the control set (RangeControl,
+  ColorControl, VecControl, TweenControl + curve editor, TextureControl) and
+  `egui_kittest` coverage.
 - `crates/modv-app` is now a library plus two binaries:
   - `modv-engine` (`src/main.rs`) — unchanged engine/headless/supervisor path.
   - `modv` (`src/bin/modv.rs`) — the native shell (`src/native.rs`).
@@ -50,13 +52,15 @@ Last updated: 2026-11-17.
   crossfades.
 - `window_state.rs` reads/writes the same `<userData>/window-state.json` as
   the Electron app, with atomic writes and the JS normalisation rules.
+- `ui_layout.rs` persists the native panel/tab/window document to
+  `<userData>/native-layout.json`; `media_settings.rs` remembers the ordered
+  camera selection and per-camera modes in `<userData>/native-media.json`.
 - `make native` / `make native-debug` run the native shell with the host
   Wayland/X11 session; `MODV_UI=native make dev` selects it from the usual dev
   command. Electron remains the default (`make dev`).
 
 ## Verification
 
-- `cargo test -p modv-ui`: 25 unit + 3 kittest tests pass.
 - Native debug smoke (`make native-debug ARGS="--frames 120"`): window +
   output window open, 432 registered modules, 62 seeded Scenes, ~41–44 fps in
   a debug build at 960×540 on the reference AMD GPU.
@@ -73,30 +77,36 @@ Last updated: 2026-11-17.
   - Written verdict: **GO** for the framework, with the lavapipe content
     number (57 fps) recorded as the one caveat; the reference GPU is well
     above the 60 fps target.
-- `cargo test -p modv-engine --lib`: **459 passed**.
-- `cargo test -p modv-app --lib`: **422 passed** (serial; GPU-safe), including
-  the MIDI, user-ISF watcher and preset round-trip tests.
-- `cargo test -p modv-ui`: 25 unit + 3 widget smoke + 1 golden snapshot.
-- `make engine-lint` (workspace clippy `-D warnings` + fmt): clean.
-- Full workspace run: 789 passed, 1 failed — `point10::scene_tests::
-  smoke_room_volume_is_structured` (the fire covers the frame). It reproduces
-  on both radv and lavapipe with the same Point10 code as the hybrid baseline
-  (`cf9be174`); it is not introduced by the native shell. Tracked as a known
-  pre-existing GPU-test failure.
+- Earlier verification pass (`08254041`, before the P4/P5 panel expansion):
+  `cargo test -p modv-engine --lib` **459 passed**; `-p modv-app --lib`
+  **422 passed** (serial; GPU-safe), including the MIDI, user-ISF watcher and
+  preset round-trip tests; `modv-ui` 25 unit + 3 widget smoke + 1 golden;
+  `make engine-lint` clean.
+- Current test inventory as of `40fdb8fb` (counted from `#[test]` in the
+  tree, not a fresh full run): `modv-engine` **476**, `modv-app` lib **519**,
+  `modv-ui` **216** unit + kittest/integration, `modv-media` **257**,
+  `modv-renderers` **794**. The committed tree at `f239ad56` has **218** after
+  the concurrent theme commit's two `modv-ui` slider tests.
+- Last recorded full workspace run: **1951 passed** at `6e5cf6be`, before the
+  P4/P5 panel expansion. `.github/workflows/native.yml` now runs clippy/fmt,
+  the workspace suite (with `modv-app` serial) and the native package builds
+  on pushes and PRs; this docs-only refresh did not re-run the full suite.
+- The former full-workspace failure (`789 passed, 1 failed`:
+  `point10::scene_tests::smoke_room_volume_is_structured`) is closed:
+  `9e4a5a40` re-baselined the check on the real curl field.
 
 ## Next slices
 
-1. Finish the P4 panel set: focused-input link editor, Audio/Video + Screen +
-   MIDI/BPM/NDI/OSC panels, command palette/Search, Plugins panel, status
-   graph.
-2. P5 `egui_tiles` docking + layout persistence; port the golden-layout
-   default arrangement.
-3. P6 `MediaHub` ownership in the native app (`camera:`/`video:`/`screen:`
-   texture sources), media watcher and user ISF watch/registration.
-4. P7 Boa plugin host + `midir` MIDI.
-5. P0 evidence: release build on lavapipe and the reference GPU, frame trace
-   proving no readbacks on the live preview, RSS comparison, signed go/no-go.
-6. P8/P9 after the user signs off; no Electron deletion before then.
+1. P3 residuals: palette editor, font registry, video transport and the 2D
+   vector pad.
+2. P6 residuals: native file/screen pickers, media-manager file dialogs,
+   project profiles and the full media-tree watch.
+3. P7: opt-in Boa plugin host (D5) and enabling the Plugins panel.
+4. P8: native e2e/perf/soak harness, multi-output windows, and manual
+   GPU/NDI/camera checks (no NDI hardware verification is recorded yet).
+5. P9: Flatpak, the 2.0.0 version bump, switching the nightly release to Rust
+   and deleting Electron only after sign-off.
+6. P1 residuals: structured daily logger, splash and native file dialogs.
 
 ## Review findings folded in
 
@@ -136,26 +146,49 @@ Last updated: 2026-11-17.
 - **Native audio** (`9d3c1fc4`): engine-owned PipeWire monitor → input fallback,
   live on the host (`audio source pipewire owns capture at 48000 Hz`).
 
+## P4/P5/P9 additions
+
+- **Gallery/Groups** (`3bd065d2`, `73feb02a`): tiles are drag sources into any
+  Group block; the Gallery is an all-module multi-row grid and long names
+  marquee on hover.
+- **Scenes grid** (`56745632`, `4c3af40f`, `578b802a`, `6c5f3687`): per-row
+  live layer monitors, in-order/random performance order, native-only per-cell
+  disable flags and named-row cell mapping.
+- **Media/tween/rate** (`b6ae28a0`, `c211457e`, `006c9704`, `e8f02b08`,
+  `4e57f81b`): ordered/remembered/restored cameras, advertised resolution/FPS
+  pickers, the keyframe curve editor, and the live capture rate in the Audio
+  panel, status bar, Tempo window and Info panel.
+- **NDI/OSC** (`dbc2aa76`): engine-backed tabs for NDI output/discovery/
+  receivers and OSC listeners/addresses. Covered by kittest action/format
+  tests only; no NDI network run is recorded.
+- **Layout** (`f359e459`, `d2951184`): resizable sections, in-app floating
+  windows and detachable/dockable tabs persisted in `native-layout.json`; no
+  `egui_tiles`.
+- **Packaging** (`da724d45`, `a331368c`): native AppImage and `.deb`,
+  `native-deb-check`, and the `native.yml` lint/test/package workflow.
+
 ## Known issues / not yet done
 
-- **Point10 volume GPU test**: `smoke_room_volume_is_structured` fails on this
-  host on both radv and lavapipe; the scene code is unchanged from the hybrid
-  baseline. Not a native-shell regression; left for a rendering pass.
-- **P5 docking** is not started; the shell uses fixed panels.
-- **P6** has a user-ISF watcher/hot reload, MediaHub camera panel and preset
-  load/save; it still lacks media-manager file dialogs, project profile
-  creation and a full media-tree watcher.
+- **P1** still lacks a structured daily logger (`Open logs` is a stub), a splash
+  screen and native file dialogs.
+- **P3** palette and font values are read-only previews, video textures are
+  typed paths without transport, and vec controls have no 2D pad.
+- **P6** has user-ISF watch/hot reload, the camera panel and preset load/save;
+  it still lacks native file/screen pickers, media-manager file dialogs,
+  project profile creation and a full media-tree watcher.
 - **P7** has expressions, native audio and a `midir` client with a MIDI panel;
-  the opt-in Boa plugin host (D5) is still missing.
+  the opt-in Boa plugin host (D5) is still missing and the Plugins panel stays
+  disabled.
+- **P8** has no native e2e/perf/soak harness yet; native coverage is unit +
+  kittest plus the headless CLI. No NDI/GPU hardware verification is recorded
+  for the new panels.
+- Native output windows are single (`output-0`); the engine `windows/*`
+  registry supports more, and the window-state map is ready for more keys.
 - **P9** has a native AppImage (`make appimage-native`), Debian package
   (`make native-deb`, checked by `make native-deb-check`) and a Rust-only CI
   workflow (`.github/workflows/native.yml`). Flatpak, the 2.0.0 native version
   bump, switching `nightly.yml` to Rust and the Electron/Node deletion are
   still pending.
-- Native output windows are single (`output-0`); the engine `windows/*`
-  registry supports more, and the window-state map is ready for more keys.
-- There is no structured daily logger in the native shell yet; engine/app
-  lines still go to stderr.
 
 ## Constraints honoured
 
