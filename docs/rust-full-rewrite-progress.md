@@ -17,9 +17,9 @@ Last updated: 2026-11-17.
 | P3 — controls | **Partial** | RangeControl, checkbox, enum, text, colour (RGBA), vec2/3/4, tween, texture picker, event button, prop reset, focused-input link editor. Palette editor, font registry, video transport and the 2D vector pad remain. |
 | P4 — panels | **Partial** | Groups/Modules, Gallery (hover previews), Scenes (performance controls, rename, timing, row names, cell copy), Inspector, Media (cameras/sources/test pattern), Info, Plugins, BPM/tap, status graph/meters, Ctrl+K palette. MIDI/NDI/OSC panels and the full media-manager/ISF watcher remain. |
 | P5 — docking | Not started | `egui_tiles` is the P0 choice (egui 0.37-compatible). Current layout is fixed panels. |
-| P6 — media manager | Not started | `MediaHub` is not yet owned by the native app; ISF watch/registration and the project media watcher remain. |
-| P7 — MIDI/plugins | Not started | Expressions already run in-engine; the Boa plugin host and `midir` client remain. |
-| P8/P9 — parity/packaging | Not started | No Electron deletion in this run (user decision). |
+| P6 — media manager | **Partial** | `MediaHub` is owned by the native shell (cameras/test pattern/source status), user ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Media-manager file dialogs, project profiles and the full media-tree watch remain. |
+| P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits flags. The opt-in Boa plugin host (D5) remains. |
+| P8/P9 — parity/packaging | **Started (P8)** | First `docs/native-parity-map.md`; no Electron deletion or native packaging in this run (user decision). |
 
 ## What exists today
 
@@ -104,15 +104,32 @@ Last updated: 2026-11-17.
   compiled-handle call path; the structural caps and allowlist are the bound,
   documented in the module.
 
+## P6/P7 additions
+
+- **User ISF hot reload** (`19a71602`): `notify` watches `<userData>/media/isf`
+  and each project `isf/` folder, coalesces 500 ms bursts, rebuilds
+  `ModuleRegistry` and swaps it into the compositor. Verified live: dropping a
+  second `.fs` raised the registered count 433 → 434 without restart.
+- **Preset round-trip** (`0d83d639`): `--preset <path>` loads a six-key preset
+  at startup and File → Save preset writes it back; unit test restores into a
+  fresh Store.
+- **MIDI** (`539854bb`, `4522f73f`): `midir` hot-plug at 1 Hz, Note On toggling,
+  CC normalisation, `ccLatch`/`noteOnLatch`, 24-PPQN clock→BPM, and the same
+  `midi/*` actions the engine stores. MIDI tab exposes the four flags.
+- **Native audio** (`9d3c1fc4`): engine-owned PipeWire monitor → input fallback,
+  live on the host (`audio source pipewire owns capture at 48000 Hz`).
+
 ## Known issues / not yet done
 
 - **Point10 volume GPU test**: `smoke_room_volume_is_structured` fails on this
   host on both radv and lavapipe; the scene code is unchanged from the hybrid
   baseline. Not a native-shell regression; left for a rendering pass.
 - **P5 docking** is not started; the shell uses fixed panels.
-- **P6** has preset load/save (`--preset`) but no media watcher, file dialogs
-  or third-party ISF watch/registration.
-- **P7** has expressions + native audio but no Boa plugin host or `midir`.
+- **P6** has a user-ISF watcher/hot reload, MediaHub camera panel and preset
+  load/save; it still lacks media-manager file dialogs, project profile
+  creation and a full media-tree watcher.
+- **P7** has expressions, native audio and a `midir` client with a MIDI panel;
+  the opt-in Boa plugin host (D5) is still missing.
 - **P9** packaging/CI and the Electron deletion are deliberately out of scope
   for this run.
 - Native output windows are single (`output-0`); the engine `windows/*`

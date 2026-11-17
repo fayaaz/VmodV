@@ -139,7 +139,7 @@ selectable until parity is signed off.
 - `modv --headless` / `modv --screenshot` — the same engine-only paths as `modv-engine`; `--state` and `--isf-dir` are shared.
 - The native shell owns `Store` + `Compositor` in-process (no IPC/Vuex mirror), registers the compositor's main texture with `egui-wgpu` for the live preview, and renders Gallery/Scene hover previews through the engine's isolated preview caches. It reuses `<userData>/window-state.json` (atomic writes) and keeps preset/Scene/playlist formats unchanged.
 - `MODV_USER_DATA` overrides the userData directory for diagnostics. `make test-unit`/`test-e2e` still target the legacy tree; the native tests are `make engine-test ARGS="-p modv-ui"` and the `modv-app` unit tests.
-- Not ported yet: dockable layout persistence, the media manager/ISF watcher, MIDI, the opt-in Boa plugin host, NDI/OSC panels and packaging. Do not delete `src/`, `tests/` or the Node config while those remain.
+- Not ported yet: dockable layout persistence, media-manager file dialogs/project profiles, the opt-in Boa plugin host, NDI/OSC panels and native packaging. User ISF hot reload, native MIDI and preset load/save are already in the shell. Do not delete `src/`, `tests/` or the Node config while the rest remains.
 
 ## Architecture (three execution contexts)
 
