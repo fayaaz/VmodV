@@ -189,17 +189,97 @@ pub fn initial_plan(
     plan
 }
 
-/// Convert the cpal device list into the Audio panel's read model.
-pub fn device_views(devices: &[InputDeviceInfo]) -> Vec<AudioDeviceView> {
-    devices
+/// ALSA/cpal backend probes that expose a capture config but are not real
+/// inputs. They mostly exist for mixing/conversion tests; listing them buried
+/// the actual microphone/interface choices under dozens of aliases.
+const BACKEND_PROBE_IDS: &[&str] = &[
+    "alsa:null",
+    "alsa:jack",
+    "alsa:oss",
+    "alsa:lavrate",
+    "alsa:samplerate",
+    "alsa:speexrate",
+    "alsa:speex",
+    "alsa:upmix",
+    "alsa:vdownmix",
+];
+
+/// Name markers for the same probes (some hosts expose them under custom ids).
+const BACKEND_PROBE_NAME_MARKERS: &[&str] = &[
+    "discard all samples",
+    "jack audio connection kit",
+    "open sound system",
+    "rate converter plugin",
+    "/dev/dsp",
+];
+
+/// Whether an enumerated cpal input is a choice worth showing in the Audio
+/// panel.
+///
+/// The host list typically contains ALSA plugins (`null`, `jack`, `oss`, the
+/// rate-converter/speex helpers) and USB-stream descriptors that have no
+/// capture config at all. Those are filtered; real hardware and the useful
+/// virtual servers (PipeWire/PulseAudio) stay. The rules are data-driven so a
+/// new backend probe is one const entry, not a new branch.
+pub fn is_usable_input_device(device: &InputDeviceInfo) -> bool {
+    let id = device.id.trim();
+    let name = device.name.trim();
+
+    if id.is_empty() || name.is_empty() {
+        return false;
+    }
+    // A zero-channel device has no capture configuration; cpal cannot open a
+    // stream for it, so it is not a usable picker row.
+    if device.channels == 0 {
+        return false;
+    }
+
+    let lowered_id = id.to_ascii_lowercase();
+    let lowered_name = name.to_ascii_lowercase();
+
+    if BACKEND_PROBE_IDS.iter().any(|probe| lowered_id == *probe) {
+        return false;
+    }
+
+    !BACKEND_PROBE_NAME_MARKERS
         .iter()
-        .map(|device| AudioDeviceView {
+        .any(|marker| lowered_name.contains(marker))
+}
+
+/// Convert the cpal device list into the Audio panel's read model.
+///
+/// Backend probes are dropped ([`is_usable_input_device`]) and duplicate ids
+/// or names are collapsed: ALSA exposes the same physical device through
+/// `hw:`/`plughw:`/`sysdefault:`/`dsnoop:` aliases and the picker only needs
+/// the first usable row per name. The first occurrence in enumeration order
+/// wins, so hardware is preferred over later aliases.
+pub fn device_views(devices: &[InputDeviceInfo]) -> Vec<AudioDeviceView> {
+    let mut views = Vec::new();
+    let mut seen_ids: Vec<String> = Vec::new();
+    let mut seen_names: Vec<String> = Vec::new();
+
+    for device in devices {
+        if !is_usable_input_device(device) {
+            continue;
+        }
+
+        let id_key = device.id.trim().to_ascii_lowercase();
+        let name_key = device.name.trim().to_ascii_lowercase();
+        if seen_ids.contains(&id_key) || seen_names.contains(&name_key) {
+            continue;
+        }
+
+        seen_ids.push(id_key);
+        seen_names.push(name_key);
+        views.push(AudioDeviceView {
             id: device.id.clone(),
             name: device.name.clone(),
             channels: device.channels,
             default_sample_rate: device.default_sample_rate,
-        })
-        .collect()
+        });
+    }
+
+    views
 }
 
 /// What to do after opening the requested replacement feed.
@@ -245,6 +325,13 @@ mod tests {
             channels: 2,
             sample_rates: vec![44_100, 48_000],
             default_sample_rate: 48_000,
+        }
+    }
+
+    fn device_with_channels(name: &str, id: &str, channels: u16) -> InputDeviceInfo {
+        InputDeviceInfo {
+            channels,
+            ..device(name, id)
         }
     }
 
@@ -425,6 +512,113 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn backend_probes_are_not_usable_inputs() {
+        for (name, id) in [
+            (
+                "Discard all samples (playback) or generate zero samples (capture)",
+                "alsa:null",
+            ),
+            ("JACK Audio Connection Kit", "alsa:jack"),
+            ("Open Sound System", "alsa:oss"),
+            (
+                "Rate Converter Plugin Using Libav/FFmpeg Library",
+                "alsa:lavrate",
+            ),
+            ("Plugin using Speex DSP", "alsa:speex"),
+        ] {
+            assert!(
+                !is_usable_input_device(&device(name, id)),
+                "{id} is an ALSA backend probe, not a microphone"
+            );
+        }
+
+        assert!(
+            !is_usable_input_device(&device_with_channels(
+                "ADAM Audio D3V",
+                "alsa:usbstream:CARD=D3V",
+                0
+            )),
+            "a zero-channel stream descriptor has no capture config"
+        );
+        assert!(
+            !is_usable_input_device(&device("Open Sound System /dev/dsp", "custom:dsp-probe")),
+            "the /dev/dsp marker catches probes under a non-ALSA id"
+        );
+
+        // Real hardware and the useful virtual servers survive.
+        for (name, id) in [
+            ("USB Audio CODEC, USB Audio", "alsa:hw:CARD=CODEC,DEV=0"),
+            (
+                "HD-Audio Generic, ALC1220 Analog",
+                "alsa:hw:CARD=Generic_1,DEV=0",
+            ),
+            ("PipeWire Sound Server", "alsa:pipewire"),
+            ("PulseAudio Sound Server", "alsa:pulse"),
+        ] {
+            assert!(
+                is_usable_input_device(&device(name, id)),
+                "{id} is a real input choice"
+            );
+        }
+    }
+
+    #[test]
+    fn device_views_drop_probes_and_collapse_duplicate_ids_and_names() {
+        let views = device_views(&[
+            device(
+                "Discard all samples (playback) or generate zero samples (capture)",
+                "alsa:null",
+            ),
+            device("JACK Audio Connection Kit", "alsa:jack"),
+            device("PipeWire Sound Server", "alsa:pipewire"),
+            device("PulseAudio Sound Server", "alsa:pulse"),
+            device("USB Audio CODEC, USB Audio", "alsa:hw:CARD=CODEC,DEV=0"),
+            device("USB Audio CODEC, USB Audio", "alsa:plughw:CARD=CODEC,DEV=0"),
+            device("Built-in Audio", "alsa:builtin"),
+            device("Built-in Audio", "alsa:builtin-alias"),
+            device_with_channels("HD-Audio Generic", "alsa:usbstream:CARD=Generic", 0),
+        ]);
+
+        let ids = views
+            .iter()
+            .map(|device| device.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                "alsa:pipewire",
+                "alsa:pulse",
+                "alsa:hw:CARD=CODEC,DEV=0",
+                "alsa:builtin",
+            ],
+            "only meaningful, de-duplicated inputs remain in enumeration order"
+        );
+    }
+
+    #[test]
+    fn host_device_filter_keeps_usable_inputs_and_never_invents_one() {
+        let devices = modv_media::audio::capture::input_devices();
+        let views = device_views(&devices);
+
+        assert!(views.len() <= devices.len());
+        for view in &views {
+            println!("filtered picker keeps: {} [{}]", view.name, view.id);
+            assert!(
+                devices.iter().any(|device| device.id == view.id),
+                "{} must come from the host enumeration",
+                view.id
+            );
+            assert!(
+                devices
+                    .iter()
+                    .any(|device| { device.id == view.id && is_usable_input_device(device) }),
+                "{} must pass the usability rule",
+                view.id
+            );
+        }
     }
 
     #[test]

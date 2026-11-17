@@ -68,6 +68,17 @@ pub struct AudioDeviceView {
     pub default_sample_rate: u32,
 }
 
+impl AudioDeviceView {
+    /// The compact secondary line under a picker row (`2 ch · 48 kHz`).
+    pub fn detail(&self) -> String {
+        format!(
+            "{} ch · {}",
+            self.channels,
+            sample_rate_label(self.default_sample_rate)
+        )
+    }
+}
+
 /// The native shell's live audio capture selection.
 ///
 /// `source` mirrors `AudioSourceSelection::as_str` (`pipewire` or `input`).
@@ -112,6 +123,62 @@ impl AudioSelectionView {
                 || selected.eq_ignore_ascii_case(&device.name))
     }
 
+    /// The selected input device, when it is still present in the list.
+    pub fn active_device<'a>(&self, devices: &'a [AudioDeviceView]) -> Option<&'a AudioDeviceView> {
+        if self.source != "input" {
+            return None;
+        }
+        devices.iter().find(|device| self.matches_device(device))
+    }
+
+    /// The friendly name the Audio panel's "in use" banner shows.
+    ///
+    /// Device rows resolve to their human-readable name; the system sources
+    /// get an explicit label instead of exposing a cpal id.
+    pub fn active_label(&self, devices: &[AudioDeviceView]) -> String {
+        if let Some(device) = self.active_device(devices) {
+            return device.name.clone();
+        }
+        match (self.source.as_str(), self.device.as_deref()) {
+            ("pipewire", _) => "System audio".to_string(),
+            ("input", None) => "System default input".to_string(),
+            ("input", Some(_)) => "Input device".to_string(),
+            (source, _) => source.to_string(),
+        }
+    }
+
+    /// The one-line explanation under the banner's friendly name.
+    pub fn active_subtitle(&self, devices: &[AudioDeviceView]) -> String {
+        if self.active_device(devices).is_some() {
+            return "Microphone or audio interface".to_string();
+        }
+        match (self.source.as_str(), self.device.as_deref()) {
+            ("pipewire", _) => "Captures what your speakers play".to_string(),
+            ("input", None) => "Follows the system's default device".to_string(),
+            ("input", Some(_)) => "The selected device is not currently connected".to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// The banner's technical line: channel count, sample rate and the stable
+    /// source id (the id stays out of the primary label).
+    pub fn active_detail(&self, devices: &[AudioDeviceView]) -> String {
+        if let Some(device) = self.active_device(devices) {
+            return format!(
+                "{} ch · {} · {}",
+                device.channels,
+                sample_rate_label(device.default_sample_rate),
+                device.id
+            );
+        }
+        match (self.source.as_str(), self.device.as_deref()) {
+            ("pipewire", _) => "PipeWire monitor · pipewire".to_string(),
+            ("input", None) => "System default · input".to_string(),
+            ("input", Some(device)) => format!("input · {device}"),
+            (source, _) => source.to_string(),
+        }
+    }
+
     /// A human-readable label for the active source (device names are
     /// resolved by the panel from [`EngineSnapshot::audio_devices`]).
     pub fn describe(&self) -> String {
@@ -121,6 +188,22 @@ impl AudioSelectionView {
             ("input", None) => "Default input (system default)".to_string(),
             (source, _) => source.to_string(),
         }
+    }
+}
+
+/// `48000` → `48 kHz`, `44100` → `44.1 kHz`, `0` → `unknown rate`.
+fn sample_rate_label(hz: u32) -> String {
+    if hz == 0 {
+        return "unknown rate".to_string();
+    }
+    if hz < 1_000 {
+        return format!("{hz} Hz");
+    }
+    let khz = f64::from(hz) / 1_000.0;
+    if khz.fract().abs() < f64::EPSILON {
+        format!("{khz:.0} kHz")
+    } else {
+        format!("{khz:.1} kHz")
     }
 }
 
@@ -497,5 +580,87 @@ mod tests {
             !selection.matches_device(&usb),
             "a device is only meaningful for the input source"
         );
+    }
+
+    #[test]
+    fn the_active_banner_names_the_system_sources_without_exposing_ids() {
+        let devices = [device("alsa:usb", "USB Microphone")];
+        let pipewire = AudioSelectionView::default();
+
+        assert_eq!(pipewire.active_label(&devices), "System audio");
+        assert_eq!(
+            pipewire.active_subtitle(&devices),
+            "Captures what your speakers play"
+        );
+        assert_eq!(
+            pipewire.active_detail(&devices),
+            "PipeWire monitor · pipewire"
+        );
+        assert!(pipewire.active_device(&devices).is_none());
+
+        let default_input = AudioSelectionView {
+            source: "input".to_string(),
+            device: None,
+            error: None,
+        };
+        assert_eq!(default_input.active_label(&devices), "System default input");
+        assert_eq!(
+            default_input.active_subtitle(&devices),
+            "Follows the system's default device"
+        );
+        assert_eq!(
+            default_input.active_detail(&devices),
+            "System default · input"
+        );
+    }
+
+    #[test]
+    fn the_active_banner_resolves_the_friendly_device_name_and_details() {
+        let usb = device("alsa:usb", "USB Microphone");
+        let devices = [usb.clone()];
+        let selection = AudioSelectionView {
+            source: "input".to_string(),
+            device: Some("ALSA:USB".to_string()),
+            error: None,
+        };
+
+        assert_eq!(selection.active_device(&devices), Some(&usb));
+        assert_eq!(selection.active_label(&devices), "USB Microphone");
+        assert_eq!(
+            selection.active_subtitle(&devices),
+            "Microphone or audio interface"
+        );
+        assert_eq!(
+            selection.active_detail(&devices),
+            "2 ch · 48 kHz · alsa:usb"
+        );
+
+        let mut fractional = usb.clone();
+        fractional.default_sample_rate = 44_100;
+        assert_eq!(
+            AudioSelectionView {
+                source: "input".to_string(),
+                device: Some(fractional.id.clone()),
+                error: None,
+            }
+            .active_detail(&[fractional]),
+            "2 ch · 44.1 kHz · alsa:usb"
+        );
+    }
+
+    #[test]
+    fn an_unplugged_device_still_gets_an_honest_banner() {
+        let selection = AudioSelectionView {
+            source: "input".to_string(),
+            device: Some("alsa:gone".to_string()),
+            error: None,
+        };
+
+        assert_eq!(selection.active_label(&[]), "Input device");
+        assert_eq!(
+            selection.active_subtitle(&[]),
+            "The selected device is not currently connected"
+        );
+        assert_eq!(selection.active_detail(&[]), "input · alsa:gone");
     }
 }

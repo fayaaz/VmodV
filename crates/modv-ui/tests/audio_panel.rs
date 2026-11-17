@@ -57,12 +57,46 @@ fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
         );
     harness.run();
 
-    harness.get_by_label("System audio (PipeWire monitor)");
-    harness.get_by_label("Default input (system default)");
+    // The banner names the active source and its state.
+    harness.get_by_label("IN USE");
+    harness.get_by_label("System audio");
+    harness.get_by_label("Captures what your speakers play");
+    harness.get_by_label("PipeWire monitor · pipewire");
+
+    // The two source groups, with the default input sorted first.
+    harness.get_by_label("OUTPUT MONITOR");
+    harness.get_by_label("INPUT DEVICES");
+    harness.get_by_label("2 inputs");
+    harness.get_by_label("System default input");
     harness.get_by_label("USB Microphone");
     harness.get_by_label("Built-in Audio");
-    harness.get_by_label("2 ch / 48000 Hz");
+    harness.get_by_label("2 ch · 48 kHz");
     harness.get_by_label("audio: engine");
+}
+
+#[test]
+fn the_active_banner_resolves_the_selected_device() {
+    let mut snapshot = demo_snapshot();
+    snapshot.audio_selection = AudioSelectionView {
+        source: "input".to_string(),
+        device: Some("alsa:usb".to_string()),
+        error: None,
+    };
+    let mut state = UiState::new();
+    state.side_panel_tab = SidePanelTab::Audio;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("2 ch · 48 kHz · alsa:usb");
+    harness.get_by_label("Microphone or audio interface");
 }
 
 #[test]

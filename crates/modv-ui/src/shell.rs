@@ -1169,29 +1169,8 @@ fn plugins_panel(ui: &mut egui::Ui) {
 
 fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     let selection = &snapshot.audio_selection;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("AUDIO INPUT").strong().size(10.0));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let (label, color) = if snapshot.health.audio_active {
-                ("engine live", theme::OK)
-            } else {
-                ("silent", theme::MUTED)
-            };
-            ui.label(
-                egui::RichText::new(label)
-                    .monospace()
-                    .size(9.0)
-                    .color(color),
-            );
-        });
-    });
-    ui.label(
-        egui::RichText::new(
-            "Engine-owned capture. A new choice applies live and is remembered for the next launch.",
-        )
-        .size(9.0)
-        .color(theme::MUTED),
-    );
+    audio_active_banner(ui, snapshot);
+
     if let Some(error) = &selection.error {
         ui.add_space(4.0);
         ui.colored_label(theme::DANGER, error);
@@ -1201,34 +1180,59 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                 .color(theme::MUTED),
         );
     }
+
     ui.separator();
-    ui.label(egui::RichText::new("SOURCE").strong().size(9.0));
-    if ui
-        .selectable_label(
-            selection.is_pipewire(),
-            egui::RichText::new("System audio (PipeWire monitor)").size(11.0),
+    ui.label(egui::RichText::new("OUTPUT MONITOR").strong().size(9.0));
+    ui.label(
+        egui::RichText::new(
+            "Capture what this machine is playing (PipeWire system audio loopback).",
         )
-        .clicked()
-    {
+        .size(9.0)
+        .color(theme::MUTED),
+    );
+    if audio_choice_row(
+        ui,
+        selection.is_pipewire(),
+        "System audio (PipeWire monitor)",
+        "PipeWire monitor · captures everything your speakers play",
+        "System audio loopback (pipewire)",
+    ) {
         state.queue(UiCommand::SetAudioSource {
             source: "pipewire".to_string(),
             device: None,
         });
     }
-    ui.label(
-        egui::RichText::new("Default output monitor (Linux PipeWire loopback).")
-            .size(9.0)
-            .color(theme::MUTED),
-    );
+
     ui.separator();
-    ui.label(egui::RichText::new("INPUT DEVICES").strong().size(9.0));
-    if ui
-        .selectable_label(
-            selection.is_default_input(),
-            egui::RichText::new("Default input (system default)").size(11.0),
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("INPUT DEVICES").strong().size(9.0));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let count = snapshot.audio_devices.len();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{count} input{}",
+                    if count == 1 { "" } else { "s" }
+                ))
+                .monospace()
+                .size(9.0)
+                .color(theme::MUTED),
+            );
+        });
+    });
+    ui.label(
+        egui::RichText::new(
+            "Microphones and audio interfaces. The system default follows hot-plug.",
         )
-        .clicked()
-    {
+        .size(9.0)
+        .color(theme::MUTED),
+    );
+    if audio_choice_row(
+        ui,
+        selection.is_default_input(),
+        "System default input",
+        "Chosen by the system · follows connected devices",
+        "Let the system choose the default input (--audio-source input)",
+    ) {
         state.queue(UiCommand::SetAudioSource {
             source: "input".to_string(),
             device: None,
@@ -1236,57 +1240,116 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
     }
     if snapshot.audio_devices.is_empty() {
         ui.label(
-            egui::RichText::new("No audio input devices found; connect one and refresh.")
+            egui::RichText::new("No usable input devices found. Connect one and Refresh.")
                 .size(10.0)
                 .color(theme::MUTED),
         );
     }
     for device in &snapshot.audio_devices {
-        if ui
-            .selectable_label(
-                selection.matches_device(device),
-                egui::RichText::new(&device.name).size(11.0),
-            )
-            .clicked()
-        {
+        if audio_choice_row(
+            ui,
+            selection.matches_device(device),
+            &device.name,
+            &device.detail(),
+            &format!("Device id: {}\n{}", device.id, device.name),
+        ) {
             state.queue(UiCommand::SetAudioSource {
                 source: "input".to_string(),
                 device: Some(device.id.clone()),
             });
         }
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} ch / {} Hz",
-                    device.channels, device.default_sample_rate
-                ))
-                .monospace()
-                .size(8.5)
+    }
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Refresh devices").clicked() {
+            state.queue(UiCommand::RefreshAudioDevices);
+        }
+        ui.label(
+            egui::RichText::new("Re-scans ALSA/PipeWire inputs")
+                .size(9.0)
                 .color(theme::MUTED),
+        );
+    });
+}
+
+/// The prominent "in use" banner above the picker.
+///
+/// The green dot means the engine is actually receiving frames
+/// (`health.audio_active`); a selected-but-silent source stays visible so the
+/// panel never hides what capture is configured to use.
+fn audio_active_banner(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
+    let selection = &snapshot.audio_selection;
+    let live = snapshot.health.audio_active;
+    let colour = if live { theme::OK } else { theme::MUTED };
+    let state = if live { "IN USE" } else { "SELECTED · SILENT" };
+
+    egui::Frame::NONE
+        .fill(theme::PANEL_ALT)
+        .stroke(Stroke::new(
+            1.0,
+            if live { theme::OK } else { theme::BORDER },
+        ))
+        .corner_radius(CornerRadius::same(3))
+        .inner_margin(Margin::symmetric(8, 7))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                ui.painter().circle_filled(rect.center(), 4.0, colour);
+                ui.label(
+                    egui::RichText::new(state)
+                        .strong()
+                        .monospace()
+                        .size(9.0)
+                        .color(colour),
+                );
+                ui.label(
+                    egui::RichText::new(selection.active_label(&snapshot.audio_devices))
+                        .strong()
+                        .size(13.0),
+                );
+            });
+            ui.label(
+                egui::RichText::new(selection.active_subtitle(&snapshot.audio_devices)).size(10.0),
             );
             ui.label(
-                egui::RichText::new(&device.id)
+                egui::RichText::new(selection.active_detail(&snapshot.audio_devices))
                     .monospace()
                     .size(8.5)
                     .color(theme::MUTED),
             );
         });
-    }
-    ui.separator();
-    if ui.button("Refresh devices").clicked() {
-        state.queue(UiCommand::RefreshAudioDevices);
-    }
-    let active = snapshot
-        .audio_devices
-        .iter()
-        .find(|device| selection.matches_device(device))
-        .map(|device| device.name.clone())
-        .unwrap_or_else(|| selection.describe());
-    ui.label(
-        egui::RichText::new(format!("Active: {active}"))
-            .size(9.0)
-            .color(theme::MUTED),
-    );
+}
+
+/// One radio row with a selected background and a hover-only device id.
+/// Returns whether it was clicked.
+fn audio_choice_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    title: &str,
+    detail: &str,
+    hover: &str,
+) -> bool {
+    let mut clicked = false;
+    egui::Frame::NONE
+        .fill(if selected {
+            theme::ACCENT_DIM
+        } else {
+            Color32::TRANSPARENT
+        })
+        .corner_radius(CornerRadius::same(2))
+        .inner_margin(Margin::symmetric(4, 3))
+        .show(ui, |ui| {
+            let response = ui.radio(selected, egui::RichText::new(title).size(11.0));
+            clicked = response.clicked();
+            response.on_hover_text(hover);
+            if !detail.is_empty() {
+                ui.label(egui::RichText::new(detail).size(8.5).color(theme::MUTED))
+                    .on_hover_text(hover);
+            }
+        });
+    clicked
 }
 
 fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
