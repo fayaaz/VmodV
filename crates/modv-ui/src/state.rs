@@ -153,6 +153,8 @@ pub enum SidePanelTab {
     #[default]
     Inspector,
     Media,
+    Info,
+    Plugins,
 }
 
 /// The focused-input link editor's draft values.

@@ -843,15 +843,44 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                 {
                     state.side_panel_tab = SidePanelTab::Media;
                 }
+                if ui
+                    .selectable_label(
+                        state.side_panel_tab == SidePanelTab::Info,
+                        egui::RichText::new("INFO").strong().size(10.0),
+                    )
+                    .clicked()
+                {
+                    state.side_panel_tab = SidePanelTab::Info;
+                }
+                if ui
+                    .selectable_label(
+                        state.side_panel_tab == SidePanelTab::Plugins,
+                        egui::RichText::new("PLUGINS").strong().size(10.0),
+                    )
+                    .clicked()
+                {
+                    state.side_panel_tab = SidePanelTab::Plugins;
+                }
             });
             ui.separator();
 
             egui::ScrollArea::vertical()
                 .id_salt("inspector-scroll")
                 .show(ui, |ui| {
-                    if state.side_panel_tab == SidePanelTab::Media {
-                        media_panel(ui, snapshot, state);
-                        return;
+                    match state.side_panel_tab {
+                        SidePanelTab::Media => {
+                            media_panel(ui, snapshot, state);
+                            return;
+                        }
+                        SidePanelTab::Info => {
+                            info_panel(ui, snapshot);
+                            return;
+                        }
+                        SidePanelTab::Plugins => {
+                            plugins_panel(ui);
+                            return;
+                        }
+                        SidePanelTab::Inspector => {}
                     }
                     let Some(module_id) = state.selected_module.clone() else {
                         inspector_empty(ui, snapshot, state);
@@ -925,6 +954,92 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                     }
                 });
         });
+}
+
+fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
+    ui.label(egui::RichText::new("modV Native").strong().size(14.0).color(theme::ACCENT));
+    ui.label(format!("Rust {}", env!("CARGO_PKG_VERSION")));
+    ui.separator();
+    egui::Grid::new("info-grid")
+        .num_columns(2)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("Adapter").color(theme::MUTED));
+            ui.label(&snapshot.health.adapter);
+            ui.end_row();
+            ui.label(egui::RichText::new("Backend").color(theme::MUTED));
+            ui.label(&snapshot.health.backend);
+            ui.end_row();
+            ui.label(egui::RichText::new("Frame").color(theme::MUTED));
+            ui.label(format!(
+                "{:.1} ms  /  {:.1} fps",
+                snapshot.frame_ms, snapshot.fps
+            ));
+            ui.end_row();
+            ui.label(egui::RichText::new("Output").color(theme::MUTED));
+            ui.label(format!(
+                "{}x{}  ({} frames)",
+                snapshot.resolution[0], snapshot.resolution[1], snapshot.health.frames_presented
+            ));
+            ui.end_row();
+            ui.label(egui::RichText::new("Audio").color(theme::MUTED));
+            ui.label(if snapshot.health.audio_active {
+                "engine capture"
+            } else {
+                "silent"
+            });
+            ui.end_row();
+            ui.label(egui::RichText::new("Tempo").color(theme::MUTED));
+            ui.label(format!("{:.0} BPM", snapshot.audio.bpm));
+            ui.end_row();
+            ui.label(egui::RichText::new("Scenes").color(theme::MUTED));
+            ui.label(format!(
+                "{} saved  /  {} rows",
+                snapshot.scenes.len(),
+                snapshot.scene_rows.len()
+            ));
+            ui.end_row();
+        });
+    ui.separator();
+    if let Some(error) = &snapshot.health.last_error {
+        ui.colored_label(theme::DANGER, error);
+    } else {
+        ui.label(
+            egui::RichText::new("No engine errors this session.")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    }
+    ui.label(
+        egui::RichText::new(
+            "Presets, Scenes, playlists and the media directory stay in the shared VmodV userData tree.",
+        )
+        .size(9.0)
+        .color(theme::MUTED),
+    );
+}
+
+fn plugins_panel(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new("JavaScript plugins").strong().size(11.0));
+    ui.label(
+        egui::RichText::new(
+            "D5 keeps plugins, but the native shell has not landed the sandboxed Boa host yet. The switch is deliberately disabled until the consent flow and restricted host API exist; the legacy Electron build remains available for grab-canvas.",
+        )
+        .size(10.0)
+        .color(theme::MUTED),
+    );
+    ui.add_enabled(false, egui::Checkbox::new(&mut false, "Enable JavaScript plugins (advanced)"));
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("Bundled plugins").strong().size(10.0));
+    ui.add_enabled(false, egui::Checkbox::new(&mut false, "grab-canvas  (not ported)"));
+    ui.separator();
+    ui.label(
+        egui::RichText::new(
+            "Expressions already run in-engine through Boa; this panel is only about the opt-in plugin host.",
+        )
+        .size(9.0)
+        .color(theme::MUTED),
+    );
 }
 
 fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
