@@ -567,6 +567,12 @@ impl Store {
             return Ok(json!({ "enabled": true, "rows": 0 }));
         }
 
+        let has_any_candidate = (0..row_count).any(|row| {
+            self.scenes
+                .scenes
+                .iter()
+                .any(|scene| is_scene_enabled(scene) && !is_row_cell_empty(scene, row, &row_names))
+        });
         let has_row_candidates = (0..row_count).any(|row| {
             self.scenes.scenes.iter().any(|scene| {
                 is_scene_enabled(scene)
@@ -575,7 +581,10 @@ impl Store {
             })
         });
 
-        if !has_row_candidates {
+        // No renderable cell anywhere: keep the legacy whole-Scene autopilot.
+        // If cells exist but every one is performance-disabled, leave the live
+        // stack alone rather than applying a disabled cell through it.
+        if !has_any_candidate {
             let current_valid = self
                 .scenes
                 .performance
@@ -591,6 +600,9 @@ impl Store {
             if !current_valid && let Some(scene_id) = self.pick_next_whole_scene() {
                 self.apply_scene_action(&single_param("sceneId", &scene_id))?;
             }
+            return Ok(json!({ "enabled": true, "rows": 0 }));
+        }
+        if !has_row_candidates {
             return Ok(json!({ "enabled": true, "rows": 0 }));
         }
 
@@ -1319,6 +1331,33 @@ mod tests {
             incoming.scene_id.as_deref(),
             Some("scene-c"),
             "the in-order advance skipped the disabled scene-b cell"
+        );
+    }
+
+    #[test]
+    fn start_performance_does_not_apply_a_fully_disabled_grid() {
+        let mut store = store_with_scenes();
+        for scene_id in ["scene-a", "scene-b", "scene-c"] {
+            for row in [0, 1] {
+                store
+                    .dispatch(
+                        "scenes/setCellEnabled",
+                        json!({ "sceneId": scene_id, "rowIndex": row, "enabled": false }),
+                    )
+                    .expect("disable cell");
+            }
+        }
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+
+        assert!(
+            store.performance_runtime().rows.is_empty(),
+            "no row has an enabled cell"
+        );
+        assert!(
+            store.state().groups.is_empty(),
+            "performance mode must not apply a disabled cell through the whole-Scene fallback"
         );
     }
 
