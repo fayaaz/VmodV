@@ -190,7 +190,14 @@ impl RangeControl {
             let slider = egui::Slider::new(&mut self.value, self.min..=self.max)
                 .show_value(false)
                 .trailing_fill(true);
-            if ui.add_sized([slider_width, 20.0], slider).changed() {
+            let slider_changed = ui
+                .scope(|ui| {
+                    theme::slider_visuals(ui);
+                    ui.add_sized([slider_width, 20.0], slider)
+                })
+                .inner
+                .changed();
+            if slider_changed {
                 changed = true;
             }
 

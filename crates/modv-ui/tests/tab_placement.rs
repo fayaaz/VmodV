@@ -6,16 +6,77 @@
 //! and the rendered state. Section sizes are captured from the real panel rects,
 //! which is what `NativeApp` persists in `native-layout.json`.
 
+use accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::state::SidePanelTab;
-use modv_ui::{EngineSnapshot, TabPlacement, UiState};
+use modv_ui::{EngineSnapshot, GroupView, ModuleView, PropView, TabPlacement, UiState};
 
 fn app() -> Harness<'static, UiState> {
     let snapshot = EngineSnapshot::default();
     let state = UiState::new();
     let harness = Harness::builder()
         .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    modv_ui::theme::apply(&harness.ctx);
+    harness
+}
+
+/// A selected module with one real `RangeControl`, so the Inspector tab draws
+/// a slider wherever it is placed.
+fn app_with_module() -> Harness<'static, UiState> {
+    let snapshot = EngineSnapshot {
+        groups: vec![GroupView {
+            id: "group-1".to_string(),
+            name: "Effects".to_string(),
+            enabled: true,
+            hidden: false,
+            alpha: 1.0,
+            alpha_input_id: None,
+            composite_operation: "normal".to_string(),
+            composite_operation_input_id: None,
+            inherit: true,
+            clearing: true,
+            pipeline: false,
+            module_ids: vec!["module-1".to_string()],
+        }],
+        modules: vec![ModuleView {
+            id: "module-1".to_string(),
+            module_name: "Chromatic Line".to_string(),
+            group_id: "group-1".to_string(),
+            enabled: true,
+            alpha: 1.0,
+            alpha_input_id: None,
+            composite_operation: "normal".to_string(),
+            composite_operation_input_id: None,
+            module_type: "2d".to_string(),
+            props: vec![PropView {
+                name: "gain".to_string(),
+                prop_type: "float".to_string(),
+                value: serde_json::json!(0.65),
+                min: Some(0.0),
+                max: Some(1.0),
+                step: Some(0.01),
+                default: Some(serde_json::json!(0.5)),
+                input_id: None,
+                components: Vec::new(),
+                tween: None,
+                options: Vec::new(),
+            }],
+        }],
+        ..Default::default()
+    };
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    let harness = Harness::builder()
+        .with_size([1440.0, 900.0])
         .with_accessibility_check(false)
         .build_ui_state(
             move |ui, state| {
@@ -179,6 +240,69 @@ fn docking_several_tabs_stacks_them_in_one_dock_column() {
     );
     assert_eq!(harness.get_all_by_label("Back to tabs").count(), 2);
     assert_eq!(harness.get_all_by_label("Float").count(), 2);
+}
+
+#[test]
+fn a_floating_tab_keeps_its_slider_visible() {
+    let mut harness = app_with_module();
+    harness.run();
+
+    harness
+        .get_all_by_label("Detach")
+        .next()
+        .expect("Inspector detach control")
+        .click();
+    harness.run();
+
+    assert_eq!(
+        harness
+            .state()
+            .layout
+            .tabs
+            .placement(SidePanelTab::Inspector),
+        TabPlacement::Floating
+    );
+    // The floating window really contains the RangeControl: its label and the
+    // egui slider itself are both in the window (the old `tab_float` golden had
+    // no module, so a missing slider could not show up).
+    harness.get_by_label("gain");
+    assert!(
+        harness.get_all_by_role(Role::Slider).count() >= 2,
+        "the module Alpha slider and the gain RangeControl slider are both rendered"
+    );
+    harness.snapshot("tab_float_range");
+}
+
+#[test]
+fn a_docked_tab_keeps_its_slider_visible() {
+    let mut harness = app_with_module();
+    harness.run();
+
+    harness
+        .get_all_by_label("Detach")
+        .next()
+        .expect("Inspector detach control")
+        .click();
+    harness.run();
+    harness.get_by_label("Dock to area").click();
+    harness.run();
+
+    assert_eq!(
+        harness
+            .state()
+            .layout
+            .tabs
+            .placement(SidePanelTab::Inspector),
+        TabPlacement::Docked
+    );
+    harness.get_by_label("gain");
+    assert!(
+        harness.get_all_by_role(Role::Slider).count() >= 2,
+        "the module Alpha slider and the gain RangeControl slider are both rendered"
+    );
+    // The regression: the dock used to paint `PANEL_ALT` while the slider rail
+    // also used `PANEL_ALT`, so the rail disappeared into the dock.
+    harness.snapshot("tab_docked_range");
 }
 
 #[test]

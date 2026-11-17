@@ -2881,6 +2881,7 @@ dependencies = [
 name = "modv-ui"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
  "egui",
  "egui_kittest",
  "serde_json",

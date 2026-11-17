@@ -29,10 +29,10 @@ pub fn link_row(
             ui.label(
                 egui::RichText::new("LINK")
                     .monospace()
-                    .size(8.0)
+                    .size(10.0)
                     .color(theme::ACCENT),
             );
-            ui.label(egui::RichText::new(summary).size(9.0).color(theme::MUTED))
+            ui.label(egui::RichText::new(summary).size(11.0).color(theme::MUTED))
                 .on_hover_text(format!("input {input_id}"));
             if ui.small_button("Edit").clicked() {
                 state.link_editor = Some(LinkEditor::for_input(input_id, prop_name, snapshot));
@@ -177,13 +177,13 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                 egui::RichText::new(
                     "Inputs are created automatically for module props. This link drives the selected property.",
                 )
-                .size(10.0)
+                .size(12.0)
                 .color(theme::MUTED),
             );
             ui.label(
                 egui::RichText::new(format!("input {}", editor.input_id))
                     .monospace()
-                    .size(9.0)
+                    .size(11.0)
                     .color(theme::MUTED),
             );
             ui.separator();
@@ -211,7 +211,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                             egui::RichText::new(
                                 "State path read from MIDI, e.g. midi.data.<device>.<channel>",
                             )
-                            .size(10.0)
+                            .size(12.0)
                             .color(theme::MUTED),
                         );
                         ui.horizontal(|ui| {
@@ -272,7 +272,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                     ui.add_enabled_ui(osc_enabled, |ui| {
                         ui.label(
                             egui::RichText::new("State path written by an OSC address, e.g. osc.data./address")
-                                .size(10.0)
+                                .size(12.0)
                                 .color(theme::MUTED),
                         );
                         ui.horizontal(|ui| {
@@ -297,7 +297,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                         egui::RichText::new(
                             "Shape the incoming value with JS syntax/math. `value` is the incoming number; `value * 3` triples it. `value` is the identity and removes the assignment.",
                         )
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED),
                     );
                     ui.add(
@@ -420,7 +420,7 @@ fn audio_section(
                         ui.label(
                             egui::RichText::new(readout)
                                 .monospace()
-                                .size(9.0)
+                                .size(11.0)
                                 .color(theme::MUTED),
                         );
                     }
@@ -429,7 +429,7 @@ fn audio_section(
                 if editor.feature == "none" {
                     ui.label(
                         egui::RichText::new("No audio feature; Save removes the link.")
-                            .size(10.0)
+                            .size(12.0)
                             .color(theme::MUTED),
                     );
                 } else if editor.feature == "kick" {
@@ -437,7 +437,7 @@ fn audio_section(
                         egui::RichText::new(
                             "Kick is a mutation link on beats/SET_KICK (no smoothing).",
                         )
-                        .size(10.0)
+                        .size(12.0)
                         .color(theme::MUTED),
                     );
                 } else {

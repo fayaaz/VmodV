@@ -10,4 +10,5 @@ egui = { version = "0.37.0", features = ["default_fonts"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 
 [dev-dependencies]
+accesskit = "0.25.2"
 egui_kittest = { version = "0.37.0", features = ["snapshot", "wgpu"] }

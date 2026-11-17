@@ -634,13 +634,13 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                 }
 
                                 let mut alpha = group.alpha;
-                                if ui
-                                    .add(
-                                        egui::Slider::new(&mut alpha, 0.0..=1.0)
-                                            .text("Alpha")
-                                            .max_decimals(3),
-                                    )
-                                    .changed()
+                                if theme::slider(
+                                    ui,
+                                    egui::Slider::new(&mut alpha, 0.0..=1.0)
+                                        .text("Alpha")
+                                        .max_decimals(3),
+                                )
+                                .changed()
                                 {
                                     state.push_action(
                                         "groups/UPDATE_GROUP_BY_KEY",
@@ -1086,13 +1086,13 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
         );
     }
     let mut alpha = module.alpha;
-    if ui
-        .add(
-            egui::Slider::new(&mut alpha, 0.0..=1.0)
-                .text("Alpha")
-                .max_decimals(3),
-        )
-        .changed()
+    if theme::slider(
+        ui,
+        egui::Slider::new(&mut alpha, 0.0..=1.0)
+            .text("Alpha")
+            .max_decimals(3),
+    )
+    .changed()
     {
         state.push_action(
             "modules/updateMeta",
@@ -1184,7 +1184,7 @@ fn dock_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
         .resizable(true)
         .frame(
             egui::Frame::NONE
-                .fill(theme::PANEL_ALT)
+                .fill(theme::DOCK_FILL)
                 .inner_margin(Margin::same(6)),
         )
         .show(ui, |ui| {
@@ -2391,13 +2391,13 @@ fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
         ui.label(egui::RichText::new("GROUP").strong().size(12.0));
         ui.label(egui::RichText::new(&group.name).size(14.0));
         let mut alpha = group.alpha;
-        if ui
-            .add(
-                egui::Slider::new(&mut alpha, 0.0..=1.0)
-                    .text("Alpha")
-                    .max_decimals(3),
-            )
-            .changed()
+        if theme::slider(
+            ui,
+            egui::Slider::new(&mut alpha, 0.0..=1.0)
+                .text("Alpha")
+                .max_decimals(3),
+        )
+        .changed()
         {
             let group_id = group.id.clone();
             state.push_action(
