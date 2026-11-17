@@ -149,8 +149,26 @@ pub struct PropView {
     pub step: Option<f64>,
     /// Registered default value (the Inspector's reset target).
     pub default: Option<Value>,
+    /// The prop's input id (`$props[prop].id`), when one exists.
+    pub input_id: Option<String>,
+    /// The tween descriptor linked to this prop, when one exists.
+    pub tween: Option<TweenView>,
     /// Enum options, when the prop declares them.
     pub options: Vec<String>,
+}
+
+/// A tween descriptor read from the engine state.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TweenView {
+    pub id: String,
+    pub duration: f64,
+    pub direction: String,
+    pub easing: String,
+    pub looping: bool,
+    pub use_bpm: bool,
+    pub bpm_division: f64,
+    pub steps: f64,
+    pub frames: u64,
 }
 
 /// One saved Scene.

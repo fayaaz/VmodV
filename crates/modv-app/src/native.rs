@@ -23,7 +23,7 @@ use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_pr
 use modv_render::wgpu;
 use modv_ui::{
     AudioView, EngineHealth, EngineSnapshot, GroupView, ModuleMetaView, ModuleView,
-    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView, UiAction,
+    PerformanceView, PreviewRequest, PreviewTexture, PropView, SceneCellView, SceneView, TweenView, UiAction,
     UiCommand, UiState, gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
@@ -827,6 +827,46 @@ impl NativeApp {
             .map(Compositor::main_texture_size)
             .unwrap_or((self.cli.width, self.cli.height));
 
+        let tween_by_id: HashMap<String, TweenView> = state
+            .tweens
+            .as_array()
+            .map(|tweens| {
+                tweens
+                    .iter()
+                    .filter_map(|tween| {
+                        let id = tween.get("id").and_then(Value::as_str)?.to_string();
+                        Some((
+                            id.clone(),
+                            TweenView {
+                                id,
+                                duration: tween.get("duration").and_then(Value::as_f64).unwrap_or(1000.0),
+                                direction: tween
+                                    .get("direction")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("alternate")
+                                    .to_string(),
+                                easing: tween
+                                    .get("easing")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("linear")
+                                    .to_string(),
+                                looping: tween.get("loop").and_then(Value::as_bool).unwrap_or(true),
+                                use_bpm: tween.get("useBpm").and_then(Value::as_bool).unwrap_or(true),
+                                bpm_division: tween
+                                    .get("bpmDivision")
+                                    .and_then(Value::as_f64)
+                                    .unwrap_or(16.0),
+                                steps: tween.get("steps").and_then(Value::as_f64).unwrap_or(0.0),
+                                frames: tween
+                                    .get("frames")
+                                    .and_then(Value::as_array)
+                                    .map_or(0, |frames| frames.len() as u64),
+                            },
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let modules: Vec<ModuleView> = state
             .modules
             .values()
@@ -861,6 +901,13 @@ impl NativeApp {
                                     .as_ref()
                                     .map(|schema| schema.type_.clone())
                                     .unwrap_or_else(|| "text".to_string());
+                                let input_id = module
+                                    .dollar_props
+                                    .as_object()
+                                    .and_then(|props| props.get(name))
+                                    .and_then(|entry| entry.get("id"))
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string);
                                 PropView {
                                     name: name.clone(),
                                     step: if prop_type == "int" {
@@ -875,6 +922,11 @@ impl NativeApp {
                                     default: schema
                                         .as_ref()
                                         .and_then(|schema| schema.default.clone()),
+                                    input_id: input_id.clone(),
+                                    tween: input_id
+                                        .as_ref()
+                                        .and_then(|id| tween_by_id.get(id))
+                                        .cloned(),
                                     options: Vec::new(),
                                 }
                             })

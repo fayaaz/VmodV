@@ -11,7 +11,7 @@ use crate::model::{EngineSnapshot, ModuleMetaView, PropView, gallery_preview_key
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{GalleryCategory, UiAction, UiCommand, UiState};
 use crate::theme;
-use crate::widgets::RangeControl;
+use crate::widgets::{ColorControl, RangeControl, TweenControl, VecControl};
 use crate::widgets::range_control::chip;
 
 /// Draw the complete native UI for one frame.
@@ -568,14 +568,119 @@ fn draw_prop(ui: &mut egui::Ui, module_id: &str, prop: &PropView, state: &mut Ui
                     }
                 });
         }
-        "color" | "vec2" | "vec3" | "vec4" | "palette" | "texture" | "tween" | "font" => {
+        "color" => {
+            let mut control = ColorControl::new(&prop.name, &prop.value);
+            if control.draw(ui) {
+                state.push_action(
+                    "modules/updateProp",
+                    serde_json::json!({
+                        "moduleId": module_id,
+                        "prop": prop.name,
+                        "data": { "value": control.to_value() },
+                    }),
+                );
+            }
+        }
+        "vec2" | "vec3" | "vec4" => {
+            let lanes = match prop.prop_type.as_str() {
+                "vec2" => 2,
+                "vec3" => 3,
+                _ => 4,
+            };
+            let mut control = VecControl::new(
+                &prop.name,
+                &prop.value,
+                lanes,
+                prop.min.unwrap_or(-1.0),
+                prop.max.unwrap_or(1.0),
+                prop.step.unwrap_or(0.001),
+            );
+            if control.draw(ui) {
+                state.push_action(
+                    "modules/updateProp",
+                    serde_json::json!({
+                        "moduleId": module_id,
+                        "prop": prop.name,
+                        "data": { "value": control.to_value() },
+                    }),
+                );
+            }
+        }
+        "tween" => {
+            let mut control = TweenControl::new(
+                &prop.name,
+                prop.input_id.clone(),
+                prop.tween.clone(),
+                prop.min.unwrap_or(0.0),
+                prop.max.unwrap_or(1.0),
+            );
+            control.draw(ui, state);
+        }
+        "event" => {
+            if ui.button(&prop.name).clicked() {
+                state.push_action(
+                    "modules/updateProp",
+                    serde_json::json!({
+                        "moduleId": module_id,
+                        "prop": prop.name,
+                        "data": { "value": 1 },
+                    }),
+                );
+            }
+        }
+        "palette" => {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&prop.name)
                         .size(11.0)
                         .color(theme::MUTED),
                 );
-                chip(ui, &prop.prop_type, theme::TWEEN);
+                chip(ui, "palette", theme::TWEEN);
+                if let serde_json::Value::Array(colors) = &prop.value {
+                    for color in colors.iter().take(8) {
+                        let control = ColorControl::new("", color);
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(12.0, 12.0),
+                            egui::Sense::hover(),
+                        );
+                        let [r, g, b, a] = control.rgba;
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::CornerRadius::same(2),
+                            egui::Color32::from_rgba_unmultiplied(
+                                (r.clamp(0.0, 1.0) * 255.0) as u8,
+                                (g.clamp(0.0, 1.0) * 255.0) as u8,
+                                (b.clamp(0.0, 1.0) * 255.0) as u8,
+                                (a.clamp(0.0, 1.0) * 255.0) as u8,
+                            ),
+                        );
+                    }
+                }
+            });
+        }
+        "texture" | "font" => {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(&prop.name)
+                        .size(11.0)
+                        .color(theme::MUTED),
+                );
+                chip(ui, &prop.prop_type, theme::MUTED);
+                let summary = match &prop.value {
+                    serde_json::Value::Object(map) => map
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("set")
+                        .to_string(),
+                    serde_json::Value::String(value) => value.clone(),
+                    _ => "unset".to_string(),
+                };
+                ui.label(
+                    egui::RichText::new(summary)
+                        .monospace()
+                        .size(9.0)
+                        .color(theme::MUTED),
+                );
             });
         }
         _ => {
