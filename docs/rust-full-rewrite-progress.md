@@ -11,11 +11,11 @@ Last updated: 2026-11-17.
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
-| P0 — framework spike | **Implemented, verification pending** | `modv-ui` + real `modv` binary; shared `wgpu` device, egui native-texture preview, output window, RangeControl and Scene-cell probes. Release/lavapipe numbers still to record. |
-| P1 — app shell | **Partial** | winit UI window, output window, menus, status bar, theme, `window-state.json` persistence, shortcuts, About/Shortcuts windows. Logging, splash, native file dialogs and the colour-picker window remain. |
-| P2 — engine in-process | **Core done** | The shell owns `Store` + `Compositor` directly; the UI reads an `EngineSnapshot` and emits actions. No IPC, no Vuex mirror, no preview ring on this path. `modv-engine` headless still uses the socket. |
-| P3 — controls | **Partial** | RangeControl, checkbox, enum, text, colour (RGBA), vec2/3/4, tween, texture picker, event button, prop reset. Palette editor, font registry, video transport and the 2D vector pad remain. |
-| P4 — panels | **Partial** | Groups/Modules, Gallery (hover previews), Scenes (performance controls, rename, timing, row names, cell copy), Inspector. Input-link editor, Audio/Video, Screen, MIDI, BPM, NDI, OSC, Search, Plugins, Status-bar graph and InfoView remain. |
+| P0 — framework spike | **GO (with one caveat)** | `modv-ui` + real `modv` binary; shared `wgpu` device, egui native-texture preview, output window, RangeControl/Scene-cell probes, kittest golden. Release evidence recorded below; lavapipe reaches 128 fps empty / 57 fps with a default Scene (below the 60 fps content target). |
+| P1 — app shell | **Partial** | winit UI window, output window, menus, status bar, theme, `window-state.json` persistence + monitor clamping, shortcuts, About/Shortcuts/Tempo/Command-palette windows, golden snapshot. Logging, splash, native file dialogs remain. |
+| P2 — engine in-process | **Core done** | The shell owns `Store` + `Compositor` + `MediaHub` directly; the UI reads an `EngineSnapshot` and emits actions. No IPC, no Vuex mirror, no preview ring on this path. Engine-owned PipeWire/cpal audio is live. `modv-engine` headless still uses the socket. |
+| P3 — controls | **Partial** | RangeControl, checkbox, enum, text, colour (RGBA), vec2/3/4, tween, texture picker, event button, prop reset, focused-input link editor. Palette editor, font registry, video transport and the 2D vector pad remain. |
+| P4 — panels | **Partial** | Groups/Modules, Gallery (hover previews), Scenes (performance controls, rename, timing, row names, cell copy), Inspector, Media (cameras/sources/test pattern), Info, Plugins, BPM/tap, status graph/meters, Ctrl+K palette. MIDI/NDI/OSC panels and the full media-manager/ISF watcher remain. |
 | P5 — docking | Not started | `egui_tiles` is the P0 choice (egui 0.37-compatible). Current layout is fixed panels. |
 | P6 — media manager | Not started | `MediaHub` is not yet owned by the native app; ISF watch/registration and the project media watcher remain. |
 | P7 — MIDI/plugins | Not started | Expressions already run in-engine; the Boa plugin host and `midir` client remain. |
@@ -46,8 +46,17 @@ Last updated: 2026-11-17.
 - `cargo test -p modv-ui`: 25 unit + 3 kittest tests pass.
 - Native debug smoke (`make native-debug ARGS="--frames 120"`): window +
   output window open, 432 registered modules, 62 seeded Scenes, ~41–44 fps in
-  a debug build at 960×540 on the reference AMD GPU. Release/lavapipe numbers
-  and the written P0 go/no-go are still open.
+  a debug build at 960×540 on the reference AMD GPU.
+- **P0 release evidence** (`--apply-scene "Lone Chrome"`, host display):
+  - Reference AMD RX 9070 XT: **138–143 fps** at 960×470–540, PipeWire audio
+    capture active (`audio source pipewire owns capture at 48000 Hz`).
+  - lavapipe (Docker, `VK_ICD_FILENAMES=lvp_icd.json`): **128 fps** empty,
+    **56.9 fps** with Lone Chrome at 960×540.
+  - RSS with the full 354-ISF registry + one applied Scene: **~157 MB**
+    (vs the Electron/hybrid app's multi-hundred-MB floor).
+  - Written verdict: **GO** for the framework, with the lavapipe content
+    number (57 fps) recorded as the one caveat; the reference GPU is well
+    above the 60 fps target.
 - `cargo check -p modv-app --bins` clean (apart from in-flight review fixes in
   other files).
 - The full `modv-app` suite is not green in this working tree yet: the
@@ -73,10 +82,18 @@ Last updated: 2026-11-17.
 - P0 review nits: RangeControl registered default, dead `SceneGridState.context`
   removed, kittest name corrected, action helpers shared, texture picker uses
   engine ids.
-- In flight via review-fix commits: Scene cell capture/clear correctness,
-  smoothing on Scene links, image decoder header probe, `removeGroup` module
-  release, stale support/docs claims, ISF category aliases, expression sandbox
-  hardening.
+- Review rounds 56–68: native audio restored (PipeWire monitor → input
+  fallback), camera enumeration cached at 1 Hz, restored window bounds clamped
+  to the primary monitor, whole-scene shader transitions captured/prepared,
+  preview errors re-reported periodically, palette focus/shortcut races fixed,
+  the invalid `add` blend token replaced with `lighter`, Info/Plugins tabs
+  added, and the golden snapshot re-baselined.
+- Landed from other review-fix commits: Scene-cell live-Group clear and
+  strict stamped capture, default-Scene bass-link smoothing ids, image decoder
+  header probe, `removeGroup` module release, stale support/docs claims, ISF
+  `three` category aliases and the literal `\n` comment.
+- Still in flight: the expression sandbox AST allowlist/budget hardening
+  (uncommitted at the time of this note).
 
 ## Constraints honoured
 
