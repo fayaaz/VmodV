@@ -1711,37 +1711,10 @@ mod tests {
         assert!(!BOTTOM_LEFT_VERTEX_WGSL.contains("(1.0 - position.y)"));
     }
 
-    fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        use std::task::{Context, Poll};
-        let waker = std::task::Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let mut future = std::pin::pin!(future);
-        loop {
-            match future.as_mut().poll(&mut context) {
-                Poll::Ready(output) => return output,
-                Poll::Pending => std::thread::yield_now(),
-            }
-        }
-    }
-
     fn try_runtime() -> Option<IsfRuntime> {
-        let instance = wgpu::Instance::default();
-        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: true,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }))
-        .ok()?;
-        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("modv-isf-test"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            experimental_features: wgpu::ExperimentalFeatures::default(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::Off,
-        }))
-        .ok()?;
+        // One shared fallback adapter for the whole test binary (see
+        // `crate::test_gpu`): parallel per-test instances crash lavapipe.
+        let (device, queue) = crate::test_gpu::gpu()?;
         Some(IsfRuntime::new(device, queue, 4))
     }
 

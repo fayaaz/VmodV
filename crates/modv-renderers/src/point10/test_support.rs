@@ -26,27 +26,12 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 }
 
 /// A software-adapter device, or `None` (with a log line) when unavailable.
+///
+/// Delegates to the crate-wide shared adapter ([`crate::test_gpu`]): one
+/// instance/device per test binary, cloned per test. Parallel per-thread
+/// instances crash lavapipe.
 pub(crate) fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
-    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        force_fallback_adapter: true,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    }))
-    .map_err(|error| eprintln!("skipping point10 GPU test: no adapter ({error})"))
-    .ok()?;
-
-    block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("modv-point10-test"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
-        experimental_features: wgpu::ExperimentalFeatures::default(),
-        memory_hints: wgpu::MemoryHints::Performance,
-        trace: wgpu::Trace::Off,
-    }))
-    .map_err(|error| eprintln!("skipping point10 GPU test: no device ({error})"))
-    .ok()
+    crate::test_gpu::gpu()
 }
 
 /// An 8-bit UNORM render target plus its view, for read-back.

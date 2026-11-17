@@ -21,40 +21,8 @@ const MODULE_SIZE: u32 = 128;
 // Harness
 // ---------------------------------------------------------------------------
 
-/// Minimal `std`-only `block_on`, same approach as `modv-render/src/device.rs`.
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    use std::task::{Context, Poll};
-
-    let mut cx = Context::from_waker(std::task::Waker::noop());
-    let mut future = std::pin::pin!(future);
-    loop {
-        match future.as_mut().poll(&mut cx) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::yield_now(),
-        }
-    }
-}
-
 fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
-    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        force_fallback_adapter: true,
-        compatible_surface: None,
-        apply_limit_buckets: false,
-    }))
-    .map_err(|error| eprintln!("skipping 2D canvas GPU test: no adapter ({error})"))
-    .ok()?;
-    block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("modv-2d-test"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
-        experimental_features: wgpu::ExperimentalFeatures::default(),
-        memory_hints: wgpu::MemoryHints::Performance,
-        trace: wgpu::Trace::Off,
-    }))
-    .map_err(|error| eprintln!("skipping 2D canvas GPU test: no device ({error})"))
-    .ok()
+    crate::test_gpu::gpu()
 }
 
 fn canvas(width: u32, height: u32) -> Option<Canvas> {
