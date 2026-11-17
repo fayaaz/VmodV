@@ -250,7 +250,7 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let fps = state.status.fps;
                     ui.label(
-                        egui::RichText::new(format!("{fps:.1} fps"))
+                        egui::RichText::new(format!("{fps:.1} FPS"))
                             .monospace()
                             .color(if fps >= 55.0 { theme::OK } else { theme::MUTED }),
                     );
@@ -292,6 +292,16 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
+                    egui::RichText::new(format!("{:.1} FPS", state.status.fps))
+                        .monospace()
+                        .size(10.0)
+                        .color(if state.status.fps >= 55.0 {
+                            theme::OK
+                        } else {
+                            theme::MUTED
+                        }),
+                );
+                ui.label(
                     egui::RichText::new(format!("{:.1} ms", state.status.frame_ms))
                         .monospace()
                         .size(10.0)
@@ -309,7 +319,7 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 );
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!("{} frames", state.status.frames_presented))
+                    egui::RichText::new(format!("{} frames total", state.status.frames_presented))
                         .monospace()
                         .size(10.0)
                         .color(theme::MUTED),

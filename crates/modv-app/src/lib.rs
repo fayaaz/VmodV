@@ -130,7 +130,8 @@ pub fn run_engine() -> ExitCode {
 pub fn native_main() -> ExitCode {
     die_with_parent();
 
-    let cli = cli::parse();
+    let mut cli = cli::parse();
+    cli.bench_seconds = cli::native_bench_seconds(cli.bench_seconds_explicit, cli.bench_seconds);
 
     if cli.list_audio_devices {
         audio::print_devices();

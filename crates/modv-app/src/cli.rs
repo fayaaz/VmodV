@@ -173,6 +173,8 @@ pub struct Cli {
     /// Windowed mode: stop after this many wall seconds. `0` disables the
     /// limit (run until the window is closed).
     pub bench_seconds: f64,
+    /// Whether `bench_seconds` was explicitly supplied on the command line.
+    pub bench_seconds_explicit: bool,
     /// Headless render, save the final frame as PNG, then exit.
     pub screenshot: Option<PathBuf>,
     /// Frequency of the synthetic sine audio fixture in Hz. `0` feeds silence.
@@ -225,6 +227,15 @@ impl Cli {
             None
         }
     }
+}
+
+/// The windowed deadline for the native shell.
+///
+/// The shared CLI defaults `--bench-seconds` to 10 for the headless/bench
+/// engine path; the native UI must run until the user closes it unless the
+/// flag was explicitly supplied.
+pub fn native_bench_seconds(explicit: bool, seconds: f64) -> f64 {
+    if explicit { seconds } else { 0.0 }
 }
 
 /// Parse the process arguments.
@@ -413,6 +424,8 @@ pub fn parse() -> Cli {
         headless: matches.get_flag("headless"),
         bench: matches.get_flag("bench"),
         bench_seconds,
+        bench_seconds_explicit: matches.value_source("bench-seconds")
+            == Some(clap::parser::ValueSource::CommandLine),
         screenshot: matches.get_one::<String>("screenshot").map(PathBuf::from),
         audio_fixture: *matches
             .get_one::<f64>("audio-fixture")
@@ -491,6 +504,13 @@ fn development_isf_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_default_runs_until_the_window_closes() {
+        assert_eq!(native_bench_seconds(false, 10.0), 0.0);
+        assert_eq!(native_bench_seconds(true, 10.0), 10.0);
+        assert_eq!(native_bench_seconds(true, 0.0), 0.0);
+    }
 
     #[test]
     fn audio_source_accepts_every_documented_spelling() {
