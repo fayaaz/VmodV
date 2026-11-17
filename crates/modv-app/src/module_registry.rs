@@ -1975,4 +1975,27 @@ void main() { gl_FragColor = vec4(1.0); }
         );
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[test]
+    fn registered_module_count_matches_the_parity_baseline() {
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        if !corpus.is_dir() {
+            eprintln!("skipping registry parity guard: ISF corpus not present");
+            return;
+        }
+        let registry = ModuleRegistry::build(Some(&corpus));
+        assert_eq!(registry.shader_modules().len(), 36, "shader modules");
+        assert_eq!(registry.two_d_definitions().len(), 15, "2D modules");
+        assert_eq!(registry.point10_definitions().len(), 27, "Point10 scenes");
+        assert_eq!(registry.isf_definitions().len(), 354, "ISF corpus");
+        assert_eq!(
+            registry
+                .registered_modules()
+                .as_object()
+                .map_or(0, serde_json::Map::len),
+            432,
+            "registered module total (module-parity guard)"
+        );
+    }
 }
