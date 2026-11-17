@@ -443,6 +443,13 @@ fn scene_dialogs(ui: &mut egui::Ui, grid: &mut SceneGridState, actions: &mut Vec
     }
 }
 
+/// Hover previews are requested only for cells that hold a Group. An empty
+/// cell has no renderable row, and requesting one only earns the engine's
+/// "has no renderable Group at row N" warning.
+fn should_request_preview(cell: &SceneCellView, hovered: bool) -> bool {
+    hovered && !cell.is_empty()
+}
+
 /// Draw one Scene cell. Returns `true` when this cell owned the pointer.
 #[allow(clippy::too_many_arguments)]
 fn draw_scene_cell(
@@ -492,7 +499,7 @@ fn draw_scene_cell(
 
     // Hover preview: the engine's isolated Scene-cell render, falling back to
     // the live composited frame until the first preview arrives.
-    if hovered && !cell.is_empty() {
+    if should_request_preview(cell, hovered) {
         let key = scene_preview_key(&scene.id, row);
         let texture = snapshot
             .scene_previews
@@ -858,6 +865,24 @@ mod tests {
             module_names: vec!["A".into(), "B".into(), "C".into()],
         };
         assert_eq!(many.label(), "A +2");
+    }
+
+    #[test]
+    fn empty_cells_never_request_a_hover_preview() {
+        // The WEBCAM row of a Scene without a WEBCAM Group is empty after the
+        // named-row mapping; hovering it must not ask the engine for a
+        // `preview/scene` row that cannot render.
+        let webcam = SceneCellView {
+            row: 0,
+            module_names: Vec::new(),
+        };
+        assert!(!should_request_preview(&webcam, true));
+        let background = SceneCellView {
+            row: 1,
+            module_names: vec!["Bands".to_string()],
+        };
+        assert!(should_request_preview(&background, true));
+        assert!(!should_request_preview(&background, false));
     }
 
     #[test]

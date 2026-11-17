@@ -1361,16 +1361,17 @@ impl NativeApp {
 
         let registered = registered_modules(&registry);
         let scenes_state = self.store.scenes_state();
+        let row_names = self.store.row_names();
         let scenes = scenes_state
             .scenes
             .iter()
             .enumerate()
-            .map(|(index, scene)| scene_view(scene, index))
+            .map(|(index, scene)| scene_view(scene, index, &row_names))
             .collect::<Vec<_>>();
         let performance = performance_view(
             &scenes_state.performance,
             self.store.performance_runtime().enabled,
-            &self.store.row_names(),
+            &row_names,
         );
         let applied_scene_id = performance.current_scene_id.clone();
         let audio = AudioView {
@@ -1732,7 +1733,7 @@ fn registered_modules(registry: &crate::module_registry::ModuleRegistry) -> Vec<
         .collect()
 }
 
-fn scene_view(scene: &Value, index: usize) -> SceneView {
+fn scene_view(scene: &Value, index: usize, row_names: &[String]) -> SceneView {
     let id = scene
         .get("id")
         .and_then(Value::as_str)
@@ -1754,38 +1755,53 @@ fn scene_view(scene: &Value, index: usize) -> SceneView {
         None
     };
     let module_names = scene.get("modules").and_then(Value::as_object);
-    let cells = scene
-        .get("groups")
-        .and_then(Value::as_array)
-        .map(|groups| {
-            groups
-                .iter()
-                .enumerate()
-                .map(|(row, group)| {
-                    let names = group
-                        .get("modules")
-                        .and_then(Value::as_array)
-                        .map(|ids| {
-                            ids.iter()
-                                .filter_map(|id| {
-                                    let id = id.as_str()?;
-                                    module_names?
-                                        .get(id)?
-                                        .get("$moduleName")?
-                                        .as_str()
-                                        .map(str::to_string)
-                                })
-                                .collect()
+    let groups = scene.get("groups").and_then(Value::as_array);
+    let row_indexes =
+        groups.map(|groups| modv_engine::scene_rows::assign_scene_row_indexes(groups, row_names));
+    let mut cells: Vec<SceneCellView> = if row_names.iter().any(|name| !name.is_empty()) {
+        vec![SceneCellView::default(); row_names.len()]
+    } else {
+        Vec::new()
+    };
+    if let Some(groups) = groups {
+        for (document_row, group) in groups.iter().enumerate() {
+            if group.is_null() {
+                continue;
+            }
+            let row = row_indexes
+                .as_ref()
+                .and_then(|indexes| indexes.get(document_row))
+                .copied()
+                .flatten()
+                .unwrap_or(document_row);
+            let names = group
+                .get("modules")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|id| {
+                            let id = id.as_str()?;
+                            module_names?
+                                .get(id)?
+                                .get("$moduleName")?
+                                .as_str()
+                                .map(str::to_string)
                         })
-                        .unwrap_or_default();
-                    SceneCellView {
-                        row,
-                        module_names: names,
-                    }
+                        .collect()
                 })
-                .collect()
-        })
-        .unwrap_or_default();
+                .unwrap_or_default();
+            if cells.len() <= row {
+                cells.resize(row + 1, SceneCellView::default());
+            }
+            cells[row] = SceneCellView {
+                row,
+                module_names: names,
+            };
+        }
+    }
+    for (row, cell) in cells.iter_mut().enumerate() {
+        cell.row = row;
+    }
     SceneView {
         id,
         name,
@@ -2246,7 +2262,7 @@ mod tests {
                 "m2": {"$moduleName": "Bars"}
             }
         });
-        let view = scene_view(&scene, 0);
+        let view = scene_view(&scene, 0, &[]);
         assert_eq!(view.id, "s1");
         assert_eq!(view.name, "Test Scene");
         assert!(view.enabled);
@@ -2257,6 +2273,55 @@ mod tests {
         // modules key and becomes an empty cell, which is the same UI state.
         assert!(view.cells[1].is_empty());
         assert!(view.cells[2].is_empty());
+    }
+
+    #[test]
+    fn scene_view_places_cells_on_their_named_rows() {
+        // User repro: `rowNames` is ["WEBCAM","Background","Foreground",
+        // "Effects",""], while "Mycelium Bloom" stores only three positional
+        // Groups (Background, Foreground, Effects) with no WEBCAM hole. The
+        // snapshot must resolve each Group to its named row; mapping by
+        // document position drew Background in the WEBCAM cell and made the
+        // grid hover a row the Scene cannot preview.
+        let scene = serde_json::json!({
+            "id": "s1",
+            "name": "Mycelium Bloom",
+            "enabled": 1,
+            "groups": [
+                {"name": "Background", "modules": ["m-bg"]},
+                {"name": "Foreground", "modules": []},
+                {"name": "Effects", "modules": ["m-fx"]}
+            ],
+            "modules": {
+                "m-bg": {"$moduleName": "Bands"},
+                "m-fx": {"$moduleName": "Ball"}
+            }
+        });
+        let row_names = vec![
+            "WEBCAM".to_string(),
+            "Background".to_string(),
+            "Foreground".to_string(),
+            "Effects".to_string(),
+            "".to_string(),
+        ];
+
+        let view = scene_view(&scene, 0, &row_names);
+
+        assert_eq!(view.cells.len(), 5, "one cell per named row");
+        assert!(
+            view.cells[0].is_empty(),
+            "WEBCAM has no Group; Background must not be drawn in its cell"
+        );
+        assert_eq!(view.cells[1].module_names, vec!["Bands"]);
+        assert_eq!(view.cells[1].row, 1);
+        assert!(
+            view.cells[2].is_empty(),
+            "the Foreground Group has no modules"
+        );
+        assert_eq!(view.cells[2].row, 2);
+        assert_eq!(view.cells[3].module_names, vec!["Ball"]);
+        assert_eq!(view.cells[3].row, 3);
+        assert!(view.cells[4].is_empty());
     }
 
     #[test]
@@ -2465,6 +2530,47 @@ mod tests {
             ["WEBCAM", "Earth"],
             "the shared Scene list loads instead of defaults-only"
         );
+        let _ = std::fs::remove_dir_all(&user_data);
+    }
+
+    #[test]
+    fn native_store_restores_the_saved_row_names() {
+        // The real install's `scenes.json` carries
+        // `performance.rowNames: ["WEBCAM","Background","Foreground","Effects",""]`.
+        // Building the native store must keep those names through hydration and
+        // the default-seeding pass (and write them back unchanged).
+        let user_data = temp_dir("modv-native-row-names");
+        let names = serde_json::json!(["WEBCAM", "Background", "Foreground", "Effects", ""]);
+        let document = serde_json::json!({
+            "version": 1,
+            "defaultsSeeded": true,
+            "defaultsVersion": modv_engine::default_scenes::DEFAULTS_VERSION,
+            "seededDefaultScenes": [],
+            "scenes": [simple_scene("scene-webcam", "WEBCAM")],
+            "performance": { "rowNames": names },
+        });
+        std::fs::write(
+            user_data.join("scenes.json"),
+            serde_json::to_vec(&document).expect("scenes json"),
+        )
+        .expect("write scenes.json");
+
+        let store = build_native_store(None, &user_data, None, &[]);
+
+        assert_eq!(
+            store.row_names(),
+            vec!["WEBCAM", "Background", "Foreground", "Effects", ""],
+            "the native grid labels the saved rows"
+        );
+        let saved: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(user_data.join("scenes.json")).expect("scenes.json"),
+        )
+        .expect("json");
+        assert_eq!(
+            saved["performance"]["rowNames"], names,
+            "the startup seed pass must not drop the row names"
+        );
+
         let _ = std::fs::remove_dir_all(&user_data);
     }
 

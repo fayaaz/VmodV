@@ -4966,6 +4966,83 @@ mod tests {
     // ————————————————— row names / performance —————————————————
 
     #[test]
+    fn saved_row_names_survive_hydrate_rename_and_reload() {
+        // Regression for the native Scenes grid losing the row labels: the
+        // shared `scenes.json` carries `performance.rowNames` (the real install
+        // uses ["WEBCAM", "Background", "Foreground", "Effects", ""]), and the
+        // names must hydrate, rename, persist and reload unchanged.
+        let dir = temp_dir();
+        let state_path = dir.join("engine-state.json");
+        let document = json!({
+            "version": SCENES_STORAGE_VERSION,
+            "defaultsSeeded": true,
+            "defaultsVersion": DEFAULTS_VERSION,
+            "seededDefaultScenes": [],
+            "scenes": [two_row_scene("scene-a")],
+            "performance": {
+                "rowNames": ["WEBCAM", "Background", "Foreground", "Effects", ""],
+            },
+        });
+        fs::write(
+            dir.join("scenes.json"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("write scenes.json");
+
+        let mut store = Store::with_state_path(Some(&state_path));
+        store
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("hydrate");
+        assert_eq!(
+            store.scenes_state().performance["rowNames"],
+            json!(["WEBCAM", "Background", "Foreground", "Effects", ""]),
+            "hydration restores the exact row names"
+        );
+        assert_eq!(
+            store.row_names(),
+            vec!["WEBCAM", "Background", "Foreground", "Effects", ""],
+            "the grid mapping reads the stored names"
+        );
+
+        // Rename a row and append a new one, exactly like the row dialog.
+        let renamed = [
+            "WEBCAM",
+            "Background",
+            "Foreground",
+            "Effects",
+            "",
+            "Overlay",
+        ];
+        store
+            .dispatch("scenes/setRowNames", json!({ "rowNames": renamed }))
+            .expect("rename rows");
+
+        let saved: Value =
+            serde_json::from_slice(&fs::read(dir.join("scenes.json")).expect("scenes.json"))
+                .expect("json");
+        assert_eq!(
+            saved["performance"]["rowNames"],
+            json!(renamed),
+            "setRowNames persists immediately"
+        );
+
+        let mut reloaded = Store::with_state_path(Some(&state_path));
+        reloaded
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("reload");
+        assert_eq!(
+            reloaded.row_names(),
+            renamed
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>(),
+            "the renamed rows survive a restart"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn set_row_names_remaps_live_groups_and_persists() {
         let mut store = Store::new();
         store
