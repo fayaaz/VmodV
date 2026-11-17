@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PreviewRequest, PropView};
 use crate::panels::scene_grid::SceneGridState;
-use crate::widgets::RangeControl;
+use crate::widgets::{RangeControl, TweenCurve};
 
 /// One engine action emitted by the UI.
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +142,8 @@ pub struct UiState {
     /// Gallery search field).
     pub palette_focus: bool,
     pub link_editor: Option<LinkEditor>,
+    /// The tween curve window currently open, if any.
+    pub tween_editor: Option<TweenCurveEditor>,
     pub show_bpm: bool,
     pub show_search: bool,
     pub command_query: String,
@@ -616,8 +618,60 @@ impl LinkEditor {
     }
 }
 
-/// Mint a smoothing id client-side.
+/// The keyframe handle currently being dragged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TweenHandleDrag {
+    /// Row index in the curve.
+    pub index: usize,
+    /// Channel index the vertical drag applies to.
+    pub channel: usize,
+}
+
+/// The open tween curve editor (one window at a time).
 ///
+/// `TweenControl` itself is rebuilt from the engine view every frame, so the
+/// draft curve, drag and JSON text live here for the duration of the window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TweenCurveEditor {
+    /// The Input id (and tween id) the window edits.
+    pub input_id: String,
+    /// The property label shown in the window title.
+    pub title: String,
+    /// Whether the window is open; closing it clears [`UiState::tween_editor`].
+    pub open: bool,
+    /// The edited keyframes (always explicit times, normalised on open).
+    pub curve: TweenCurve,
+    /// The handle under the pointer, when a drag is in progress.
+    pub dragging: Option<TweenHandleDrag>,
+    /// Pointer position of a press that might turn into an add click.
+    pub pending_press: Option<egui::Pos2>,
+    /// The editable JSON text.
+    pub json: String,
+    /// Whether `json` was typed by the user (so it must not be rewritten from
+    /// the curve every frame).
+    pub json_dirty: bool,
+    /// The inline parse error, when the JSON is invalid.
+    pub error: Option<String>,
+}
+
+impl TweenCurveEditor {
+    /// Open an editor for `curve`.
+    pub fn new(input_id: impl Into<String>, title: impl Into<String>, curve: TweenCurve) -> Self {
+        Self {
+            input_id: input_id.into(),
+            title: title.into(),
+            open: true,
+            json: curve.to_json(),
+            curve,
+            dragging: None,
+            pending_press: None,
+            json_dirty: false,
+            error: None,
+        }
+    }
+}
+
+/// Mint a smoothing id client-side.
 /// The engine's `meyda/getSmoothingId` exists but the native UI cannot await
 /// an action result; the evaluator seeds an unseen id at `0` on first use
 /// (`input_links.rs`), so a locally unique id is equivalent.
@@ -683,6 +737,7 @@ impl UiState {
             search_focus: false,
             palette_focus: false,
             link_editor: None,
+            tween_editor: None,
             show_bpm: false,
             show_search: false,
             command_query: String::new(),

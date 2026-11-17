@@ -36,6 +36,6 @@ pub use model::{
     scene_preview_key, un_premultiply_rgba, unique_resolutions,
 };
 pub use state::{
-    AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiAction, UiCommand, UiState,
-    mint_smoothing_id,
+    AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, TweenCurveEditor, TweenHandleDrag,
+    UiAction, UiCommand, UiState, mint_smoothing_id,
 };
