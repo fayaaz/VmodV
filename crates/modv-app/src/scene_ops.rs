@@ -75,10 +75,12 @@
 //! - **Scene preview frames are rendered by `preview/scene`**, not here; the
 //!   store only exposes the Scene document and bumps the list revision that
 //!   invalidates the preview cache.
-//! - **No meyda smoothing id.** `createBassLink` asks
-//!   `meyda/getSmoothingId` for the feature smoothing argument; the engine has
-//!   no Meyda smoothing registry yet (WS-9/M6), so links are created with
-//!   `args: [feature]` and the smoothing value is dropped.
+//! - **Meyda smoothing ids are minted at build time.** `createBassLink` asks
+//!   `meyda/getSmoothingId` for the feature smoothing argument
+//!   (`scenes.js:758-789`), so a default Scene link that declares `smoothing`
+//!   is built with `args: [feature, smoothingId, amount]` and the minted id is
+//!   seeded in the store's smoothing registry (`addSmoothingId` starts it at
+//!   `0`). Links without a declared smoothing keep `args: [feature]`.
 //! - **Hydration keeps the full performance config.** The JS hydrate commits
 //!   only the normalised timing keys (`scenes.js:2839-2858`), which drops
 //!   `rowNames`/`order`/`allowedTransitions` on every restart. The engine
@@ -109,7 +111,7 @@ use modv_engine::scene_cells::{clear_scene_cell_modules, copy_scene_cell, merge_
 use modv_engine::scene_columns::{EmptySceneOptions, create_empty_scene, move_scene_to_index};
 use modv_engine::scene_link_defaults::{
     LinkMode, default_link_for_input, default_link_tween, get_bass_link_range, get_bpm_link_range,
-    is_auto_link_excluded,
+    get_feature_smoothing, is_auto_link_excluded,
 };
 use modv_engine::scene_rows::get_row_label;
 use modv_engine::scene_rows::{
@@ -464,6 +466,7 @@ impl Store {
                 &self.state.midi,
                 &mut skipped,
             );
+            self.register_link_smoothing(&built.smoothing_ids);
             let Some(existing) = self
                 .scenes
                 .scenes
@@ -473,7 +476,7 @@ impl Store {
                 continue;
             };
             let (Some(existing_object), Some(built_object)) =
-                (existing.as_object_mut(), built.as_object())
+                (existing.as_object_mut(), built.document.as_object())
             else {
                 continue;
             };
@@ -529,15 +532,16 @@ impl Store {
 
         for definition in definitions {
             let mut skipped = 0usize;
-            let scene = build_default_scene_document(
+            let built = build_default_scene_document(
                 &self.registry,
                 definition,
                 &self.state.midi,
                 &mut skipped,
             );
+            self.register_link_smoothing(&built.smoothing_ids);
             skipped_modules += skipped;
             added.push(definition.name.clone());
-            self.scenes.scenes.push(scene);
+            self.scenes.scenes.push(built.document);
         }
 
         // `markSeeded` for every default whose name already exists in the list
@@ -1158,15 +1162,24 @@ impl Store {
         self.scenes.scenes[index] = updated.clone();
 
         if let Some(group) = live_group {
-            for module_id in &cleared.module_ids {
-                if !group.modules.iter().any(|id| id == module_id) {
-                    continue;
-                }
+            // `clearSceneCell` removes every Module the **live** Group owns
+            // (`liveGroup.modules`, `scenes.js:3405-3413`); the cleared cell's
+            // ids belong to the saved document, not the live instances.
+            let live_module_ids = group.modules.clone();
+            for module_id in live_module_ids {
                 self.dispatch(
                     "modules/removeActiveModule",
                     json!({ "moduleId": module_id }),
                 )?;
             }
+            // `groups/REPLACE_GROUP_MODULES { modules: [] }`
+            // (`scenes.js:3415-3418`): without the rewrite the live Group keeps
+            // ids it no longer owns, and the next cell capture writes a Group
+            // whose module ids have no snapshots.
+            self.dispatch(
+                "groups/REPLACE_GROUP_MODULES",
+                json!({ "groupId": group.id, "modules": [] }),
+            )?;
             self.deltas
                 .push("scenes/SET_ACTIVE_ROWS", self.live_scene_rows());
         }
@@ -1324,7 +1337,9 @@ impl Store {
     /// `scenes/captureSceneRowToScene` (`scenes.js:3487-3567`).
     ///
     /// Writes the live Group of one row back into its Scene cell, merging the
-    /// Module snapshots, inputs, input links, expressions and tweens.
+    /// Module snapshots, inputs, input links, expressions and tweens. Only a
+    /// Group stamped for this Scene (active row or saved row) is captured;
+    /// anything else returns `null` like the JS.
     pub fn capture_scene_row_to_scene(
         &mut self,
         params: &Map<String, Value>,
@@ -1367,8 +1382,9 @@ impl Store {
                     && group.transition_ghost != Some(true)
             })
             .cloned()
-            .or_else(|| self.find_live_row_group(row))
         else {
+            // `scenes.js:3528-3530`: no matching Group means nothing to save.
+            // A positional fallback here captured another Scene's live row.
             return Ok(Value::Null);
         };
 
@@ -2849,12 +2865,15 @@ struct CreatedGroup {
 
 /// `buildSceneSnapshot` (`scenes.js:1689-1835`): materialise a default Scene
 /// definition into a full Scene document without touching the live stack.
+///
+/// The returned [`BuiltDefaultScene`] also carries the smoothing ids the
+/// document's explicit bass links minted, so the store can seed them.
 fn build_default_scene_document(
     registry: &ModuleRegistry,
     definition: &SceneDocument,
     midi: &Value,
     skipped_modules: &mut usize,
-) -> Value {
+) -> BuiltDefaultScene {
     let mut groups: Vec<Value> = Vec::new();
     let mut modules: Map<String, Value> = Map::new();
     let mut inputs: Map<String, Value> = Map::new();
@@ -3013,11 +3032,13 @@ fn build_default_scene_document(
 
     // `applyDefaultSceneInputLinks` (`scenes.js:930-1024`): pinned links first,
     // then one automatic bass link and one automatic BPM tween.
+    let mut smoothing_ids: Vec<String> = Vec::new();
     let mut build = SceneBuild {
         groups: &groups,
         modules: &modules,
         input_links: &mut input_links,
         tweens: &mut tweens,
+        smoothing_ids: &mut smoothing_ids,
     };
     apply_default_scene_input_links(definition, &mut build);
 
@@ -3045,7 +3066,20 @@ fn build_default_scene_document(
     document.insert("expressions".to_string(), json!({ "assignments": {} }));
     document.insert("tweens".to_string(), Value::Array(tweens));
     document.insert("midi".to_string(), midi.clone());
-    Value::Object(document)
+    BuiltDefaultScene {
+        document: Value::Object(document),
+        smoothing_ids,
+    }
+}
+
+/// A default Scene materialised from its definition, plus the smoothing ids
+/// its explicit bass links minted.
+struct BuiltDefaultScene {
+    /// The Scene document (`buildSceneSnapshot`).
+    document: Value,
+    /// `meyda/getSmoothingId` ids the document's links reference; the store
+    /// seeds them in its smoothing registry (`addSmoothingId` starts at `0`).
+    smoothing_ids: Vec<String>,
 }
 
 /// The mutable pieces of a Scene snapshot under construction.
@@ -3054,6 +3088,8 @@ struct SceneBuild<'a> {
     modules: &'a Map<String, Value>,
     input_links: &'a mut Map<String, Value>,
     tweens: &'a mut Vec<Value>,
+    /// Smoothing ids minted for explicit bass links.
+    smoothing_ids: &'a mut Vec<String>,
 }
 
 /// `applyDefaultSceneInputLinks` (`scenes.js:930-1024`).
@@ -3087,6 +3123,7 @@ fn apply_default_scene_input_links(definition: &SceneDocument, build: &mut Scene
                 &target,
                 link.feature.as_deref().unwrap_or("bass"),
                 range,
+                link.smoothing,
             );
         }
         excluded.insert(target.input_id);
@@ -3108,14 +3145,14 @@ fn apply_default_scene_input_links(definition: &SceneDocument, build: &mut Scene
                 min: 0.55,
                 max: 1.0,
             });
-        create_bass_link(build, &target, "bass", range);
+        create_bass_link(build, &target, "bass", range, None);
         excluded.insert(target.input_id);
     } else if let Some(target) = find_group_alpha_target(build, LINK_GROUP_PRIORITY, &excluded) {
         let range = modv_engine::scene_link_defaults::LinkRange {
             min: 0.55,
             max: 1.0,
         };
-        create_bass_link(build, &target, "bass", range);
+        create_bass_link(build, &target, "bass", range, None);
         excluded.insert(target.input_id);
     }
 
@@ -3358,14 +3395,29 @@ fn create_bass_link(
     target: &LinkTarget,
     feature: &str,
     range: modv_engine::scene_link_defaults::LinkRange,
+    smoothing: Option<f64>,
 ) {
     let link = default_link_for_input(LinkMode::Bass, &target.input_id, Some(feature), Some(range));
+    let feature = link.feature.clone().unwrap_or_else(|| "bass".to_string());
+
+    // `createBassLink` (`scenes.js:770-778`): a usable smoothing amount mints a
+    // `meyda/getSmoothingId` id and widens the args to
+    // `[feature, smoothingId, smoothingValue]`; without one the getter reads
+    // the raw feature.
+    let mut args = vec![json!(feature)];
+    if let Some(amount) = smoothing.and_then(|amount| get_feature_smoothing(Some(&json!(amount)))) {
+        let smoothing_id = crate::ids::uuid_v4();
+        build.smoothing_ids.push(smoothing_id.clone());
+        args.push(json!(smoothing_id));
+        args.push(json_number(amount));
+    }
+
     let value = json!({
         "id": target.input_id,
         "type": link.r#type,
         "location": link.location,
         "source": link.source,
-        "args": [link.feature.unwrap_or_else(|| "bass".to_string())],
+        "args": args,
         "min": json_number(link.range.min),
         "max": json_number(link.range.max),
     });
@@ -3852,6 +3904,32 @@ mod tests {
             .expect("scene loads");
     }
 
+    /// The bind-side input id a default Scene link targets, resolved from the
+    /// built document (Group → Module → control input).
+    fn scene_link_input_id(
+        scene: &Value,
+        link: &modv_engine::default_scenes::SceneInputLink,
+    ) -> String {
+        let group = scene["groups"]
+            .as_array()
+            .expect("groups")
+            .iter()
+            .find(|group| group["name"] == json!(link.group))
+            .unwrap_or_else(|| panic!("group {}", link.group));
+        let Some(module_name) = link.module.as_deref() else {
+            return group_control_input_id(group, &link.control).expect("group control input");
+        };
+        let module_id = group["modules"]
+            .as_array()
+            .expect("group modules")
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|id| scene["modules"][*id]["$moduleName"] == json!(module_name))
+            .unwrap_or_else(|| panic!("module {module_name} in group {}", link.group));
+        module_control_input_id(&scene["modules"][module_id], &link.control)
+            .expect("module control input")
+    }
+
     // ————————————————— applyScene —————————————————
 
     #[test]
@@ -4258,7 +4336,8 @@ mod tests {
             .expect("default definition");
         let mut skipped = 0usize;
         let document =
-            build_default_scene_document(&store.registry, definition, &json!({}), &mut skipped);
+            build_default_scene_document(&store.registry, definition, &json!({}), &mut skipped)
+                .document;
         let document_links = document["inputs"]["inputLinks"]
             .as_object()
             .expect("built links")
@@ -4291,13 +4370,103 @@ mod tests {
     }
 
     #[test]
+    fn default_scene_links_keep_their_declared_smoothing() {
+        // `createBassLink` (`scenes.js:758-789`) materialises a declared
+        // smoothing as `args: [feature, smoothingId, value]` after minting the
+        // id through `meyda/getSmoothingId`. The engine parsed the value but
+        // never forwarded it, so the v15 scenes' `smoothing: 0.6` links fed
+        // raw bass in engine mode.
+        //
+        // Every current smoothing link targets an ISF corpus shader, so the
+        // store needs the corpus registry for the links to resolve.
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        if !corpus.is_dir() {
+            eprintln!(
+                "skipping default-scene smoothing test: ISF corpus missing at {}",
+                corpus.display()
+            );
+            return;
+        }
+        let mut store = Store::with_state_path_and_isf(None, Some(&corpus));
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("seeding");
+
+        let mut checked = 0usize;
+        for definition in modv_engine::default_scenes::default_scenes() {
+            for link in &definition.input_links {
+                let Some(amount) = link.smoothing else {
+                    continue;
+                };
+                if link.source.as_deref() == Some("tween") {
+                    continue;
+                }
+                let scene = store
+                    .scenes_state()
+                    .scenes
+                    .iter()
+                    .find(|scene| scene["name"] == json!(definition.name))
+                    .unwrap_or_else(|| panic!("{} is seeded", definition.name));
+                let input_id = scene_link_input_id(scene, link);
+                let built = &scene["inputs"]["inputLinks"][input_id.as_str()];
+                let args = built["args"].as_array().expect("link args");
+                assert_eq!(
+                    args.len(),
+                    3,
+                    "a declared smoothing emits the args triple: {built}"
+                );
+                assert_eq!(
+                    args[0],
+                    json!(link.feature.clone().unwrap_or_else(|| "bass".to_string()))
+                );
+                let smoothing_id = args[1].as_str().expect("smoothing id");
+                assert_eq!(smoothing_id.len(), 36, "the id is a uuid: {built}");
+                assert_eq!(
+                    args[2].as_f64(),
+                    Some(amount),
+                    "the declared smoothing amount travels: {built}"
+                );
+                assert_eq!(
+                    store.link_smoothing_value(smoothing_id),
+                    Some(0.0),
+                    "the minted id is registered in the smoothing registry"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "the v15 scenes declare smoothing links");
+
+        // A link without a declared smoothing keeps the single-arg shape.
+        let plain = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .flat_map(|scene| {
+                scene["inputs"]["inputLinks"]
+                    .as_object()
+                    .map(|links| links.values().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .find(|link| {
+                link["location"] == json!("meyda/getFeature")
+                    && link["args"].as_array().is_some_and(|args| args.len() == 1)
+            });
+        assert!(
+            plain.is_some(),
+            "an automatic bass link still emits args: [feature]"
+        );
+    }
+
+    #[test]
     fn re_applying_a_scene_keeps_tween_playheads_and_prunes_unknown_ids() {
         let mut store = Store::new();
         let definition = modv_engine::default_scenes::get_default_definition("Polygon Grid")
             .expect("default definition");
         let mut skipped = 0usize;
         let document =
-            build_default_scene_document(&store.registry, definition, &json!({}), &mut skipped);
+            build_default_scene_document(&store.registry, definition, &json!({}), &mut skipped)
+                .document;
 
         seed_scene(&mut store, document.clone());
         store
@@ -5142,6 +5311,109 @@ mod tests {
             )
             .expect("clearSceneCell dispatches");
         assert_eq!(cleared["groups"][1]["modules"], json!([]));
+    }
+
+    #[test]
+    fn clearing_a_scene_cell_empties_the_live_group_and_its_capture() {
+        // `clearSceneCell` (`scenes.js:3399-3420`) removes every Module the
+        // live row Group owns and then rewrites the Group's module list with
+        // `groups/REPLACE_GROUP_MODULES { modules: [] }`. Only the removal had
+        // been ported, so the live Group kept phantom module ids and the next
+        // cell capture serialised a Group whose ids had no snapshots.
+        let mut store = Store::new();
+        seed_scene(&mut store, two_row_scene("scene-a"));
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-a" }))
+            .expect("applyScene dispatches");
+
+        let live_row_group = |store: &Store| {
+            store
+                .state()
+                .groups
+                .iter()
+                .find(|group| {
+                    group.scene_id.as_deref() == Some("scene-a")
+                        && group.scene_row == Some(1)
+                        && group.transition_ghost != Some(true)
+                })
+                .cloned()
+                .expect("the live row-1 Group")
+        };
+        let live_module_ids = live_row_group(&store).modules;
+        assert_eq!(live_module_ids.len(), 1, "the row owns one live Module");
+
+        store
+            .dispatch(
+                "scenes/clearSceneCell",
+                json!({ "sceneId": "scene-a", "rowIndex": 1 }),
+            )
+            .expect("clearSceneCell dispatches");
+
+        assert!(
+            live_row_group(&store).modules.is_empty(),
+            "the live Group keeps no phantom module ids: {:?}",
+            live_row_group(&store).modules
+        );
+        for module_id in &live_module_ids {
+            assert!(
+                !store.state().modules.contains_key(module_id),
+                "the removed Module instance is gone: {module_id}"
+            );
+        }
+
+        // A capture right after the clear round-trips the empty cell instead
+        // of writing the phantom ids back into the Scene document.
+        let captured = store
+            .dispatch(
+                "scenes/captureSceneRowToScene",
+                json!({ "sceneId": "scene-a", "rowIndex": 1 }),
+            )
+            .expect("captureSceneRowToScene dispatches");
+        assert_eq!(captured["groups"][1]["modules"], json!([]));
+        let snapshots = captured["modules"].as_object().expect("module snapshots");
+        for module_id in captured["groups"][1]["modules"]
+            .as_array()
+            .expect("row modules")
+            .iter()
+            .filter_map(Value::as_str)
+        {
+            assert!(
+                snapshots.contains_key(module_id),
+                "every captured module id has a snapshot: {captured}"
+            );
+        }
+        assert!(
+            !snapshots.contains_key("doc-ball"),
+            "the cleared module snapshot is not resurrected: {captured}"
+        );
+    }
+
+    #[test]
+    fn capturing_an_unowned_row_returns_null_and_leaves_the_scene_alone() {
+        // `captureSceneRowToScene` (`scenes.js:3505-3530`) only captures the
+        // active row's Group or a Group stamped for this Scene and returns
+        // `null` otherwise. The positional `find_live_row_group` fallback wrote
+        // whichever Scene owned the live row into this Scene's cell.
+        let mut store = Store::new();
+        for (id, name) in [("scene-a", "Alpha"), ("scene-b", "Beta")] {
+            let mut scene = two_row_scene(id);
+            scene["name"] = json!(name);
+            seed_scene(&mut store, scene);
+        }
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-a" }))
+            .expect("applyScene dispatches");
+
+        let beta_before = find_default_scene(&store, "Beta").clone();
+        let captured = store
+            .dispatch(
+                "scenes/captureSceneRowToScene",
+                json!({ "sceneId": "scene-b", "rowIndex": 1 }),
+            )
+            .expect("captureSceneRowToScene dispatches");
+
+        assert_eq!(captured, Value::Null, "no live row belongs to Beta");
+        assert_eq!(find_default_scene(&store, "Beta"), &beta_before);
     }
 
     #[test]

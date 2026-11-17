@@ -484,6 +484,24 @@ impl Store {
         self.deltas.len()
     }
 
+    /// Register `meyda/getSmoothingId` ids in the smoothing registry.
+    ///
+    /// The JS `getSmoothingId` action calls `addSmoothingId`, which starts the
+    /// id's smoothed value at `0` (`audio-features.js`); the engine mints ids
+    /// while it builds a default Scene document, so the store seeds them here.
+    pub(crate) fn register_link_smoothing(&mut self, ids: &[String]) {
+        for id in ids {
+            self.link_smoothing.entry(id.clone()).or_insert(0.0);
+        }
+    }
+
+    /// The current value of a `meyda/getFeature` smoothing id, when the engine
+    /// has one registered (tests / diagnostics).
+    #[cfg(test)]
+    pub fn link_smoothing_value(&self, id: &str) -> Option<f64> {
+        self.link_smoothing.get(id).copied()
+    }
+
     /// Apply one Vuex-style action/mutation and emit its mirror delta.
     ///
     /// [`Store::dispatch`] is used for both `state/dispatch` and
