@@ -75,8 +75,19 @@ pub struct InputDeviceInfo {
     pub channels: u16,
     /// Supported sample rates (the endpoints of every advertised range).
     pub sample_rates: Vec<u32>,
-    /// Default input sample rate.
+    /// Default input sample rate as cpal reports it.
+    ///
+    /// This is `default_input_config()`'s rate, not the rate modV opens: the
+    /// ALSA backend hard-codes 44.1 kHz whenever 44.1 kHz sits inside an
+    /// advertised range. Use [`InputDeviceInfo::capture_sample_rate`] for the
+    /// rate [`AudioCapture::start`] would negotiate.
     pub default_sample_rate: u32,
+    /// Sample rate [`AudioCapture::start`] would request for
+    /// [`CaptureConfig::default()`] on this device.
+    ///
+    /// [`DEFAULT_SAMPLE_RATE`] whenever an advertised range covers it,
+    /// otherwise the cpal default rate (see [`capture_rate`]).
+    pub capture_sample_rate: u32,
 }
 
 /// Capture failure.
@@ -350,6 +361,83 @@ pub fn choose_config(ranges: &[ConfigRange], sample_rate: u32, channels: u16) ->
     best.map(|(index, _)| index)
 }
 
+/// The sample rate [`AudioCapture::start`] would negotiate for
+/// [`CaptureConfig::default()`] on a device advertising `ranges`.
+///
+/// [`DEFAULT_SAMPLE_RATE`] wins whenever an advertised range covers it, because
+/// that is what [`choose_config`] selects. Only when no range covers 48 kHz
+/// does the capture open at `default_rate` — cpal's `default_input_config()`
+/// rate, whose ALSA backend reports 44.1 kHz whenever 44.1 kHz is advertised.
+/// `None` means cpal could not report a default at all; the reported rate is
+/// then [`DEFAULT_SAMPLE_RATE`], matching [`input_devices`]' fallback.
+///
+/// The rate is what capture *would* open with (the true rate is only known
+/// after the stream starts); [`AudioCapture::sample_rate`] reports the
+/// negotiated one.
+pub fn capture_rate(default_rate: Option<u32>, ranges: &[ConfigRange]) -> u32 {
+    if choose_config(ranges, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS).is_some() {
+        DEFAULT_SAMPLE_RATE
+    } else {
+        default_rate.unwrap_or(DEFAULT_SAMPLE_RATE)
+    }
+}
+
+impl From<cpal::SupportedStreamConfigRange> for ConfigRange {
+    fn from(range: cpal::SupportedStreamConfigRange) -> Self {
+        Self {
+            channels: range.channels(),
+            min_sample_rate: range.min_sample_rate(),
+            max_sample_rate: range.max_sample_rate(),
+            sample_format: range.sample_format(),
+        }
+    }
+}
+
+/// The device's advertised input configurations; enumeration failures yield an
+/// empty list so a single unusable device never empties the whole table.
+fn advertised_ranges(device: &cpal::Device) -> Vec<ConfigRange> {
+    match device.supported_input_configs() {
+        Ok(configs) => configs.map(ConfigRange::from).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Assemble one [`InputDeviceInfo`] from the values [`input_devices`] reads off
+/// cpal.
+///
+/// Pure, so the mapping (advertised range endpoints plus the cpal default, and
+/// the separate capture-rate decision) is testable without a device.
+fn device_info(
+    name: String,
+    id: String,
+    channels: u16,
+    default_sample_rate: Option<u32>,
+    ranges: &[ConfigRange],
+) -> InputDeviceInfo {
+    let mut sample_rates = Vec::new();
+
+    for range in ranges {
+        sample_rates.push(range.min_sample_rate);
+        sample_rates.push(range.max_sample_rate);
+    }
+
+    let capture_sample_rate = capture_rate(default_sample_rate, ranges);
+    let default_sample_rate = default_sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE);
+
+    sample_rates.push(default_sample_rate);
+    sample_rates.sort_unstable();
+    sample_rates.dedup();
+
+    InputDeviceInfo {
+        name,
+        id,
+        channels,
+        sample_rates,
+        default_sample_rate,
+        capture_sample_rate,
+    }
+}
+
 /// Enumerate the host's input devices. Backend failures yield an empty list.
 pub fn input_devices() -> Vec<InputDeviceInfo> {
     let host = cpal::default_host();
@@ -369,35 +457,17 @@ pub fn input_devices() -> Vec<InputDeviceInfo> {
             .map(|id| id.to_string())
             .unwrap_or_else(|_| name.clone());
         let default = device.default_input_config().ok();
-        let channels = default
-            .as_ref()
-            .map(|config| config.channels())
-            .unwrap_or(0);
-        let default_sample_rate = default
-            .as_ref()
-            .map(|config| config.sample_rate())
-            .unwrap_or(DEFAULT_SAMPLE_RATE);
 
-        let mut sample_rates = Vec::new();
-
-        if let Ok(configs) = device.supported_input_configs() {
-            for config in configs {
-                sample_rates.push(config.min_sample_rate());
-                sample_rates.push(config.max_sample_rate());
-            }
-        }
-
-        sample_rates.push(default_sample_rate);
-        sample_rates.sort_unstable();
-        sample_rates.dedup();
-
-        infos.push(InputDeviceInfo {
+        infos.push(device_info(
             name,
             id,
-            channels,
-            sample_rates,
-            default_sample_rate,
-        });
+            default
+                .as_ref()
+                .map(|config| config.channels())
+                .unwrap_or(0),
+            default.as_ref().map(|config| config.sample_rate()),
+            &advertised_ranges(&device),
+        ));
     }
 
     infos
@@ -586,12 +656,7 @@ impl AudioCapture {
         let ranges: Vec<ConfigRange> = device
             .supported_input_configs()
             .map_err(|error| CaptureError::ConfigUnsupported(error.to_string()))?
-            .map(|range| ConfigRange {
-                channels: range.channels(),
-                min_sample_rate: range.min_sample_rate(),
-                max_sample_rate: range.max_sample_rate(),
-                sample_format: range.sample_format(),
-            })
+            .map(ConfigRange::from)
             .collect();
 
         let (channels, sample_rate, sample_format) =
@@ -877,6 +942,86 @@ mod tests {
 
         assert_eq!(choose_config(&ranges, 96_000, 2), None);
         assert_eq!(choose_config(&[], 48_000, 2), None);
+    }
+
+    fn range(min_sample_rate: u32, max_sample_rate: u32) -> ConfigRange {
+        ConfigRange {
+            channels: 2,
+            min_sample_rate,
+            max_sample_rate,
+            sample_format: SampleFormat::F32,
+        }
+    }
+
+    #[test]
+    fn capture_rate_keeps_48k_when_an_advertised_range_covers_it() {
+        // cpal's ALSA `default_input_config()` reports 44100 whenever 44.1 kHz
+        // sits in an advertised range; capture still asks for 48 kHz.
+        assert_eq!(capture_rate(Some(44_100), &[range(44_100, 48_000)]), 48_000);
+        assert_eq!(
+            capture_rate(Some(44_100), &[range(8_000, 44_100), range(48_000, 96_000)]),
+            48_000,
+            "the 48 kHz range wins even though 44.1 kHz is also advertised"
+        );
+    }
+
+    #[test]
+    fn capture_rate_ignores_the_virtual_alsa_any_rate_bounds() {
+        // `alsa:pipewire` / `alsa:default` advertise 1..=u32::MAX ("no limit").
+        assert_eq!(capture_rate(Some(44_100), &[range(1, u32::MAX)]), 48_000);
+    }
+
+    #[test]
+    fn capture_rate_falls_back_to_the_device_default_when_48k_is_not_advertised() {
+        assert_eq!(
+            capture_rate(Some(44_100), &[range(8_000, 44_100)]),
+            44_100,
+            "no range reaches 48 kHz: capture opens at the device default"
+        );
+        assert_eq!(capture_rate(Some(96_000), &[range(96_000, 96_000)]), 96_000);
+    }
+
+    #[test]
+    fn capture_rate_uses_the_default_when_nothing_was_advertised() {
+        assert_eq!(capture_rate(Some(48_000), &[]), 48_000);
+        assert_eq!(capture_rate(Some(44_100), &[]), 44_100);
+    }
+
+    #[test]
+    fn capture_rate_falls_back_to_48k_when_no_default_rate_exists() {
+        assert_eq!(capture_rate(None, &[]), DEFAULT_SAMPLE_RATE);
+        assert_eq!(
+            capture_rate(None, &[range(8_000, 44_100)]),
+            DEFAULT_SAMPLE_RATE,
+            "the capture would fail to start; the table still reports the engine rate"
+        );
+    }
+
+    #[test]
+    fn device_info_reports_the_capture_rate_next_to_the_advertised_rates() {
+        let info = device_info(
+            "USB Microphone".to_string(),
+            "alsa:hw:CARD=CODEC".to_string(),
+            2,
+            Some(44_100),
+            &[range(8_000, 48_000)],
+        );
+
+        assert_eq!(
+            info.default_sample_rate, 44_100,
+            "cpal's heuristic stays verbatim"
+        );
+        assert_eq!(info.sample_rates, vec![8_000, 44_100, 48_000]);
+        assert_eq!(info.capture_sample_rate, 48_000);
+    }
+
+    #[test]
+    fn device_info_reports_a_capture_rate_for_a_device_without_configs() {
+        let info = device_info("Null".to_string(), "alsa:null".to_string(), 0, None, &[]);
+
+        assert_eq!(info.sample_rates, vec![DEFAULT_SAMPLE_RATE]);
+        assert_eq!(info.default_sample_rate, DEFAULT_SAMPLE_RATE);
+        assert_eq!(info.capture_sample_rate, DEFAULT_SAMPLE_RATE);
     }
 
     #[test]

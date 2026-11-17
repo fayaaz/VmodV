@@ -134,6 +134,13 @@ pub fn resolve_input_device(wanted: &str, devices: &[InputDeviceInfo]) -> Option
 /// Render the input-device table `--list-audio-devices` prints (and the
 /// missing-device error appends).
 ///
+/// Each row shows the advertised range extremes (`sample rates (Hz)`, verbatim
+/// — the ALSA virtual devices advertise `1 … 4294967295`) *and* the rate
+/// capture will actually ask for (`capture rate`). The two differ because
+/// cpal's `default_input_config()` reports 44.1 kHz whenever 44.1 kHz is
+/// advertised, while [`CaptureConfig::default()`] asks for 48 kHz whenever a
+/// range covers it.
+///
 /// An empty list is not an error: headless/CI hosts often have no ALSA
 /// device, and the hint points at the system-audio source instead.
 pub fn describe_devices(devices: &[InputDeviceInfo]) -> String {
@@ -158,10 +165,11 @@ pub fn describe_devices(devices: &[InputDeviceInfo]) -> String {
         };
 
         table.push_str(&format!(
-            "\n  [{index}] {name}\n      id: {id}\n      channels: {channels}\n      sample rates (Hz): {rates}",
+            "\n  [{index}] {name}\n      id: {id}\n      channels: {channels}\n      sample rates (Hz): {rates}\n      capture rate: {capture_rate} Hz",
             name = device.name,
             id = device.id,
             channels = device.channels,
+            capture_rate = device.capture_sample_rate,
         ));
     }
 
@@ -353,7 +361,8 @@ mod tests {
             id: id.to_string(),
             channels: 2,
             sample_rates: vec![44_100, 48_000],
-            default_sample_rate: 48_000,
+            default_sample_rate: 44_100,
+            capture_sample_rate: 48_000,
         }
     }
 
@@ -390,7 +399,47 @@ mod tests {
         assert!(table.contains("USB Microphone"), "{table}");
         assert!(table.contains("id: alsa:usb"), "{table}");
         assert!(table.contains("channels: 2"), "{table}");
-        assert!(table.contains("44100, 48000"), "{table}");
+        assert!(table.contains("sample rates (Hz): 44100, 48000"), "{table}");
+        assert!(table.contains("capture rate: 48000 Hz"), "{table}");
+    }
+
+    /// The table must show cpal's advertised extremes *and* the rate modV
+    /// opens: the ALSA backend reports 44.1 kHz as the device default whenever
+    /// 44.1 kHz is advertised, which is not what capture negotiates.
+    #[test]
+    fn device_table_distinguishes_advertised_rates_from_the_capture_rate() {
+        let mut device = device("PipeWire Sound Server", "alsa:pipewire");
+
+        device.sample_rates = vec![1, 44_100, 384_000];
+        device.default_sample_rate = 44_100;
+        device.capture_sample_rate = 48_000;
+
+        let table = describe_devices(&[device]);
+
+        assert!(
+            table.contains("sample rates (Hz): 1, 44100, 384000"),
+            "the raw advertised list stays verbatim: {table}"
+        );
+        assert!(
+            table.contains("capture rate: 48000 Hz"),
+            "the open rate is reported separately: {table}"
+        );
+        assert!(
+            table.contains("channels: 2"),
+            "the rest of the row is unchanged: {table}"
+        );
+    }
+
+    #[test]
+    fn device_table_prints_unknown_rates_but_still_reports_the_capture_rate() {
+        let mut device = device("USB Microphone", "alsa:usb");
+
+        device.sample_rates.clear();
+
+        let table = describe_devices(&[device]);
+
+        assert!(table.contains("sample rates (Hz): unknown"), "{table}");
+        assert!(table.contains("capture rate: 48000 Hz"), "{table}");
     }
 
     #[test]

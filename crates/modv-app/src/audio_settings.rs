@@ -325,6 +325,7 @@ mod tests {
             channels: 2,
             sample_rates: vec![44_100, 48_000],
             default_sample_rate: 48_000,
+            capture_sample_rate: 48_000,
         }
     }
 
