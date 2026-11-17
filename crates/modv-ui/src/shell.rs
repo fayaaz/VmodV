@@ -28,6 +28,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     shortcuts_window(ui.ctx(), state);
     link_editor_window(ui, state);
     bpm_window(ui.ctx(), snapshot, state);
+    command_palette(ui.ctx(), snapshot, state);
 }
 
 /// Keyboard shortcuts that work globally (outside text fields).
@@ -47,12 +48,16 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.queue(UiCommand::SaveSnapshot);
     }
     if search {
+        state.show_search = true;
         state.search_focus = true;
+        state.command_query.clear();
+        state.command_selection = 0;
     }
     if help {
         state.show_shortcuts = !state.show_shortcuts;
     }
     if escape {
+        state.show_search = false;
         state.show_shortcuts = false;
         state.show_about = false;
         state.scene_grid.renaming = None;
@@ -1683,6 +1688,183 @@ fn gallery_tile(
             ui.close();
         }
     });
+}
+
+enum PaletteAction {
+    Action(&'static str, serde_json::Value),
+    Command(UiCommand),
+    AddModule(String),
+    Scene(String),
+}
+
+fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
+    if !state.show_search {
+        return;
+    }
+    let mut commands: Vec<(String, PaletteAction)> = vec![
+        (
+            "Start/stop performance mode".to_string(),
+            PaletteAction::Action(
+                "scenes/setPerformanceEnabled",
+                serde_json::json!({ "enabled": !snapshot.performance.enabled }),
+            ),
+        ),
+        (
+            "Create Group".to_string(),
+            PaletteAction::Action("groups/createGroup", serde_json::json!({})),
+        ),
+        (
+            "Add empty Scene".to_string(),
+            PaletteAction::Action(
+                "scenes/addEmptyScene",
+                serde_json::json!({ "name": "New Scene" }),
+            ),
+        ),
+        (
+            "Save snapshot".to_string(),
+            PaletteAction::Command(UiCommand::SaveSnapshot),
+        ),
+        (
+            "Open output window".to_string(),
+            PaletteAction::Command(UiCommand::OpenOutputWindow),
+        ),
+        (
+            "Close output window".to_string(),
+            PaletteAction::Command(UiCommand::CloseOutputWindow),
+        ),
+        (
+            "Toggle output fullscreen".to_string(),
+            PaletteAction::Command(UiCommand::ToggleOutputFullscreen),
+        ),
+        (
+            "Show keyboard shortcuts".to_string(),
+            PaletteAction::Action(
+                "ui/showShortcuts",
+                serde_json::json!({}),
+            ),
+        ),
+    ];
+    for scene in &snapshot.scenes {
+        commands.push((
+            format!("Apply Scene: {}", scene.name),
+            PaletteAction::Scene(scene.id.clone()),
+        ));
+    }
+    if let Some(group_id) = state.selected_group.clone() {
+        for module in snapshot.registered.iter().take(80) {
+            commands.push((
+                format!("Add module: {} (to selected Group)", module.name),
+                PaletteAction::AddModule(format!("{}|{}", module.name, group_id)),
+            ));
+        }
+    }
+
+    let query = state.command_query.trim().to_ascii_lowercase();
+    let filtered: Vec<&(String, PaletteAction)> = commands
+        .iter()
+        .filter(|(label, _)| query.is_empty() || label.to_ascii_lowercase().contains(&query))
+        .take(14)
+        .collect();
+    if state.command_selection >= filtered.len() {
+        state.command_selection = filtered.len().saturating_sub(1);
+    }
+
+    let mut open = true;
+    let mut cancel = false;
+    let mut execute = None;
+    egui::Window::new("Command palette")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(520.0)
+        .fixed_pos(egui::pos2(
+            ctx.content_rect().center().x - 260.0,
+            ctx.content_rect().top() + 80.0,
+        ))
+        .show(ctx, |ui| {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut state.command_query)
+                    .hint_text("Type a command, Scene or module  (Enter to run)")
+                    .desired_width(f32::INFINITY),
+            );
+            if state.search_focus {
+                response.request_focus();
+                state.search_focus = false;
+            }
+            if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
+                state.command_selection =
+                    (state.command_selection + 1).min(filtered.len().saturating_sub(1));
+            }
+            if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
+                state.command_selection = state.command_selection.saturating_sub(1);
+            }
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+            ui.separator();
+            if filtered.is_empty() {
+                ui.label(
+                    egui::RichText::new("No matching command")
+                        .size(11.0)
+                        .color(theme::MUTED),
+                );
+            }
+            for (index, (label, _)) in filtered.iter().enumerate() {
+                let selected = index == state.command_selection;
+                if ui
+                    .selectable_label(selected, egui::RichText::new(label).size(11.0))
+                    .clicked()
+                {
+                    execute = Some(index);
+                }
+            }
+            if ui.input(|input| input.key_pressed(egui::Key::Enter))
+                && let Some((_, action)) = filtered.get(state.command_selection)
+            {
+                match action {
+                    PaletteAction::Action(action, payload) => {
+                        state.push_action(*action, payload.clone());
+                    }
+                    PaletteAction::Command(command) => state.queue(command.clone()),
+                    PaletteAction::AddModule(value) => {
+                        if let Some((module, group)) = value.split_once('|') {
+                            state.actions.push(UiAction::add_module_to_group(module, group));
+                        }
+                    }
+                    PaletteAction::Scene(scene_id) => {
+                        state.push_action(
+                            "scenes/applyScene",
+                            serde_json::json!({ "sceneId": scene_id }),
+                        );
+                    }
+                }
+                state.show_search = false;
+            }
+        });
+
+    if let Some(index) = execute
+        && let Some((_, action)) = filtered.get(index)
+    {
+        match action {
+            PaletteAction::Action(action, payload) => state.push_action(*action, payload.clone()),
+            PaletteAction::Command(command) => state.queue(command.clone()),
+            PaletteAction::AddModule(value) => {
+                if let Some((module, group)) = value.split_once('|') {
+                    state.actions.push(UiAction::add_module_to_group(module, group));
+                }
+            }
+            PaletteAction::Scene(scene_id) => {
+                state.push_action(
+                    "scenes/applyScene",
+                    serde_json::json!({ "sceneId": scene_id }),
+                );
+            }
+        }
+        state.show_search = false;
+    }
+    if cancel || !open {
+        state.show_search = false;
+    }
 }
 
 fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
