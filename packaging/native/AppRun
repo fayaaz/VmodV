@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export MODV_ISF_DIR="${MODV_ISF_DIR:-$HERE/usr/share/vmodv/isf}"
+export MODV_ASSETS_DIR="${MODV_ASSETS_DIR:-$HERE/usr/share/vmodv/textures}"
+exec "$HERE/usr/bin/modv" "$@"

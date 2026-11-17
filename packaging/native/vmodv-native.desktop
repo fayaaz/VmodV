@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VmodV Native
+Comment=Native Rust modV audio visualiser
+Exec=modv
+Icon=vmodv-native
+Terminal=false
+Categories=Graphics;AudioVideo;
+StartupNotify=true

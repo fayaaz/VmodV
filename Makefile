@@ -62,6 +62,8 @@ GUI_RUN_ARGS_X11 := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(X11_G
 .DEFAULT_GOAL := build
 RUST_IMAGE ?= modv-rust:local
 CARGO_VOLUME ?= modv-cargo
+# Native AppImage version (the crates are 0.1.0); packaging metadata only.
+NATIVE_VERSION ?= 0.1.0
 
 # Building the engine and the installers needs several GB of BuildKit cache.
 # Fail before a build starts when the filesystem is nearly full instead of
@@ -69,7 +71,7 @@ CARGO_VOLUME ?= modv-cargo
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage clean docker-deps docker-node-modules docker-reset install dev dev-native native native-debug lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
+.PHONY: build appimage appimage-native clean docker-deps docker-node-modules docker-reset install dev dev-native native native-debug lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -95,6 +97,19 @@ build: disk-guard
 
 # AppImage-only variant of `build`. The deb packaging step is by far the
 # slowest part (~70s vs ~2s for the AppImage), so this skips it for local runs.
+appimage-native: disk-guard docker-cargo-volume
+	mkdir -p "$(DIST_DIR)"
+	$(DOCKER) run --rm \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		-e HOME=/tmp \
+		-e CARGO_HOME=/cargo \
+		-e APP_VERSION=$(NATIVE_VERSION) \
+		-v "$(CURDIR)":/app \
+		-v "$(CARGO_VOLUME)":/cargo \
+		-w /app \
+		$(RUST_IMAGE) \
+		bash /app/tools/native-appimage.sh
+
 appimage: disk-guard
 	mkdir -p "$(DIST_DIR)"
 	find "$(DIST_DIR)" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
