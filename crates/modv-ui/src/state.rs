@@ -156,6 +156,7 @@ pub enum SidePanelTab {
     Media,
     Info,
     Plugins,
+    Midi,
 }
 
 /// The focused-input link editor's draft values.

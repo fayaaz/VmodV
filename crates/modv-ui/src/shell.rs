@@ -857,6 +857,15 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                 {
                     state.side_panel_tab = SidePanelTab::Plugins;
                 }
+                if ui
+                    .selectable_label(
+                        state.side_panel_tab == SidePanelTab::Midi,
+                        egui::RichText::new("MIDI").strong().size(10.0),
+                    )
+                    .clicked()
+                {
+                    state.side_panel_tab = SidePanelTab::Midi;
+                }
             });
             ui.separator();
 
@@ -874,6 +883,10 @@ fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
                         }
                         SidePanelTab::Plugins => {
                             plugins_panel(ui);
+                            return;
+                        }
+                        SidePanelTab::Midi => {
+                            midi_panel(ui, snapshot, state);
                             return;
                         }
                         SidePanelTab::Inspector => {}
@@ -1018,6 +1031,70 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
         .size(9.0)
         .color(theme::MUTED),
     );
+}
+
+fn midi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let midi = &snapshot.midi;
+    if !midi.available {
+        ui.label(
+            egui::RichText::new("MIDI is unavailable")
+                .strong()
+                .color(theme::DANGER),
+        );
+        if let Some(error) = &midi.error {
+            ui.label(egui::RichText::new(error).size(10.0).color(theme::MUTED));
+        }
+        return;
+    }
+    ui.label(
+        egui::RichText::new(format!("{} MIDI input(s)", midi.devices.len()))
+            .size(10.0)
+            .color(theme::MUTED),
+    );
+    ui.separator();
+    if midi.devices.is_empty() {
+        ui.label(
+            egui::RichText::new("No MIDI devices detected. Hot-plug is polled at 1 Hz.")
+                .size(10.0)
+                .color(theme::MUTED),
+        );
+    }
+    for device in &midi.devices {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(if device.connected { "●" } else { "○" })
+                    .color(if device.connected { theme::OK } else { theme::MUTED }),
+            );
+            ui.label(egui::RichText::new(&device.name).size(11.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(if device.connected { "live" } else { "gone" })
+                        .monospace()
+                        .size(8.0)
+                        .color(theme::MUTED),
+                );
+            });
+        });
+        for (label, key, value) in [
+            ("Input", "listenForInput", device.listen_for_input),
+            ("Clock", "listenForClock", device.listen_for_clock),
+            ("CC latch", "ccLatch", device.cc_latch),
+            ("Note latch", "noteOnLatch", device.note_on_latch),
+        ] {
+            let mut checked = value;
+            if ui.checkbox(&mut checked, label).changed() {
+                state.push_action(
+                    "midi/UPDATE_DEVICE",
+                    serde_json::json!({
+                        "id": device.key,
+                        "key": key,
+                        "value": checked,
+                    }),
+                );
+            }
+        }
+        ui.separator();
+    }
 }
 
 fn plugins_panel(ui: &mut egui::Ui) {

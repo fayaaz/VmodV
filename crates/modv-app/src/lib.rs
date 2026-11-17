@@ -13,6 +13,7 @@ pub mod headless;
 pub mod ids;
 pub mod input_links;
 pub mod media;
+pub mod midi;
 pub mod module_preview;
 pub mod module_registry;
 pub mod native;

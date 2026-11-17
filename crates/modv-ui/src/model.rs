@@ -46,6 +46,8 @@ pub struct EngineSnapshot {
     pub input_links: HashMap<String, InputLinkView>,
     /// Live capture state for the Media panel.
     pub media: MediaSnapshot,
+    /// Native MIDI input state.
+    pub midi: MidiSnapshot,
 }
 
 /// One uploaded preview texture (an egui texture owned by the shell).
@@ -97,6 +99,27 @@ pub struct MediaSourceView {
     pub frames: u64,
     pub dropped: u64,
     pub last_error: Option<String>,
+}
+
+/// Native MIDI availability and devices.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MidiSnapshot {
+    pub available: bool,
+    pub error: Option<String>,
+    pub devices: Vec<MidiDeviceView>,
+}
+
+/// One MIDI input and its engine flags.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MidiDeviceView {
+    /// The engine state key (`${id}-${name}-${manufacturer}`).
+    pub key: String,
+    pub name: String,
+    pub connected: bool,
+    pub listen_for_input: bool,
+    pub listen_for_clock: bool,
+    pub cc_latch: bool,
+    pub note_on_latch: bool,
 }
 
 /// A MediaHub operation requested by the UI.

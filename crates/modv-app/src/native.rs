@@ -24,7 +24,7 @@ use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_pr
 use modv_render::wgpu;
 use modv_ui::{
     AudioView, CameraView, EngineHealth, EngineSnapshot, GroupView, InputLinkView, MediaAction,
-    MediaSnapshot, MediaSourceView, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
+    MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
     PreviewTexture, PropView, SceneCellView, SceneView, TextureSourceView, TweenView, UiAction,
     UiCommand, UiState, gallery_preview_key, scene_preview_key,
 };
@@ -39,6 +39,7 @@ use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
 use crate::media::MediaHub;
+use crate::midi::MidiClient;
 use crate::report::AdapterSummary;
 use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
@@ -116,6 +117,7 @@ pub struct NativeApp {
     last_camera_scan: Instant,
     audio_feed: Option<AudioFeed>,
     audio_error_logged: bool,
+    midi_client: MidiClient,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -187,6 +189,12 @@ impl NativeApp {
         }
         apply_startup_scene(&mut store, cli.apply_scene.as_deref());
         let audio_feed = open_native_audio(&cli);
+        let midi_client = MidiClient::new();
+        if midi_client.available() {
+            eprintln!("ui: INFO MIDI input available (hot-plug polled at 1 Hz)");
+        } else if let Some(error) = midi_client.error() {
+            eprintln!("ui: WARN MIDI unavailable: {error}");
+        }
 
         let egui_ctx = egui::Context::default();
         modv_ui::theme::apply(&egui_ctx);
@@ -222,6 +230,7 @@ impl NativeApp {
             last_camera_scan: start.checked_sub(Duration::from_secs(10)).unwrap_or(start),
             audio_feed,
             audio_error_logged: false,
+            midi_client,
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -413,6 +422,7 @@ impl NativeApp {
     fn tick_engine(&mut self, dt: Duration) {
         self.pump_audio(dt);
         self.store.drain_osc();
+        self.midi_client.pump(&mut self.store);
         if self.store.scenes_tick_due() {
             let delta = dt.as_secs_f64() * 1000.0;
             if let Err(error) = self
@@ -1302,6 +1312,43 @@ impl NativeApp {
                 scene_previews.insert(key.clone(), texture);
             }
         }
+        let midi = MidiSnapshot {
+            available: self.midi_client.available(),
+            error: self.midi_client.error().map(str::to_string),
+            devices: {
+                let state_devices = state.midi.get("devices").and_then(Value::as_object);
+                self.midi_client
+                    .devices()
+                    .iter()
+                    .map(|device| {
+                        let record = state_devices
+                            .and_then(|devices| devices.get(&device.key))
+                            .and_then(Value::as_object);
+                        MidiDeviceView {
+                            key: device.key.clone(),
+                            name: device.name.clone(),
+                            connected: device.connected,
+                            listen_for_input: record
+                                .and_then(|record| record.get("listenForInput"))
+                                .and_then(Value::as_bool)
+                                .unwrap_or(true),
+                            listen_for_clock: record
+                                .and_then(|record| record.get("listenForClock"))
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            cc_latch: record
+                                .and_then(|record| record.get("ccLatch"))
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            note_on_latch: record
+                                .and_then(|record| record.get("noteOnLatch"))
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        }
+                    })
+                    .collect()
+            },
+        };
         let health = EngineHealth {
             adapter: format!("{} ({})", self.adapter.name, self.adapter.device_type),
             backend: self.adapter.backend.clone(),
@@ -1329,6 +1376,7 @@ impl NativeApp {
             texture_sources,
             input_links,
             media,
+            midi,
         }
     }
 
@@ -1469,6 +1517,7 @@ impl NativeApp {
         self.store.flush_link_deltas();
         self.store.shutdown_ndi();
         self.media_hub.stop_all();
+        self.midi_client.stop();
         if let Some(mut feed) = self.audio_feed.take() {
             feed.stop();
         }

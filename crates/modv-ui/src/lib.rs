@@ -27,7 +27,7 @@ pub mod widgets;
 
 pub use model::{
     AudioView, CameraView, EngineHealth, EngineSnapshot, GroupView, InputLinkView, MediaAction,
-    MediaSnapshot, MediaSourceView, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
+    MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
     PreviewTexture, PropView, SceneCellView, SceneView, TextureSourceView, TweenView,
     gallery_preview_key, scene_preview_key,
 };
