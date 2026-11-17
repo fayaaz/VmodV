@@ -358,25 +358,35 @@ pub fn decode_rgba8(bytes: &[u8]) -> Result<DecodedImage, String> {
 
 /// Decode an image file into tightly packed RGBA8.
 ///
-/// The file is refused when it is larger than [`MAX_IMAGE_PIXELS`] *after*
-/// decoding (the dimensions are only known from the decoded image; the file
-/// size guard keeps a pathological decode from starting).
+/// The file's dimensions are read from the format header first, so an image
+/// larger than [`MAX_IMAGE_PIXELS`] is refused *before* the decoder
+/// materialises the pixel buffer (an image path in a shared Scene/preset is
+/// untrusted input). The post-decode check stays as defence in depth against a
+/// header that understates the decoded frame.
 pub fn decode_file(path: &Path) -> Result<DecodedImage, String> {
     let metadata =
         std::fs::metadata(path).map_err(|error| format!("could not stat the image: {error}"))?;
     if !metadata.is_file() {
         return Err("the image path is not a file".to_string());
     }
+    // `image::image_dimensions` reads the header only; `image::open` followed
+    // by `to_rgba8` would allocate the whole frame first.
+    let (width, height) = image::image_dimensions(path)
+        .map_err(|error| format!("could not read the image dimensions: {error}"))?;
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return Err(oversized_image(width, height));
+    }
     let image =
         image::open(path).map_err(|error| format!("could not decode the image: {error}"))?;
     let decoded = DecodedImage::from_dynamic(image);
     if u64::from(decoded.width) * u64::from(decoded.height) > MAX_IMAGE_PIXELS {
-        return Err(format!(
-            "the image is {}x{} (more than {MAX_IMAGE_PIXELS} pixels)",
-            decoded.width, decoded.height
-        ));
+        return Err(oversized_image(decoded.width, decoded.height));
     }
     Ok(decoded)
+}
+
+fn oversized_image(width: u32, height: u32) -> String {
+    format!("the image is {width}x{height} (more than {MAX_IMAGE_PIXELS} pixels)")
 }
 
 /// A decoded image uploaded as a sampled GPU texture.
@@ -661,6 +671,49 @@ mod tests {
         image.save(path).expect("png written");
     }
 
+    /// CRC-32 (ISO-HDLC) over a PNG chunk type + data.
+    fn png_crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
+    /// A PNG with the declared dimensions and an empty pixel-data stream:
+    /// enough header for a dimension probe, no decodable image.
+    fn write_png_header(path: &Path, width: u32, height: u32) {
+        let mut ihdr = Vec::with_capacity(17);
+        ihdr.extend_from_slice(b"IHDR");
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        // 8-bit RGBA, deflate, adaptive filtering, no interlace.
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        // An empty zlib stream (final stored block, adler32 of no data).
+        let mut idat = Vec::with_capacity(12);
+        idat.extend_from_slice(b"IDAT");
+        idat.extend_from_slice(&[0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]);
+        let mut iend = Vec::with_capacity(4);
+        iend.extend_from_slice(b"IEND");
+
+        let mut bytes = Vec::with_capacity(8 + 2 * (12 + ihdr.len()) + 12 + idat.len());
+        bytes.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        bytes.extend_from_slice(&(13u32).to_be_bytes());
+        bytes.extend_from_slice(&ihdr);
+        bytes.extend_from_slice(&png_crc32(&ihdr).to_be_bytes());
+        bytes.extend_from_slice(&(8u32).to_be_bytes());
+        bytes.extend_from_slice(&idat);
+        bytes.extend_from_slice(&png_crc32(&idat).to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&iend);
+        bytes.extend_from_slice(&png_crc32(&iend).to_be_bytes());
+        std::fs::write(path, &bytes).expect("png header written");
+    }
+
     #[test]
     fn parses_the_saved_texture_definition() {
         let request = TextureRequest::from_value(Some(&json!({
@@ -786,6 +839,34 @@ mod tests {
         assert_eq!((decoded.width, decoded.height), (3, 2));
         assert_eq!(decoded.byte_len(), 3 * 2 * 4);
         assert_eq!(&decoded.rgba[0..4], &[10, 20, 30, 255]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rejects_oversized_images_from_the_header_without_decoding() {
+        let dir = unique_dir("oversized-header");
+        let bomb = dir.join("bomb.png");
+        // 65535² = ~4.3 gigapixels, far past the 8192² cap, in a file with no
+        // pixel data at all: only a decoder that ran would notice.
+        write_png_header(&bomb, 65_535, 65_535);
+        assert_eq!(
+            image::image_dimensions(&bomb).expect("the header declares dimensions"),
+            (65_535, 65_535)
+        );
+
+        let error = decode_file(&bomb).expect_err("an oversized image is refused");
+        assert!(
+            error.contains("more than"),
+            "the header guard must reject before decoding: {error}"
+        );
+
+        // A normal image still decodes through the same guard.
+        let small = dir.join("small.png");
+        write_png(&small, 2, 2, [1, 2, 3, 255]);
+        let decoded = decode_file(&small).expect("a small image decodes");
+        assert_eq!((decoded.width, decoded.height), (2, 2));
+        assert_eq!(decoded.byte_len(), 2 * 2 * 4);
 
         std::fs::remove_dir_all(&dir).ok();
     }

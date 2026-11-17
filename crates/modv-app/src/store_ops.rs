@@ -1737,8 +1737,9 @@ impl Store {
         Ok(Value::Null)
     }
 
-    /// `groups/removeGroup` (`groups.js:204-208`): clean the Group-owned
-    /// inputs, then remove the Group.
+    /// `groups/removeGroup` (`groups.js:204-208`) + `cleanUpGroupResources`
+    /// (`groups.js:221-247`): clean the Group-owned inputs, drop every Module
+    /// it owns, then remove the Group.
     fn remove_group_action(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
         let group_id = required_str(params, "groups/removeGroup", "groupId")?.to_string();
         let Some(group) = self.state.groups.iter().find(|group| group.id == group_id) else {
@@ -1752,19 +1753,28 @@ impl Store {
             group.composite_operation_input_id.clone(),
             group.pipeline_input_id.clone(),
         ];
+        // `inputs/removeInputLink` also drops a tween descriptor owned by the
+        // link (`inputs.js:182-198`). The shared `release_group` teardown below
+        // only removes the input records, so keep the tween cleanup here.
         for input_id in input_ids.into_iter().flatten() {
-            let mut link_params = Map::new();
-            link_params.insert("inputId".to_string(), json!(input_id));
-            self.remove_input_link(&link_params)?;
-            let mut input_params = Map::new();
-            input_params.insert("inputId".to_string(), json!(input_id));
-            input_params.insert("silent".to_string(), json!(true));
-            self.remove_input_action(&input_params)?;
+            if self
+                .state
+                .input_links
+                .get(&input_id)
+                .is_some_and(|link| link.source.as_deref() == Some("tween"))
+            {
+                self.remove_tween(&input_id);
+                self.deltas
+                    .push("tweens/REMOVE_TWEEN", json!({ "id": input_id }));
+            }
         }
 
-        let mut remove = Map::new();
-        remove.insert("id".to_string(), json!(group_id));
-        self.remove_group_mutation(&remove)
+        // Share the Scene/performance teardown: it removes the Group, its
+        // control inputs, and every Module no surviving Group references (with
+        // `REMOVE_ACTIVE_MODULE` deltas), so a removed Group's Module instances
+        // cannot leak into `state.modules` or a later preset.
+        self.remove_live_group(&group_id);
+        Ok(Value::Null)
     }
 
     /// `groups/REMOVE_GROUP` (`groups.js:465-472`).
@@ -4955,6 +4965,71 @@ mod tests {
             deltas
                 .iter()
                 .any(|delta| delta.r#type == "inputs/REMOVE_INPUT")
+        );
+    }
+
+    #[test]
+    fn remove_group_drops_its_modules_from_state_and_presets() {
+        let (mut store, group_id) = store_with_group("Effects");
+        let module = store
+            .dispatch("modules/makeActiveModule", json!({"moduleName": "Bands"}))
+            .expect("makeActiveModule dispatches");
+        let module_id = module["$id"].as_str().expect("module id").to_string();
+        store
+            .dispatch(
+                "groups/ADD_MODULE_TO_GROUP",
+                json!({"groupId": group_id, "moduleId": module_id}),
+            )
+            .expect("module added to the group");
+        assert!(store.state().modules.contains_key(&module_id));
+
+        let mut module_input_ids: Vec<String> = module["$props"]
+            .as_object()
+            .expect("$props object")
+            .values()
+            .filter_map(|descriptor| descriptor.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        for key in ["alpha", "enabled", "compositeOperation"] {
+            module_input_ids.push(
+                module["meta"][format!("{key}InputId")]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{key} input id"))
+                    .to_string(),
+            );
+        }
+        store.drain_deltas();
+
+        store
+            .dispatch("groups/removeGroup", json!({ "groupId": group_id }))
+            .expect("removeGroup dispatches");
+
+        assert!(store.state().find_group(&group_id).is_none());
+        assert!(
+            !store.state().modules.contains_key(&module_id),
+            "the removed Group's Module must not survive in state.modules"
+        );
+        for input_id in &module_input_ids {
+            assert!(
+                !store.state().inputs.contains_key(input_id),
+                "the Module's input {input_id} must be cleaned up"
+            );
+        }
+        let preset = create_preset_from_state(store.state());
+        assert!(
+            preset["modules"].get(&module_id).is_none(),
+            "the removed Group's Module must not be written into the next preset"
+        );
+
+        let deltas = store.drain_deltas();
+        assert!(deltas.iter().any(|delta| {
+            delta.r#type == "modules/REMOVE_ACTIVE_MODULE"
+                && delta.payload["moduleId"] == json!(module_id)
+        }));
+        assert!(
+            deltas
+                .iter()
+                .any(|delta| delta.r#type == "groups/REMOVE_GROUP")
         );
     }
 
