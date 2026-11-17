@@ -857,12 +857,14 @@ mod tests {
         let one = SceneCellView {
             row: 0,
             module_names: vec!["Bands".to_string()],
+            disabled: false,
         };
         assert_eq!(one.label(), "Bands");
 
         let many = SceneCellView {
             row: 0,
             module_names: vec!["A".into(), "B".into(), "C".into()],
+            disabled: false,
         };
         assert_eq!(many.label(), "A +2");
     }
@@ -875,11 +877,13 @@ mod tests {
         let webcam = SceneCellView {
             row: 0,
             module_names: Vec::new(),
+            disabled: false,
         };
         assert!(!should_request_preview(&webcam, true));
         let background = SceneCellView {
             row: 1,
             module_names: vec!["Bands".to_string()],
+            disabled: false,
         };
         assert!(should_request_preview(&background, true));
         assert!(!should_request_preview(&background, false));

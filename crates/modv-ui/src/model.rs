@@ -365,6 +365,9 @@ impl SceneView {
 pub struct SceneCellView {
     pub row: usize,
     pub module_names: Vec<String>,
+    /// Disabled in performance mode only; a manual Scene/cell apply still
+    /// renders it. Persisted in `scenes.json` as `performance.disabledCells`.
+    pub disabled: bool,
 }
 
 impl SceneCellView {

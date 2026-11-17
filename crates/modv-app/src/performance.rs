@@ -65,8 +65,9 @@ use serde_json::{Map, Value, json};
 
 use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group};
 use modv_engine::scene_rows::{
-    PickNextRowScene, ResolveRowAdvanceScene, get_row_count, is_row_cell_empty, is_scene_enabled,
-    normalize_row_names, pick_next_row_scene, resolve_row_advance_scene,
+    PickNextRowScene, ResolveRowAdvanceScene, get_row_count, is_row_cell_empty,
+    is_scene_cell_disabled, is_scene_enabled, normalize_disabled_cells, normalize_row_names,
+    pick_next_row_scene_with_disabled, resolve_row_advance_scene_with_disabled,
 };
 use modv_engine::scene_timing::{
     normalize_transition_duration, pick_cell_dwell_numeric, resolve_scene_timing,
@@ -393,6 +394,23 @@ impl Store {
         normalize_row_names(self.scenes.performance.get("rowNames"))
     }
 
+    /// Performance-disabled cells from the config (`performance.disabledCells`).
+    pub(crate) fn disabled_cells(&self) -> BTreeMap<String, Vec<usize>> {
+        normalize_disabled_cells(self.scenes.performance.get("disabledCells"))
+    }
+
+    /// `true` when `scene`'s cell at `row` is skipped by performance mode.
+    fn scene_cell_disabled(
+        disabled: &BTreeMap<String, Vec<usize>>,
+        scene: &Value,
+        row: usize,
+    ) -> bool {
+        scene
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|scene_id| is_scene_cell_disabled(disabled, scene_id, row))
+    }
+
     /// Pick the next Scene for one row (`pickNextRowScene`).
     ///
     /// `row_names` is passed in so a caller that already normalised them (the
@@ -410,8 +428,9 @@ impl Store {
             .and_then(Value::as_str)
             .unwrap_or("in-order")
             .to_string();
+        let disabled = self.disabled_cells();
         let scenes = &self.scenes.scenes;
-        let picked = pick_next_row_scene(
+        let picked = pick_next_row_scene_with_disabled(
             &PickNextRowScene {
                 scenes,
                 row_index: row,
@@ -419,6 +438,7 @@ impl Store {
                 order: &order,
                 row_names,
             },
+            &disabled,
             || self.performance.rng.next_f64(),
         );
         picked
@@ -541,16 +561,18 @@ impl Store {
         self.set_performance_value("enabled", json!(true));
 
         let row_names = self.row_names();
+        let disabled = self.disabled_cells();
         let row_count = self.row_count_for(&row_names);
         if row_count == 0 {
             return Ok(json!({ "enabled": true, "rows": 0 }));
         }
 
         let has_row_candidates = (0..row_count).any(|row| {
-            self.scenes
-                .scenes
-                .iter()
-                .any(|scene| is_scene_enabled(scene) && !is_row_cell_empty(scene, row, &row_names))
+            self.scenes.scenes.iter().any(|scene| {
+                is_scene_enabled(scene)
+                    && !is_row_cell_empty(scene, row, &row_names)
+                    && !Self::scene_cell_disabled(&disabled, scene, row)
+            })
         });
 
         if !has_row_candidates {
@@ -587,7 +609,9 @@ impl Store {
                     .iter()
                     .find(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id))
                     .is_some_and(|scene| {
-                        is_scene_enabled(scene) && !is_row_cell_empty(scene, row, &row_names)
+                        is_scene_enabled(scene)
+                            && !is_row_cell_empty(scene, row, &row_names)
+                            && !Self::scene_cell_disabled(&disabled, scene, row)
                     }),
                 _ => false,
             };
@@ -703,6 +727,7 @@ impl Store {
 
         // 3. Per-row dwell (`scenes.js:3900-4105`).
         let row_names = self.row_names();
+        let disabled = self.disabled_cells();
         let row_count = self.row_count_for(&row_names);
         let order = self
             .scenes
@@ -735,6 +760,7 @@ impl Store {
                 (Some(group), Some(scene)) => {
                     is_scene_enabled(scene)
                         && !is_row_cell_empty(scene, row, &row_names)
+                        && !Self::scene_cell_disabled(&disabled, scene, row)
                         && active
                             .group_id
                             .as_deref()
@@ -762,7 +788,9 @@ impl Store {
                 .scenes
                 .iter()
                 .filter(|scene| {
-                    is_scene_enabled(scene) && !is_row_cell_empty(scene, row, &row_names)
+                    is_scene_enabled(scene)
+                        && !is_row_cell_empty(scene, row, &row_names)
+                        && !Self::scene_cell_disabled(&disabled, scene, row)
                 })
                 .count();
             if candidate_count < 2 {
@@ -803,7 +831,7 @@ impl Store {
 
             let next_scene = {
                 let scenes = &self.scenes.scenes;
-                resolve_row_advance_scene(
+                resolve_row_advance_scene_with_disabled(
                     &ResolveRowAdvanceScene {
                         scenes,
                         row_index: row,
@@ -812,6 +840,7 @@ impl Store {
                         order: &order,
                         row_names: &row_names,
                     },
+                    &disabled,
                     || self.performance.rng.next_f64(),
                 )
                 .and_then(|scene| scene.get("id").and_then(Value::as_str))
@@ -1189,6 +1218,108 @@ mod tests {
                 runtime.dwell_target
             );
         }
+    }
+
+    #[test]
+    fn start_performance_skips_performance_disabled_cells() {
+        let mut store = store_with_scenes();
+        store
+            .dispatch(
+                "scenes/setCellEnabled",
+                json!({ "sceneId": "scene-a", "rowIndex": 0, "enabled": false }),
+            )
+            .expect("disable scene-a row 0");
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+
+        assert_eq!(
+            store
+                .row_runtime(0)
+                .and_then(|row| row.current_scene_id.as_deref()),
+            Some("scene-b"),
+            "row 0 starts on the first enabled candidate"
+        );
+        assert_eq!(
+            store
+                .row_runtime(1)
+                .and_then(|row| row.current_scene_id.as_deref()),
+            Some("scene-a"),
+            "row 1 is unaffected by row 0's flag"
+        );
+    }
+
+    #[test]
+    fn a_row_with_every_cell_disabled_never_advances() {
+        let mut store = store_with_scenes();
+        for scene_id in ["scene-a", "scene-b", "scene-c"] {
+            store
+                .dispatch(
+                    "scenes/setCellEnabled",
+                    json!({ "sceneId": scene_id, "rowIndex": 0, "enabled": false }),
+                )
+                .expect("disable row 0 cell");
+        }
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+        if let Some(row) = store.performance.rows.get_mut(&1) {
+            row.dwell_target = 1.0;
+        }
+        store.drain_deltas();
+
+        advance(&mut store, 2.0);
+
+        assert!(
+            store.row_transition(0).is_none(),
+            "a fully disabled row must not start a crossfade"
+        );
+        assert!(
+            !store
+                .state()
+                .groups
+                .iter()
+                .any(|group| group.scene_row == Some(0)),
+            "no Scene was applied to the fully disabled row"
+        );
+    }
+
+    #[test]
+    fn dwell_advance_skips_a_disabled_cell() {
+        let mut store = store_with_scenes();
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+        assert_eq!(
+            store
+                .row_runtime(0)
+                .and_then(|row| row.current_scene_id.as_deref()),
+            Some("scene-a")
+        );
+        store
+            .dispatch(
+                "scenes/setCellEnabled",
+                json!({ "sceneId": "scene-b", "rowIndex": 0, "enabled": false }),
+            )
+            .expect("disable scene-b row 0");
+        store.performance.rows.get_mut(&0).unwrap().dwell_target = 1.0;
+        if let Some(row) = store.performance.rows.get_mut(&1) {
+            row.dwell_target = 60.0;
+        }
+        store.drain_deltas();
+
+        advance(&mut store, 1.05);
+
+        let transition = store.row_transition(0).cloned().expect("row 0 advanced");
+        let incoming = store
+            .state()
+            .find_group(&transition.group_id)
+            .expect("incoming group");
+        assert_eq!(
+            incoming.scene_id.as_deref(),
+            Some("scene-c"),
+            "the in-order advance skipped the disabled scene-b cell"
+        );
     }
 
     #[test]

@@ -115,8 +115,9 @@ use modv_engine::scene_link_defaults::{
 };
 use modv_engine::scene_rows::get_row_label;
 use modv_engine::scene_rows::{
-    assign_scene_row_indexes, get_row_count, get_row_group_index, is_row_cell_empty,
-    matches_row_name, normalize_row_names, row_family_is_shared, strict_matches_row_name,
+    assign_scene_row_indexes, disabled_cells_json, get_row_count, get_row_group_index,
+    is_row_cell_empty, matches_row_name, normalize_disabled_cells_for_scenes, normalize_row_names,
+    row_family_is_shared, set_scene_cell_disabled, strict_matches_row_name,
 };
 use modv_engine::scene_timing::{
     normalize_performance_timing, normalize_scene_timing, normalize_transition_duration,
@@ -597,6 +598,15 @@ impl Store {
         if let Some(object) = performance.as_object_mut() {
             // `writeStoredScenes`: runtime state is not persisted.
             object.remove("currentSceneId");
+            if object.get("disabledCells").is_some() {
+                let row_names = normalize_row_names(object.get("rowNames"));
+                let disabled = normalize_disabled_cells_for_scenes(
+                    object.get("disabledCells"),
+                    &self.scenes.scenes,
+                    &row_names,
+                );
+                object.insert("disabledCells".to_string(), disabled_cells_json(&disabled));
+            }
         }
         let payload = json!({
             "version": SCENES_STORAGE_VERSION,
@@ -2019,6 +2029,55 @@ impl Store {
         ))
     }
 
+    /// `scenes/setCellEnabled` (native-only): toggle one Scene cell's
+    /// performance-mode flag.
+    ///
+    /// The flag lives in `performance.disabledCells` (`{ "<sceneId>": [row] }`,
+    /// sorted and de-duplicated). The JS Scenes grid ignores the key and keeps
+    /// saving an otherwise-identical `scenes.json`; manual `applyScene`/cell
+    /// clicks are unaffected, only the performance picks skip the cell.
+    pub fn set_cell_enabled(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "scenes/setCellEnabled";
+        let scene_id = required_str(params, action, "sceneId")?.to_string();
+        let row = params
+            .get("rowIndex")
+            .and_then(Value::as_u64)
+            .map(|row| row as usize)
+            .ok_or_else(|| invalid(action, "missing numeric \"rowIndex\""))?;
+        let enabled = params
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+
+        let row_names = self.row_names();
+        let Some(scene) = self
+            .scenes
+            .scenes
+            .iter()
+            .find(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str()))
+        else {
+            return Ok(json!({ "updated": false, "reason": "scene-not-found" }));
+        };
+        if get_row_group_index(scene, row, &row_names).is_none() {
+            return Ok(json!({ "updated": false, "reason": "empty-cell" }));
+        }
+
+        let mut disabled = normalize_disabled_cells_for_scenes(
+            self.scenes.performance.get("disabledCells"),
+            &self.scenes.scenes,
+            &row_names,
+        );
+        set_scene_cell_disabled(&mut disabled, &scene_id, row, !enabled);
+        self.set_performance_value("disabledCells", disabled_cells_json(&disabled));
+        self.touch_scene_list();
+        self.persist_best_effort();
+        Ok(json!({
+            "sceneId": scene_id,
+            "rowIndex": row,
+            "enabled": enabled,
+        }))
+    }
+
     /// `scenes/updatePerformance` (`scenes.js:3360-3368`).
     ///
     /// Normalises the incoming timing/transition data and merges it over the
@@ -2031,7 +2090,18 @@ impl Store {
             .get("config")
             .cloned()
             .unwrap_or_else(|| Value::Object(params.clone()));
-        let merged = merge_performance(&self.scenes.performance, &data);
+        let mut merged = merge_performance(&self.scenes.performance, &data);
+        if merged.get("disabledCells").is_some() {
+            let row_names = normalize_row_names(merged.get("rowNames"));
+            let disabled = normalize_disabled_cells_for_scenes(
+                merged.get("disabledCells"),
+                &self.scenes.scenes,
+                &row_names,
+            );
+            if let Some(object) = merged.as_object_mut() {
+                object.insert("disabledCells".to_string(), disabled_cells_json(&disabled));
+            }
+        }
         // A config update can carry `rowNames` (the grid mapping a preview
         // resolves); a changed mapping invalidates cached Scene previews.
         let row_names_changed = merged.get("rowNames") != self.scenes.performance.get("rowNames");
@@ -3624,6 +3694,21 @@ fn parse_stored_scenes(stored: &Value) -> Option<ParsedStoredScenes> {
         defaults_version = 0;
     }
 
+    // Native-only per-cell flags: prune unknown Scenes/rows so a stale
+    // `scenes.json` cannot disable a cell that no longer exists. The JS UI
+    // ignores `disabledCells` and keeps it in the document.
+    let row_names = normalize_row_names(performance.get("rowNames"));
+    if performance.get("disabledCells").is_some() {
+        let disabled = normalize_disabled_cells_for_scenes(
+            performance.get("disabledCells"),
+            &scenes,
+            &row_names,
+        );
+        if let Some(object) = performance.as_object_mut() {
+            object.insert("disabledCells".to_string(), disabled_cells_json(&disabled));
+        }
+    }
+
     Some(ParsedStoredScenes {
         scenes,
         performance,
@@ -5038,6 +5123,82 @@ mod tests {
                 .collect::<Vec<_>>(),
             "the renamed rows survive a restart"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_cell_enabled_persists_and_manual_apply_still_uses_the_cell() {
+        let dir = temp_dir();
+        let state_path = dir.join("engine-state.json");
+        let mut store = Store::with_state_path(Some(&state_path));
+        seed_scene(&mut store, two_row_scene("scene-a"));
+        seed_scene(&mut store, two_row_scene("scene-b"));
+
+        let result = store
+            .dispatch(
+                "scenes/setCellEnabled",
+                json!({ "sceneId": "scene-b", "rowIndex": 0, "enabled": false }),
+            )
+            .expect("disable cell");
+        assert_eq!(result["enabled"], json!(false));
+        assert_eq!(
+            store.scenes_state().performance["disabledCells"],
+            json!({ "scene-b": [0] })
+        );
+        let types = delta_types(&mut store);
+        assert!(
+            types.contains(&"scenes/UPDATE_PERFORMANCE".to_string()),
+            "the mirror receives the new flags: {types:?}"
+        );
+
+        let saved: Value =
+            serde_json::from_slice(&fs::read(dir.join("scenes.json")).expect("scenes.json"))
+                .expect("json");
+        assert_eq!(
+            saved["performance"]["disabledCells"],
+            json!({ "scene-b": [0] }),
+            "the flag is stored in the shared scenes.json"
+        );
+
+        let mut reloaded = Store::with_state_path(Some(&state_path));
+        reloaded
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("reload");
+        assert_eq!(
+            reloaded.scenes_state().performance["disabledCells"],
+            json!({ "scene-b": [0] }),
+            "the flag reloads from scenes.json"
+        );
+
+        // Performance mode skips the cell, but a manual apply still renders it.
+        reloaded
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-b" }))
+            .expect("manual apply");
+        assert!(
+            reloaded
+                .state()
+                .groups
+                .iter()
+                .any(|group| group.name == "Background" && group.scene_row == Some(0)),
+            "a disabled cell is still part of a manual Scene apply"
+        );
+
+        // Unknown Scenes and rows are refused and never persisted.
+        let missing = reloaded
+            .dispatch(
+                "scenes/setCellEnabled",
+                json!({ "sceneId": "scene-missing", "rowIndex": 0, "enabled": false }),
+            )
+            .expect("unknown scene");
+        assert_eq!(missing["updated"], json!(false));
+        let empty = reloaded
+            .dispatch(
+                "scenes/setCellEnabled",
+                json!({ "sceneId": "scene-b", "rowIndex": 99, "enabled": false }),
+            )
+            .expect("unknown row");
+        assert_eq!(empty["updated"], json!(false));
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -31,7 +31,7 @@
 //!
 //! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde_json::Value;
 
@@ -252,6 +252,108 @@ pub fn normalize_row_names(value: Option<&Value>) -> Vec<String> {
     }
 }
 
+/// Parse `performance.disabledCells` (native-only): scene id → row indexes.
+///
+/// Invalid entries are dropped, indexes are sorted and de-duplicated, and
+/// indexes at or beyond [`MAX_SCENE_ROWS`] are discarded. The map itself keeps
+/// unknown Scene ids here; [`normalize_disabled_cells_for_scenes`] prunes them
+/// once the Scene list and row mapping are known.
+pub fn normalize_disabled_cells(value: Option<&Value>) -> BTreeMap<String, Vec<usize>> {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return BTreeMap::new();
+    };
+    let mut disabled = BTreeMap::new();
+    for (scene_id, rows) in object {
+        let Some(rows) = rows.as_array() else {
+            continue;
+        };
+        let mut indexes: Vec<usize> = rows
+            .iter()
+            .filter_map(Value::as_u64)
+            .map(|index| index as usize)
+            .filter(|index| *index < MAX_SCENE_ROWS)
+            .collect();
+        indexes.sort_unstable();
+        indexes.dedup();
+        if !indexes.is_empty() {
+            disabled.insert(scene_id.clone(), indexes);
+        }
+    }
+    disabled
+}
+
+/// [`normalize_disabled_cells`] against the current Scene list and row names:
+/// unknown Scene ids, rows the grid does not address and rows with no Group are
+/// dropped, so a stale `scenes.json` cannot disable a cell that does not exist.
+pub fn normalize_disabled_cells_for_scenes(
+    value: Option<&Value>,
+    scenes: &[Value],
+    row_names: &[String],
+) -> BTreeMap<String, Vec<usize>> {
+    let mut disabled = normalize_disabled_cells(value);
+    disabled.retain(|scene_id, rows| {
+        let Some(scene) = scenes
+            .iter()
+            .find(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str()))
+        else {
+            return false;
+        };
+        rows.retain(|row| get_row_group(scene, *row, row_names).is_some());
+        !rows.is_empty()
+    });
+    disabled
+}
+
+/// `true` when `scene_id`'s cell at `row_index` is disabled for performance
+/// mode. A manual Scene/cell apply ignores this flag.
+pub fn is_scene_cell_disabled(
+    disabled: &BTreeMap<String, Vec<usize>>,
+    scene_id: &str,
+    row_index: usize,
+) -> bool {
+    disabled
+        .get(scene_id)
+        .is_some_and(|rows| rows.binary_search(&row_index).is_ok())
+}
+
+/// Serialise a disabled-cell map for `performance.disabledCells`.
+pub fn disabled_cells_json(disabled: &BTreeMap<String, Vec<usize>>) -> Value {
+    Value::Object(
+        disabled
+            .iter()
+            .map(|(scene_id, rows)| {
+                (
+                    scene_id.clone(),
+                    Value::Array(rows.iter().map(|row| (*row).into()).collect()),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Insert/remove one cell in a disabled-cell map, keeping the row list sorted.
+pub fn set_scene_cell_disabled(
+    disabled: &mut BTreeMap<String, Vec<usize>>,
+    scene_id: &str,
+    row_index: usize,
+    disabled_cell: bool,
+) {
+    if disabled_cell {
+        let rows = disabled.entry(scene_id.to_string()).or_default();
+        match rows.binary_search(&row_index) {
+            Ok(_) => {}
+            Err(index) => rows.insert(index, row_index),
+        }
+    } else if let Some(rows) = disabled.get_mut(scene_id) {
+        if let Ok(index) = rows.binary_search(&row_index) {
+            rows.remove(index);
+        }
+        if rows.is_empty() {
+            disabled.remove(scene_id);
+        }
+    }
+}
+
 /// `assignSceneRowIndexes` (`scene-rows.js:179-240`): one row index per Group
 /// snapshot (holes stay `None`).
 ///
@@ -421,15 +523,25 @@ pub fn get_row_label(scenes: &[Value], row_index: usize, row_names: &[String]) -
 }
 
 /// `getCandidateScenes` (`scene-rows.js:323-327`): enabled Scenes with a
-/// non-empty cell at the row.
+/// non-empty cell at the row, minus cells disabled for performance mode.
 fn get_candidate_scenes<'a>(
     scenes: &'a [Value],
     row_index: usize,
     row_names: &[String],
+    disabled_cells: &BTreeMap<String, Vec<usize>>,
 ) -> Vec<&'a Value> {
     scenes
         .iter()
-        .filter(|scene| is_scene_enabled(scene) && !is_row_cell_empty(scene, row_index, row_names))
+        .filter(|scene| {
+            is_scene_enabled(scene)
+                && !is_row_cell_empty(scene, row_index, row_names)
+                && !scene
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|scene_id| {
+                        is_scene_cell_disabled(disabled_cells, scene_id, row_index)
+                    })
+        })
         .collect()
 }
 
@@ -453,11 +565,27 @@ pub struct PickNextRowScene<'a> {
 /// otherwise the next candidate in order (wrapping) or — for
 /// `order == "random"` — a random pick that excludes the current Scene unless
 /// it is the only candidate. `random` is only called on the random branch.
-pub fn pick_next_row_scene<'a, F>(args: &PickNextRowScene<'a>, mut random: F) -> Option<&'a Value>
+pub fn pick_next_row_scene<'a, F>(args: &PickNextRowScene<'a>, random: F) -> Option<&'a Value>
 where
     F: FnMut() -> f64,
 {
-    let candidates = get_candidate_scenes(args.scenes, args.row_index, args.row_names);
+    pick_next_row_scene_with_disabled(args, &BTreeMap::new(), random)
+}
+
+/// [`pick_next_row_scene`] skipping the cells in `disabled_cells`.
+///
+/// Disabled cells are only skipped by performance mode: `applyScene` and a
+/// manual cell click still use them.
+pub fn pick_next_row_scene_with_disabled<'a, F>(
+    args: &PickNextRowScene<'a>,
+    disabled_cells: &BTreeMap<String, Vec<usize>>,
+    mut random: F,
+) -> Option<&'a Value>
+where
+    F: FnMut() -> f64,
+{
+    let candidates =
+        get_candidate_scenes(args.scenes, args.row_index, args.row_names, disabled_cells);
 
     if candidates.is_empty() {
         return None;
@@ -519,6 +647,20 @@ pub struct ResolveRowAdvanceScene<'a> {
 /// loads; otherwise a fresh pick is made.
 pub fn resolve_row_advance_scene<'a, F>(
     args: &ResolveRowAdvanceScene<'a>,
+    random: F,
+) -> Option<&'a Value>
+where
+    F: FnMut() -> f64,
+{
+    resolve_row_advance_scene_with_disabled(args, &BTreeMap::new(), random)
+}
+
+/// [`resolve_row_advance_scene`] skipping performance-disabled cells. A
+/// prewarmed Scene whose cell was disabled meanwhile is discarded and a fresh
+/// pick is made.
+pub fn resolve_row_advance_scene_with_disabled<'a, F>(
+    args: &ResolveRowAdvanceScene<'a>,
+    disabled_cells: &BTreeMap<String, Vec<usize>>,
     mut random: F,
 ) -> Option<&'a Value>
 where
@@ -533,12 +675,13 @@ where
         if let Some(pending) = pending
             && is_scene_enabled(pending)
             && !is_row_cell_empty(pending, args.row_index, args.row_names)
+            && !is_scene_cell_disabled(disabled_cells, pending_id, args.row_index)
         {
             return Some(pending);
         }
     }
 
-    pick_next_row_scene(
+    pick_next_row_scene_with_disabled(
         &PickNextRowScene {
             scenes: args.scenes,
             row_index: args.row_index,
@@ -546,6 +689,7 @@ where
             order: args.order,
             row_names: args.row_names,
         },
+        disabled_cells,
         &mut random,
     )
 }
@@ -1403,6 +1547,114 @@ mod tests {
     }
 
     #[test]
+    fn pick_next_row_scene_skips_performance_disabled_cells() {
+        let scenes = [
+            scene("a", json!([a("A")])),
+            scene("b", json!([b("B")])),
+            scene("c", json!([c("C")])),
+        ];
+        let mut disabled = BTreeMap::new();
+        set_scene_cell_disabled(&mut disabled, "b", 0, true);
+
+        let picked = pick_next_row_scene_with_disabled(
+            &PickNextRowScene {
+                scenes: &scenes,
+                row_index: 0,
+                current_scene_id: Some("a"),
+                order: "in-order",
+                row_names: &[],
+            },
+            &disabled,
+            || 0.0,
+        );
+        assert_eq!(
+            picked.unwrap()["id"],
+            json!("c"),
+            "an in-order advance skips the disabled cell"
+        );
+    }
+
+    #[test]
+    fn random_picks_skip_performance_disabled_cells() {
+        let scenes = [
+            scene("a", json!([a("A")])),
+            scene("b", json!([b("B")])),
+            scene("c", json!([c("C")])),
+        ];
+        let mut disabled = BTreeMap::new();
+        set_scene_cell_disabled(&mut disabled, "b", 0, true);
+
+        let picked = pick_next_row_scene_with_disabled(
+            &PickNextRowScene {
+                scenes: &scenes,
+                row_index: 0,
+                current_scene_id: Some("a"),
+                order: "random",
+                row_names: &[],
+            },
+            &disabled,
+            || 0.99,
+        );
+        assert_eq!(
+            picked.unwrap()["id"],
+            json!("c"),
+            "the random pool excludes the disabled Scene"
+        );
+    }
+
+    #[test]
+    fn a_row_with_every_cell_disabled_has_no_candidates() {
+        let scenes = [scene("a", json!([a("A")])), scene("b", json!([b("B")]))];
+        let mut disabled = BTreeMap::new();
+        set_scene_cell_disabled(&mut disabled, "a", 0, true);
+        set_scene_cell_disabled(&mut disabled, "b", 0, true);
+
+        assert!(
+            pick_next_row_scene_with_disabled(
+                &PickNextRowScene {
+                    scenes: &scenes,
+                    row_index: 0,
+                    current_scene_id: Some("a"),
+                    order: "in-order",
+                    row_names: &[],
+                },
+                &disabled,
+                || 0.0,
+            )
+            .is_none(),
+            "a fully disabled row must not advance"
+        );
+    }
+
+    #[test]
+    fn disabled_cell_maps_normalise_and_prune_invalid_entries() {
+        let value = json!({
+            "scene-a": [3, 1, 1, -2, "nope", 4.5, 5000],
+            "scene-b": [],
+            "scene-c": "not-an-array"
+        });
+        let disabled = normalize_disabled_cells(Some(&value));
+        assert_eq!(disabled.get("scene-a"), Some(&vec![1, 3]));
+        assert!(!disabled.contains_key("scene-b"));
+        assert!(!disabled.contains_key("scene-c"));
+
+        let scenes = [scene("scene-a", json!([a("A"), b("B")]))];
+        let pruned = normalize_disabled_cells_for_scenes(Some(&value), &scenes, &[]);
+        assert_eq!(
+            pruned.get("scene-a"),
+            Some(&vec![1]),
+            "rows without a Group are dropped"
+        );
+
+        let mut map = pruned;
+        set_scene_cell_disabled(&mut map, "scene-a", 0, true);
+        set_scene_cell_disabled(&mut map, "scene-a", 1, false);
+        assert_eq!(disabled_cells_json(&map), json!({"scene-a": [0]}));
+        set_scene_cell_disabled(&mut map, "scene-a", 0, false);
+        assert!(map.is_empty(), "the last flag removes the Scene entry");
+    }
+
+    #[test]
     fn pick_next_row_scene_skips_empty_cells() {
         // scene-rows.test.js:497-510
         let scenes = [
@@ -1764,6 +2016,35 @@ mod tests {
         assert_eq!(
             resolve(&scenes, 1, Some("a"), Some("b")).unwrap()["id"],
             json!("c")
+        );
+    }
+
+    #[test]
+    fn resolve_row_advance_discards_a_pending_scene_disabled_meanwhile() {
+        let scenes = [
+            scene("a", json!([a("A")])),
+            scene("b", json!([b("B")])),
+            scene("c", json!([c("C")])),
+        ];
+        let mut disabled = BTreeMap::new();
+        set_scene_cell_disabled(&mut disabled, "b", 0, true);
+
+        let picked = resolve_row_advance_scene_with_disabled(
+            &ResolveRowAdvanceScene {
+                scenes: &scenes,
+                row_index: 0,
+                current_scene_id: Some("a"),
+                pending_scene_id: Some("b"),
+                order: "in-order",
+                row_names: &[],
+            },
+            &disabled,
+            || 0.0,
+        );
+        assert_eq!(
+            picked.unwrap()["id"],
+            json!("c"),
+            "a prewarmed Scene disabled before the advance is skipped"
         );
     }
 

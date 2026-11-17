@@ -116,10 +116,12 @@ fn demo_snapshot() -> EngineSnapshot {
             SceneCellView {
                 row: 0,
                 module_names: vec!["Bands".to_string()],
+                disabled: false,
             },
             SceneCellView {
                 row: 1,
                 module_names: vec!["Chromatic Line".to_string()],
+                disabled: false,
             },
         ],
     };

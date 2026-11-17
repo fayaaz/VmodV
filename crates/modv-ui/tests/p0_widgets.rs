@@ -54,6 +54,7 @@ fn shell_scene_grid_renders_scene_columns_and_cells() {
         cells: vec![modv_ui::SceneCellView {
             row: 0,
             module_names: vec!["Bands".to_string()],
+            disabled: false,
         }],
     });
     snapshot.scene_rows = vec!["Foreground".to_string()];

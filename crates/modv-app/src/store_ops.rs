@@ -689,6 +689,7 @@ impl Store {
             "scenes/exportPlaylist" => Ok(self.export_playlist_action()),
             "scenes/removeScene" => self.remove_scene_action(params),
             "scenes/setRowNames" => self.set_row_names(params),
+            "scenes/setCellEnabled" => self.set_cell_enabled(params),
             "scenes/updatePerformance" => self.update_performance_action(params),
             "scenes/setPerformanceEnabled" => self.set_performance_enabled(params),
             "scenes/applyScene" => self.apply_scene_action(params),

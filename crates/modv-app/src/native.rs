@@ -1362,11 +1362,16 @@ impl NativeApp {
         let registered = registered_modules(&registry);
         let scenes_state = self.store.scenes_state();
         let row_names = self.store.row_names();
+        let disabled_cells = modv_engine::scene_rows::normalize_disabled_cells_for_scenes(
+            scenes_state.performance.get("disabledCells"),
+            &scenes_state.scenes,
+            &row_names,
+        );
         let scenes = scenes_state
             .scenes
             .iter()
             .enumerate()
-            .map(|(index, scene)| scene_view(scene, index, &row_names))
+            .map(|(index, scene)| scene_view(scene, index, &row_names, &disabled_cells))
             .collect::<Vec<_>>();
         let performance = performance_view(
             &scenes_state.performance,
@@ -1733,7 +1738,12 @@ fn registered_modules(registry: &crate::module_registry::ModuleRegistry) -> Vec<
         .collect()
 }
 
-fn scene_view(scene: &Value, index: usize, row_names: &[String]) -> SceneView {
+fn scene_view(
+    scene: &Value,
+    index: usize,
+    row_names: &[String],
+    disabled_cells: &std::collections::BTreeMap<String, Vec<usize>>,
+) -> SceneView {
     let id = scene
         .get("id")
         .and_then(Value::as_str)
@@ -1796,6 +1806,7 @@ fn scene_view(scene: &Value, index: usize, row_names: &[String]) -> SceneView {
             cells[row] = SceneCellView {
                 row,
                 module_names: names,
+                disabled: modv_engine::scene_rows::is_scene_cell_disabled(disabled_cells, &id, row),
             };
         }
     }
@@ -2262,7 +2273,7 @@ mod tests {
                 "m2": {"$moduleName": "Bars"}
             }
         });
-        let view = scene_view(&scene, 0, &[]);
+        let view = scene_view(&scene, 0, &[], &std::collections::BTreeMap::new());
         assert_eq!(view.id, "s1");
         assert_eq!(view.name, "Test Scene");
         assert!(view.enabled);
@@ -2305,7 +2316,9 @@ mod tests {
             "".to_string(),
         ];
 
-        let view = scene_view(&scene, 0, &row_names);
+        let mut disabled = std::collections::BTreeMap::new();
+        disabled.insert("s1".to_string(), vec![3]);
+        let view = scene_view(&scene, 0, &row_names, &disabled);
 
         assert_eq!(view.cells.len(), 5, "one cell per named row");
         assert!(
@@ -2314,6 +2327,7 @@ mod tests {
         );
         assert_eq!(view.cells[1].module_names, vec!["Bands"]);
         assert_eq!(view.cells[1].row, 1);
+        assert!(!view.cells[1].disabled);
         assert!(
             view.cells[2].is_empty(),
             "the Foreground Group has no modules"
@@ -2321,6 +2335,7 @@ mod tests {
         assert_eq!(view.cells[2].row, 2);
         assert_eq!(view.cells[3].module_names, vec!["Ball"]);
         assert_eq!(view.cells[3].row, 3);
+        assert!(view.cells[3].disabled, "the saved per-cell flag is exposed");
         assert!(view.cells[4].is_empty());
     }
 
