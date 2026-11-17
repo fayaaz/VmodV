@@ -518,6 +518,9 @@ fn draw_prop(ui: &mut egui::Ui, module_id: &str, prop: &PropView, state: &mut Ui
                 .step
                 .unwrap_or(if prop.prop_type == "int" { 1.0 } else { 0.001 });
             let mut control = RangeControl::new(&prop.name, value, min, max, step);
+            if let Some(default) = prop.default.as_ref().and_then(serde_json::Value::as_f64) {
+                control = control.with_default(default);
+            }
             if control.draw(ui) {
                 state.push_action(
                     "modules/updateProp",

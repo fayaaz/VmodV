@@ -69,7 +69,7 @@ CARGO_VOLUME ?= modv-cargo
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage clean docker-deps docker-node-modules docker-reset install dev lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
+.PHONY: build appimage clean docker-deps docker-node-modules docker-reset install dev dev-native native native-debug lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -148,9 +148,28 @@ install: docker-deps
 	$(DOCKER) run --rm -v "$(NODE_MODULES_VOLUME):/app/node_modules" "$(TOOLCHAIN_IMAGE)" \
 		chown -R "$(HOST_UID):$(HOST_GID)" /app/node_modules
 
+# `MODV_UI=native` switches the development entry point from Electron to the
+# native egui shell. The legacy Vue UI remains the default and the two paths
+# share the same engine state plane.
+ifeq ($(MODV_UI),native)
+dev: dev-native
+else
 dev: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS) -e NO_SANDBOX=1 $(if $(filter 1,$(ENGINE_MODE)),-e MODV_ENGINE=1,)
 dev: docker-node-modules
 	$(call run-yarn,dev $(ARGS))
+endif
+
+# The native P0/P1 shell. Release by default so frame pacing matches the
+# packaged engine; use `native-debug` for iteration.
+native: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
+native: docker-cargo-volume
+	$(call run-cargo,run --release -p modv-app --bin modv -- $(ARGS))
+
+native-debug: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
+native-debug: docker-cargo-volume
+	$(call run-cargo,run -p modv-app --bin modv -- $(ARGS))
+
+dev-native: native
 
 lint: docker-node-modules
 	$(call run-yarn,lint)

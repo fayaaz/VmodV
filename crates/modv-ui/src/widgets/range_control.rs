@@ -19,6 +19,8 @@ pub struct RangeControl {
     /// Drag/typed increment; `0.0` disables quantisation.
     pub step: f64,
     pub unit: String,
+    /// Registered default; the reset button is hidden when absent.
+    pub default: Option<f64>,
     /// Expression badge (`E`) is visible.
     pub expression: bool,
     /// Tween badge (`T`) is visible.
@@ -38,6 +40,7 @@ impl RangeControl {
             max,
             step,
             unit: String::new(),
+            default: None,
             expression: false,
             tween: false,
             text: String::new(),
@@ -50,6 +53,11 @@ impl RangeControl {
 
     pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
         self.unit = unit.into();
+        self
+    }
+
+    pub fn with_default(mut self, value: f64) -> Self {
+        self.default = Some(value);
         self
     }
 
@@ -210,16 +218,13 @@ impl RangeControl {
                 changed = true;
             }
 
-            if ui
-                .add(egui::Button::new("R").small().frame(false))
-                .on_hover_text("Reset to the default")
-                .clicked()
+            if let Some(default) = self.default
+                && ui
+                    .add(egui::Button::new("R").small().frame(false))
+                    .on_hover_text("Reset to the registered default")
+                    .clicked()
             {
-                // The engine-side default is not in the read model; P3 binds
-                // this to `$props[prop].default`. For P0 it returns the
-                // midpoint, which is the editor's neutral value.
-                self.value = (self.min + self.max) * 0.5;
-                changed = true;
+                changed |= self.set_value(default);
             }
         });
 

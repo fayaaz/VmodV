@@ -1374,7 +1374,7 @@ impl ApplicationHandler for WindowedApp {
 /// (`renderers/shader/index.js:98-121`). Calendar conversion is Howard
 /// Hinnant's `civil_from_days` over Unix days, so it works without a
 /// chrono/time dependency.
-fn wall_clock_date(monotonic_seconds: f32) -> [f32; 4] {
+pub(crate) fn wall_clock_date(monotonic_seconds: f32) -> [f32; 4] {
     let unix_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)

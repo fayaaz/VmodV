@@ -12,7 +12,6 @@ use serde_json::Value;
 use crate::model::{EngineSnapshot, SceneCellView, SceneView};
 use crate::state::UiAction;
 use crate::theme;
-use crate::widgets::range_control::chip;
 
 /// A cell address inside the Scenes grid.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,7 +34,6 @@ impl CellRef {
 pub struct SceneGridState {
     pub hovered: Option<CellRef>,
     pub copy_source: Option<CellRef>,
-    pub context: Option<CellRef>,
 }
 
 impl SceneGridState {
@@ -61,12 +59,7 @@ impl SceneGridState {
         }
         Some(UiAction::new(
             "scenes/copySceneCellToScene",
-            serde_json::json!({
-                "fromSceneId": source.scene_id,
-                "fromRowIndex": source.row,
-                "toSceneId": target.scene_id,
-                "toRowIndex": target.row,
-            }),
+            copy_payload(&source, target),
         ))
     }
 }
@@ -131,9 +124,6 @@ pub fn draw_scene_grid(
                                 "scenes/applyScene",
                                 serde_json::json!({ "sceneId": scene.id }),
                             ));
-                        }
-                        if header.secondary_clicked() {
-                            grid.context = Some(CellRef::new(scene.id.clone(), 0));
                         }
                         header.context_menu(|ui| scene_column_menu(ui, scene, actions));
 
@@ -285,10 +275,7 @@ fn draw_scene_cell(
 
     // Primary click applies the Scene.
     if response.clicked() && !cell.is_empty() {
-        actions.push(UiAction::new(
-            "scenes/applyScene",
-            serde_json::json!({ "sceneId": scene.id }),
-        ));
+        actions.push(apply_scene_action(&scene.id));
     }
 
     // Ctrl/Cmd+drag starts a cell copy.
@@ -305,9 +292,6 @@ fn draw_scene_cell(
     }
 
     // Context menu.
-    if response.secondary_clicked() {
-        grid.context = Some(target.clone());
-    }
     response.context_menu(|ui| {
         scene_cell_menu(ui, scene, row, &cell, snapshot, grid, actions);
     });
@@ -325,10 +309,7 @@ fn scene_cell_menu(
     actions: &mut Vec<UiAction>,
 ) {
     if ui.button("Apply Scene").clicked() {
-        actions.push(UiAction::new(
-            "scenes/applyScene",
-            serde_json::json!({ "sceneId": scene.id }),
-        ));
+        actions.push(apply_scene_action(&scene.id));
         ui.close();
     }
     if ui
@@ -355,10 +336,7 @@ fn scene_cell_menu(
         .add_enabled(!cell.is_empty(), egui::Button::new("Clear cell"))
         .clicked()
     {
-        actions.push(UiAction::new(
-            "scenes/clearSceneCell",
-            serde_json::json!({ "sceneId": scene.id, "rowIndex": row }),
-        ));
+        actions.push(clear_cell_action(&scene.id, row));
         ui.close();
     }
     ui.separator();
@@ -394,10 +372,7 @@ fn scene_cell_menu(
 
 fn scene_column_menu(ui: &mut egui::Ui, scene: &SceneView, actions: &mut Vec<UiAction>) {
     if ui.button("Apply Scene").clicked() {
-        actions.push(UiAction::new(
-            "scenes/applyScene",
-            serde_json::json!({ "sceneId": scene.id }),
-        ));
+        actions.push(apply_scene_action(&scene.id));
         ui.close();
     }
     if ui.button("Capture live state into Scene").clicked() {
@@ -426,20 +401,8 @@ fn scene_column_menu(ui: &mut egui::Ui, scene: &SceneView, actions: &mut Vec<UiA
     }
 }
 
-/// A compact timing chip used by the P0 checklist and Scene cells.
-pub fn timing_chip(ui: &mut egui::Ui, seconds: Option<f64>) {
-    match seconds {
-        Some(seconds) => {
-            chip(ui, &format!("{seconds:.0}s"), theme::MUTED);
-        }
-        None => {
-            chip(ui, "auto", theme::MUTED);
-        }
-    }
-}
-
 /// Build an `applyScene` action (used by tests and menu helpers).
-pub fn apply_scene_action(scene_id: &str) -> UiAction {
+pub(crate) fn apply_scene_action(scene_id: &str) -> UiAction {
     UiAction::new(
         "scenes/applyScene",
         serde_json::json!({ "sceneId": scene_id }),
@@ -447,7 +410,7 @@ pub fn apply_scene_action(scene_id: &str) -> UiAction {
 }
 
 /// Build a `clearSceneCell` action.
-pub fn clear_cell_action(scene_id: &str, row: usize) -> UiAction {
+pub(crate) fn clear_cell_action(scene_id: &str, row: usize) -> UiAction {
     UiAction::new(
         "scenes/clearSceneCell",
         serde_json::json!({ "sceneId": scene_id, "rowIndex": row }),
@@ -455,7 +418,7 @@ pub fn clear_cell_action(scene_id: &str, row: usize) -> UiAction {
 }
 
 /// Serialise a cell drop payload for diagnostics/tests.
-pub fn copy_payload(source: &CellRef, target: &CellRef) -> Value {
+pub(crate) fn copy_payload(source: &CellRef, target: &CellRef) -> Value {
     serde_json::json!({
         "fromSceneId": source.scene_id,
         "fromRowIndex": source.row,

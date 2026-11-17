@@ -140,7 +140,9 @@ impl Default for UiState {
 
 impl UiState {
     pub fn new() -> Self {
-        let mut inspector_probe = RangeControl::new("gain", 0.5, 0.0, 2.0, 0.001).with_unit("");
+        let mut inspector_probe = RangeControl::new("gain", 0.5, 0.0, 2.0, 0.001)
+            .with_unit("")
+            .with_default(0.5);
         inspector_probe.expression = true;
         inspector_probe.tween = true;
         Self {

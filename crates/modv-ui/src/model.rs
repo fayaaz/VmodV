@@ -109,6 +109,8 @@ pub struct PropView {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub step: Option<f64>,
+    /// Registered default value (the Inspector's reset target).
+    pub default: Option<Value>,
     /// Enum options, when the prop declares them.
     pub options: Vec<String>,
 }

@@ -3280,6 +3280,25 @@ impl Compositor {
             })
     }
 
+    /// A clone of the composited main texture view.
+    ///
+    /// The native UI registers this view with `egui-wgpu` as a native texture,
+    /// so the preview path has no readback and no shared-memory ring. The view
+    /// is recreated on resize/reset; callers re-register when
+    /// [`Self::main_texture_size`] changes.
+    pub fn main_texture_view(&self) -> Option<wgpu::TextureView> {
+        self.main.as_ref().map(|main| main.view.clone())
+    }
+
+    /// The composited main texture's size, or `(0, 0)` before the first frame.
+    pub fn main_texture_size(&self) -> (u32, u32) {
+        if self.main.is_some() {
+            self.size
+        } else {
+            (0, 0)
+        }
+    }
+
     /// Read the main texture back as tightly packed RGBA8
     /// (`width * height * 4` bytes).
     ///

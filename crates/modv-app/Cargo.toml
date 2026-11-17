@@ -3,15 +3,26 @@ name = "modv-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "modV engine binary — see docs/rust-hybrid.md"
+description = "modV engine binary and native shell — see docs/rust-hybrid.md"
 default-run = "modv-engine"
+
+[lib]
+name = "modv_app"
+path = "src/lib.rs"
 
 [[bin]]
 name = "modv-engine"
 path = "src/main.rs"
 
+[[bin]]
+name = "modv"
+path = "src/bin/modv.rs"
+
 [dependencies]
 clap = "4.6.7"
+egui = { version = "0.37.0", features = ["default_fonts"] }
+egui-wgpu = { version = "0.37.0", default-features = false, features = ["winit", "wayland", "x11"] }
+egui-winit = { version = "0.37.0", default-features = false, features = ["wayland", "x11"] }
 image = "0.25.10"
 libc = "0.2"
 modv-engine = { path = "../modv-engine" }
@@ -19,6 +30,7 @@ modv-ipc = { path = "../modv-ipc" }
 modv-media = { version = "0.1.0", path = "../modv-media" }
 modv-render = { version = "0.1.0", path = "../modv-render" }
 modv-renderers = { version = "0.1.0", path = "../modv-renderers" }
+modv-ui = { version = "0.1.0", path = "../modv-ui" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 winit = "0.30.13"

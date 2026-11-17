@@ -44,7 +44,7 @@ fn shell_draws_with_an_empty_engine_snapshot() {
 }
 
 #[test]
-fn shell_scene_grid_emits_apply_action_on_header_click() {
+fn shell_scene_grid_renders_scene_columns_and_cells() {
     let mut snapshot = EngineSnapshot::default();
     snapshot.scenes.push(modv_ui::SceneView {
         id: "scene-a".to_string(),
