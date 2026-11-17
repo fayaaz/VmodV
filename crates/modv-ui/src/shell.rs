@@ -7,6 +7,7 @@
 
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, vec2};
 
+use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
 use crate::layout::{
     LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
     WINDOW_TEMPO,
@@ -527,7 +528,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                     for (index, group) in snapshot.groups.iter().enumerate() {
                         let selected = state.selected_group.as_deref() == Some(group.id.as_str());
                         let mut enabled = group.enabled;
-                        ui.horizontal(|ui| {
+                        let header = ui.horizontal(|ui| {
                             if ui
                                 .checkbox(&mut enabled, "")
                                 .on_hover_text("Enable this Group")
@@ -732,9 +733,13 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                 }
                             });
                         }
-                        ui.indent(("group-modules", &group.id), |ui| {
+                        let modules = ui.indent(("group-modules", &group.id), |ui| {
                             group_module_list(ui, snapshot, state, group, selected);
                         });
+                        // Header, selected-Group controls and the module strip
+                        // all accept a Gallery module dropped from the Gallery.
+                        let drop_rect = header.response.rect.union(modules.response.rect);
+                        gallery_drop_target(ui, drop_rect, &group.id, state);
                     }
                 });
 
@@ -754,6 +759,68 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
             });
         });
     state.layout.groups_width = response.response.rect.width();
+}
+
+/// Make a Group block a Gallery drop target: while a Gallery payload hovers
+/// the block, paint the accent tint/border plus an "Add <module>" chip, and on
+/// pointer release queue the same `ui/addModuleToGroup` action as the tile's
+/// double-click path. The whole block rect (header plus module strip) accepts
+/// the drop, including inside the scrolling Groups list.
+fn gallery_drop_target(ui: &egui::Ui, rect: egui::Rect, group_id: &str, state: &mut UiState) {
+    if !egui::DragAndDrop::has_payload_of_type::<GalleryDrag>(ui.ctx())
+        || !ui.rect_contains_pointer(rect)
+    {
+        return;
+    }
+    let Some(payload) = egui::DragAndDrop::payload::<GalleryDrag>(ui.ctx()) else {
+        return;
+    };
+
+    paint_gallery_drop_target(ui, rect, &payload.module_name);
+
+    if ui.input(|input| input.pointer.any_released()) {
+        // Consume the payload so a release cannot be answered twice; the pure
+        // resolver returns None only if the drag carried no module name.
+        let released = egui::DragAndDrop::take_payload::<GalleryDrag>(ui.ctx());
+        if let Some(action) = gallery_drop_action(released.as_deref(), Some(group_id)) {
+            state.actions.push(action);
+        }
+    } else {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+    }
+}
+
+/// The Group drop-target affordance: a translucent accent wash, an accent
+/// border and a small "Add <module>" chip at the bottom-right of the block.
+fn paint_gallery_drop_target(ui: &egui::Ui, rect: egui::Rect, module_name: &str) {
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        CornerRadius::same(3),
+        theme::ACCENT.gamma_multiply(0.18),
+    );
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(3),
+        Stroke::new(1.5, theme::ACCENT),
+        StrokeKind::Inside,
+    );
+
+    let galley = painter.layout_no_wrap(
+        format!("Add {module_name}"),
+        egui::FontId::proportional(9.0),
+        theme::BACKGROUND,
+    );
+    let chip_size = galley.size() + vec2(8.0, 4.0);
+    let chip = egui::Rect::from_min_size(
+        egui::pos2(
+            (rect.right() - chip_size.x - 4.0).max(rect.left() + 4.0),
+            (rect.bottom() - chip_size.y - 4.0).max(rect.top() + 4.0),
+        ),
+        chip_size,
+    );
+    painter.rect_filled(chip, CornerRadius::same(3), theme::ACCENT);
+    painter.galley(chip.min + vec2(4.0, 2.0), galley, theme::BACKGROUND);
 }
 
 /// The width already reserved by the right-hand panels that are visible.
@@ -2415,9 +2482,18 @@ fn gallery_tile(
     state: &mut UiState,
 ) {
     let size = vec2(108.0, 76.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    // The tile name is painted, not a label widget; expose it to assistive
+    // technology (and to the kittest pointer-driven drag tests) as a button.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &module.name));
+    // The tile is a Gallery drag source: the payload is the registered module
+    // name, which every Group block resolves into `ui/addModuleToGroup`.
+    if response.drag_started() {
+        response.dnd_set_drag_payload(GalleryDrag::new(module.name.clone()));
+    }
     let selected = state.selected_gallery_module.as_deref() == Some(module.name.as_str());
-    let fill = if selected {
+    let dragging = response.dragged();
+    let fill = if selected || dragging {
         theme::ACCENT_DIM
     } else if response.hovered() {
         theme::PANEL_ALT
@@ -2449,7 +2525,7 @@ fn gallery_tile(
         CornerRadius::same(3),
         Stroke::new(
             1.0,
-            if selected {
+            if selected || dragging {
                 theme::ACCENT
             } else {
                 theme::BORDER
@@ -2515,6 +2591,9 @@ fn gallery_tile(
     );
 
     if response.hovered() {
+        // The tile is draggable as well as clickable; the grab cursor is the
+        // only resting hint, so it does not add a permanent affordance.
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         state.request_gallery_preview(&module.name, true, std::time::Duration::from_millis(150));
     }
     if response.clicked() {
