@@ -3015,6 +3015,9 @@ impl Store {
         if let Some(steps) = params.get("steps").and_then(Value::as_f64) {
             descriptor.steps = steps;
         }
+        if let Some(times) = params.get("keyframeTimes") {
+            descriptor.keyframe_times = serde_json::from_value(times.clone()).ok();
+        }
         if let Some(is_gallery) = params.get("isGallery").and_then(Value::as_bool) {
             descriptor.is_gallery = Some(is_gallery);
         }

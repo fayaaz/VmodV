@@ -4,7 +4,8 @@
 //! (264 lines) and the `tween` data type in `store/modules/dataTypes.js:108-128`.
 //!
 //! A tween is a small descriptor (`id`, `data`, `duration`, `direction`,
-//! `easing`, `loop`, `useBpm`, `bpmDivision`, `durationAsTotalTime`, `steps`).
+//! `easing`, `loop`, `useBpm`, `bpmDivision`, `durationAsTotalTime`, `steps`,
+//! and the native `keyframeTimes` extension).
 //! The worker pre-renders the whole animation into an array of value frames by
 //! calling anime.js `seek()` at every frame boundary ([`build_tween_frames`]),
 //! then treats that array as a step sequencer: an Input Link reads the current
@@ -84,6 +85,20 @@
 //! multi-keyframe (3+ `data` rows) frames from
 //! `tools/tween-keyframe-reference.mjs`.
 //!
+//! # Free keyframe times (native extension)
+//!
+//! A descriptor may carry an optional `keyframeTimes: [0, 0.35, 1]`: the
+//! normalised progress of every `data` row, strictly increasing, with the
+//! first at 0 and the last at 1. Electron ignores the key, so it stays
+//! Electron-readable; the native editor uses it to drag keyframes on both
+//! axes. Valid times replace anime's even keyframe spacing (including the
+//! leading hold) with a segment between each pair of times, easing the local
+//! progress with the descriptor's easing/`steps`. With no times, or with an
+//! invalid list (wrong length, non-finite, non-monotonic, wrong endpoints),
+//! sampling uses the anime semantics above. Invalid raw values stay in
+//! [`TweenDescriptor::extra`] so a load -> save round trip keeps them verbatim;
+//! a two-row `[0, 1]` list samples exactly like an even-spaced two-row tween.
+//!
 //! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use indexmap::IndexMap;
@@ -151,6 +166,14 @@ pub struct TweenDescriptor {
     pub id: String,
     /// Keyframe rows; channel `i` is the sequence `data[row][i]`.
     pub data: Vec<Vec<f64>>,
+    /// Optional native extension: the progress (0..1) of each `data` row.
+    ///
+    /// Electron-authored tweens omit it and get anime's even keyframe spacing.
+    /// When present it must have one entry per row, be finite and strictly
+    /// increasing, and start at 0 / end at 1; an invalid list is ignored for
+    /// sampling but kept verbatim in [`TweenDescriptor::extra`] so a load ->
+    /// save round trip does not lose it.
+    pub keyframe_times: Option<Vec<f64>>,
     /// Duration in milliseconds (before the `data.length` division).
     pub duration: f64,
     /// `normal`, `reverse` or `alternate` (see the module docs).
@@ -186,6 +209,7 @@ impl TweenDescriptor {
         Self {
             id: id.into(),
             data,
+            keyframe_times: None,
             duration: 1000.0,
             direction: "alternate".to_string(),
             easing: "linear".to_string(),
@@ -203,6 +227,17 @@ impl TweenDescriptor {
     /// Number of animated channels (the widest `data` row).
     pub fn channel_count(&self) -> usize {
         self.data.iter().map(Vec::len).max().unwrap_or(0)
+    }
+
+    /// The free keyframe times when they are valid for this descriptor.
+    ///
+    /// Validation also runs here (not just on load) because the field is
+    /// public: a caller that sets `keyframe_times` and then changes `data`
+    /// must not sample with a mismatched list.
+    pub fn effective_keyframe_times(&self) -> Option<&[f64]> {
+        self.keyframe_times
+            .as_deref()
+            .filter(|times| valid_keyframe_times(times, self.data.len()))
     }
 
     /// The effective duration of one animation leg, in milliseconds.
@@ -292,11 +327,44 @@ impl TweenDescriptor {
         {
             map.insert("steps".to_string(), value);
         }
+        if let Some(times) = &self.keyframe_times
+            && let Some(value) = finite_numbers(times)
+        {
+            map.insert("keyframeTimes".to_string(), value);
+        }
         for (key, value) in &self.extra {
             map.insert(key.clone(), value.clone());
         }
 
         Value::Object(map)
+    }
+}
+
+/// Whether `times` is a usable free keyframe list for a `rows`-row tween.
+///
+/// The contract the native editor writes: one entry per `data` row, finite,
+/// strictly increasing, first 0 and last 1. Anything else is ignored for
+/// sampling (even spacing / anime keyframes) rather than failing the document.
+fn valid_keyframe_times(times: &[f64], rows: usize) -> bool {
+    times.len() == rows
+        && times.len() >= 2
+        && times.iter().all(|time| time.is_finite())
+        && times[0] == 0.0
+        && times[times.len() - 1] == 1.0
+        && times.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+/// Raw `keyframeTimes` value, present or not.
+///
+/// [`Value`] alone cannot distinguish an absent key from an explicit `null`,
+/// and both must round-trip exactly: absent means "even spacing, emit nothing"
+/// while `null` is invalid input that stays in `extra` verbatim.
+#[derive(Default)]
+struct RawKeyframeTimes(Option<Value>);
+
+impl<'de> Deserialize<'de> for RawKeyframeTimes {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Value::deserialize(deserializer).map(|value| Self(Some(value)))
     }
 }
 
@@ -359,6 +427,15 @@ fn finite_grid(data: &[Vec<f64>]) -> Option<Value> {
     }
 }
 
+/// [`finite_number`] for a flat number list (`keyframeTimes`).
+fn finite_numbers(values: &[f64]) -> Option<Value> {
+    if values.iter().all(|value| value.is_finite()) {
+        serde_json::to_value(MinimalF64Row(values)).ok()
+    } else {
+        None
+    }
+}
+
 impl Serialize for TweenDescriptor {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // One implementation: [`TweenDescriptor::to_json`] is the finite-only
@@ -375,6 +452,8 @@ struct TweenDescriptorRepr {
     id: String,
     #[serde(default)]
     data: Option<Vec<Vec<f64>>>,
+    #[serde(default, rename = "keyframeTimes")]
+    keyframe_times: RawKeyframeTimes,
     #[serde(default)]
     duration: Option<f64>,
     #[serde(default)]
@@ -412,9 +491,26 @@ impl<'de> Deserialize<'de> for TweenDescriptor {
             steps: repr.steps.is_some(),
         };
 
+        let mut extra = repr.extra;
+        let data = repr.data.unwrap_or_default();
+        let rows = data.len();
+        // Keep invalid raw times verbatim (in `extra`) instead of failing the
+        // descriptor; sampling falls back to anime's even keyframe spacing.
+        let keyframe_times = match repr.keyframe_times.0 {
+            Some(raw) => match serde_json::from_value::<Vec<f64>>(raw.clone()) {
+                Ok(times) if valid_keyframe_times(&times, rows) => Some(times),
+                _ => {
+                    extra.insert("keyframeTimes".to_string(), raw);
+                    None
+                }
+            },
+            None => None,
+        };
+
         Ok(TweenDescriptor {
             id: repr.id,
-            data: repr.data.unwrap_or_default(),
+            data,
+            keyframe_times,
             duration: repr.duration.unwrap_or(1000.0),
             direction: repr.direction.unwrap_or_else(|| "alternate".to_string()),
             easing: repr.easing.unwrap_or_else(|| "linear".to_string()),
@@ -424,7 +520,7 @@ impl<'de> Deserialize<'de> for TweenDescriptor {
             duration_as_total_time: repr.duration_as_total_time.unwrap_or(false),
             steps: repr.steps.unwrap_or(0.0),
             is_gallery: repr.is_gallery,
-            extra: repr.extra,
+            extra,
             presence,
         })
     }
@@ -702,6 +798,17 @@ impl Channel {
     fn sample(&self, tween: &TweenDescriptor, time: f64, duration: f64) -> f64 {
         let values = &self.values;
 
+        // Free keyframe positions are a native extension: when present and
+        // valid, they replace anime's even keyframe spacing. A ragged channel
+        // whose value count differs from the row count cannot map onto the
+        // times, so it keeps the anime semantics.
+        if let Some(times) = tween
+            .effective_keyframe_times()
+            .filter(|times| times.len() == values.len())
+        {
+            return sample_free(self, tween, times, time, duration);
+        }
+
         match values.len() {
             0 => 0.0,
             1 => values[0],
@@ -721,6 +828,44 @@ impl Channel {
             }
         }
     }
+}
+
+/// Sample a channel whose keyframes sit at explicit `times`.
+///
+/// Unlike anime's normalised keyframes there is no leading hold: the first
+/// segment starts at progress 0 and the last ends at 1. The easing/`steps` is
+/// applied to the segment's local progress.
+fn sample_free(
+    channel: &Channel,
+    tween: &TweenDescriptor,
+    times: &[f64],
+    time: f64,
+    duration: f64,
+) -> f64 {
+    let values = &channel.values;
+    let progress = if duration == 0.0 || duration.is_nan() {
+        1.0
+    } else {
+        let progress = time / duration;
+        if progress.is_nan() {
+            1.0
+        } else {
+            progress.clamp(0.0, 1.0)
+        }
+    };
+
+    let mut index = values.len() - 2;
+    for candidate in 0..values.len() - 1 {
+        if progress < times[candidate + 1] {
+            index = candidate;
+            break;
+        }
+    }
+
+    let width = times[index + 1] - times[index];
+    let local = ((progress - times[index]) / width).clamp(0.0, 1.0);
+
+    interpolate(values[index], values[index + 1], eased(tween, local))
 }
 
 /// The active tween index and its start time for a 3+ keyframe channel.
@@ -1526,6 +1671,148 @@ mod tests {
         assert_eq!(values[19], 0.0);
         assert_eq!(values[11], values[9]);
         assert_eq!(values[18], values[2]);
+    }
+
+    #[test]
+    fn keyframe_times_round_trip_and_preserve_unknown_keys() {
+        let document = json!({
+            "id": "free",
+            "data": [[0], [1], [0]],
+            "keyframeTimes": [0, 0.25, 1],
+            "mysteryKey": {"deep": [true, null]},
+        });
+
+        let descriptor: TweenDescriptor =
+            serde_json::from_value(document.clone()).expect("descriptor");
+        assert_eq!(
+            descriptor.keyframe_times,
+            Some(vec![0.0, 0.25, 1.0]),
+            "valid times are typed"
+        );
+        // The typed field must not duplicate or drop the raw key.
+        assert_eq!(descriptor.to_json(), document);
+
+        let reparsed: TweenDescriptor =
+            serde_json::from_value(descriptor.to_json()).expect("reparse");
+        assert_eq!(reparsed, descriptor);
+        assert_eq!(reparsed.to_json(), document);
+
+        // Preset/Scene documents carry `state.tweens` as the descriptor array.
+        let set = TweenSet::load_from_json(&json!([document.clone()]), 60.0, 120.0).expect("load");
+        assert_eq!(set.to_json(), json!([document]));
+
+        // Absent means absent: no `keyframeTimes` key is invented.
+        let plain = json!({"id": "plain", "data": [[0], [1]]});
+        let descriptor: TweenDescriptor = serde_json::from_value(plain.clone()).expect("plain");
+        assert_eq!(descriptor.keyframe_times, None);
+        assert_eq!(descriptor.to_json(), plain);
+    }
+
+    #[test]
+    fn invalid_keyframe_times_fall_back_to_even_spacing_and_round_trip_verbatim() {
+        let rows = json!([[0], [0.25], [0.6], [1]]);
+        let invalid = [
+            json!([0, 0.5, 1]),         // wrong length
+            json!([0, 0.5, 0.4, 1]),    // not strictly increasing
+            json!([0, 0.5, 0.5, 1]),    // duplicate position
+            json!([0.1, 0.3, 0.6, 1]),  // first is not 0
+            json!([0, 0.3, 0.6, 0.9]),  // last is not 1
+            json!(["-0", 0.3, 0.6, 1]), // not numeric
+            json!({"not": "times"}),    // wrong shape
+            Value::Null,                // null
+        ];
+
+        let plain = descriptor_from(&json!({
+            "id": "even",
+            "data": rows.clone(),
+            "useBpm": false,
+            "duration": 400,
+            "direction": "normal",
+            "easing": "linear",
+            "loop": false,
+        }));
+        let expected = build_tween_frames(&plain, 10.0, 120.0);
+
+        for times in invalid {
+            let document = json!({
+                "id": "bad",
+                "data": rows.clone(),
+                "keyframeTimes": times.clone(),
+            });
+            let descriptor: TweenDescriptor =
+                serde_json::from_value(document.clone()).expect("descriptor decodes");
+
+            assert_eq!(
+                descriptor.keyframe_times, None,
+                "invalid times are ignored: {times}"
+            );
+            // The raw key is preserved verbatim for a load -> save round trip.
+            assert_eq!(descriptor.to_json(), document, "raw key for {times}");
+
+            let mut descriptor = descriptor;
+            descriptor.use_bpm = false;
+            descriptor.duration = 400.0;
+            descriptor.direction = "normal".to_string();
+            descriptor.easing = "linear".to_string();
+            descriptor.looping = false;
+            assert_eq!(
+                build_tween_frames(&descriptor, 10.0, 120.0),
+                expected,
+                "invalid times sample like even spacing: {times}"
+            );
+        }
+
+        // A programmatically assigned non-finite time is just as invalid; it
+        // must not panic or be used in sampling.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut descriptor = plain.clone();
+            descriptor.keyframe_times = Some(vec![0.0, bad, 0.6, 1.0]);
+            assert_eq!(build_tween_frames(&descriptor, 10.0, 120.0), expected);
+        }
+    }
+
+    #[test]
+    fn keyframe_times_sample_free_positions() {
+        let mut tween =
+            TweenDescriptor::new("free", vec![vec![0.0], vec![1.0], vec![0.0], vec![2.0]]);
+        tween.duration = 1000.0;
+        tween.duration_as_total_time = true;
+        tween.direction = "normal".to_string();
+        tween.easing = "linear".to_string();
+        tween.looping = false;
+        tween.use_bpm = false;
+        tween.keyframe_times = Some(vec![0.0, 0.2, 0.6, 1.0]);
+
+        // 1000 ms at 10 fps: progress = 0, 0.1, ... 0.9.
+        let frames = build_tween_frames(&tween, 10.0, 120.0);
+        let values: Vec<f64> = frames.iter().map(|frame| frame[0]).collect();
+        let expected = [0.0, 0.5, 1.0, 0.75, 0.5, 0.25, 0.0, 0.5, 1.0, 1.5];
+
+        assert_eq!(values.len(), expected.len());
+        for (index, (value, expected)) in values.iter().zip(expected).enumerate() {
+            assert!(
+                (value - expected).abs() < 1e-12,
+                "frame {index}: {value} != {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_row_keyframe_times_match_the_even_spacing_result() {
+        let mut tween = linear_tween();
+        let even = build_tween_frames(&tween, 10.0, 120.0);
+
+        tween.keyframe_times = Some(vec![0.0, 1.0]);
+        assert_eq!(build_tween_frames(&tween, 10.0, 120.0), even);
+
+        // `steps` is applied identically on the free-time path.
+        tween.steps = 4.0;
+        let mut even_steps = tween.clone();
+        even_steps.keyframe_times = None;
+        assert_eq!(
+            build_tween_frames(&tween, 10.0, 120.0),
+            build_tween_frames(&even_steps, 10.0, 120.0)
+        );
     }
 
     #[test]
