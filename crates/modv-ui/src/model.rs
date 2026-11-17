@@ -71,8 +71,10 @@ pub struct AudioDeviceView {
     pub name: String,
     /// Default input channel count.
     pub channels: u16,
-    /// Default input sample rate in Hz.
-    pub default_sample_rate: u32,
+    /// The rate capture will actually negotiate for this device
+    /// (`InputDeviceInfo::capture_sample_rate`), never cpal's
+    /// `default_input_config()` heuristic.
+    pub capture_sample_rate: u32,
 }
 
 impl AudioDeviceView {
@@ -81,7 +83,7 @@ impl AudioDeviceView {
         format!(
             "{} ch · {}",
             self.channels,
-            sample_rate_label(self.default_sample_rate)
+            sample_rate_label(self.capture_sample_rate)
         )
     }
 }
@@ -95,6 +97,11 @@ impl AudioDeviceView {
 pub struct AudioSelectionView {
     pub source: String,
     pub device: Option<String>,
+    /// The rate the running feed negotiated (`AudioFeed::sample_rate()`),
+    /// `None` while capture is silent (no feed, or a feed that stopped on an
+    /// error). Preferred over a device's advertised capture rate wherever the
+    /// banner names the rate analysis is running at.
+    pub capture_sample_rate: Option<u32>,
     /// The last live-switch failure. The previous feed keeps running when this
     /// is set, so the panel can say so instead of implying silence.
     pub error: Option<String>,
@@ -105,6 +112,7 @@ impl Default for AudioSelectionView {
         Self {
             source: "pipewire".to_string(),
             device: None,
+            capture_sample_rate: None,
             error: None,
         }
     }
@@ -167,21 +175,37 @@ impl AudioSelectionView {
         }
     }
 
+    /// The rate analysis is actually running at: the live feed's negotiated
+    /// rate when capture is running, otherwise the selected device's capture
+    /// rate. `None` for the system sources while silent.
+    pub fn capture_rate(&self, devices: &[AudioDeviceView]) -> Option<u32> {
+        self.capture_sample_rate
+            .filter(|rate| *rate > 0)
+            .or_else(|| {
+                self.active_device(devices)
+                    .map(|device| device.capture_sample_rate)
+                    .filter(|rate| *rate > 0)
+            })
+    }
+
     /// The banner's technical line: channel count, sample rate and the stable
     /// source id (the id stays out of the primary label).
+    ///
+    /// The rate is the live feed's negotiated rate when capture is running and
+    /// the device's capture rate while silent — cpal's 44.1 kHz
+    /// `default_input_config()` heuristic never reaches this line.
     pub fn active_detail(&self, devices: &[AudioDeviceView]) -> String {
+        let rate = self.capture_rate(devices);
+        let rate_note = rate
+            .map(|rate| format!(" · {}", sample_rate_label(rate)))
+            .unwrap_or_default();
         if let Some(device) = self.active_device(devices) {
-            return format!(
-                "{} ch · {} · {}",
-                device.channels,
-                sample_rate_label(device.default_sample_rate),
-                device.id
-            );
+            return format!("{} ch{rate_note} · {}", device.channels, device.id);
         }
         match (self.source.as_str(), self.device.as_deref()) {
-            ("pipewire", _) => "PipeWire monitor · pipewire".to_string(),
-            ("input", None) => "System default · input".to_string(),
-            ("input", Some(device)) => format!("input · {device}"),
+            ("pipewire", _) => format!("PipeWire monitor{rate_note} · pipewire"),
+            ("input", None) => format!("System default{rate_note} · input"),
+            ("input", Some(device)) => format!("input{rate_note} · {device}"),
             (source, _) => source.to_string(),
         }
     }
@@ -199,7 +223,7 @@ impl AudioSelectionView {
 }
 
 /// `48000` → `48 kHz`, `44100` → `44.1 kHz`, `0` → `unknown rate`.
-fn sample_rate_label(hz: u32) -> String {
+pub fn sample_rate_label(hz: u32) -> String {
     if hz == 0 {
         return "unknown rate".to_string();
     }
@@ -969,8 +993,36 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             channels: 2,
-            default_sample_rate: 48_000,
+            capture_sample_rate: 48_000,
         }
+    }
+
+    #[test]
+    fn the_device_detail_reports_the_rate_capture_negotiates() {
+        // cpal's `default_input_config()` reports 44.1 kHz whenever the device
+        // advertises it, while capture opens at 48 kHz. The picker renders the
+        // capture rate, so no 44.1 kHz heuristic leaks into a row.
+        let usb = device("alsa:usb", "USB Microphone");
+        assert_eq!(usb.detail(), "2 ch · 48 kHz");
+
+        let hi_res = AudioDeviceView {
+            capture_sample_rate: 96_000,
+            ..usb.clone()
+        };
+        assert_eq!(hi_res.detail(), "2 ch · 96 kHz");
+
+        // A device that genuinely negotiates 44.1 kHz still renders as 44.1 kHz.
+        let fractional = AudioDeviceView {
+            capture_sample_rate: 44_100,
+            ..usb.clone()
+        };
+        assert_eq!(fractional.detail(), "2 ch · 44.1 kHz");
+
+        let unknown = AudioDeviceView {
+            capture_sample_rate: 0,
+            ..usb
+        };
+        assert_eq!(unknown.detail(), "2 ch · unknown rate");
     }
 
     #[test]
@@ -989,6 +1041,7 @@ mod tests {
         let mut selection = AudioSelectionView {
             source: "input".to_string(),
             device: Some("ALSA:USB".to_string()),
+            capture_sample_rate: None,
             error: None,
         };
 
@@ -1033,6 +1086,7 @@ mod tests {
         let default_input = AudioSelectionView {
             source: "input".to_string(),
             device: None,
+            capture_sample_rate: None,
             error: None,
         };
         assert_eq!(default_input.active_label(&devices), "System default input");
@@ -1053,6 +1107,7 @@ mod tests {
         let selection = AudioSelectionView {
             source: "input".to_string(),
             device: Some("ALSA:USB".to_string()),
+            capture_sample_rate: None,
             error: None,
         };
 
@@ -1068,11 +1123,12 @@ mod tests {
         );
 
         let mut fractional = usb.clone();
-        fractional.default_sample_rate = 44_100;
+        fractional.capture_sample_rate = 44_100;
         assert_eq!(
             AudioSelectionView {
                 source: "input".to_string(),
                 device: Some(fractional.id.clone()),
+                capture_sample_rate: None,
                 error: None,
             }
             .active_detail(&[fractional]),
@@ -1081,10 +1137,49 @@ mod tests {
     }
 
     #[test]
+    fn the_active_banner_prefers_the_live_feed_rate_over_the_device_rate() {
+        let usb = device("alsa:usb", "USB Microphone");
+        let mut selection = AudioSelectionView {
+            source: "input".to_string(),
+            device: Some("alsa:usb".to_string()),
+            capture_sample_rate: Some(96_000),
+            error: None,
+        };
+
+        assert_eq!(
+            selection.active_detail(std::slice::from_ref(&usb)),
+            "2 ch · 96 kHz · alsa:usb",
+            "the running feed's negotiated rate wins over the device row"
+        );
+
+        selection.capture_sample_rate = None;
+        assert_eq!(
+            selection.active_detail(&[usb]),
+            "2 ch · 48 kHz · alsa:usb",
+            "a silent capture falls back to the device's capture rate"
+        );
+
+        let monitor = AudioSelectionView {
+            source: "pipewire".to_string(),
+            device: None,
+            capture_sample_rate: Some(48_000),
+            error: None,
+        };
+        assert_eq!(
+            monitor.active_detail(&[]),
+            "PipeWire monitor · 48 kHz · pipewire",
+            "the PipeWire monitor reports its negotiated rate too"
+        );
+        assert_eq!(monitor.capture_rate(&[]), Some(48_000));
+        assert_eq!(AudioSelectionView::default().capture_rate(&[]), None);
+    }
+
+    #[test]
     fn an_unplugged_device_still_gets_an_honest_banner() {
         let selection = AudioSelectionView {
             source: "input".to_string(),
             device: Some("alsa:gone".to_string()),
+            capture_sample_rate: None,
             error: None,
         };
 

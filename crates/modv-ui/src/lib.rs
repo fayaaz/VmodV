@@ -33,7 +33,7 @@ pub use model::{
     PerformanceView, PreviewRequest, PreviewTexture, PropComponentView, PropView, RowMonitorView,
     SceneCellView, SceneView, TextureSourceView, TweenView, default_camera_mode, fps_options,
     gallery_preview_key, mode_for_resolution, normalize_performance_order, performance_order_label,
-    scene_preview_key, un_premultiply_rgba, unique_resolutions,
+    sample_rate_label, scene_preview_key, un_premultiply_rgba, unique_resolutions,
 };
 pub use state::{
     AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, TweenCurveEditor, TweenHandleDrag,

@@ -9,7 +9,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::state::SidePanelTab;
 use modv_ui::{
-    AudioDeviceView, AudioSelectionView, EngineHealth, EngineSnapshot, UiCommand, UiState,
+    AudioDeviceView, AudioSelectionView, AudioView, EngineHealth, EngineSnapshot, UiCommand,
+    UiState,
 };
 
 fn demo_snapshot() -> EngineSnapshot {
@@ -19,18 +20,23 @@ fn demo_snapshot() -> EngineSnapshot {
                 id: "alsa:usb".to_string(),
                 name: "USB Microphone".to_string(),
                 channels: 2,
-                default_sample_rate: 48_000,
+                capture_sample_rate: 48_000,
             },
             AudioDeviceView {
                 id: "alsa:builtin".to_string(),
                 name: "Built-in Audio".to_string(),
-                channels: 2,
-                default_sample_rate: 44_100,
+                channels: 4,
+                capture_sample_rate: 48_000,
             },
         ],
+        audio: AudioView {
+            bpm: 128.0,
+            ..Default::default()
+        },
         audio_selection: AudioSelectionView {
             source: "pipewire".to_string(),
             device: None,
+            capture_sample_rate: None,
             error: None,
         },
         health: EngineHealth {
@@ -57,7 +63,7 @@ fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
         );
     harness.run();
 
-    // The banner names the active source and its state.
+    // The banner names the active source, its state and the live capture rate.
     harness.get_by_label("IN USE");
     harness.get_by_label("System audio");
     harness.get_by_label("Captures what your speakers play");
@@ -70,7 +76,10 @@ fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
     harness.get_by_label("System default input");
     harness.get_by_label("USB Microphone");
     harness.get_by_label("Built-in Audio");
-    harness.get_by_label("2 ch · 48 kHz");
+    // Picker rows show the rate capture negotiates (48 kHz), never cpal's
+    // 44.1 kHz `default_input_config()` heuristic.
+    assert_eq!(harness.get_all_by_label("2 ch · 48 kHz").count(), 1);
+    harness.get_by_label("4 ch · 48 kHz");
     harness.get_by_label("audio: engine");
 }
 
@@ -80,6 +89,7 @@ fn the_active_banner_resolves_the_selected_device() {
     snapshot.audio_selection = AudioSelectionView {
         source: "input".to_string(),
         device: Some("alsa:usb".to_string()),
+        capture_sample_rate: None,
         error: None,
     };
     let mut state = UiState::new();

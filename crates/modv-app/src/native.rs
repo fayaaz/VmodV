@@ -1795,6 +1795,7 @@ impl NativeApp {
         let audio_selection = AudioSelectionView {
             source: self.audio_selection.as_str().to_string(),
             device: self.audio_device.clone(),
+            capture_sample_rate: None,
             error: self.audio_switch_error.clone(),
         };
 

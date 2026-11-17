@@ -171,11 +171,12 @@ fn demo_snapshot() -> EngineSnapshot {
             id: "alsa:builtin".to_string(),
             name: "Built-in Audio Analog Stereo".to_string(),
             channels: 2,
-            default_sample_rate: 48_000,
+            capture_sample_rate: 48_000,
         }],
         audio_selection: AudioSelectionView {
             source: "pipewire".to_string(),
             device: None,
+            capture_sample_rate: None,
             error: None,
         },
         ..Default::default()

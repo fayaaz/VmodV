@@ -275,7 +275,10 @@ pub fn device_views(devices: &[InputDeviceInfo]) -> Vec<AudioDeviceView> {
             id: device.id.clone(),
             name: device.name.clone(),
             channels: device.channels,
-            default_sample_rate: device.default_sample_rate,
+            // The rate `AudioCapture::start(CaptureConfig::default())` will
+            // negotiate, not cpal's `default_input_config()` 44.1 kHz
+            // heuristic (`InputDeviceInfo::default_sample_rate`).
+            capture_sample_rate: device.capture_sample_rate,
         });
     }
 
@@ -488,13 +491,19 @@ mod tests {
     }
 
     #[test]
-    fn device_views_map_name_id_channels_and_rate_including_an_empty_host() {
+    fn device_views_map_name_id_channels_and_the_capture_rate() {
         assert!(device_views(&[]).is_empty());
 
-        let views = device_views(&[
-            device("USB Microphone", "alsa:usb"),
-            device("Built-in Audio", "alsa:builtin"),
-        ]);
+        // cpal's heuristic reports 44.1 kHz for both rows; the picker must map
+        // the rate capture negotiates instead (`InputDeviceInfo::capture_sample_rate`).
+        let mut usb = device("USB Microphone", "alsa:usb");
+        usb.default_sample_rate = 44_100;
+        usb.capture_sample_rate = 48_000;
+        let mut builtin = device("Built-in Audio", "alsa:builtin");
+        builtin.default_sample_rate = 44_100;
+        builtin.capture_sample_rate = 96_000;
+
+        let views = device_views(&[usb, builtin]);
 
         assert_eq!(
             views,
@@ -503,15 +512,20 @@ mod tests {
                     id: "alsa:usb".to_string(),
                     name: "USB Microphone".to_string(),
                     channels: 2,
-                    default_sample_rate: 48_000,
+                    capture_sample_rate: 48_000,
                 },
                 AudioDeviceView {
                     id: "alsa:builtin".to_string(),
                     name: "Built-in Audio".to_string(),
                     channels: 2,
-                    default_sample_rate: 48_000,
+                    capture_sample_rate: 96_000,
                 },
             ]
+        );
+        assert_eq!(
+            views[0].detail(),
+            "2 ch · 48 kHz",
+            "the cpal default never reaches the picker"
         );
     }
 

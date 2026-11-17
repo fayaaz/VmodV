@@ -20,24 +20,25 @@ fn audio_snapshot() -> EngineSnapshot {
                 id: "alsa:pipewire".to_string(),
                 name: "PipeWire Sound Server".to_string(),
                 channels: 2,
-                default_sample_rate: 48_000,
+                capture_sample_rate: 48_000,
             },
             AudioDeviceView {
                 id: "alsa:hw:CARD=CODEC,DEV=0".to_string(),
                 name: "USB Audio CODEC, USB Audio".to_string(),
                 channels: 2,
-                default_sample_rate: 48_000,
+                capture_sample_rate: 48_000,
             },
             AudioDeviceView {
                 id: "alsa:hw:CARD=Generic_1,DEV=0".to_string(),
                 name: "HD-Audio Generic, ALC1220 Analog".to_string(),
                 channels: 2,
-                default_sample_rate: 44_100,
+                capture_sample_rate: 48_000,
             },
         ],
         audio_selection: AudioSelectionView {
             source: "pipewire".to_string(),
             device: None,
+            capture_sample_rate: None,
             error: None,
         },
         health: EngineHealth {
