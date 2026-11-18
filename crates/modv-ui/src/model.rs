@@ -9,6 +9,30 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+/// The project profile shown by the File menu.
+///
+/// Electron's media manager keeps every profile under `<userData>/media`; the
+/// active one provides the ISF/image/video/palette folders the shell watches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectView {
+    /// The active profile name (`default` when nothing is saved).
+    pub active_profile: String,
+    /// Every profile folder under `<userData>/media`, sorted.
+    pub profiles: Vec<String>,
+}
+
+/// The profile the JS media manager creates on first launch.
+pub const DEFAULT_PROFILE_NAME: &str = "default";
+
+impl Default for ProjectView {
+    fn default() -> Self {
+        Self {
+            active_profile: DEFAULT_PROFILE_NAME.to_string(),
+            profiles: Vec::new(),
+        }
+    }
+}
+
 /// Everything the shell needs to draw one frame.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EngineSnapshot {
@@ -61,6 +85,8 @@ pub struct EngineSnapshot {
     pub osc: OscSnapshot,
     /// Enumerated cpal input devices for the Audio panel.
     pub audio_devices: Vec<AudioDeviceView>,
+    /// The active media project profile and every profile on disk.
+    pub project: ProjectView,
     /// The live native capture selection (the Audio panel's active choice).
     pub audio_selection: AudioSelectionView,
 }

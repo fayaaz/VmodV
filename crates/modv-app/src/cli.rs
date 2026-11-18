@@ -208,9 +208,13 @@ pub struct Cli {
     pub list_audio_devices: bool,
     /// Native shell only: apply this Scene name/id after seeding.
     pub apply_scene: Option<String>,
-    /// Native shell only: load a preset/Scene document at startup and use it
-    /// as the default "Save preset" target.
+    /// Native shell only: load a preset/Scene/playlist document at startup and
+    /// use a plain preset as the default "Save preset" target.
     pub preset: Option<PathBuf>,
+    /// Native shell only: open a Scene document at startup.
+    pub scene: Option<PathBuf>,
+    /// Native shell only: import a Scenes playlist at startup.
+    pub playlist: Option<PathBuf>,
 }
 
 impl Cli {
@@ -361,7 +365,19 @@ pub fn parse() -> Cli {
             Arg::new("preset")
                 .long("preset")
                 .value_name("PATH")
-                .help("Native shell: load a preset/Scene at startup (and save back here)"),
+                .help("Native shell: open a preset, Scene or Scenes playlist at startup (saves back here for a plain preset)"),
+        )
+        .arg(
+            Arg::new("scene")
+                .long("scene")
+                .value_name("PATH")
+                .help("Native shell: open a Scene document at startup (alias for --preset with Scene detection)"),
+        )
+        .arg(
+            Arg::new("playlist")
+                .long("playlist")
+                .value_name("PATH")
+                .help("Native shell: import a Scenes playlist at startup"),
         )
         .arg(
             Arg::new("emit-fixtures")
@@ -462,7 +478,22 @@ pub fn parse() -> Cli {
         list_audio_devices: matches.get_flag("list-audio-devices"),
         apply_scene: matches.get_one::<String>("apply-scene").cloned(),
         preset: matches.get_one::<String>("preset").map(PathBuf::from),
+        scene: matches.get_one::<String>("scene").map(PathBuf::from),
+        playlist: matches.get_one::<String>("playlist").map(PathBuf::from),
     }
+}
+
+/// The document to open at startup.
+///
+/// `--playlist` and `--scene` are explicit aliases; `--preset` is the original
+/// flag and auto-detects the document kind. The most specific flag wins when
+/// more than one is supplied.
+pub fn startup_document_path<'a>(
+    preset: Option<&'a Path>,
+    scene: Option<&'a Path>,
+    playlist: Option<&'a Path>,
+) -> Option<&'a Path> {
+    playlist.or(scene).or(preset)
 }
 
 /// Report an audio-source/device validation failure through clap (exit code 2).
@@ -531,6 +562,30 @@ mod tests {
         assert_eq!(native_bench_seconds(false, 10.0), 0.0);
         assert_eq!(native_bench_seconds(true, 10.0), 10.0);
         assert_eq!(native_bench_seconds(true, 0.0), 0.0);
+    }
+
+    #[test]
+    fn startup_document_flags_prefer_the_specific_alias() {
+        let preset = Path::new("/tmp/preset.json");
+        let scene = Path::new("/tmp/scene.json");
+        let playlist = Path::new("/tmp/playlist.json");
+        assert_eq!(startup_document_path(None, None, None), None);
+        assert_eq!(
+            startup_document_path(Some(preset), None, None),
+            Some(preset)
+        );
+        assert_eq!(
+            startup_document_path(Some(preset), Some(scene), None),
+            Some(scene)
+        );
+        assert_eq!(
+            startup_document_path(Some(preset), Some(scene), Some(playlist)),
+            Some(playlist)
+        );
+        assert_eq!(
+            startup_document_path(None, None, Some(playlist)),
+            Some(playlist)
+        );
     }
 
     #[test]

@@ -15,6 +15,8 @@ pub mod ids;
 pub mod input_links;
 pub mod isf_watch;
 pub mod media;
+pub mod media_dialogs;
+pub mod media_profiles;
 pub mod media_settings;
 pub mod midi;
 pub mod module_preview;

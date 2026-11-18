@@ -5,9 +5,11 @@
 //! the app drains after drawing.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
 use serde_json::Value;
 
+use crate::file_dialog::{FileDialogAction, FileDialogState};
 use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PreviewRequest, PropView};
 use crate::panels::scene_grid::SceneGridState;
 use crate::widgets::{RangeControl, TweenCurve};
@@ -47,6 +49,22 @@ pub enum UiCommand {
     SaveSnapshot,
     SavePreset,
     FlushLogs,
+    /// Open the in-app picker for this action. The native app resolves the
+    /// starting folder from the active media profile.
+    ShowFileDialog(FileDialogAction),
+    /// The picker (or a command-line open) produced a validated path.
+    FileChosen {
+        action: FileDialogAction,
+        path: PathBuf,
+    },
+    /// Create `<userData>/media/<name>` with the Electron profile folders.
+    CreateProfile(String),
+    /// Switch the active media profile and rescan the user ISF folders.
+    SwitchProfile(String),
+    /// Open `<userData>/media` in the platform file manager.
+    OpenMediaFolder,
+    /// Open `<userData>/logs` in the platform file manager.
+    OpenLogsFolder,
     /// Switch native audio capture live. `source` is `pipewire` or `input`;
     /// an `input` with no `device` selects the host default input.
     SetAudioSource {
@@ -176,6 +194,12 @@ pub struct UiState {
     pub osc_host_draft: String,
     pub osc_port_draft: String,
     pub osc_form_error: Option<String>,
+    /// The open in-app file picker, if any.
+    pub file_dialog: Option<FileDialogState>,
+    /// The "New project profile" modal.
+    pub show_profile_dialog: bool,
+    pub profile_name: String,
+    pub profile_error: Option<String>,
 }
 
 /// Which panel the right side shows.
@@ -846,7 +870,35 @@ impl UiState {
             osc_host_draft: DEFAULT_OSC_HOST.to_string(),
             osc_port_draft: DEFAULT_OSC_PORT.to_string(),
             osc_form_error: None,
+            file_dialog: None,
+            show_profile_dialog: false,
+            profile_name: String::new(),
+            profile_error: None,
         }
+    }
+
+    /// Open the in-app picker at `start_dir`.
+    pub fn open_file_dialog(&mut self, action: FileDialogAction, start_dir: impl Into<PathBuf>) {
+        self.file_dialog = Some(FileDialogState::open(action, start_dir));
+    }
+
+    /// Open the "New project profile" modal with an empty name.
+    pub fn open_profile_dialog(&mut self) {
+        self.show_profile_dialog = true;
+        self.profile_name.clear();
+        self.profile_error = None;
+    }
+
+    /// Queue the profile named by the modal, or show why the name is unusable.
+    pub fn queue_create_profile(&mut self) {
+        let name = self.profile_name.trim().to_string();
+        if name.is_empty() {
+            self.profile_error = Some("Enter a profile name".to_string());
+            return;
+        }
+        self.commands.push(UiCommand::CreateProfile(name));
+        self.show_profile_dialog = false;
+        self.profile_error = None;
     }
 
     /// Whether `tab` is on screen this frame: the active strip tab, or a tab

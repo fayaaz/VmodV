@@ -30,11 +30,11 @@ use modv_ui::model::{
 };
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraModeView, CameraView, EngineHealth,
-    EngineSnapshot, GroupView, InputLinkView, MediaAction, MediaSnapshot, MediaSourceView,
-    MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView, PreviewRequest,
-    PreviewTexture, PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView,
-    SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
-    scene_preview_key,
+    EngineSnapshot, FileDialogAction, GroupView, InputLinkView, MediaAction, MediaSnapshot,
+    MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView,
+    PreviewRequest, PreviewTexture, ProjectView, PropComponentView, PropView, RowMonitorView,
+    SceneCellView, SceneView, SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand,
+    UiState, gallery_preview_key, scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -48,6 +48,8 @@ use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
 use crate::isf_watch::IsfWatcher;
 use crate::media::MediaHub;
+use crate::media_dialogs::{self, DocumentKind, FilePicker};
+use crate::media_profiles::{self, DEFAULT_PROFILE, PROJECT_SETTINGS_FILENAME, ProjectSettings};
 use crate::media_settings::{CameraMode, MediaSettings, plan_restore, resolve_mode};
 use crate::midi::MidiClient;
 use crate::pacing::FramePacer;
@@ -259,6 +261,20 @@ pub struct NativeApp {
     engine: Option<Engine>,
     adapter: AdapterSummary,
     store: Store,
+    /// `<userData>` and the shared media tree it owns.
+    user_data: PathBuf,
+    media_root: PathBuf,
+    /// The persisted active profile and extra user ISF folders.
+    project_settings: ProjectSettings,
+    project_settings_path: PathBuf,
+    active_profile: String,
+    profiles: Vec<String>,
+    extra_isf_dirs: Vec<PathBuf>,
+    /// Set after a failed project-settings write so a broken disk logs once.
+    project_settings_error_logged: bool,
+    last_profile_scan: Instant,
+    /// The last Save preset target (CLI `--preset`, then Save As/Open Preset).
+    preset_path: Option<PathBuf>,
     compositor: Option<Compositor>,
     egui_ctx: egui::Context,
     egui_state: Option<EguiWinitState>,
@@ -351,7 +367,39 @@ impl NativeApp {
 
         let isf_dir = resolve_isf_dir(&cli);
         let user_data = user_data_dir();
-        let user_isf_dirs = user_isf_dirs(&user_data);
+        let media_root = user_data.join("media");
+        let project_settings_path = user_data.join(PROJECT_SETTINGS_FILENAME);
+        let project_settings = match ProjectSettings::read_from(&project_settings_path) {
+            Ok(settings) => settings.unwrap_or_default(),
+            Err(error) => {
+                eprintln!("ui: WARN ignoring the saved project choice: {error}");
+                ProjectSettings::default()
+            }
+        };
+        let prepared = match media_profiles::prepare_profiles(
+            &media_root,
+            project_settings.active_profile(),
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                eprintln!("ui: WARN could not prepare the media profiles: {error}");
+                media_profiles::PreparedProfiles {
+                    active: DEFAULT_PROFILE.to_string(),
+                    profiles: Vec::new(),
+                }
+            }
+        };
+        if prepared.active != project_settings.active_profile() {
+            eprintln!(
+                "ui: WARN project profile {:?} is missing; using {:?}",
+                project_settings.active_profile(),
+                prepared.active
+            );
+        }
+        let active_profile = prepared.active;
+        let profiles = prepared.profiles;
+        let extra_isf_dirs = project_settings.isf_dirs.clone();
+        let user_isf_dirs = user_isf_dirs(&media_root, &active_profile, &extra_isf_dirs);
         let mut store = build_native_store(
             cli.state.as_deref(),
             &user_data,
@@ -378,10 +426,22 @@ impl NativeApp {
         let ndi_view = ndi_snapshot(&store);
         let osc_view = osc_snapshot(&store, &osc_servers);
 
-        if let Some(path) = &cli.preset
-            && let Err(error) = load_preset_from(path, &mut store)
-        {
-            eprintln!("ui: WARN could not load preset {}: {error}", path.display());
+        if let Some(path) = crate::cli::startup_document_path(
+            cli.preset.as_deref(),
+            cli.scene.as_deref(),
+            cli.playlist.as_deref(),
+        ) {
+            match media_dialogs::open_document(&mut store, path) {
+                Ok(kind) => eprintln!(
+                    "ui: INFO opened startup {} {}",
+                    kind.label(),
+                    path.display()
+                ),
+                Err(error) => eprintln!(
+                    "ui: WARN could not open startup document {}: {error}",
+                    path.display()
+                ),
+            }
         }
         apply_startup_scene(&mut store, cli.apply_scene.as_deref());
 
@@ -488,10 +548,19 @@ impl NativeApp {
 
         Self {
             bench_deadline: cli.bench_deadline(),
+            preset_path: cli.preset.clone(),
             cli,
             engine: Some(engine),
             adapter,
             store,
+            media_root,
+            project_settings,
+            project_settings_path,
+            active_profile,
+            profiles,
+            extra_isf_dirs,
+            project_settings_error_logged: false,
+            last_profile_scan: start,
             compositor: None,
             egui_ctx,
             egui_state: None,
@@ -509,6 +578,7 @@ impl NativeApp {
             row_monitors: HashMap::new(),
             window_state: WindowState::read(&user_data.join(WINDOW_STATE_FILENAME)),
             window_state_path: user_data.join(WINDOW_STATE_FILENAME),
+            user_data,
             window_state_dirty: false,
             last_window_state_save: start,
             window_state_error_logged: false,
@@ -900,6 +970,10 @@ impl NativeApp {
         if now.saturating_duration_since(self.last_media_health) >= Duration::from_secs(1) {
             self.media_hub.poll_health();
             self.last_media_health = now;
+        }
+        if now.saturating_duration_since(self.last_profile_scan) >= Duration::from_secs(2) {
+            self.refresh_profiles();
+            self.last_profile_scan = now;
         }
         if now.saturating_duration_since(self.last_camera_scan) >= Duration::from_secs(1) {
             self.media_cameras = self.media_hub.list_cameras();
@@ -1456,11 +1530,153 @@ impl NativeApp {
                 UiCommand::SaveSnapshot => self.save_snapshot(),
                 UiCommand::SavePreset => self.save_preset(),
                 UiCommand::FlushLogs => {}
+                UiCommand::ShowFileDialog(action) => self.open_file_dialog(action),
+                UiCommand::FileChosen { action, path } => {
+                    self.apply_file_choice(action, &path);
+                }
+                UiCommand::CreateProfile(name) => self.create_project_profile(&name),
+                UiCommand::SwitchProfile(name) => self.switch_project_profile(&name),
+                UiCommand::OpenMediaFolder => {
+                    let media_root = self.media_root.clone();
+                    self.open_folder(&media_root);
+                }
+                UiCommand::OpenLogsFolder => {
+                    let logs = media_dialogs::logs_dir(&self.user_data);
+                    self.open_folder(&logs);
+                }
                 UiCommand::SetAudioSource { source, device } => {
                     self.set_audio_source(&source, device.as_deref());
                 }
                 UiCommand::RefreshAudioDevices => self.refresh_audio_devices(),
             }
+        }
+    }
+
+    /// Open the in-app picker at the active profile's folder for `action`.
+    ///
+    /// The dialog itself lives in `modv-ui` and is only state, so nothing here
+    /// blocks the frame loop; the chosen path arrives as a
+    /// [`UiCommand::FileChosen`] after the user confirms.
+    fn open_file_dialog(&mut self, action: FileDialogAction) {
+        let start = action
+            .start_folder()
+            .map(|folder| {
+                media_profiles::profile_folder(&self.media_root, &self.active_profile, folder)
+            })
+            .unwrap_or_else(|| media_profiles::profile_dir(&self.media_root, &self.active_profile));
+        let start = if start.is_dir() {
+            start
+        } else if self.media_root.is_dir() {
+            self.media_root.clone()
+        } else {
+            self.user_data.clone()
+        };
+        self.ui_state.open_file_dialog(action, start);
+    }
+
+    /// Apply a confirmed picker path through the [`FilePicker`] seam.
+    fn apply_file_choice(&mut self, action: FileDialogAction, path: &Path) {
+        match media_dialogs::apply_file_action(self, action, path) {
+            Ok(()) => eprintln!("ui: INFO {} {}", action.title(), path.display()),
+            Err(error) => self.record_error(format!("{} failed: {error}", action.title())),
+        }
+    }
+
+    /// Re-read the profile folders shown by the File menu.
+    fn refresh_profiles(&mut self) {
+        self.profiles = media_profiles::list_profiles(&self.media_root);
+        if !self
+            .profiles
+            .iter()
+            .any(|name| name == &self.active_profile)
+        {
+            self.profiles.push(self.active_profile.clone());
+            self.profiles.sort_by_key(|name| name.to_lowercase());
+        }
+    }
+
+    /// Persist the active profile and extra ISF folders.
+    fn persist_project_settings(&mut self) -> Result<(), String> {
+        self.project_settings.profile = self.active_profile.clone();
+        self.project_settings.isf_dirs = self.extra_isf_dirs.clone();
+        match self.project_settings.write_to(&self.project_settings_path) {
+            Ok(()) => {
+                self.project_settings_error_logged = false;
+                Ok(())
+            }
+            Err(error) => {
+                if !self.project_settings_error_logged {
+                    self.project_settings_error_logged = true;
+                    eprintln!(
+                        "ui: WARN could not write {}: {error}",
+                        self.project_settings_path.display()
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Recompute the user ISF search folders and restart the watcher.
+    fn rebuild_user_isf_dirs(&mut self) {
+        self.user_isf_dirs =
+            user_isf_dirs(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
+        self.isf_watcher = IsfWatcher::new(&self.user_isf_dirs);
+    }
+
+    /// Create `<userData>/media/<name>` with the Electron folder set and switch
+    /// to it. A bad name reopens the modal with an inline error.
+    fn create_project_profile(&mut self, name: &str) {
+        match media_profiles::create_profile(&self.media_root, name) {
+            Ok(root) => {
+                eprintln!("ui: INFO created project profile {}", root.display());
+                self.refresh_profiles();
+                let profile = media_profiles::normalize_profile_name(name)
+                    .unwrap_or_else(|_| DEFAULT_PROFILE.to_string());
+                self.switch_project_profile(&profile);
+            }
+            Err(error) => {
+                self.ui_state.profile_name = name.to_string();
+                self.ui_state.profile_error = Some(error.clone());
+                self.ui_state.show_profile_dialog = true;
+                self.record_error(format!("could not create profile {name:?}: {error}"));
+            }
+        }
+    }
+
+    /// Switch the active media profile: persist it, rescan the user ISF
+    /// modules and restart the media watcher.
+    ///
+    /// `<userData>/scenes.json` is deliberately not touched: Scenes are shared
+    /// by both front ends and stay authoritative across profile switches.
+    fn switch_project_profile(&mut self, name: &str) {
+        let name = match media_profiles::normalize_profile_name(name) {
+            Ok(name) => name,
+            Err(error) => {
+                self.record_error(format!("could not switch profile: {error}"));
+                return;
+            }
+        };
+        if !media_profiles::profile_dir(&self.media_root, &name).is_dir() {
+            self.record_error(format!("project profile {name:?} does not exist"));
+            return;
+        }
+        self.active_profile = name.clone();
+        if let Err(error) = self.persist_project_settings() {
+            self.record_error(format!("could not save the project choice: {error}"));
+        }
+        self.refresh_profiles();
+        self.rebuild_user_isf_dirs();
+        self.rescan_modules();
+        eprintln!(
+            "ui: INFO switched project profile to {name:?} ({} user ISF folder(s))",
+            self.user_isf_dirs.len()
+        );
+    }
+
+    fn open_folder(&mut self, path: &Path) {
+        if let Err(error) = media_dialogs::open_external(path) {
+            self.record_error(error);
         }
     }
 
@@ -2177,6 +2393,10 @@ impl NativeApp {
             osc: self.osc_view.clone(),
             audio_devices: self.audio_devices.clone(),
             audio_selection,
+            project: ProjectView {
+                active_profile: self.active_profile.clone(),
+                profiles: self.profiles.clone(),
+            },
         }
     }
 
@@ -2297,11 +2517,10 @@ impl NativeApp {
 
     fn save_preset(&mut self) {
         let path = self
-            .cli
-            .preset
+            .preset_path
             .clone()
-            .unwrap_or_else(|| user_data_dir().join("native-preset.json"));
-        match save_preset_to(&path, &self.store) {
+            .unwrap_or_else(|| self.user_data.join("native-preset.json"));
+        match media_dialogs::save_preset_file(&path, &self.store) {
             Ok(()) => eprintln!("ui: INFO preset saved to {}", path.display()),
             Err(error) => {
                 self.record_error(format!("could not save preset {}: {error}", path.display()))
@@ -2800,29 +3019,6 @@ fn acquire_surface(
     }
 }
 
-/// Resolve the ISF corpus directory for the native binary.
-///
-/// Packaging moves the corpus to `resources/isf`; during development it still
-/// lives beside the legacy renderer tree. `$MODV_ISF_DIR` and `--isf-dir` win.
-/// Write the six-key preset document for `store` to `path`.
-fn save_preset_to(path: &Path, store: &Store) -> std::io::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    let document = store.snapshot();
-    let text = serde_json::to_string_pretty(&document).map_err(std::io::Error::other)?;
-    std::fs::write(path, text)
-}
-
-/// Load a preset/Scene document from `path` into `store`.
-fn load_preset_from(path: &Path, store: &mut Store) -> Result<(), String> {
-    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let document: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    store.restore(&document).map_err(|error| error.to_string())
-}
-
 /// Apply a Scene by exact name or id after the store has seeded its defaults.
 ///
 /// Used by `modv --apply-scene <name>` for reproducible performance demos and
@@ -2910,31 +3106,14 @@ fn build_native_store(
 /// User ISF folders under `<userData>/media`.
 ///
 /// The legacy media manager keeps third-party shaders in
-/// `<media>/<project>/isf`; scan the flat `<media>/isf` folder too. This is a
-/// startup scan; the watch/reload wrapper is still P6 work.
-fn user_isf_dirs(user_data: &Path) -> Vec<PathBuf> {
+/// `<media>/<profile>/isf`; the active profile plus explicit extra folders
+/// form the user corpus. The flat `<media>/isf` folder is kept for installs
+/// created by older native builds. `MODV_USER_ISF_DIR` overrides all of it.
+fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("MODV_USER_ISF_DIR").map(PathBuf::from) {
         return vec![dir];
     }
-    let media = user_data.join("media");
-    let mut dirs = Vec::new();
-    let flat = media.join("isf");
-    if flat.is_dir() {
-        dirs.push(flat);
-    }
-    if let Ok(entries) = std::fs::read_dir(&media) {
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                let candidate = entry.path().join("isf");
-                if candidate.is_dir() {
-                    dirs.push(candidate);
-                }
-            }
-        }
-    }
-    dirs.sort();
-    dirs.dedup();
-    dirs
+    media_profiles::user_isf_dirs(media_root, profile, extra)
 }
 
 /// Clamp a saved placement onto the primary monitor.
@@ -3031,6 +3210,50 @@ fn resolve_isf_dir_from(explicit: Option<&Path>) -> Option<PathBuf> {
         manifest.join("../../src/renderer/src/application/renderers/isf/modules/isf"),
     ];
     candidates.into_iter().find(|path| path.is_dir())
+}
+
+impl FilePicker for NativeApp {
+    fn open_document(&mut self, path: &Path) -> Result<DocumentKind, String> {
+        let kind = media_dialogs::open_document(&mut self.store, path)?;
+        // Electron remembers the opened preset as the Save target. A Scene or
+        // playlist is not a preset document, so saving over it would lose its
+        // metadata; only a plain preset becomes the target.
+        if kind == DocumentKind::Preset {
+            self.preset_path = Some(path.to_path_buf());
+        }
+        Ok(kind)
+    }
+
+    fn save_preset_as(&mut self, path: &Path) -> Result<(), String> {
+        media_dialogs::save_preset_file(path, &self.store)?;
+        self.preset_path = Some(path.to_path_buf());
+        Ok(())
+    }
+
+    fn export_playlist(&mut self, path: &Path) -> Result<(), String> {
+        media_dialogs::export_playlist_file(path, &mut self.store)
+    }
+
+    fn import_playlist(&mut self, path: &Path) -> Result<(), String> {
+        media_dialogs::import_playlist_file(path, &mut self.store)
+    }
+
+    fn add_isf_folder(&mut self, path: &Path) -> Result<(), String> {
+        let path = path
+            .canonicalize()
+            .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+        if !path.is_dir() {
+            return Err(format!("{} is not a folder", path.display()));
+        }
+        if !self.extra_isf_dirs.iter().any(|dir| dir == &path) {
+            self.extra_isf_dirs.push(path);
+            self.extra_isf_dirs.sort();
+        }
+        self.persist_project_settings()?;
+        self.rebuild_user_isf_dirs();
+        self.rescan_modules();
+        Ok(())
+    }
 }
 
 impl ApplicationHandler for NativeApp {
@@ -3476,9 +3699,9 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_nanos())
         ));
-        save_preset_to(&path, &store).expect("save preset");
+        media_dialogs::save_preset_file(&path, &store).expect("save preset");
         let mut restored = Store::new();
-        load_preset_from(&path, &mut restored).expect("load preset");
+        media_dialogs::open_document(&mut restored, &path).expect("load preset");
         assert_eq!(restored.state().groups.len(), 1);
         assert_eq!(restored.state().modules.len(), 1);
         assert_eq!(restored.state().groups[0].name, "Round Trip");
@@ -3506,21 +3729,28 @@ mod tests {
     }
 
     #[test]
-    fn user_isf_dirs_find_flat_and_project_folders() {
-        let root = std::env::temp_dir().join(format!(
-            "modv-user-isf-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos())
-        ));
+    fn user_isf_dirs_follow_the_active_profile_and_extras() {
+        let root = temp_dir("modv-user-isf");
         std::fs::create_dir_all(root.join("media/isf")).expect("flat isf");
-        std::fs::create_dir_all(root.join("media/default/isf")).expect("project isf");
-        std::fs::create_dir_all(root.join("media/default/video")).expect("other folder");
-        let dirs = user_isf_dirs(&root);
-        assert!(dirs.contains(&root.join("media/isf")));
-        assert!(dirs.contains(&root.join("media/default/isf")));
-        assert!(!dirs.contains(&root.join("media/default/video")));
+        std::fs::create_dir_all(root.join("media/default/isf")).expect("default isf");
+        std::fs::create_dir_all(root.join("media/live/isf")).expect("live isf");
+        std::fs::create_dir_all(root.join("media/live/video")).expect("other folder");
+        let extra = root.join("third-party");
+        std::fs::create_dir_all(&extra).expect("extra isf");
+
+        let dirs = user_isf_dirs(&root.join("media"), "live", std::slice::from_ref(&extra));
+
+        assert!(dirs.contains(&root.join("media/isf")), "legacy flat folder");
+        assert!(
+            dirs.contains(&root.join("media/live/isf")),
+            "active profile"
+        );
+        assert!(dirs.contains(&extra), "explicit extra folder");
+        assert!(
+            !dirs.contains(&root.join("media/default/isf")),
+            "a switch must not keep scanning the previous profile"
+        );
+        assert!(!dirs.contains(&root.join("media/live/video")));
         let _ = std::fs::remove_dir_all(root);
     }
 

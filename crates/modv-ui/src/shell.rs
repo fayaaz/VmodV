@@ -9,6 +9,7 @@ use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, Vec2, vec2,
 };
 
+use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_window};
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
 use crate::layout::{
     LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
@@ -60,6 +61,8 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     floating_tab_windows(ui.ctx(), snapshot, state);
     about_window(ui.ctx(), state);
     shortcuts_window(ui.ctx(), state);
+    file_dialog_window(ui.ctx(), state);
+    profile_dialog_window(ui.ctx(), state);
     link_editor_window(ui, snapshot, state);
     bpm_window(ui.ctx(), snapshot, state);
     command_palette(ui.ctx(), snapshot, state);
@@ -68,18 +71,38 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
 /// Keyboard shortcuts that work globally (outside text fields).
 fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     let typing = ui.ctx().memory(|memory| memory.focused().is_some());
-    let (save, apply, search, escape, help) = ui.input(|input| {
+    let (save, save_snapshot, open, open_scene, apply, search, escape, help) = ui.input(|input| {
         let command = input.modifiers.command || input.modifiers.ctrl;
+        let shift = input.modifiers.shift;
         (
-            command && input.key_pressed(egui::Key::S),
+            command && !shift && input.key_pressed(egui::Key::S),
+            command && shift && input.key_pressed(egui::Key::S),
+            command && !shift && input.key_pressed(egui::Key::O),
+            command && shift && input.key_pressed(egui::Key::O),
             command && input.key_pressed(egui::Key::Enter),
             command && input.key_pressed(egui::Key::K),
             input.key_pressed(egui::Key::Escape),
             input.key_pressed(egui::Key::F1),
         )
     });
-    if save {
+    // A modal picker owns the keyboard: Ctrl+S while naming a file must not
+    // save a preset, and Ctrl+O must not stack a second picker.
+    let modal = state.file_dialog.is_some() || state.show_profile_dialog;
+    if save && !modal {
+        state.queue(UiCommand::SavePreset);
+    }
+    if save_snapshot && !modal {
         state.queue(UiCommand::SaveSnapshot);
+    }
+    if open && !modal {
+        state.queue(UiCommand::ShowFileDialog(
+            crate::file_dialog::FileDialogAction::OpenPreset,
+        ));
+    }
+    if open_scene && !modal {
+        state.queue(UiCommand::ShowFileDialog(
+            crate::file_dialog::FileDialogAction::OpenScene,
+        ));
     }
     if search {
         state.show_search = !state.show_search;
@@ -97,6 +120,9 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.show_search = false;
         state.show_shortcuts = false;
         state.show_about = false;
+        state.file_dialog = None;
+        state.show_profile_dialog = false;
+        state.profile_error = None;
         state.scene_grid.renaming = None;
         state.scene_grid.timing_edit = None;
         state.scene_grid.row_names_edit = None;
@@ -182,10 +208,66 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                         ui.close();
                     }
                     ui.separator();
+                    if ui.button("Open preset…").clicked() {
+                        state.queue(UiCommand::ShowFileDialog(FileDialogAction::OpenPreset));
+                        ui.close();
+                    }
+                    if ui.button("Open Scene…").clicked() {
+                        state.queue(UiCommand::ShowFileDialog(FileDialogAction::OpenScene));
+                        ui.close();
+                    }
+                    if ui.button("Import playlist…").clicked() {
+                        state.queue(UiCommand::ShowFileDialog(FileDialogAction::ImportPlaylist));
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button("Save preset").clicked() {
                         state.queue(UiCommand::SavePreset);
                         ui.close();
                     }
+                    if ui.button("Save preset as…").clicked() {
+                        state.queue(UiCommand::ShowFileDialog(FileDialogAction::SavePresetAs));
+                        ui.close();
+                    }
+                    if ui.button("Export playlist…").clicked() {
+                        state.queue(UiCommand::ShowFileDialog(FileDialogAction::ExportPlaylist));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("New project profile…").clicked() {
+                        state.open_profile_dialog();
+                        ui.close();
+                    }
+                    ui.menu_button("Switch profile", |ui| {
+                        let project = &snapshot.project;
+                        if project.profiles.is_empty() {
+                            ui.add_enabled(false, egui::Button::new("No profiles yet"));
+                        }
+                        for profile in &project.profiles {
+                            let selected = profile == &project.active_profile;
+                            if ui
+                                .add(egui::Button::new(profile).selected(selected))
+                                .clicked()
+                            {
+                                state.queue(UiCommand::SwitchProfile(profile.clone()));
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.separator();
+                    if ui.button("Choose extra ISF folder…").clicked() {
+                        state.queue(UiCommand::ShowFileDialog(FileDialogAction::AddIsfFolder));
+                        ui.close();
+                    }
+                    if ui.button("Open media folder").clicked() {
+                        state.queue(UiCommand::OpenMediaFolder);
+                        ui.close();
+                    }
+                    if ui.button("Open logs").clicked() {
+                        state.queue(UiCommand::OpenLogsFolder);
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button("Save engine snapshot").clicked() {
                         state.queue(UiCommand::SaveSnapshot);
                         ui.close();
@@ -3742,8 +3824,11 @@ fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {
     );
     let response = window.show(ctx, |ui| {
         let rows = [
+            ("Ctrl/Cmd+O", "Open preset…"),
+            ("Ctrl/Cmd+Shift+O", "Open Scene…"),
+            ("Ctrl/Cmd+S", "Save preset"),
+            ("Ctrl/Cmd+Shift+S", "Save preset as…"),
             ("Ctrl/Cmd+K", "Focus Gallery search"),
-            ("Ctrl/Cmd+S", "Save engine snapshot"),
             ("Ctrl/Cmd+Enter", "Apply the selected Scene"),
             ("1..9", "Apply Scene column 1..9"),
             ("F1", "Show this list"),
