@@ -106,8 +106,10 @@ jobs:
       # modv-app's GPU tests share one lavapipe device and race when run in
       # parallel (`cargo test -p modv-app -- --test-threads=1`). The rest of
       # the workspace runs normally.
-      - name: Workspace tests (modv-app excluded)
-        run: make engine-test ARGS="--workspace --exclude modv-app"
+      # Serial: the GPU/kittest suites share one lavapipe device and a
+      # virtual display, just like modv-app below.
+      - name: Workspace tests (modv-app excluded, serial)
+        run: make engine-test ARGS="--workspace --exclude modv-app -- --test-threads=1"
 
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
