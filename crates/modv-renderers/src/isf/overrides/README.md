@@ -18,8 +18,8 @@ caller passes.
 
 `build.rs` embeds every `*.wgsl` file in this directory with `include_str!`
 (`isf::translate::EMBEDDED_OVERRIDES`), so a packaged engine carries the
-overrides — there is no data directory next to the executable and
-`electron-builder.yml` needs no extra resource. Adding, editing or deleting an
+overrides — there is no data directory next to the executable and the native
+packages carry the binary and its assets only. Adding, editing or deleting an
 override only needs a rebuild; `cargo:rerun-if-changed` tracks the directory.
 
 Lookup order:

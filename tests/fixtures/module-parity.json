@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by tests/unit/module-parity.test.js and the Rust registry guard in crates/modv-app/src/module_registry.rs.",
+  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final).",
   "counts": {
     "twoD": 15,
     "point10": 27,

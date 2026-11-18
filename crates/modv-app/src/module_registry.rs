@@ -86,8 +86,9 @@
 //! * The engine resolves the corpus directory from `--isf-dir`, then
 //!   `$MODV_ISF_DIR`, then a development default relative to the executable
 //!   (see [`crate::cli::resolve_isf_dir`]) and hands it to
-//!   [`ModuleRegistry::build`]. The packaged app ships the corpus as
-//!   `resources/isf` (`electron-builder.yml`).
+//!   [`ModuleRegistry::build`]. The native packages ship the corpus as
+//!   `/usr/share/vmodv/isf` (`.deb`) or `usr/share/vmodv/isf` inside the
+//!   AppImage (see `tools/native-appimage.sh`/`tools/native-deb.sh`).
 //! * A file that cannot be read or parsed is skipped with a one-line warning;
 //!   the summary line reports the registered/failed counts.
 //! * The built-in corpus is scanned flat. User ISF folders supplied through
