@@ -857,193 +857,199 @@ void main(){
         tHit += clamp(-map(p).x/ndv0, 0.0, 0.75);
         p = ro + rd*tHit;
 
-        // Metres of surface covered by one pixel, grazing angle included.
-        //
-        // The grazing term is sqrt(c*c + k) rather than max(|c|, k): a hard
-        // clamp has an EDGE where it engages, and on a flat wall that edge is a
-        // cone about the normal - a ring painted across the surface. The
-        // softened form has the same limit and no boundary at all.
-        float ndv  = dot(n, rd);
-        float foot = tHit/(uLens*R.y*sqrt(ndv*ndv + 0.004));
-        float det  = mip(0.010, foot);      // carpet pile, ceiling stipple
-        float detW = mip(0.22/max(uPatScale, 0.05), foot);   // what the filter cannot save
-        float detM = mip(0.45, foot);       // the big soft stains
-        vec3 alb = vec3(0.5);
-        vec3 emisC = vec3(0.0);
-
-        if (mat < 1.5){
-            // ---- carpet ----
+        // Beyond 0.92*FAR the fog below this block is exactly 1.0, so
+        // the shaded result is discarded by the mix: skip it and keep
+        // tHit exact for the fog, haze and figure maths. A far wall costs
+        // two map() calls instead of thirty-eight. Identical output.
+        if (tHit < FAR*0.92){
+            // Metres of surface covered by one pixel, grazing angle included.
             //
-            // Loop pile is fine and it has a NAP: the two octaves are stretched
-            // on opposite axes, which is what stops it reading as generic noise
-            // and starts it reading as something woven.
-            float lp = 0.55*vnoise(p.xz*vec2(205.0, 96.0))
-                     + 0.45*vnoise(p.xz*vec2(88.0, 255.0) + 11.0);
+            // The grazing term is sqrt(c*c + k) rather than max(|c|, k): a hard
+            // clamp has an EDGE where it engages, and on a flat wall that edge is a
+            // cone about the normal - a ring painted across the surface. The
+            // softened form has the same limit and no boundary at all.
+            float ndv  = dot(n, rd);
+            float foot = tHit/(uLens*R.y*sqrt(ndv*ndv + 0.004));
+            float det  = mip(0.010, foot);      // carpet pile, ceiling stipple
+            float detW = mip(0.22/max(uPatScale, 0.05), foot);   // what the filter cannot save
+            float detM = mip(0.45, foot);       // the big soft stains
+            vec3 alb = vec3(0.5);
+            vec3 emisC = vec3(0.0);
 
-            // The pile is sub-pixel past a couple of metres, and with nothing
-            // between it and the metre-scale stains the floor went flat exactly
-            // where most of it is on screen. This is that missing octave.
-            float mid = vnoise(p.xz*13.0 + 5.0);
+            if (mat < 1.5){
+                // ---- carpet ----
+                //
+                // Loop pile is fine and it has a NAP: the two octaves are stretched
+                // on opposite axes, which is what stops it reading as generic noise
+                // and starts it reading as something woven.
+                float lp = 0.55*vnoise(p.xz*vec2(205.0, 96.0))
+                         + 0.45*vnoise(p.xz*vec2(88.0, 255.0) + 11.0);
 
-            float gr  = fbm(p.xz*0.60 + 3.0);
-            float mot = vnoise(p.xz*2.6 + 8.0);
-            alb = cFloor*(1.0 + uCarpet*0.50*(lp - 0.5)*det);
-            alb *= 1.0 + uCarpet*0.17*(mid - 0.5)*mip(0.075, foot);
-            alb *= 0.86 + 0.26*gr;
-            alb *= 1.0 + uCarpet*0.16*(mot - 0.5)*mip(0.38, foot);
-            alb = mix(alb, alb*vec3(0.74, 0.70, 0.63), smoothstep(0.40, 1.10, gr)*uGrime*detM);
-            alb *= 1.0 - 0.26*uDamp*detM*smoothstep(0.38, 1.10, fbm(p.xz*0.90 + 31.0) + 0.10*lp);
+                // The pile is sub-pixel past a couple of metres, and with nothing
+                // between it and the metre-scale stains the floor went flat exactly
+                // where most of it is on screen. This is that missing octave.
+                float mid = vnoise(p.xz*13.0 + 5.0);
 
-            // Blood, as SPLATTER rather than one pool per cell.
-            //
-            // Warping the whole plane once and then testing plain blobs is
-            // what makes this affordable: the per-blob fbm the first version
-            // used meant only the cell under the sample could be afforded, so
-            // any blob bigger than its own cell was cut off at the boundary.
-            // With the warp hoisted out, the 3x3 neighbourhood is just nine
-            // hashes and nothing can clip.
-            //
-            // The radius is cubed, so most draws are 4-6 cm spots and only the
-            // occasional one opens out into a pool.
-            vec2 bw = p.xz*1.15 + 0.42*(vec2(vnoise(p.xz*2.3),
-                                             vnoise(p.xz*2.3 + 19.0)) - 0.5);
-            vec2 bb = floor(bw);
-            float blood = 0.0;
-            for (int bj = 0; bj < 3; bj++){
-                for (int bi = 0; bi < 3; bi++){
-                    vec2 bid = bb + vec2(float(bi) - 1.0, float(bj) - 1.0);
-                    vec4 bh  = hash42(bid + 61.3);
-                    float br = 0.05 + 0.30*bh.z*bh.z*bh.z;
-                    vec2 bo  = (bw - (bid + 0.25 + 0.5*bh.xy))/vec2(1.0, 0.72 + 0.5*bh.w);
-                    blood = max(blood, step(hash12(bid + 3.1), uBlood*0.6)
-                                     * smoothstep(br, br*0.35, length(bo)));
+                float gr  = fbm(p.xz*0.60 + 3.0);
+                float mot = vnoise(p.xz*2.6 + 8.0);
+                alb = cFloor*(1.0 + uCarpet*0.50*(lp - 0.5)*det);
+                alb *= 1.0 + uCarpet*0.17*(mid - 0.5)*mip(0.075, foot);
+                alb *= 0.86 + 0.26*gr;
+                alb *= 1.0 + uCarpet*0.16*(mot - 0.5)*mip(0.38, foot);
+                alb = mix(alb, alb*vec3(0.74, 0.70, 0.63), smoothstep(0.40, 1.10, gr)*uGrime*detM);
+                alb *= 1.0 - 0.26*uDamp*detM*smoothstep(0.38, 1.10, fbm(p.xz*0.90 + 31.0) + 0.10*lp);
+
+                // Blood, as SPLATTER rather than one pool per cell.
+                //
+                // Warping the whole plane once and then testing plain blobs is
+                // what makes this affordable: the per-blob fbm the first version
+                // used meant only the cell under the sample could be afforded, so
+                // any blob bigger than its own cell was cut off at the boundary.
+                // With the warp hoisted out, the 3x3 neighbourhood is just nine
+                // hashes and nothing can clip.
+                //
+                // The radius is cubed, so most draws are 4-6 cm spots and only the
+                // occasional one opens out into a pool.
+                vec2 bw = p.xz*1.15 + 0.42*(vec2(vnoise(p.xz*2.3),
+                                                 vnoise(p.xz*2.3 + 19.0)) - 0.5);
+                vec2 bb = floor(bw);
+                float blood = 0.0;
+                for (int bj = 0; bj < 3; bj++){
+                    for (int bi = 0; bi < 3; bi++){
+                        vec2 bid = bb + vec2(float(bi) - 1.0, float(bj) - 1.0);
+                        vec4 bh  = hash42(bid + 61.3);
+                        float br = 0.05 + 0.30*bh.z*bh.z*bh.z;
+                        vec2 bo  = (bw - (bid + 0.25 + 0.5*bh.xy))/vec2(1.0, 0.72 + 0.5*bh.w);
+                        blood = max(blood, step(hash12(bid + 3.1), uBlood*0.6)
+                                         * smoothstep(br, br*0.35, length(bo)));
+                        if (blood > 0.99) break;
+                    }
                     if (blood > 0.99) break;
                 }
-                if (blood > 0.99) break;
-            }
-            alb = mix(alb, vec3(0.038, 0.008, 0.006)*(0.75 + 0.5*hash12(bb)),
-                      blood*0.95*mip(0.055, foot));
-        } else if (mat < 2.5){
-            // ---- drop ceiling, and the troffers set into it ----
-            float LG = gLG;
-            vec2 lid = floor(p.xz/LG);
-            vec2 dp  = abs(p.xz - PANEL_C(lid)) - PANEL_E;
-            if (max(dp.x, dp.y) < 0.0){
-                float on = panelOn(lid);
-                vec2 pg = fract((p.xz - PANEL_C(lid))/(PANEL_E.x*0.25));
-                float pr = smoothstep(0.0, 0.16, min(min(pg.x, 1.0 - pg.x), min(pg.y, 1.0 - pg.y)));
-                pr = mix(1.0, 0.72 + 0.40*pr, det);       // prismatic diffuser
-                emisC = cLite*(1.6 + 7.0*uBright)*on*pr;
-                alb = cLite*0.50;
+                alb = mix(alb, vec3(0.038, 0.008, 0.006)*(0.75 + 0.5*hash12(bb)),
+                          blood*0.95*mip(0.055, foot));
+            } else if (mat < 2.5){
+                // ---- drop ceiling, and the troffers set into it ----
+                float LG = gLG;
+                vec2 lid = floor(p.xz/LG);
+                vec2 dp  = abs(p.xz - PANEL_C(lid)) - PANEL_E;
+                if (max(dp.x, dp.y) < 0.0){
+                    float on = panelOn(lid);
+                    vec2 pg = fract((p.xz - PANEL_C(lid))/(PANEL_E.x*0.25));
+                    float pr = smoothstep(0.0, 0.16, min(min(pg.x, 1.0 - pg.x), min(pg.y, 1.0 - pg.y)));
+                    pr = mix(1.0, 0.72 + 0.40*pr, det);       // prismatic diffuser
+                    emisC = cLite*(1.6 + 7.0*uBright)*on*pr;
+                    alb = cLite*0.50;
+                } else {
+                    float TS = TILE;                           // a fixed 2 ft, not a fraction of LG
+                    vec2 tid = floor(p.xz/TS);
+                    vec2 tf  = fract(p.xz/TS);
+                    float grid = min(min(tf.x, 1.0 - tf.x), min(tf.y, 1.0 - tf.y));
+                    // a 15 mm T-bar is sub-pixel across most of a ceiling, so it gets
+                    // the same treatment, settling to the grid's average coverage
+                    float wt = foot/TS;
+                    float bar = 1.0 - mix(band(grid, 0.025, wt), 0.10, smoothstep(0.06, 0.30, wt));
+                    vec4 th = hash42(tid + 3.7);
+                    float st = 0.5*vnoise(p.xz*95.0) + 0.5*vnoise(p.xz*260.0);
+                    alb = cTile*(0.60 + 0.40*bar)*(0.86 + 0.20*th.x)*(1.0 + 0.26*(st - 0.5)*det);
+                    float ring = smoothstep(0.52, 0.80, fbm(p.xz*1.40 + th.yz*11.0))*uDamp*step(th.w, 0.45)*detM;
+                    alb = mix(alb, vec3(0.30, 0.23, 0.13), ring*0.75);
+                    alb *= mix(1.0, 0.05, step(0.982, th.z));  // a tile gone from the grid
+                    alb *= 1.0 - 0.55*smoothstep(-0.05, 0.0, max(dp.x, dp.y));   // fixture frame
+                }
+            } else if (mat < 3.5){
+                // ---- wallpaper, baseboard, and forty years of shoulders ----
+                vec2 wuv;
+                if (abs(n.x) > 0.5) wuv = vec2(p.z, p.y); else wuv = vec2(p.x, p.y);
+                float ink = mix(0.24, wallpaper(wuv, foot), detW);
+                alb = mix(cWall, cInk, ink);
+                // the tooth of the vinyl. Too fine to resolve past a couple of
+                // metres, but it is what stops a near wall reading as flat paint.
+                alb *= 1.0 + 0.16*(vnoise(wuv*230.0) - 0.5)*mip(0.011, foot)
+                           + 0.09*(vnoise(wuv*61.0) - 0.5)*mip(0.045, foot);
+                float sm = abs(fract(wuv.x/0.53 + 0.5) - 0.5);
+                alb *= 1.0 - 0.09*smoothstep(0.010, 0.0, sm)*det;   // where the rolls meet
+                float gr = fbm(wuv*1.30 + 7.0);
+                alb *= mix(1.0, 0.62 + 0.44*gr, smoothstep(0.75, 0.02, wuv.y)*uGrime*0.80*detM);
+                alb = mix(alb, alb*vec3(0.58, 0.51, 0.39), smoothstep(0.48, 1.02, gr)*uDamp*0.70*detM);
+                // Vinyl cove base. uTrim is its HEIGHT, not its opacity: mixing
+                // toward the trim colour BY uTrim left 45 % of the wallpaper
+                // showing through it at the default, and a baseboard you can see
+                // the paper through is not a baseboard. Inside the band the wall
+                // covering is replaced outright; uTrim 0 removes it entirely.
+                float bh  = 0.160*uTrim;
+                float bOn = step(0.012, bh);
+                float cov = band(wuv.y - 0.5*bh, 0.5*bh, foot)*bOn;
+                vec3 baseCol = cTrim*(0.80 + 0.26*gr)
+                             * (0.90 + 0.16*clamp(wuv.y/max(bh, 1e-4), 0.0, 1.0));
+                alb = mix(alb, baseCol, cov);
+                alb *= 1.0 - 0.42*bOn*band(wuv.y - bh, 0.010, foot);
+                alb *= 1.0 + 0.30*bOn*band(wuv.y - bh + 0.016, 0.006, foot);
+                alb *= 1.0 - 0.35*uGrime*band(wuv.y, 0.022, foot);
             } else {
-                float TS = TILE;                           // a fixed 2 ft, not a fraction of LG
-                vec2 tid = floor(p.xz/TS);
-                vec2 tf  = fract(p.xz/TS);
-                float grid = min(min(tf.x, 1.0 - tf.x), min(tf.y, 1.0 - tf.y));
-                // a 15 mm T-bar is sub-pixel across most of a ceiling, so it gets
-                // the same treatment, settling to the grid's average coverage
-                float wt = foot/TS;
-                float bar = 1.0 - mix(band(grid, 0.025, wt), 0.10, smoothstep(0.06, 0.30, wt));
-                vec4 th = hash42(tid + 3.7);
-                float st = 0.5*vnoise(p.xz*95.0) + 0.5*vnoise(p.xz*260.0);
-                alb = cTile*(0.60 + 0.40*bar)*(0.86 + 0.20*th.x)*(1.0 + 0.26*(st - 0.5)*det);
-                float ring = smoothstep(0.52, 0.80, fbm(p.xz*1.40 + th.yz*11.0))*uDamp*step(th.w, 0.45)*detM;
-                alb = mix(alb, vec3(0.30, 0.23, 0.13), ring*0.75);
-                alb *= mix(1.0, 0.05, step(0.982, th.z));  // a tile gone from the grid
-                alb *= 1.0 - 0.55*smoothstep(-0.05, 0.0, max(dp.x, dp.y));   // fixture frame
+                // ---- a door leaf, and no baseboard running across it ----
+                //
+                // Everything below needs the leaf's OWN horizontal coordinate, so
+                // the cell's hashes are recomputed here. maze2 works them out and
+                // throws them away; redoing them once per pixel is far cheaper
+                // than threading a door centre out through two hundred marcher
+                // steps, and it is only the shading pass that pays.
+                vec2 did = floor(p.xz/uCell);
+                vec2 dcc = (did + 0.5)*uCell;
+                vec4 dh  = hash42(did);
+                vec4 dg  = hash42(did + 57.31);
+                float dHor  = step(0.5, dh.y);
+                vec2  dDir  = mix(vec2(0.0, 1.0), vec2(1.0, 0.0), dHor);
+                float dRoom = step(fract(dh.y*31.7), uRooms);
+                float dPil  = step(0.88, dg.x);
+                float dLen  = mix((0.62 + 0.38*dh.z)*0.5*uCell, 0.26, dPil);
+                float ctrL  = dot(dcc, dDir) + (dh.w - 0.5)*(uCell - 2.0*dLen);
+                float u = dot(p.xz, dDir)
+                        - mix(ctrL + (dg.w - 0.5)*2.0*max(dLen - 0.62, 0.0),
+                              dot(dcc, dDir), dRoom);
+                vec2 duv = vec2(u, p.y);
+
+                alb = cTrim*0.84;
+                alb *= 1.0 + 0.12*(vnoise(duv*vec2(80.0, 6.0)) - 0.5)*mip(0.013, foot);
+
+                // two recessed panels between three rails, which is what a plain
+                // office door is: stiles 0.11, panels 0.65 across
+                float sdU = sdBox2(duv - vec2(0.0, 1.50), vec2(0.325, 0.345));
+                float sdL = sdBox2(duv - vec2(0.0, 0.585), vec2(0.325, 0.325));
+                alb *= 1.0 - 0.06*clamp(fill(sdU + 0.012, foot) + fill(sdL + 0.012, foot), 0.0, 1.0);
+                alb *= 1.0 - 0.34*clamp(band(sdU, 0.009, foot) + band(sdL, 0.009, foot), 0.0, 1.0);
+
+                // a lever handle on the leading stile, and its rose
+                float hs = mix(-1.0, 1.0, step(0.5, fract(dg.z*23.1)));
+                vec2 hp = duv - vec2(hs*0.345, 1.020);
+                alb = mix(alb, vec3(0.30, 0.29, 0.26),
+                          0.85*clamp(fill(sdBox2(hp + vec2(hs*0.030, 0.0), vec2(0.062, 0.013)), foot)
+                                   + fill(length(hp) - 0.032, foot), 0.0, 1.0));
+
+                // kick plate along the bottom, brushed
+                float kick = band(duv.y - 0.105, 0.105, foot)*band(u, 0.415, foot);
+                alb = mix(alb, cTrim*(0.92 + 0.22*vnoise(duv*vec2(150.0, 7.0))), kick*0.75);
+
+                // and the shadow line down its own edge, inside the frame
+                alb *= 1.0 - 0.30*(1.0 - band(u, 0.405, foot));
+                alb *= 0.90 + 0.20*fbm(duv*1.6 + 21.0);
             }
-        } else if (mat < 3.5){
-            // ---- wallpaper, baseboard, and forty years of shoulders ----
-            vec2 wuv;
-            if (abs(n.x) > 0.5) wuv = vec2(p.z, p.y); else wuv = vec2(p.x, p.y);
-            float ink = mix(0.24, wallpaper(wuv, foot), detW);
-            alb = mix(cWall, cInk, ink);
-            // the tooth of the vinyl. Too fine to resolve past a couple of
-            // metres, but it is what stops a near wall reading as flat paint.
-            alb *= 1.0 + 0.16*(vnoise(wuv*230.0) - 0.5)*mip(0.011, foot)
-                       + 0.09*(vnoise(wuv*61.0) - 0.5)*mip(0.045, foot);
-            float sm = abs(fract(wuv.x/0.53 + 0.5) - 0.5);
-            alb *= 1.0 - 0.09*smoothstep(0.010, 0.0, sm)*det;   // where the rolls meet
-            float gr = fbm(wuv*1.30 + 7.0);
-            alb *= mix(1.0, 0.62 + 0.44*gr, smoothstep(0.75, 0.02, wuv.y)*uGrime*0.80*detM);
-            alb = mix(alb, alb*vec3(0.58, 0.51, 0.39), smoothstep(0.48, 1.02, gr)*uDamp*0.70*detM);
-            // Vinyl cove base. uTrim is its HEIGHT, not its opacity: mixing
-            // toward the trim colour BY uTrim left 45 % of the wallpaper
-            // showing through it at the default, and a baseboard you can see
-            // the paper through is not a baseboard. Inside the band the wall
-            // covering is replaced outright; uTrim 0 removes it entirely.
-            float bh  = 0.160*uTrim;
-            float bOn = step(0.012, bh);
-            float cov = band(wuv.y - 0.5*bh, 0.5*bh, foot)*bOn;
-            vec3 baseCol = cTrim*(0.80 + 0.26*gr)
-                         * (0.90 + 0.16*clamp(wuv.y/max(bh, 1e-4), 0.0, 1.0));
-            alb = mix(alb, baseCol, cov);
-            alb *= 1.0 - 0.42*bOn*band(wuv.y - bh, 0.010, foot);
-            alb *= 1.0 + 0.30*bOn*band(wuv.y - bh + 0.016, 0.006, foot);
-            alb *= 1.0 - 0.35*uGrime*band(wuv.y, 0.022, foot);
-        } else {
-            // ---- a door leaf, and no baseboard running across it ----
-            //
-            // Everything below needs the leaf's OWN horizontal coordinate, so
-            // the cell's hashes are recomputed here. maze2 works them out and
-            // throws them away; redoing them once per pixel is far cheaper
-            // than threading a door centre out through two hundred marcher
-            // steps, and it is only the shading pass that pays.
-            vec2 did = floor(p.xz/uCell);
-            vec2 dcc = (did + 0.5)*uCell;
-            vec4 dh  = hash42(did);
-            vec4 dg  = hash42(did + 57.31);
-            float dHor  = step(0.5, dh.y);
-            vec2  dDir  = mix(vec2(0.0, 1.0), vec2(1.0, 0.0), dHor);
-            float dRoom = step(fract(dh.y*31.7), uRooms);
-            float dPil  = step(0.88, dg.x);
-            float dLen  = mix((0.62 + 0.38*dh.z)*0.5*uCell, 0.26, dPil);
-            float ctrL  = dot(dcc, dDir) + (dh.w - 0.5)*(uCell - 2.0*dLen);
-            float u = dot(p.xz, dDir)
-                    - mix(ctrL + (dg.w - 0.5)*2.0*max(dLen - 0.62, 0.0),
-                          dot(dcc, dDir), dRoom);
-            vec2 duv = vec2(u, p.y);
 
-            alb = cTrim*0.84;
-            alb *= 1.0 + 0.12*(vnoise(duv*vec2(80.0, 6.0)) - 0.5)*mip(0.013, foot);
-
-            // two recessed panels between three rails, which is what a plain
-            // office door is: stiles 0.11, panels 0.65 across
-            float sdU = sdBox2(duv - vec2(0.0, 1.50), vec2(0.325, 0.345));
-            float sdL = sdBox2(duv - vec2(0.0, 0.585), vec2(0.325, 0.325));
-            alb *= 1.0 - 0.06*clamp(fill(sdU + 0.012, foot) + fill(sdL + 0.012, foot), 0.0, 1.0);
-            alb *= 1.0 - 0.34*clamp(band(sdU, 0.009, foot) + band(sdL, 0.009, foot), 0.0, 1.0);
-
-            // a lever handle on the leading stile, and its rose
-            float hs = mix(-1.0, 1.0, step(0.5, fract(dg.z*23.1)));
-            vec2 hp = duv - vec2(hs*0.345, 1.020);
-            alb = mix(alb, vec3(0.30, 0.29, 0.26),
-                      0.85*clamp(fill(sdBox2(hp + vec2(hs*0.030, 0.0), vec2(0.062, 0.013)), foot)
-                               + fill(length(hp) - 0.032, foot), 0.0, 1.0));
-
-            // kick plate along the bottom, brushed
-            float kick = band(duv.y - 0.105, 0.105, foot)*band(u, 0.415, foot);
-            alb = mix(alb, cTrim*(0.92 + 0.22*vnoise(duv*vec2(150.0, 7.0))), kick*0.75);
-
-            // and the shadow line down its own edge, inside the frame
-            alb *= 1.0 - 0.30*(1.0 - band(u, 0.405, foot));
-            alb *= 0.90 + 0.20*fbm(duv*1.6 + 21.0);
+            float ao = mix(1.0, calcAO(p, n), uAO);
+            vec3 kd; float kdist;
+            float lit = lighting(p, n, kd, kdist);
+            float sh = 1.0;
+            if (uShadow > 0.01) sh = mix(1.0, shadowRay(p + n*0.06, kd, kdist - 0.20), uShadow);
+            vec3 diff = cLite*lit*(0.52 + 0.48*sh)*(2.7 + 4.3*uBright);
+            // no GI here, but a room this small and this bright is mostly bounce:
+            // a hemispheric fill plus an explicit term for light coming back off
+            // the carpet, which is what puts any brightness on the ceiling at all
+            float dn = 0.5 - 0.5*n.y;
+            float zdim = mix(1.0, 0.25 + 1.05*lightZone(p.xz), uZones);
+            vec3 amb = ao*zdim*(mix(cWall, cLite, 0.5)*(0.075 + 0.095*uBright)
+                              + cFloor*cLite*(0.24 + 0.31*uBright)*dn);
+            col = alb*(diff*ao*0.85 + amb) + emisC;
         }
-
-        float ao = mix(1.0, calcAO(p, n), uAO);
-        vec3 kd; float kdist;
-        float lit = lighting(p, n, kd, kdist);
-        float sh = 1.0;
-        if (uShadow > 0.01) sh = mix(1.0, shadowRay(p + n*0.06, kd, kdist - 0.20), uShadow);
-        vec3 diff = cLite*lit*(0.52 + 0.48*sh)*(2.7 + 4.3*uBright);
-        // no GI here, but a room this small and this bright is mostly bounce:
-        // a hemispheric fill plus an explicit term for light coming back off
-        // the carpet, which is what puts any brightness on the ceiling at all
-        float dn = 0.5 - 0.5*n.y;
-        float zdim = mix(1.0, 0.25 + 1.05*lightZone(p.xz), uZones);
-        vec3 amb = ao*zdim*(mix(cWall, cLite, 0.5)*(0.075 + 0.095*uBright)
-                          + cFloor*cLite*(0.24 + 0.31*uBright)*dn);
-        col = alb*(diff*ao*0.85 + amb) + emisC;
         // A ray straight down a straight corridor can reach FAR without ever
         // hitting anything, and then it is pure fog - while the rays either
         // side of it still hit a wall at 50 m and keep 20 % of a lit surface.
@@ -1146,9 +1152,15 @@ void main(){
         // Travel gives real parallax - which means a figure dead ahead has
         // none at all and shows no trail. A lateral judder on the beat, along
         // the camera's own right vector, smears it wherever it happens to be.
-        vec3 tOff = (trav*(0.17 + 0.34*uTrails)
-                   + rt*(0.05 + 0.17*uTrails)*(hash11(gb*3.7 + zi) - 0.5)*2.0)
-                  * (0.45 + 0.18*uSpeed);
+        // The trail copies only exist when trails are visible, so the whole
+        // offset block is gated on the slider: with trails at zero the figure
+        // integrates one body instead of four, and the offset hashes drop out.
+        vec3 tOff = vec3(0.0);
+        if (uTrails > 0.0){
+            tOff = (trav*(0.17 + 0.34*uTrails)
+                  + rt*(0.05 + 0.17*uTrails)*(hash11(gb*3.7 + zi) - 0.5)*2.0)
+                 * (0.45 + 0.18*uSpeed);
+        }
         float bR = 1.30;
         float fh = fb*fb - dot(oc, oc) + bR*bR;
         if (fh <= 0.0) continue;
@@ -1209,8 +1221,10 @@ void main(){
             float fade = smoothstep(-0.100, 0.055, q.y)*scanline*ds;
             dens  += smoothstep(0.040, -0.018, figure(q))*fade;
             // a second copy, offset, driving the blue channel: an actual
-            // spatial separation instead of a coloured fringe
-            densB += smoothstep(0.040, -0.018, figure(q + vec3(0.055*uGlitch, 0.0, 0.0)))*fade;
+            // spatial separation instead of a coloured fringe. With the
+            // slider at its rest position the offset is exactly zero, i.e.
+            // densB == dens by construction, so the call is skipped.
+            if (uGlitch > 0.0) densB += smoothstep(0.040, -0.018, figure(q + vec3(0.055*uGlitch, 0.0, 0.0)))*fade;
             // Three afterimages dragged back along the way you came.
             //
             // Their bands are TIGHTER than the figure's, not wider. Widening
@@ -1219,10 +1233,17 @@ void main(){
             // that is the only reason a limb reads as a limb - and the whole
             // silhouette closed up into a column. Softness comes from the
             // alpha, not from thickening the shape.
-            densT.x += smoothstep(0.040, -0.018, figure(q + tOff       ))*fade;
-            densT.y += smoothstep(0.044, -0.016, figure(q + tOff*2.05  ))*fade;
-            densT.z += smoothstep(0.048, -0.014, figure(q + tOff*3.20  ))*fade;
+            //
+            // All three are multiplied by uTrails at the very end, so with
+            // trails at zero these are three wasted body evaluations per
+            // sample; the gate skips them entirely.
+            if (uTrails > 0.0){
+                densT.x += smoothstep(0.040, -0.018, figure(q + tOff       ))*fade;
+                densT.y += smoothstep(0.044, -0.016, figure(q + tOff*2.05  ))*fade;
+                densT.z += smoothstep(0.048, -0.014, figure(q + tOff*3.20  ))*fade;
+            }
         }
+        if (uGlitch == 0.0) densB = dens;   // the blue copy was skipped above
         // This is composited BEFORE the tone map, where the carpet is already
         // sitting near 1.9 - a figure painted at 0.8 came out darker than the
         // floor and simply vanished. It has to be genuinely emissive to read as

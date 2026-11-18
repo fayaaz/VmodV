@@ -781,6 +781,11 @@ impl IsfRuntime {
         &self.device
     }
 
+    /// The queue the runtime was created with.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
     /// Compiled pipeline count (for tests/metrics).
     pub fn cached_pipelines(&self) -> usize {
         self.pipelines.len()

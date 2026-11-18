@@ -638,6 +638,10 @@ float wake(vec2 xz){
 }
 
 float waterHeight(vec2 xz){
+    // With the ripple slider at its rest position the surface is flat: the
+    // wave field is multiplied by exactly zero anyway, so skip four octaves of
+    // noise and the wake per call. Bitwise identical for uRipple == 0.0.
+    if (uRipple == 0.0) return gWL;
     return gWL + uRipple*(0.0130*rippleHi(xz*3.0, gWT)
                         + 0.0075*wake(xz)*clamp(uSpeed*0.4, 0.0, 1.2));
 }
@@ -930,16 +934,22 @@ void main(){
         float ndv0 = min(dot(n, rd), -0.06);
         tHit += clamp(-map(p).x/ndv0, 0.0, 0.75);
         p = ro + rd*tHit;
-        n = calcNormal(p);
-        float ndv = dot(n, rd);
-        // The grazing term is sqrt(c*c + k) and not max(|c|, k): a hard clamp
-        // has an EDGE where it engages, and on a flat wall that edge is a cone
-        // about the normal - a ring painted across the surface.
-        float foot = tHit*gPX/sqrt(ndv*ndv + 0.004);
-        vec3 em;
-        col = shade(p, rd, n, mat, foot, 1.0, em) + em;
         tShow = tHit;
-    } else if (tW < FAR){
+        // Beyond 0.92*FAR the fog below is exactly 1.0, so everything until
+        // the fog mix is discarded by it: skip the re-normal and the shade()
+        // call, keeping tHit (post-Newton) exact for the fog/haze maths. A
+        // far wall costs two map() calls instead of thirty-four.
+        if (tHit < FAR*0.92){
+            n = calcNormal(p);
+            float ndv = dot(n, rd);
+            // The grazing term is sqrt(c*c + k) and not max(|c|, k): a hard clamp
+            // has an EDGE where it engages, and on a flat wall that edge is a cone
+            // about the normal - a ring painted across the surface.
+            float foot = tHit*gPX/sqrt(ndv*ndv + 0.004);
+            vec3 em;
+            col = shade(p, rd, n, mat, foot, 1.0, em) + em;
+        }
+    } else if (tW < FAR*0.92){
         // ---------------- the surface ----------------
         vec3 pw = ro + rd*tW;
         float foot = tW*gPX/max(-rd.y, 0.02);
@@ -1023,6 +1033,11 @@ void main(){
         float sp = pow(max(dot(n, hv), 0.0), mix(60.0, 900.0, res));
         col += gLite*sp*lit*(0.5 + 0.6*uBright)*(0.35 + 0.65*F);
 
+        tShow = tW;
+    } else if (tW < FAR){
+        // Far water: the reflection/refraction/caustic shading is computed at
+        // full cost but completely discarded by the fog mix below (its factor
+        // is exactly 1.0 there), so skip straight to the fog arithmetic.
         tShow = tW;
     }
 

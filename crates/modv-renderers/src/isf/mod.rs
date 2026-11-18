@@ -73,6 +73,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+mod golden;
 pub mod parser;
 pub mod props;
 pub mod runtime;
