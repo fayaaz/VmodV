@@ -44,8 +44,7 @@ const REQUIRED_ISF_FILTERS: &[&str] = &[
 ];
 
 fn corpus_dir() -> Option<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
     dir.is_dir().then_some(dir)
 }
 

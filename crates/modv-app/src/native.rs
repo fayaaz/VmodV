@@ -4505,8 +4505,6 @@ fn resolve_isf_dir_from(explicit: Option<&Path>) -> Option<PathBuf> {
         PathBuf::from("../resources/isf"),
         PathBuf::from("../../resources/isf"),
         manifest.join("../../resources/isf"),
-        PathBuf::from("src/renderer/src/application/renderers/isf/modules/isf"),
-        manifest.join("../../src/renderer/src/application/renderers/isf/modules/isf"),
     ];
     candidates.into_iter().find(|path| path.is_dir())
 }

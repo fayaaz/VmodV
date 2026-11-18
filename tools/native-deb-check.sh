@@ -22,8 +22,8 @@ DEB="$DIST/VmodV-Native-$VERSION-amd64.deb"
 # corpus size (354) for checking an artifact outside the repository.
 EXPECTED_ISF="${EXPECTED_ISF:-}"
 if [ -z "$EXPECTED_ISF" ]; then
-    if [ -d "$ROOT/src/renderer/src/application/renderers/isf/modules/isf" ]; then
-        EXPECTED_ISF=$(find "$ROOT/src/renderer/src/application/renderers/isf/modules/isf" \
+    if [ -d "$ROOT/resources/isf" ]; then
+        EXPECTED_ISF=$(find "$ROOT/resources/isf" \
             -type f -name '*.fs' | wc -l | tr -d ' ')
     else
         EXPECTED_ISF=354
@@ -31,8 +31,8 @@ if [ -z "$EXPECTED_ISF" ]; then
 fi
 EXPECTED_TEXTURES="${EXPECTED_TEXTURES:-}"
 if [ -z "$EXPECTED_TEXTURES" ]; then
-    if [ -d "$ROOT/src/renderer/src/application/point10/textures" ]; then
-        EXPECTED_TEXTURES=$(find "$ROOT/src/renderer/src/application/point10/textures" \
+    if [ -d "$ROOT/resources/point10/textures" ]; then
+        EXPECTED_TEXTURES=$(find "$ROOT/resources/point10/textures" \
             -type f | wc -l | tr -d ' ')
     else
         EXPECTED_TEXTURES=25

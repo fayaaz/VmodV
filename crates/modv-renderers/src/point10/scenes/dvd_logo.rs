@@ -39,8 +39,7 @@ pub const SVG_DEPTH: f32 = 100.0;
 /// `curveSegments: 6` (`DvdRoom.js:264`).
 pub const CURVE_SEGMENTS: u32 = 6;
 
-/// The visible `<path d>` of
-/// `src/renderer/src/application/point10/textures/dvd_logo.svg`.
+/// The visible `<path d>` of `resources/point10/textures/dvd_logo.svg`.
 ///
 /// The SVG's second path (the "TM" mark) is `display="none"` and is skipped by
 /// the JS, so it is not inlined.

@@ -6049,8 +6049,7 @@ mod tests {
 
     #[test]
     fn make_active_module_isf_corpus_shader_has_its_props() {
-        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         if !corpus.is_dir() {
             eprintln!("skipping ISF store test: {} is missing", corpus.display());
             return;

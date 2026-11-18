@@ -73,7 +73,7 @@
 //!
 //! ## ISF corpus (WS-4)
 //!
-//! The 354 `.fs` shaders under `src/renderer/src/application/renderers/isf/modules/isf`
+//! The 354 `.fs` shaders under `resources/isf`
 //! are not compiled into the binary: [`ModuleRegistry::build`] scans a
 //! directory at startup and registers one [`IsfDefinition`] per parsable
 //! shader (name = file stem, matching the JS `getIsfModuleName`). The scan is
@@ -2093,8 +2093,7 @@ mod tests {
     /// The vendored ISF corpus directory, or `None` when this checkout does
     /// not have it (the test then skips).
     fn corpus_dir() -> Option<PathBuf> {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         dir.is_dir().then_some(dir)
     }
 
@@ -2140,8 +2139,7 @@ mod tests {
 
     #[test]
     fn isf_corpus_directory_is_scanned_into_definitions() {
-        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         if !corpus.is_dir() {
             eprintln!("skipping ISF corpus test: {} is missing", corpus.display());
             return;
@@ -2514,8 +2512,7 @@ void main() { gl_FragColor = vec4(1.0); }
     /// [`module_registry_matches_the_legacy_manifest`].
     #[test]
     fn registered_module_count_matches_the_parity_baseline() {
-        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         assert!(
             corpus.is_dir(),
             "ISF corpus missing at {}; the parity guard needs the source tree",
@@ -2556,8 +2553,7 @@ void main() { gl_FragColor = vec4(1.0); }
 
     #[test]
     fn module_registry_matches_the_legacy_manifest() {
-        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         assert!(
             corpus.is_dir(),
             "ISF corpus missing at {}; the parity guard needs the source tree",
@@ -2609,8 +2605,7 @@ void main() { gl_FragColor = vec4(1.0); }
 
     #[test]
     fn every_default_scene_module_resolves_in_the_registry() {
-        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         let manifest = legacy_module_manifest();
         let registry = ModuleRegistry::build(Some(&corpus));
 

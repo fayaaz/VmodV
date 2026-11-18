@@ -59,8 +59,8 @@
 //! # Corpus report
 //!
 //! [`corpus_report`] translates every `.fs` in the vendored corpus
-//! (`src/renderer/src/application/renderers/isf/modules/isf`) and every `.vs`
-//! sidecar. The test suite compares that against the checked-in
+//! (`resources/isf`) and every `.vs` sidecar. The test suite compares that
+//! against the checked-in
 //! `data/isf-corpus-baseline.json` ([`CorpusBaseline`]) — the tracked
 //! `docs/isf-corpus-report.md` is **not** rewritten by tests; a regression is
 //! a failing assertion with a per-shader diff instead. Use
@@ -139,7 +139,7 @@ impl std::error::Error for TranslateError {}
 
 /// Directory scanned by [`write_corpus_report`] when
 /// `MODV_ISF_CORPUS_DIR` is unset. Relative to the crate root.
-pub const DEFAULT_CORPUS_DIR: &str = "../../src/renderer/src/application/renderers/isf/modules/isf";
+pub const DEFAULT_CORPUS_DIR: &str = "../../resources/isf";
 
 /// Where WGSL overrides live, relative to the crate root.
 pub const OVERRIDES: &str = "src/isf/overrides";
@@ -148,7 +148,7 @@ pub const OVERRIDES: &str = "src/isf/overrides";
 /// trusted without a fingerprint (see [`ShaderOrigin`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShaderOrigin {
-    /// The vendored corpus (`src/renderer/src/application/renderers/isf/modules/isf`).
+    /// The vendored corpus (`resources/isf`).
     /// The file name identifies the shader, so overrides apply by name.
     Corpus,
     /// A shader from a user media directory. An override only applies when the
@@ -827,9 +827,6 @@ impl CorpusReport {
     /// The corpus directory as a repository-relative path when possible.
     pub fn corpus_display(&self) -> String {
         let display = self.corpus_dir.display().to_string();
-        if let Some(index) = display.find("src/renderer/") {
-            return display[index..].to_string();
-        }
         let canonical_dir = std::fs::canonicalize(&self.corpus_dir).ok();
         let canonical_repo = std::fs::canonicalize(crate_root().join("../..")).ok();
         if let (Some(directory), Some(repo)) = (canonical_dir, canonical_repo)
@@ -877,7 +874,7 @@ impl CorpusReport {
              `crates/modv-renderers/data/isf-corpus-baseline.json` instead. \
              Regenerate both manually with `write_corpus_report` after \
              reviewing a real change. The corpus is the vendored \
-             `src/renderer/src/application/renderers/isf/modules/isf`.\n\n",
+             `resources/isf`.\n\n",
         );
         out.push_str(&format!(
             "- Corpus directory: `{}`\n",

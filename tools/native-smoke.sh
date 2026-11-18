@@ -218,9 +218,9 @@ else
     cp "$ROOT/packaging/native/log-run.sh" "$APPDIR/usr/bin/log-run.sh"
     cp "$BIN" "$APPDIR/usr/bin/modv"
     chmod +x "$APPDIR/AppRun" "$APPDIR/usr/bin/log-run.sh" "$APPDIR/usr/bin/modv"
-    ln -sfn "$ROOT/src/renderer/src/application/renderers/isf/modules/isf" \
+    ln -sfn "$ROOT/resources/isf" \
         "$APPDIR/usr/share/vmodv/isf"
-    ln -sfn "$ROOT/src/renderer/src/application/point10/textures" \
+    ln -sfn "$ROOT/resources/point10/textures" \
         "$APPDIR/usr/share/vmodv/textures"
     MODE="assembled AppDir ($BIN)"
     APP_CMD=("$APPDIR/AppRun")

@@ -232,7 +232,7 @@ function credit(source) {
  */
 function ncSaSources() {
   const isf = walk(
-    path.join(ROOT, "src/renderer/src/application/renderers/isf/modules"),
+    path.join(ROOT, "resources/isf"),
     ".fs",
   );
   const shader = walk(
@@ -265,7 +265,7 @@ describe("third-party notices cover NC-SA sources", () => {
     // coverage assertions below would otherwise pass vacuously.
     expect(sources.length).toBeGreaterThanOrEqual(20);
     expect(sources.map((entry) => entry.path)).toContain(
-      "src/renderer/src/application/renderers/isf/modules/isf/UltimateFlame.fs",
+      "resources/isf/UltimateFlame.fs",
     );
     expect(sources.map((entry) => entry.path)).toContain(
       "src/renderer/src/application/point10/scenes/Boxy.js",

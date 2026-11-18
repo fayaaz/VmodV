@@ -537,10 +537,9 @@ fn exit_with_audio_error(error: AudioSourceError) -> ! {
 /// 3. a development default relative to the executable. The canonical Docker
 ///    build writes `crates/target/release/modv-engine`, so the repository root
 ///    is three levels above the binary directory and the corpus is at
-///    `src/renderer/src/application/renderers/isf/modules/isf`. A Cargo
-///    `target/` at the repository root and the current working directory are
-///    tried as well. A missing directory is not an error: the engine starts
-///    without ISF modules (the scan warns once).
+///    `resources/isf`. A Cargo `target/` at the repository root and the
+///    current working directory are tried as well. A missing directory is not
+///    an error: the engine starts without ISF modules (the scan warns once).
 pub fn resolve_isf_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
     if explicit.is_some() {
         return explicit;
@@ -551,9 +550,12 @@ pub fn resolve_isf_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
     development_isf_dir()
 }
 
+/// The corpus directory inside a development checkout, relative to its root.
+pub const DEV_ISF_DIR: &str = "resources/isf";
+
 /// The development-only corpus lookup described on [`resolve_isf_dir`].
 fn development_isf_dir() -> Option<PathBuf> {
-    let relative = Path::new("src/renderer/src/application/renderers/isf/modules/isf");
+    let relative = Path::new(DEV_ISF_DIR);
     let mut candidates = Vec::new();
     if let Ok(executable) = std::env::current_exe()
         && let Some(binary_dir) = executable.parent()
@@ -578,6 +580,25 @@ mod tests {
         assert_eq!(native_bench_seconds(false, 10.0), 0.0);
         assert_eq!(native_bench_seconds(true, 10.0), 10.0);
         assert_eq!(native_bench_seconds(true, 0.0), 0.0);
+    }
+
+    #[test]
+    fn the_development_corpus_lives_under_resources() {
+        // The native build must not depend on the Electron renderer tree: the
+        // corpus moved to `resources/isf` and the dev lookup follows it.
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(DEV_ISF_DIR);
+        assert!(
+            corpus.is_dir(),
+            "dev ISF corpus missing at {}",
+            corpus.display()
+        );
+        assert!(
+            corpus.join("Bloom.fs").is_file(),
+            "dev ISF corpus at {} has no Bloom.fs",
+            corpus.display()
+        );
     }
 
     #[test]

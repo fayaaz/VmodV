@@ -7,7 +7,7 @@ import {
 } from "../../src/renderer/src/application/module-category.js";
 
 const ISF_DIR = path.resolve(
-  "src/renderer/src/application/renderers/isf/modules/isf",
+  "resources/isf",
 );
 
 function readIsf(fileName) {

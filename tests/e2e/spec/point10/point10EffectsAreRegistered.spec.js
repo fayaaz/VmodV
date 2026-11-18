@@ -15,7 +15,7 @@ const effectNames = [...effectsSource.matchAll(/effect\(\s*"([^"]+)"/g)].map(
 );
 
 const isfDirectory = path.resolve(
-  "src/renderer/src/application/renderers/isf/modules/isf",
+  "resources/isf",
 );
 
 const transitionNames = fs

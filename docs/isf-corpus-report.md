@@ -1,8 +1,8 @@
 # ISF corpus translation report
 
-The corpus gate is the checked-in baseline `crates/modv-renderers/data/isf-corpus-baseline.json` (asserted by `cargo test -p modv-renderers`; the test no longer rewrites this file). The corpus is the vendored `src/renderer/src/application/renderers/isf/modules/isf`.
+The corpus gate is the checked-in baseline `crates/modv-renderers/data/isf-corpus-baseline.json` (asserted by `cargo test -p modv-renderers`; the test no longer rewrites this file). The corpus is the vendored `resources/isf`.
 
-- Corpus directory: `src/renderer/src/application/renderers/isf/modules/isf`
+- Corpus directory: `resources/isf`
 - Fragment shaders (`.fs`): **354**
 - Translated without an override: **354** (100.0 %)
 - Translated via an override: **0**

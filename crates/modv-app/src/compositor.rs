@@ -5589,8 +5589,7 @@ void main() {
     /// The vendored corpus directory, or `None` when this checkout does not
     /// have it (the test then skips like a missing GPU adapter).
     fn corpus_dir() -> Option<std::path::PathBuf> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         if dir.is_dir() {
             Some(dir)
         } else {

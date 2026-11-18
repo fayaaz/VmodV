@@ -14,8 +14,7 @@
 //! 1. `$MODV_ASSETS_DIR` (the packaged app's asset directory);
 //! 2. the `assets_dir` the engine passes in [`SceneContext::assets_dir`]
 //!    (the planned `--assets-dir` switch — `modv-app` does not pass one yet);
-//! 3. the dev fallback, the repo's own
-//!    `src/renderer/src/application/point10/textures` (via
+//! 3. the dev fallback, the repo's own `resources/point10/textures` (via
 //!    `CARGO_MANIFEST_DIR`, so it only resolves inside a checkout).
 //!
 //! A missing file never fails a scene: [`load_texture`] builds a procedural
@@ -54,8 +53,7 @@ pub const ASSETS_DIR_ENV: &str = "MODV_ASSETS_DIR";
 /// a checkout (dev and the Docker toolchain); a packaged build uses
 /// `$MODV_ASSETS_DIR` or the engine's `--assets-dir`.
 pub fn dev_fallback_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../src/renderer/src/application/point10/textures")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/point10/textures")
 }
 
 /// A decoded RGBA8 image.
@@ -451,7 +449,11 @@ mod tests {
     #[test]
     fn dev_fallback_points_at_the_repo_textures() {
         let dir = dev_fallback_dir();
-        assert!(dir.ends_with("application/point10/textures"), "{dir:?}");
+        assert!(dir.ends_with("resources/point10/textures"), "{dir:?}");
+        assert!(
+            dir.join("earth.jpg").is_file(),
+            "dev fallback texture missing from {dir:?}"
+        );
     }
 
     #[test]

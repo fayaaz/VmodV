@@ -22,9 +22,9 @@ cargo build --release --manifest-path "$ROOT/crates/Cargo.toml" -p modv-app --bi
 install -Dm755 "$ROOT/crates/target/release/modv" "$APPDIR/usr/bin/modv"
 install -Dm755 "$ROOT/packaging/native/log-run.sh" \
     "$APPDIR/usr/bin/log-run.sh"
-cp -a "$ROOT/src/renderer/src/application/renderers/isf/modules/isf" \
+cp -a "$ROOT/resources/isf" \
     "$APPDIR/usr/share/vmodv/isf"
-cp -a "$ROOT/src/renderer/src/application/point10/textures" \
+cp -a "$ROOT/resources/point10/textures" \
     "$APPDIR/usr/share/vmodv/textures"
 install -Dm755 "$ROOT/packaging/native/AppRun" "$APPDIR/AppRun"
 install -Dm644 "$ROOT/packaging/native/vmodv-native.desktop" \

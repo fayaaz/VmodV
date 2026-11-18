@@ -54,9 +54,9 @@ install -Dm755 "$ROOT/packaging/native/log-run.sh" \
 install -Dm755 "$ROOT/packaging/native/deb-launcher.sh" "$PKGROOT/usr/bin/modv"
 ln -s modv "$PKGROOT/usr/bin/vmodv-native"
 
-cp -a "$ROOT/src/renderer/src/application/renderers/isf/modules/isf" \
+cp -a "$ROOT/resources/isf" \
     "$PKGROOT/usr/share/vmodv/isf"
-cp -a "$ROOT/src/renderer/src/application/point10/textures" \
+cp -a "$ROOT/resources/point10/textures" \
     "$PKGROOT/usr/share/vmodv/textures"
 install -Dm644 "$ROOT/packaging/native/vmodv-native.desktop" \
     "$PKGROOT/usr/share/applications/vmodv-native.desktop"

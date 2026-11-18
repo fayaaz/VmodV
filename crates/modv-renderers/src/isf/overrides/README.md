@@ -9,8 +9,8 @@ overrides/<shader-name>.wgsl
 ```
 
 `<shader-name>` is the `.fs` file stem exactly as it appears in
-`src/renderer/src/application/renderers/isf/modules/isf`, spaces and case
-included — e.g. `Soft Blur.fs` → `Soft Blur.wgsl`. The lookup is performed by
+`resources/isf`, spaces and case included — e.g. `Soft Blur.fs` →
+`Soft Blur.wgsl`. The lookup is performed by
 `translate_named_with_overrides` / `IsfRuntime::compile`, keyed by the name the
 caller passes.
 

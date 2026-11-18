@@ -4570,8 +4570,7 @@ mod tests {
 
     #[test]
     fn apply_scene_materialises_isf_modules_from_the_corpus() {
-        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         if !corpus.is_dir() {
             eprintln!("skipping ISF Scene test: {} is missing", corpus.display());
             return;
@@ -5057,8 +5056,7 @@ mod tests {
         //
         // Every current smoothing link targets an ISF corpus shader, so the
         // store needs the corpus registry for the links to resolve.
-        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
         if !corpus.is_dir() {
             eprintln!(
                 "skipping default-scene smoothing test: ISF corpus missing at {}",

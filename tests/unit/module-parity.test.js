@@ -5,7 +5,7 @@
  * registrations in `application/worker/index.worker.js`: every `*.js` under
  * `renderers/2d/modules`, every `*.js` under `renderers/shader/modules`
  * (flattening array exports such as `Point10Effects.js`), and every `*.fs`
- * under `renderers/isf/modules/isf` (named by file stem).
+ * under `resources/isf` (named by file stem).
  *
  * `tests/fixtures/module-parity.json` is the committed snapshot of that
  * registry. This test recomputes the registry from the real files and fails
@@ -31,7 +31,7 @@ const DEFAULT_SCENES_PATH = path.resolve(
   "crates/modv-engine/data/default-scenes.json",
 );
 const ISF_DIR = path.resolve(
-  "src/renderer/src/application/renderers/isf/modules/isf",
+  "resources/isf",
 );
 
 const twoDModuleFiles = import.meta.glob(
