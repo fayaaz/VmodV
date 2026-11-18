@@ -41,6 +41,26 @@ impl UiAction {
             serde_json::json!({ "moduleName": module_name, "groupId": group_id }),
         )
     }
+
+    /// Move an active Module to `to_index` in another Group (or within its
+    /// own). `to_index` is the final index after the Module leaves its source
+    /// Group; the engine clamps it to the destination length.
+    pub fn move_module(
+        module_id: &str,
+        from_group_id: &str,
+        to_group_id: &str,
+        to_index: usize,
+    ) -> Self {
+        Self::new(
+            "groups/MOVE_MODULE",
+            serde_json::json!({
+                "moduleId": module_id,
+                "fromGroupId": from_group_id,
+                "toGroupId": to_group_id,
+                "toIndex": to_index,
+            }),
+        )
+    }
 }
 
 /// The `modules/updateProp` action that writes a texture value.

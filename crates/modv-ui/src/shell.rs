@@ -22,6 +22,7 @@ use crate::model::{
     VideoTransportView, asset_meta_label, format_duration, gallery_preview_key,
     group_enabled_indicator, letterbox_rect, next_group_enabled, sample_rate_label,
 };
+use crate::module_drag::{ModuleDrag, insertion_index, module_drop_action};
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
     DEFAULT_OSC_HOST, GalleryCategory, LibraryAssignmentTarget, SidePanelTab, UiAction, UiCommand,
@@ -968,12 +969,15 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                             });
                         }
                         let modules = ui.indent(("group-modules", &group.id), |ui| {
-                            group_module_list(ui, snapshot, state, group, selected);
+                            group_module_list(ui, snapshot, state, group, selected)
                         });
                         // Header, selected-Group controls and the module strip
                         // all accept a Gallery module dropped from the Gallery.
                         let drop_rect = header.response.rect.union(modules.response.rect);
                         gallery_drop_target(ui, drop_rect, &group.id, state);
+                        // Dragging a module row inside the block: a row gap
+                        // inserts above/below it, the rest of the block appends.
+                        module_group_drop_target(ui, drop_rect, &group.id, &modules.inner, state);
                     }
                 });
 
@@ -1075,13 +1079,16 @@ fn reserved_side_width(state: &UiState, tab_dragging: bool) -> f32 {
 /// One Group's module list: always visible, so every Group in the pane shows
 /// what it contains. The per-Group name/alpha/blend editors stay selected-only
 /// (they share one draft input); this list is safe to repeat per Group.
+///
+/// Returns each row's rect so the Group block can append a dragged module
+/// after its last row.
 fn group_module_list(
     ui: &mut egui::Ui,
     snapshot: &EngineSnapshot,
     state: &mut UiState,
     group: &crate::model::GroupView,
     selected: bool,
-) {
+) -> Vec<egui::Rect> {
     ui.separator();
     let modules = snapshot.modules_in_group(&group.id);
     if modules.is_empty() {
@@ -1093,12 +1100,12 @@ fn group_module_list(
                     .color(theme::MUTED),
             );
         }
-        return;
+        return Vec::new();
     }
-    let module_ids: Vec<String> = group.module_ids.clone();
+    let mut row_rects = Vec::with_capacity(modules.len());
     for (module_index, module) in modules.iter().enumerate() {
         let selected_module = state.selected_module.as_deref() == Some(module.id.as_str());
-        ui.horizontal(|ui| {
+        let row = ui.horizontal(|ui| {
             let mut module_enabled = module.enabled;
             if ui.checkbox(&mut module_enabled, "").changed() {
                 state.push_action(
@@ -1110,12 +1117,24 @@ fn group_module_list(
                     }),
                 );
             }
+            // The name is both the click-to-select target and the drag source:
+            // its whole row re-orders within the Group or moves to another one.
+            paint_module_drag_grip(ui);
             let label = format!("{}  ({})", module.module_name, short_id(&module.id));
-            if ui
-                .selectable_label(selected_module, egui::RichText::new(label).size(12.0))
-                .clicked()
-            {
+            let response = ui.add(
+                egui::Button::selectable(selected_module, egui::RichText::new(label).size(12.0))
+                    .sense(Sense::click_and_drag()),
+            );
+            if response.clicked() {
                 state.selected_module = Some(module.id.clone());
+            }
+            if response.drag_started() {
+                response.dnd_set_drag_payload(ModuleDrag::new(&module.id, &group.id, module_index));
+            }
+            if response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            } else if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -1138,42 +1157,6 @@ fn group_module_list(
                     );
                 }
                 if ui
-                    .add_enabled(
-                        module_index + 1 < modules.len(),
-                        egui::Button::new("v").small().frame(false),
-                    )
-                    .on_hover_text("Move module down")
-                    .clicked()
-                {
-                    let mut ids = module_ids.clone();
-                    ids.swap(module_index, module_index + 1);
-                    state.push_action(
-                        "groups/REPLACE_GROUP_MODULES",
-                        serde_json::json!({
-                            "groupId": group.id,
-                            "modules": ids,
-                        }),
-                    );
-                }
-                if ui
-                    .add_enabled(
-                        module_index > 0,
-                        egui::Button::new("^").small().frame(false),
-                    )
-                    .on_hover_text("Move module up")
-                    .clicked()
-                {
-                    let mut ids = module_ids.clone();
-                    ids.swap(module_index, module_index - 1);
-                    state.push_action(
-                        "groups/REPLACE_GROUP_MODULES",
-                        serde_json::json!({
-                            "groupId": group.id,
-                            "modules": ids,
-                        }),
-                    );
-                }
-                if ui
                     .small_button("D")
                     .on_hover_text("Duplicate module")
                     .clicked()
@@ -1188,7 +1171,131 @@ fn group_module_list(
                 }
             });
         });
+        row_rects.push(row.response.rect);
     }
+    module_rows_drop_target(ui, &row_rects, &group.id, state);
+    row_rects
+}
+
+/// The three-line grip that hints a module row is draggable. The lines are
+/// painted rather than labelled so they never enter the accessibility tree.
+fn paint_module_drag_grip(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(7.0, 12.0), Sense::hover());
+    let painter = ui.painter();
+    let stroke = Stroke::new(1.0, theme::MUTED.gamma_multiply(0.75));
+    for offset in [-3.0f32, 0.0, 3.0] {
+        let y = rect.center().y + offset;
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            stroke,
+        );
+    }
+}
+
+/// The module strip's insertion point: the pointer's y resolves against the
+/// row midpoints ([`insertion_index`]), so the upper half of a row drops above
+/// it and the lower half below it. The nearest row half is tinted and an accent
+/// line marks the exact gap.
+fn module_rows_drop_target(
+    ui: &egui::Ui,
+    rows: &[egui::Rect],
+    group_id: &str,
+    state: &mut UiState,
+) {
+    if rows.is_empty()
+        || !egui::DragAndDrop::has_payload_of_type::<ModuleDrag>(ui.ctx())
+        || !rows.iter().any(|row| ui.rect_contains_pointer(*row))
+    {
+        return;
+    }
+    let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) else {
+        return;
+    };
+
+    let gap = insertion_index(rows, pointer.y);
+    let (highlight, line_y) = if gap == 0 {
+        let row = rows[0];
+        (
+            egui::Rect::from_min_max(row.min, egui::pos2(row.right(), row.center().y)),
+            row.top(),
+        )
+    } else {
+        let row = rows[gap - 1];
+        (
+            egui::Rect::from_min_max(egui::pos2(row.left(), row.center().y), row.max),
+            row.bottom(),
+        )
+    };
+    ui.painter().rect_filled(
+        highlight,
+        CornerRadius::same(0),
+        theme::ACCENT.gamma_multiply(0.14),
+    );
+    paint_module_insertion_line(ui, ui.max_rect().x_range(), line_y);
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+
+    if ui.input(|input| input.pointer.any_released()) {
+        // Consume the payload so neither the Group block nor a later frame can
+        // answer the same release twice.
+        let released = egui::DragAndDrop::take_payload::<ModuleDrag>(ui.ctx());
+        if let Some(action) = module_drop_action(released.as_deref(), group_id, gap) {
+            state.actions.push(action);
+        }
+    }
+}
+
+/// The rest of a Group block (header, selected-Group controls, the space below
+/// its last row) appends a dragged module after the last row. A row under the
+/// pointer owns the drop, so this only paints/handles the block itself.
+fn module_group_drop_target(
+    ui: &egui::Ui,
+    block_rect: egui::Rect,
+    group_id: &str,
+    rows: &[egui::Rect],
+    state: &mut UiState,
+) {
+    if !egui::DragAndDrop::has_payload_of_type::<ModuleDrag>(ui.ctx())
+        || !ui.rect_contains_pointer(block_rect)
+    {
+        return;
+    }
+    let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) else {
+        return;
+    };
+    if rows.iter().any(|row| row.contains(pointer)) {
+        return;
+    }
+
+    let painter = ui.painter();
+    painter.rect_filled(
+        block_rect,
+        CornerRadius::same(0),
+        theme::ACCENT.gamma_multiply(0.08),
+    );
+    painter.rect_stroke(
+        block_rect,
+        CornerRadius::same(0),
+        Stroke::new(1.0, theme::ACCENT),
+        StrokeKind::Inside,
+    );
+    let line_y = rows.last().map_or(block_rect.bottom(), |row| row.bottom());
+    paint_module_insertion_line(ui, block_rect.x_range(), line_y);
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+
+    if ui.input(|input| input.pointer.any_released()) {
+        let released = egui::DragAndDrop::take_payload::<ModuleDrag>(ui.ctx());
+        if let Some(action) = module_drop_action(released.as_deref(), group_id, rows.len()) {
+            state.actions.push(action);
+        }
+    }
+}
+
+/// The accent two-pixel insertion line, with a dot at its left end so the gap
+/// reads even against a selected row's accent fill.
+fn paint_module_insertion_line(ui: &egui::Ui, x: egui::Rangef, y: f32) {
+    let painter = ui.painter();
+    painter.hline(x, y, Stroke::new(2.0, theme::ACCENT));
+    painter.circle_filled(egui::pos2(x.min + 2.0, y), 2.5, theme::ACCENT);
 }
 
 fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {

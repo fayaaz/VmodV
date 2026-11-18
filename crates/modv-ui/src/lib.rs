@@ -25,6 +25,7 @@ pub mod gallery_drag;
 pub mod layout;
 pub mod library_drag;
 pub mod model;
+pub mod module_drag;
 pub mod panels;
 pub mod shell;
 pub mod state;
