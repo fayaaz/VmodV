@@ -10,7 +10,11 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use crate::file_dialog::{FileDialogAction, FileDialogState};
-use crate::model::{EngineSnapshot, MediaAction, ModuleMetaView, PreviewRequest, PropView};
+use crate::library_drag;
+use crate::model::{
+    EngineSnapshot, LibraryKind, MediaAction, MediaAssetView, ModuleMetaView, PreviewRequest,
+    PropView, join_library_folder, normalise_library_folder, parent_library_folder,
+};
 use crate::panels::scene_grid::SceneGridState;
 use crate::widgets::{RangeControl, TweenCurve};
 
@@ -39,6 +43,43 @@ impl UiAction {
     }
 }
 
+/// The `modules/updateProp` action that writes a texture value.
+///
+/// Both assignment paths (a Library click and a Library drag/drop) go through
+/// this builder, so the payload the engine receives is identical to the one
+/// the manual path editor writes.
+pub fn texture_prop_action(module_id: &str, prop: &str, value: Value) -> UiAction {
+    UiAction::new(
+        "modules/updateProp",
+        serde_json::json!({
+            "moduleId": module_id,
+            "prop": prop,
+            "data": { "value": value },
+        }),
+    )
+}
+
+/// A texture prop the Library tab is currently picking for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryAssignmentTarget {
+    pub module_id: String,
+    pub module_name: String,
+    pub prop_name: String,
+    pub kind: LibraryKind,
+}
+
+impl LibraryAssignmentTarget {
+    /// The banner line the Library panel shows while armed.
+    pub fn describe(&self) -> String {
+        format!(
+            "Pick {} for {} / {}",
+            self.kind.title().to_lowercase(),
+            self.module_name,
+            self.prop_name
+        )
+    }
+}
+
 /// An application command that is not an engine action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiCommand {
@@ -61,6 +102,8 @@ pub enum UiCommand {
     CreateProfile(String),
     /// Switch the active media profile and rescan the user ISF folders.
     SwitchProfile(String),
+    /// Re-scan the Library tab's image/video/palette folders.
+    RescanLibrary,
     /// Open `<userData>/media` in the platform file manager.
     OpenMediaFolder,
     /// Open `<userData>/logs` in the platform file manager.
@@ -203,6 +246,15 @@ pub struct UiState {
     pub layout: crate::layout::LayoutState,
     /// MediaHub operations drained by the shell after drawing.
     pub media_actions: Vec<MediaAction>,
+    /// The Library tab's selected media folder.
+    pub library_kind: LibraryKind,
+    /// The current subfolder scope inside the selected media folder. Empty is
+    /// the kind's root and lists every nested asset.
+    pub library_folder: String,
+    /// The asset selected by a click (media-root-relative path).
+    pub selected_library_asset: Option<String>,
+    /// A texture prop waiting for a library pick.
+    pub library_target: Option<LibraryAssignmentTarget>,
     pub p0: P0State,
     pub inspector_probe: RangeControl,
     pub inspector_probe_value: f64,
@@ -234,6 +286,7 @@ pub enum SidePanelTab {
     #[default]
     Inspector,
     Media,
+    Library,
     Audio,
     Info,
     Plugins,
@@ -244,9 +297,10 @@ pub enum SidePanelTab {
 
 impl SidePanelTab {
     /// Every right-panel tab, in strip order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Inspector,
         Self::Media,
+        Self::Library,
         Self::Audio,
         Self::Info,
         Self::Plugins,
@@ -262,12 +316,13 @@ impl SidePanelTab {
         match self {
             Self::Inspector => 0,
             Self::Media => 1,
-            Self::Audio => 2,
-            Self::Info => 3,
-            Self::Plugins => 4,
-            Self::Midi => 5,
-            Self::Ndi => 6,
-            Self::Osc => 7,
+            Self::Library => 2,
+            Self::Audio => 3,
+            Self::Info => 4,
+            Self::Plugins => 5,
+            Self::Midi => 6,
+            Self::Ndi => 7,
+            Self::Osc => 8,
         }
     }
 
@@ -276,6 +331,7 @@ impl SidePanelTab {
         match self {
             Self::Inspector => "inspector",
             Self::Media => "media",
+            Self::Library => "library",
             Self::Audio => "audio",
             Self::Info => "info",
             Self::Plugins => "plugins",
@@ -290,6 +346,7 @@ impl SidePanelTab {
         match self {
             Self::Inspector => "Inspector",
             Self::Media => "Media",
+            Self::Library => "Library",
             Self::Audio => "Audio",
             Self::Info => "Info",
             Self::Plugins => "Plugins",
@@ -886,6 +943,10 @@ impl UiState {
             tab_float_target: None,
             layout: crate::layout::LayoutState::default(),
             media_actions: Vec::new(),
+            library_kind: LibraryKind::Image,
+            library_folder: String::new(),
+            selected_library_asset: None,
+            library_target: None,
             p0: P0State::default(),
             inspector_probe,
             inspector_probe_value: 0.5,
@@ -978,6 +1039,73 @@ impl UiState {
     /// Push one engine action.
     pub fn push_action(&mut self, action: impl Into<String>, payload: Value) {
         self.actions.push(UiAction::new(action, payload));
+    }
+
+    /// Switch the Library folder. Changing kind returns to that kind's root;
+    /// the folder is otherwise kept while the panel is open.
+    pub fn select_library_kind(&mut self, kind: LibraryKind) {
+        if self.library_kind != kind {
+            self.library_kind = kind;
+            self.library_folder.clear();
+        }
+    }
+
+    /// Open a subfolder (relative to the kind root) in the Library panel.
+    pub fn enter_library_folder(&mut self, folder: impl AsRef<str>) {
+        self.library_folder = normalise_library_folder(folder.as_ref());
+    }
+
+    /// Enter an immediate child of the current Library folder.
+    pub fn open_library_subfolder(&mut self, child: &str) {
+        self.library_folder = join_library_folder(&self.library_folder, child);
+    }
+
+    /// Go up one Library folder (a no-op at the kind root).
+    pub fn library_up(&mut self) {
+        self.library_folder = parent_library_folder(&self.library_folder);
+    }
+
+    /// Mark a texture prop as waiting for a Library pick.
+    ///
+    /// Arms the panel and brings it to the front with the matching folder
+    /// selected, so the "Use from library…" button is one click away from a
+    /// thumbnail.
+    pub fn arm_library_target(&mut self, target: LibraryAssignmentTarget) {
+        if self.library_kind != target.kind {
+            self.library_folder.clear();
+        }
+        self.library_kind = target.kind;
+        self.library_target = Some(target);
+        self.side_panel_tab = SidePanelTab::Library;
+    }
+
+    /// Cancel a pending Library assignment (the prop keeps its current value).
+    pub fn clear_library_target(&mut self) {
+        self.library_target = None;
+    }
+
+    /// Queue the prop write for a clicked Library asset when a target is armed.
+    ///
+    /// Returns whether an action was queued: no target, a mismatched kind, or a
+    /// palette asset does nothing.
+    pub fn assign_library_asset(&mut self, asset: &MediaAssetView) -> bool {
+        let Some(target) = self.library_target.clone() else {
+            return false;
+        };
+        if target.kind != asset.kind {
+            return false;
+        }
+        let Some(value) = library_drag::texture_value_for_asset(asset.kind, &asset.path) else {
+            return false;
+        };
+        self.selected_library_asset = Some(asset.path.clone());
+        self.actions.push(texture_prop_action(
+            &target.module_id,
+            &target.prop_name,
+            value,
+        ));
+        self.library_target = None;
+        true
     }
 
     /// Take the queued engine actions.
@@ -1191,7 +1319,7 @@ mod tests {
             &SidePanelTab::ALL[SidePanelTab::COUNT - 2..],
             &[SidePanelTab::Ndi, SidePanelTab::Osc]
         );
-        for (index, tab) in [(6, SidePanelTab::Ndi), (7, SidePanelTab::Osc)] {
+        for (index, tab) in [(7, SidePanelTab::Ndi), (8, SidePanelTab::Osc)] {
             assert_eq!(tab.index(), index);
             assert_eq!(SidePanelTab::from_key(tab.key()), Some(tab));
         }
@@ -1199,6 +1327,142 @@ mod tests {
         assert_eq!(SidePanelTab::Osc.title(), "OSC");
         assert_eq!(SidePanelTab::Ndi.key(), "ndi");
         assert_eq!(SidePanelTab::Osc.key(), "osc");
+    }
+
+    #[test]
+    fn the_library_tab_sits_between_media_and_audio() {
+        assert_eq!(SidePanelTab::Library.index(), 2);
+        assert_eq!(SidePanelTab::Library.key(), "library");
+        assert_eq!(SidePanelTab::Library.title(), "Library");
+        assert_eq!(
+            SidePanelTab::from_key("library"),
+            Some(SidePanelTab::Library)
+        );
+        assert_eq!(
+            &SidePanelTab::ALL[1..4],
+            &[
+                SidePanelTab::Media,
+                SidePanelTab::Library,
+                SidePanelTab::Audio
+            ]
+        );
+        assert_eq!(SidePanelTab::ALL.len(), 9);
+    }
+
+    #[test]
+    fn arming_a_library_target_opens_the_matching_folder() {
+        let mut state = UiState::new();
+        state.enter_library_folder("artist");
+        state.arm_library_target(LibraryAssignmentTarget {
+            module_id: "module-1".to_string(),
+            module_name: "Image".to_string(),
+            prop_name: "texture".to_string(),
+            kind: LibraryKind::Video,
+        });
+
+        assert_eq!(state.side_panel_tab, SidePanelTab::Library);
+        assert_eq!(state.library_kind, LibraryKind::Video);
+        assert_eq!(
+            state.library_folder, "",
+            "a kind switch returns to its root"
+        );
+        assert_eq!(
+            state.library_target.as_ref().map(|t| t.describe()),
+            Some("Pick videos for Image / texture".to_string())
+        );
+
+        state.clear_library_target();
+        assert!(state.library_target.is_none());
+    }
+
+    #[test]
+    fn clicking_a_library_asset_writes_the_armed_texture_prop() {
+        let mut state = UiState::new();
+        state.arm_library_target(LibraryAssignmentTarget {
+            module_id: "module-1".to_string(),
+            module_name: "Image".to_string(),
+            prop_name: "texture".to_string(),
+            kind: LibraryKind::Image,
+        });
+        let asset = MediaAssetView {
+            path: "live/image/loop.png".to_string(),
+            kind: LibraryKind::Image,
+            name: "loop.png".to_string(),
+            ..Default::default()
+        };
+
+        assert!(state.assign_library_asset(&asset));
+        assert_eq!(
+            state.take_actions(),
+            vec![texture_prop_action(
+                "module-1",
+                "texture",
+                serde_json::json!({
+                    "type": "image",
+                    "options": { "path": "live/image/loop.png" },
+                })
+            )],
+            "the exact value the manual path editor writes"
+        );
+        assert_eq!(
+            state.selected_library_asset.as_deref(),
+            Some("live/image/loop.png")
+        );
+        assert!(state.library_target.is_none(), "the pick disarms the prop");
+
+        assert!(
+            !state.assign_library_asset(&asset),
+            "a second click without a target only selects"
+        );
+        assert!(state.actions.is_empty());
+    }
+
+    #[test]
+    fn a_library_asset_of_another_kind_never_fills_a_armed_prop() {
+        let mut state = UiState::new();
+        state.arm_library_target(LibraryAssignmentTarget {
+            module_id: "module-1".to_string(),
+            module_name: "Image".to_string(),
+            prop_name: "texture".to_string(),
+            kind: LibraryKind::Image,
+        });
+        let video = MediaAssetView {
+            path: "live/video/clip.mp4".to_string(),
+            kind: LibraryKind::Video,
+            name: "clip.mp4".to_string(),
+            ..Default::default()
+        };
+
+        assert!(!state.assign_library_asset(&video));
+        assert!(state.actions.is_empty());
+        assert!(
+            state.library_target.is_some(),
+            "the prop keeps waiting for an image"
+        );
+    }
+
+    #[test]
+    fn library_folder_navigation_resets_on_kind_and_walks_up() {
+        let mut state = UiState::new();
+        state.open_library_subfolder("artist");
+        state.open_library_subfolder("pack");
+        assert_eq!(state.library_folder, "artist/pack");
+
+        state.library_up();
+        assert_eq!(state.library_folder, "artist");
+        state.library_up();
+        assert_eq!(state.library_folder, "");
+
+        state.enter_library_folder("/artist/pack/");
+        assert_eq!(state.library_folder, "artist/pack");
+        state.select_library_kind(LibraryKind::Image);
+        assert_eq!(
+            state.library_folder, "artist/pack",
+            "reselecting the current kind keeps the folder"
+        );
+        state.select_library_kind(LibraryKind::Palette);
+        assert_eq!(state.library_folder, "");
+        assert_eq!(state.library_kind, LibraryKind::Palette);
     }
 
     #[test]

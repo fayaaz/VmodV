@@ -16,8 +16,9 @@ use crate::layout::{
     WINDOW_TEMPO,
 };
 use crate::model::{
-    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView, ScreenCaptureView,
-    gallery_preview_key, sample_rate_label,
+    COMPOSITE_OPERATIONS, EngineSnapshot, LibraryKind, MediaAction, MediaAssetView, ModuleMetaView,
+    PropView, ScreenCaptureView, asset_meta_label, format_duration, gallery_preview_key,
+    letterbox_rect, sample_rate_label,
 };
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
@@ -1401,6 +1402,7 @@ fn tab_content(
     match tab {
         SidePanelTab::Inspector => inspector_content(ui, snapshot, state),
         SidePanelTab::Media => media_panel(ui, snapshot, state),
+        SidePanelTab::Library => library_panel(ui, snapshot, state),
         SidePanelTab::Audio => audio_panel(ui, snapshot, state),
         SidePanelTab::Info => info_panel(ui, snapshot),
         SidePanelTab::Plugins => plugins_panel(ui, snapshot, state),
@@ -2751,6 +2753,227 @@ fn plugin_consent_window(ctx: &egui::Context, state: &mut UiState) {
     }
     if cancel || !open {
         state.cancel_plugin_consent();
+    }
+}
+
+/// The Library tab: the active profile's images, videos and palettes.
+///
+/// The panel browses recursively (the scan is one level of folders, the tiles
+/// are every asset below the current scope), with a folder breadcrumb/back
+/// control, subfolder chips and a rescan button. Clicking an asset assigns it
+/// to a waiting texture prop; dragging one onto a texture control does the
+/// same through [`MediaLibraryDrag`].
+fn library_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let library = &snapshot.library;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("MEDIA LIBRARY").strong().size(12.0));
+        chip(ui, &library.profile, theme::MUTED);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .button("Rescan")
+                .on_hover_text("Re-read the profile's image, video and palette folders")
+                .clicked()
+            {
+                state.queue(UiCommand::RescanLibrary);
+            }
+        });
+    });
+    if let Some(error) = &library.error {
+        ui.colored_label(theme::DANGER, error);
+    }
+    ui.horizontal_wrapped(|ui| {
+        for kind in LibraryKind::ALL {
+            if ui
+                .selectable_label(state.library_kind == kind, kind.title())
+                .clicked()
+            {
+                state.select_library_kind(kind);
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        let can_go_up = !state.library_folder.is_empty();
+        if ui
+            .add_enabled(can_go_up, egui::Button::new("Up"))
+            .on_hover_text("Up one folder")
+            .clicked()
+        {
+            state.library_up();
+        }
+        let mut breadcrumb = format!("{} / {}", library.profile, state.library_kind.folder());
+        if !state.library_folder.is_empty() {
+            breadcrumb.push_str(" / ");
+            breadcrumb.push_str(&state.library_folder.replace('/', " / "));
+        }
+        ui.label(
+            egui::RichText::new(breadcrumb)
+                .monospace()
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+    });
+
+    let subfolders = library.subfolders(state.library_kind, &state.library_folder);
+    if !subfolders.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new("FOLDERS")
+                    .size(10.5)
+                    .color(theme::MUTED),
+            );
+            for name in &subfolders {
+                if ui
+                    .selectable_label(false, format!("{name}/"))
+                    .on_hover_text(format!("Open the {name} folder"))
+                    .clicked()
+                {
+                    state.open_library_subfolder(name);
+                }
+            }
+        });
+    }
+
+    let assets = library.assets_for(state.library_kind, &state.library_folder);
+    let count = assets.len();
+    let available_height = ui.available_height().max(1.0);
+    egui::ScrollArea::vertical()
+        .id_salt("library-grid")
+        .max_height(available_height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if assets.is_empty() {
+                let kind = state.library_kind;
+                ui.label(
+                    egui::RichText::new(format!(
+                        "No {} in the {} profile yet.",
+                        kind.title().to_lowercase(),
+                        library.profile
+                    ))
+                    .size(12.0)
+                    .color(theme::MUTED),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Copy files into {} / {} (subfolders are scanned too), then Rescan.",
+                        library.profile,
+                        kind.folder()
+                    ))
+                    .size(11.0)
+                    .color(theme::MUTED),
+                );
+                return;
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                for asset in assets {
+                    library_tile(ui, asset, state);
+                }
+            });
+        });
+
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(if count == 1 {
+                "1 asset".to_string()
+            } else {
+                format!("{count} assets")
+            })
+            .size(10.5)
+            .color(theme::MUTED),
+        );
+        if library.truncated {
+            ui.label(
+                egui::RichText::new("· folder capped, open a subfolder")
+                    .size(10.5)
+                    .color(theme::TWEEN),
+            );
+        }
+    });
+}
+
+/// One Library tile: a letterboxed thumbnail, the file name and cheap
+/// metadata. It is both a click target and a drag source.
+fn library_tile(ui: &mut egui::Ui, asset: &MediaAssetView, state: &mut UiState) {
+    let size = vec2(132.0, 112.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &asset.name));
+    let selected = state.selected_library_asset.as_deref() == Some(asset.path.as_str());
+    let dragging = response.dragged();
+    let fill = if selected || dragging {
+        theme::ACCENT_DIM
+    } else if response.hovered() {
+        theme::PANEL_ALT
+    } else {
+        theme::PANEL
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(0), fill);
+
+    let thumb = egui::Rect::from_min_size(rect.min + vec2(2.0, 2.0), vec2(size.x - 4.0, 74.0));
+    painter.rect_filled(thumb, CornerRadius::same(0), theme::PANEL_ALT);
+    if let Some(preview) = asset.thumbnail {
+        let fitted = letterbox_rect(thumb, preview.width, preview.height);
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        painter.image(preview.id, fitted, uv, Color32::WHITE);
+    } else {
+        let placeholder = match asset.kind {
+            LibraryKind::Image => "IMAGE",
+            LibraryKind::Video => "VIDEO",
+            LibraryKind::Palette => "PALETTE",
+        };
+        painter.text(
+            thumb.center(),
+            Align2::CENTER_CENTER,
+            placeholder,
+            egui::FontId::proportional(10.5),
+            theme::MUTED,
+        );
+        if asset.kind == LibraryKind::Video
+            && let Some(duration) = asset.duration_ms
+        {
+            painter.text(
+                thumb.center() + vec2(0.0, 14.0),
+                Align2::CENTER_CENTER,
+                format_duration(duration),
+                egui::FontId::proportional(10.0),
+                theme::MUTED,
+            );
+        }
+    }
+
+    let text_painter = ui.painter().with_clip_rect(rect);
+    text_painter.text(
+        egui::pos2(rect.left() + 4.0, thumb.bottom() + 3.0),
+        Align2::LEFT_TOP,
+        &asset.name,
+        egui::FontId::proportional(11.5),
+        theme::FOREGROUND,
+    );
+    text_painter.text(
+        egui::pos2(rect.left() + 4.0, thumb.bottom() + 18.0),
+        Align2::LEFT_TOP,
+        asset_meta_label(asset),
+        egui::FontId::proportional(10.0),
+        theme::MUTED,
+    );
+
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(0),
+        Stroke::new(
+            1.0,
+            if selected || dragging {
+                theme::ACCENT
+            } else {
+                theme::BORDER
+            },
+        ),
+        StrokeKind::Inside,
+    );
+
+    if response.clicked() {
+        state.selected_library_asset = Some(asset.path.clone());
     }
 }
 

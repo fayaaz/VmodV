@@ -32,11 +32,11 @@ use modv_ui::model::{
 use modv_ui::model::{ScreenCaptureView, ScreenShareKindView, ScreenSourceView};
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraModeView, CameraView, EngineHealth,
-    EngineSnapshot, FileDialogAction, GroupView, InputLinkView, MediaAction, MediaSnapshot,
-    MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView,
-    PluginInfoView, PluginPropView, PluginView, PreviewRequest, PreviewTexture, ProjectView,
-    PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView, SidePanelTab,
-    TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
+    EngineSnapshot, FileDialogAction, GroupView, InputLinkView, MediaAction, MediaLibraryView,
+    MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView,
+    PerformanceView, PluginInfoView, PluginPropView, PluginView, PreviewRequest, PreviewTexture,
+    ProjectView, PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView,
+    SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
     scene_preview_key,
 };
 use serde_json::Value;
@@ -436,6 +436,15 @@ pub struct NativeApp {
     isf_dir: Option<PathBuf>,
     user_isf_dirs: Vec<PathBuf>,
     media_watcher: Option<MediaWatcher>,
+    /// The active profile's recursive image/video/palette index.
+    media_library: crate::media_library::MediaLibrary,
+    /// Coalesced rescan requests from the watcher and the Rescan button.
+    library_refresh: crate::media_library::LibraryRefresh,
+    /// The Library tab's read model (rebuilt after a scan/thumbnail decode).
+    library_view: MediaLibraryView,
+    /// Uploaded Library thumbnails keyed by media-root-relative path.
+    library_textures: HashMap<String, PreviewEntry>,
+    library_view_dirty: bool,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -653,6 +662,14 @@ impl NativeApp {
                 "ui: INFO watching the {active_profile:?} media tree for ISF/image/video/palette changes"
             );
         }
+        let mut media_library =
+            crate::media_library::MediaLibrary::new(media_root.clone(), active_profile.clone());
+        media_library.rescan();
+        eprintln!(
+            "ui: INFO media library indexed {} asset(s) in the {active_profile:?} profile",
+            media_library.total_count()
+        );
+        let library_view = media_library.view(&HashMap::new());
         if midi_client.available() {
             eprintln!("ui: INFO MIDI input available (hot-plug polled at 1 Hz)");
         } else if let Some(error) = midi_client.error() {
@@ -767,6 +784,11 @@ impl NativeApp {
             isf_dir,
             user_isf_dirs,
             media_watcher,
+            media_library,
+            library_refresh: crate::media_library::LibraryRefresh::default(),
+            library_view,
+            library_textures: HashMap::new(),
+            library_view_dirty: false,
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -1193,6 +1215,7 @@ impl NativeApp {
             self.last_camera_scan = now;
         }
         if let Some(burst) = self.media_watcher.as_mut().and_then(MediaWatcher::pump) {
+            self.library_refresh.note_burst(&burst);
             if burst.has(MediaFolder::Isf) {
                 self.rescan_modules();
             }
@@ -1877,6 +1900,7 @@ impl NativeApp {
     /// Refresh the NDI/OSC/Plugins panel views at 1 Hz, only while their tab is
     /// visible (active in the strip, or docked/floating).
     fn poll_panel_views(&mut self, now: Instant) {
+        self.refresh_media_library();
         if self.ui_state.is_tab_visible(SidePanelTab::Ndi)
             && now.saturating_duration_since(self.last_ndi_poll) >= PANEL_POLL_INTERVAL
         {
@@ -1911,6 +1935,91 @@ impl NativeApp {
     fn refresh_plugin_view(&mut self) {
         self.plugin_view = plugin_snapshot(&self.plugin_runtime);
         self.last_plugin_poll = Instant::now();
+    }
+
+    /// Re-scan the media library when a watcher burst or the Rescan button
+    /// asked, then decode a few missing thumbnails for the visible folder.
+    ///
+    /// The scan itself only runs on a coalesced request, never per frame; the
+    /// thumbnail decode is capped per frame and cached, so scrolling a large
+    /// folder does not touch the disk again.
+    fn refresh_media_library(&mut self) {
+        let mut dirty = self.library_view_dirty;
+        if self.library_refresh.take().is_some() {
+            self.drop_library_textures();
+            self.media_library.rescan();
+            dirty = true;
+            eprintln!(
+                "ui: INFO media library rescan: {} asset(s) in the {:?} profile",
+                self.media_library.total_count(),
+                self.media_library.profile()
+            );
+        }
+
+        if self.ui_state.is_tab_visible(SidePanelTab::Library) {
+            let kind = self.ui_state.library_kind;
+            let folder = self.ui_state.library_folder.clone();
+            let decoded = self.media_library.decode_thumbnails(kind, &folder, 4);
+            if !decoded.is_empty() {
+                dirty = true;
+            }
+            for (path, thumbnail) in decoded {
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [thumbnail.width as usize, thumbnail.height as usize],
+                    &thumbnail.rgba,
+                );
+                let handle = self.egui_ctx.load_texture(
+                    format!("library:{path}"),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                if let Some(previous) = self.library_textures.insert(
+                    path,
+                    PreviewEntry {
+                        handle,
+                        width: thumbnail.width,
+                        height: thumbnail.height,
+                    },
+                ) {
+                    self.egui_ctx
+                        .tex_manager()
+                        .write()
+                        .free(previous.handle.id());
+                }
+            }
+        }
+
+        if dirty {
+            let textures: HashMap<String, PreviewTexture> = self
+                .library_textures
+                .iter()
+                .map(|(path, entry)| {
+                    (
+                        path.clone(),
+                        PreviewTexture {
+                            id: entry.handle.id(),
+                            width: entry.width,
+                            height: entry.height,
+                        },
+                    )
+                })
+                .collect();
+            self.library_view = self.media_library.view(&textures);
+            self.library_view_dirty = false;
+        }
+    }
+
+    /// Drop every uploaded Library thumbnail (a rescan/profile switch).
+    fn drop_library_textures(&mut self) {
+        let texture_ids: Vec<egui::TextureId> = self
+            .library_textures
+            .drain()
+            .map(|(_, entry)| entry.handle.id())
+            .collect();
+        for id in texture_ids {
+            self.egui_ctx.tex_manager().write().free(id);
+        }
+        self.library_view_dirty = true;
     }
 
     fn add_module_to_group(&mut self, action: &UiAction) {
@@ -1967,6 +2076,7 @@ impl NativeApp {
                 }
                 UiCommand::CreateProfile(name) => self.create_project_profile(&name),
                 UiCommand::SwitchProfile(name) => self.switch_project_profile(&name),
+                UiCommand::RescanLibrary => self.library_refresh.request(),
                 UiCommand::OpenMediaFolder => {
                     let media_root = self.media_root.clone();
                     self.open_folder(&media_root);
@@ -2142,6 +2252,11 @@ impl NativeApp {
         }
         self.refresh_profiles();
         self.rebuild_user_isf_dirs();
+        // The Library index belongs to the active profile: drop the old scan
+        // and thumbnails, then index the new folders on the next frame.
+        self.media_library.set_profile(self.active_profile.clone());
+        self.drop_library_textures();
+        self.library_refresh.request();
         // The active profile also owns a `plugin/` folder; point discovery at
         // the new profile (a rescan keeps loaded scripts whose paths survive).
         self.plugin_runtime.set_roots(vec![
@@ -2886,6 +3001,7 @@ impl NativeApp {
             tweens: tween_by_id,
             expressions: expression_views(state),
             media,
+            library: self.library_view.clone(),
             midi,
             plugins: self.plugin_view.clone(),
             ndi: self.ndi_view.clone(),

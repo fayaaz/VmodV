@@ -84,6 +84,8 @@ pub struct EngineSnapshot {
     pub expressions: Vec<ExpressionView>,
     /// Live capture state for the Media panel.
     pub media: MediaSnapshot,
+    /// The active profile's image/video/palette library (the Library tab).
+    pub library: MediaLibraryView,
     /// Native MIDI input state.
     pub midi: MidiSnapshot,
     /// The opt-in JavaScript plugin runtime (the Plugins panel).
@@ -778,6 +780,261 @@ pub struct ScreenSourceView {
     pub node_id: u32,
     /// The monitor/window picker that produced it.
     pub kind: ScreenShareKindView,
+}
+
+/// A media-library folder: the three asset kinds the active profile owns.
+///
+/// The native Library panel browses `<media>/<profile>/image|video|palette`
+/// recursively; documents (presets, Scenes, modules) stay in the File menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LibraryKind {
+    #[default]
+    Image,
+    Video,
+    Palette,
+}
+
+impl LibraryKind {
+    /// Every library folder, in panel order.
+    pub const ALL: [Self; 3] = [Self::Image, Self::Video, Self::Palette];
+
+    /// The profile folder this kind scans (`image`, `video`, `palette`).
+    pub const fn folder(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Palette => "palette",
+        }
+    }
+
+    /// The folder-switch label (`Images`, `Videos`, `Palettes`).
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Image => "Images",
+            Self::Video => "Videos",
+            Self::Palette => "Palettes",
+        }
+    }
+
+    /// The texture-prop `type` an asset of this kind writes.
+    pub const fn asset_type(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Palette => "palette",
+        }
+    }
+
+    /// The texture-prop kinds this folder can fill.
+    pub const fn texture_type(self) -> Option<&'static str> {
+        match self {
+            Self::Image => Some("image"),
+            Self::Video => Some("video"),
+            Self::Palette => None,
+        }
+    }
+
+    /// Resolve a profile folder name.
+    pub fn from_folder(folder: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.folder() == folder)
+    }
+}
+
+/// One file in the active profile's media library.
+///
+/// `path` is **media-root-relative** (`default/image/loop.png`), the same
+/// spelling a texture prop's `options.path` stores and `ImageTextures`
+/// resolves. `folder` is relative to the kind's root (`artist/pack`, empty at
+/// the root) so the panel can browse recursively and filter by scope.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MediaAssetView {
+    /// Media-root-relative path with `/` separators.
+    pub path: String,
+    /// The absolute path on disk, for tooltips/diagnostics.
+    pub absolute: Option<String>,
+    /// Which profile folder the asset came from.
+    pub kind: LibraryKind,
+    /// The file name shown on the tile.
+    pub name: String,
+    /// The containing folder relative to the kind root.
+    pub folder: String,
+    /// File size in bytes.
+    pub size_bytes: u64,
+    /// Image/video pixel size, read from the header when cheap.
+    pub dimensions: Option<[u32; 2]>,
+    /// Video duration in milliseconds, read from the container header.
+    pub duration_ms: Option<u64>,
+    /// Palette colours (RGBA), capped to the preview width.
+    pub palette: Option<Vec<[u8; 4]>>,
+    /// Decoded thumbnail uploaded by the shell.
+    pub thumbnail: Option<PreviewTexture>,
+}
+
+/// The Library panel's read model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MediaLibraryView {
+    /// The active profile whose folders were scanned.
+    pub profile: String,
+    /// Every scanned asset, all kinds, deterministic order.
+    pub assets: Vec<MediaAssetView>,
+    /// Whether any kind hit the scan cap (the panel says so).
+    pub truncated: bool,
+    /// A folder that could not be read, when one failed.
+    pub error: Option<String>,
+}
+
+impl MediaLibraryView {
+    /// Assets of `kind` under `folder` (recursively). An empty scope is the
+    /// kind's root and lists everything.
+    pub fn assets_for(&self, kind: LibraryKind, folder: &str) -> Vec<&MediaAssetView> {
+        let scope = normalise_library_folder(folder);
+        self.assets
+            .iter()
+            .filter(|asset| asset.kind == kind && folder_in_scope(&asset.folder, &scope))
+            .collect()
+    }
+
+    /// The immediate subfolder names under `folder` for `kind`.
+    pub fn subfolders(&self, kind: LibraryKind, folder: &str) -> Vec<String> {
+        let scope = normalise_library_folder(folder);
+        let prefix = if scope.is_empty() {
+            String::new()
+        } else {
+            format!("{scope}/")
+        };
+        let mut names: Vec<String> = self
+            .assets_for(kind, &scope)
+            .into_iter()
+            .filter_map(|asset| asset.folder.strip_prefix(&prefix))
+            .filter_map(|rest| rest.split('/').next())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect();
+        names.sort_by_key(|name| name.to_lowercase());
+        names.dedup();
+        names
+    }
+
+    /// The number of assets in one folder scope, without cloning them.
+    pub fn count_for(&self, kind: LibraryKind, folder: &str) -> usize {
+        self.assets_for(kind, folder).len()
+    }
+}
+
+/// Normalise a UI folder scope: `/` separators, no surrounding separators.
+pub fn normalise_library_folder(folder: &str) -> String {
+    folder.replace('\\', "/").trim_matches('/').to_string()
+}
+
+/// Whether `asset_folder` is `scope` or below it.
+pub fn folder_in_scope(asset_folder: &str, scope: &str) -> bool {
+    let asset_folder = normalise_library_folder(asset_folder);
+    let scope = normalise_library_folder(scope);
+    scope.is_empty() || asset_folder == scope || asset_folder.starts_with(&format!("{scope}/"))
+}
+
+/// The parent of a folder scope (`a/b` → `a`; root stays root).
+pub fn parent_library_folder(folder: &str) -> String {
+    let folder = normalise_library_folder(folder);
+    folder
+        .rsplit_once('/')
+        .map(|(parent, _)| parent.to_string())
+        .unwrap_or_default()
+}
+
+/// Join a subfolder onto a scope.
+pub fn join_library_folder(scope: &str, child: &str) -> String {
+    let scope = normalise_library_folder(scope);
+    let child = normalise_library_folder(child);
+    match (scope.is_empty(), child.is_empty()) {
+        (true, _) => child,
+        (false, true) => scope,
+        (false, false) => format!("{scope}/{child}"),
+    }
+}
+
+/// A byte count in the Library tile style (`820 B`, `1.4 MB`).
+pub fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let kib = bytes as f64 / 1024.0;
+    if kib < 1024.0 {
+        return format!("{kib:.0} KB");
+    }
+    let mib = kib / 1024.0;
+    if mib < 1024.0 {
+        return format!("{mib:.1} MB");
+    }
+    format!("{:.2} GB", mib / 1024.0)
+}
+
+/// A video duration in the Library tile style (`0:04`, `12:03`).
+pub fn format_duration(ms: u64) -> String {
+    let total_seconds = ms / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    if minutes >= 60 {
+        format!("{}:{:02}:{seconds:02}", minutes / 60, minutes % 60)
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// The metadata line under a Library tile's name.
+pub fn asset_meta_label(asset: &MediaAssetView) -> String {
+    let size = format_file_size(asset.size_bytes);
+    match asset.kind {
+        LibraryKind::Image => match asset.dimensions {
+            Some([width, height]) => format!("{width}×{height} · {size}"),
+            None => size,
+        },
+        LibraryKind::Video => {
+            let mut parts = Vec::new();
+            if let Some(duration) = asset.duration_ms {
+                parts.push(format_duration(duration));
+            }
+            if let Some([width, height]) = asset.dimensions {
+                parts.push(format!("{width}×{height}"));
+            }
+            parts.push(size);
+            parts.join(" · ")
+        }
+        LibraryKind::Palette => {
+            let colours = asset.palette.as_ref().map_or(0, Vec::len);
+            if colours > 0 {
+                format!("{colours} colours · {size}")
+            } else {
+                size
+            }
+        }
+    }
+}
+
+/// An aspect-correct letterbox of `width`×`height` inside `container`.
+///
+/// Zero-sized content returns the container; the caller paints a placeholder.
+pub fn letterbox_rect(container: egui::Rect, width: u32, height: u32) -> egui::Rect {
+    if width == 0 || height == 0 {
+        return container;
+    }
+    let container_aspect = container.width() / container.height().max(f32::EPSILON);
+    let image_aspect = width as f32 / height as f32;
+    if image_aspect >= container_aspect {
+        let height = container.width() / image_aspect;
+        let top = container.center().y - height / 2.0;
+        egui::Rect::from_min_size(
+            egui::pos2(container.left(), top),
+            egui::vec2(container.width(), height),
+        )
+    } else {
+        let width = container.height() * image_aspect;
+        let left = container.center().x - width / 2.0;
+        egui::Rect::from_min_size(
+            egui::pos2(left, container.top()),
+            egui::vec2(width, container.height()),
+        )
+    }
 }
 
 /// One enumerable camera.
@@ -2715,5 +2972,169 @@ mod tests {
             vec!["Bravo", "Alpha"],
             "a camera source with index 0 still leads; screens never enter the camera list"
         );
+    }
+
+    fn asset(path: &str, kind: LibraryKind, folder: &str) -> MediaAssetView {
+        MediaAssetView {
+            path: path.to_string(),
+            kind,
+            name: path.rsplit('/').next().unwrap_or(path).to_string(),
+            folder: folder.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn library_assets_filter_by_kind_and_recursive_scope() {
+        let view = MediaLibraryView {
+            profile: "live".to_string(),
+            assets: vec![
+                asset("live/image/root.png", LibraryKind::Image, ""),
+                asset("live/image/pack/a.png", LibraryKind::Image, "pack"),
+                asset(
+                    "live/image/pack/deep/b.png",
+                    LibraryKind::Image,
+                    "pack/deep",
+                ),
+                asset("live/image/other/c.png", LibraryKind::Image, "other"),
+                asset("live/video/clip.mp4", LibraryKind::Video, ""),
+                asset("live/palette/neon.json", LibraryKind::Palette, ""),
+            ],
+            ..Default::default()
+        };
+
+        let root: Vec<&str> = view
+            .assets_for(LibraryKind::Image, "")
+            .into_iter()
+            .map(|asset| asset.name.as_str())
+            .collect();
+        assert_eq!(root, vec!["root.png", "a.png", "b.png", "c.png"]);
+        assert_eq!(view.count_for(LibraryKind::Image, ""), 4);
+
+        let pack: Vec<&str> = view
+            .assets_for(LibraryKind::Image, "pack")
+            .into_iter()
+            .map(|asset| asset.name.as_str())
+            .collect();
+        assert_eq!(pack, vec!["a.png", "b.png"], "nested assets stay in scope");
+
+        assert_eq!(
+            view.assets_for(LibraryKind::Video, "pack").len(),
+            0,
+            "the scope never crosses kinds"
+        );
+        assert_eq!(view.assets_for(LibraryKind::Palette, "").len(), 1);
+    }
+
+    #[test]
+    fn library_subfolders_are_immediate_and_sorted() {
+        let view = MediaLibraryView {
+            assets: vec![
+                asset("live/image/Root.png", LibraryKind::Image, ""),
+                asset("live/image/Zeta/one.png", LibraryKind::Image, "Zeta"),
+                asset("live/image/alpha/two.png", LibraryKind::Image, "alpha"),
+                asset(
+                    "live/image/alpha/deep/three.png",
+                    LibraryKind::Image,
+                    "alpha/deep",
+                ),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            view.subfolders(LibraryKind::Image, ""),
+            vec!["alpha", "Zeta"],
+            "immediate children only, case-insensitive order"
+        );
+        assert_eq!(view.subfolders(LibraryKind::Image, "alpha"), vec!["deep"]);
+        assert!(view.subfolders(LibraryKind::Video, "").is_empty());
+    }
+
+    #[test]
+    fn library_folder_scopes_normalise_and_walk_up() {
+        assert_eq!(normalise_library_folder("/artist/pack/"), "artist/pack");
+        assert_eq!(normalise_library_folder(""), "");
+        assert_eq!(parent_library_folder("artist/pack"), "artist");
+        assert_eq!(parent_library_folder("artist"), "");
+        assert_eq!(parent_library_folder(""), "");
+        assert_eq!(join_library_folder("", "artist"), "artist");
+        assert_eq!(join_library_folder("artist", "pack"), "artist/pack");
+        assert_eq!(join_library_folder("artist/", "pack"), "artist/pack");
+        assert!(folder_in_scope("artist/pack", "artist"));
+        assert!(folder_in_scope("artist", "artist"));
+        assert!(!folder_in_scope("artist2", "artist"));
+        assert!(folder_in_scope("artist2", ""));
+    }
+
+    #[test]
+    fn library_metadata_labels_are_human_readable() {
+        assert_eq!(format_file_size(820), "820 B");
+        assert_eq!(format_file_size(1536), "2 KB");
+        assert_eq!(format_file_size(1_500_000), "1.4 MB");
+        assert_eq!(format_duration(4_250), "0:04");
+        assert_eq!(format_duration(63_000), "1:03");
+        assert_eq!(format_duration(3_723_000), "1:02:03");
+
+        let image = MediaAssetView {
+            kind: LibraryKind::Image,
+            size_bytes: 2048,
+            dimensions: Some([1920, 1080]),
+            ..Default::default()
+        };
+        assert_eq!(asset_meta_label(&image), "1920×1080 · 2 KB");
+
+        let video = MediaAssetView {
+            kind: LibraryKind::Video,
+            size_bytes: 4_500_000,
+            dimensions: Some([1280, 720]),
+            duration_ms: Some(12_400),
+            ..Default::default()
+        };
+        assert_eq!(asset_meta_label(&video), "0:12 · 1280×720 · 4.3 MB");
+
+        let palette = MediaAssetView {
+            kind: LibraryKind::Palette,
+            size_bytes: 120,
+            palette: Some(vec![[255, 0, 0, 255], [0, 255, 0, 255]]),
+            ..Default::default()
+        };
+        assert_eq!(asset_meta_label(&palette), "2 colours · 120 B");
+    }
+
+    #[test]
+    fn letterbox_keeps_aspect_and_centres() {
+        let container = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 100.0));
+
+        let wide = letterbox_rect(container, 200, 100);
+        assert!((wide.width() - 100.0).abs() < 0.001);
+        assert!((wide.height() - 50.0).abs() < 0.001);
+        assert!((wide.top() - 45.0).abs() < 0.001);
+
+        let tall = letterbox_rect(container, 100, 200);
+        assert!((tall.width() - 50.0).abs() < 0.001);
+        assert!((tall.height() - 100.0).abs() < 0.001);
+        assert!((tall.left() - 35.0).abs() < 0.001);
+
+        assert_eq!(
+            letterbox_rect(container, 0, 0),
+            container,
+            "a missing thumbnail size paints the whole tile"
+        );
+    }
+
+    #[test]
+    fn library_kinds_map_to_profile_folders_and_texture_types() {
+        assert_eq!(LibraryKind::from_folder("image"), Some(LibraryKind::Image));
+        assert_eq!(LibraryKind::from_folder("video"), Some(LibraryKind::Video));
+        assert_eq!(
+            LibraryKind::from_folder("palette"),
+            Some(LibraryKind::Palette)
+        );
+        assert_eq!(LibraryKind::from_folder("preset"), None);
+        assert_eq!(LibraryKind::Image.texture_type(), Some("image"));
+        assert_eq!(LibraryKind::Video.texture_type(), Some("video"));
+        assert_eq!(LibraryKind::Palette.texture_type(), None);
+        assert_eq!(LibraryKind::Palette.asset_type(), "palette");
     }
 }

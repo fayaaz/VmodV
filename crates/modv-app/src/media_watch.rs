@@ -74,6 +74,16 @@ impl MediaBurst {
             .filter(|folder| *folder != MediaFolder::Isf)
             .collect()
     }
+
+    /// Whether the burst touched a folder the Library index mirrors.
+    ///
+    /// A shader-only burst never rescans the media library; an image, video or
+    /// palette change asks for one coalesced rescan.
+    pub fn touches_library(&self) -> bool {
+        self.folders
+            .iter()
+            .any(|folder| *folder != MediaFolder::Isf)
+    }
 }
 
 /// The debounce state, split out so it is testable without a real watcher.
@@ -365,6 +375,19 @@ mod tests {
         assert_eq!(burst.events, 3);
         assert!(burst.has(MediaFolder::Isf));
         assert_eq!(burst.other_folders(), vec![MediaFolder::Image]);
+        assert!(
+            burst.touches_library(),
+            "the image change rescans the Library"
+        );
+
+        let isf_only = MediaBurst {
+            folders: vec![MediaFolder::Isf],
+            events: 1,
+        };
+        assert!(
+            !isf_only.touches_library(),
+            "a shader save does not touch the media library"
+        );
         assert_eq!(
             debounce.take(start + Duration::from_secs(2), DEBOUNCE),
             None,
