@@ -2189,6 +2189,18 @@ impl NativeApp {
             })
             .collect::<Vec<_>>();
         let applied_scene_id = performance.current_scene_id.clone();
+        // The per-row live Scene ids come from the same live Group stamps that
+        // feed `scenes/SET_ACTIVE_ROWS`; transition ghosts and bare Groups are
+        // excluded by the accessor. The UI needs the Scene ids (not the JSON
+        // delta) to mark each row's live cell while performance mode advances
+        // rows independently.
+        let active_scene_rows = self
+            .store
+            .live_scene_rows_by_row()
+            .into_iter()
+            .map(|(row, (scene_id, _group_id))| (row, scene_id))
+            .collect();
+
         let audio = audio_view(
             self.store.bpm(),
             self.store.kick(),
@@ -2420,6 +2432,7 @@ impl NativeApp {
             frame_ms: self.frame_ms,
             scene_rows: self.store.row_names(),
             applied_scene_id,
+            active_scene_rows,
             health,
             gallery_previews,
             scene_previews,

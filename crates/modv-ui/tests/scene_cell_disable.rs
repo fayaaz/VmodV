@@ -69,7 +69,7 @@ fn harness(disabled: Arc<AtomicBool>) -> Harness<'static, UiState> {
 /// The first cell's rect: the column header is an accessible button, and the
 /// grid places the first cell just below it.
 fn first_cell(harness: &Harness<'_, UiState>) -> egui::Rect {
-    let header = harness.get_by_label("Lone Chrome").rect();
+    let header = harness.get_by_label("Lone Chrome (applied Scene)").rect();
     egui::Rect::from_min_size(
         egui::pos2(header.left(), header.bottom() + 3.0),
         egui::vec2(CELL_WIDTH, CELL_HEIGHT),

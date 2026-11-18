@@ -5,7 +5,7 @@
 //! a reference to the store, so egui's immediate-mode draw calls cannot
 //! conflict with a dispatch.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::Value;
 
@@ -58,6 +58,13 @@ pub struct EngineSnapshot {
     pub scene_rows: Vec<String>,
     /// The Scene the engine last applied.
     pub applied_scene_id: Option<String>,
+    /// The live Scene id for each performance row, keyed by row
+    /// (`scenes/SET_ACTIVE_ROWS` without the Group ids).
+    ///
+    /// Performance mode advances rows independently, so this can name
+    /// different Scenes in different rows; transition ghosts and Groups with
+    /// no Scene stamp are excluded.
+    pub active_scene_rows: BTreeMap<usize, String>,
     /// Engine/adapter health for the status bar.
     pub health: EngineHealth,
     /// Gallery hover previews keyed by module name.

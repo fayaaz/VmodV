@@ -272,13 +272,13 @@ fn the_layer_gutter_stays_pinned_while_the_scene_columns_scroll_sideways() {
     let mut harness = harness([640.0, 420.0]);
 
     let cell_before = cell_rect(&harness, "Alpha", 2);
-    let header_before = harness.get_by_label("Alpha").rect();
+    let header_before = harness.get_by_label("Alpha (applied Scene)").rect();
     let gutter_before = layer_rect(&harness, 2);
 
     wheel(&mut harness, cell_before.center(), egui::vec2(-140.0, 0.0));
 
     let cell_after = cell_rect(&harness, "Alpha", 2);
-    let header_after = harness.get_by_label("Alpha").rect();
+    let header_after = harness.get_by_label("Alpha (applied Scene)").rect();
     let gutter_after = layer_rect(&harness, 2);
 
     assert_close(

@@ -89,7 +89,7 @@
 //!
 //! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -2928,9 +2928,15 @@ impl Store {
         Value::Object(rows)
     }
 
-    /// Active rows implied by every live Scene-stamped Group.
-    pub(crate) fn live_scene_rows(&self) -> Value {
-        let mut rows = Map::new();
+    /// Active rows implied by every live Scene-stamped Group, as
+    /// `row -> (scene id, group id)`.
+    ///
+    /// This is the typed source behind `scenes/SET_ACTIVE_ROWS` and the native
+    /// snapshot's per-row live markers. A transition ghost is the outgoing
+    /// half of a row crossfade, so it must not claim the row; a Group with no
+    /// Scene stamp or no row is not a Scene cell.
+    pub(crate) fn live_scene_rows_by_row(&self) -> BTreeMap<usize, (String, String)> {
+        let mut rows = BTreeMap::new();
         for group in &self.state.groups {
             let Some(scene_id) = &group.scene_id else {
                 continue;
@@ -2941,9 +2947,18 @@ impl Store {
             if group.transition_ghost == Some(true) {
                 continue;
             }
+            rows.insert(row, (scene_id.clone(), group.id.clone()));
+        }
+        rows
+    }
+
+    /// Active rows implied by every live Scene-stamped Group.
+    pub(crate) fn live_scene_rows(&self) -> Value {
+        let mut rows = Map::new();
+        for (row, (scene_id, group_id)) in self.live_scene_rows_by_row() {
             rows.insert(
                 row.to_string(),
-                json!({ "sceneId": scene_id, "groupId": group.id }),
+                json!({ "sceneId": scene_id, "groupId": group_id }),
             );
         }
         Value::Object(rows)
@@ -6359,5 +6374,54 @@ mod tests {
             )
             .expect("empty copy dispatches");
         assert_eq!(empty, Value::Null);
+    }
+
+    #[test]
+    fn live_scene_rows_are_typed_and_skip_transition_ghosts() {
+        let mut store = Store::new();
+        seed_scene(&mut store, two_row_scene("scene-live"));
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-live" }))
+            .expect("apply");
+
+        let rows = store.live_scene_rows_by_row();
+        assert_eq!(rows.len(), 2, "both Scene rows are live: {rows:?}");
+        for row in 0..2 {
+            let (scene_id, group_id) = rows.get(&row).expect("row is live");
+            assert_eq!(scene_id, "scene-live");
+            let group = store
+                .state()
+                .groups
+                .iter()
+                .find(|group| &group.id == group_id)
+                .expect("the live row names a real Group");
+            assert_eq!(group.scene_row, Some(row));
+            assert_eq!(group.scene_id.as_deref(), Some("scene-live"));
+            assert_eq!(group.transition_ghost, None);
+        }
+
+        // A transition ghost is the outgoing half of a row crossfade: it must
+        // not claim the row, even though it still carries the Scene stamps.
+        let row0_group = rows.get(&0).expect("row 0").1.clone();
+        store
+            .state
+            .groups
+            .iter_mut()
+            .find(|group| group.id == row0_group)
+            .expect("row 0 Group")
+            .transition_ghost = Some(true);
+
+        let rows = store.live_scene_rows_by_row();
+        assert!(!rows.contains_key(&0), "the ghost row is not live");
+        assert_eq!(
+            rows.get(&1).map(|(scene_id, _)| scene_id.as_str()),
+            Some("scene-live")
+        );
+
+        // `scenes/SET_ACTIVE_ROWS` is built from the same typed view.
+        let delta = store.live_scene_rows();
+        assert!(delta.get("0").is_none());
+        assert_eq!(delta["1"]["sceneId"], json!("scene-live"));
+        assert_eq!(delta["1"]["groupId"], json!(rows[&1].1));
     }
 }

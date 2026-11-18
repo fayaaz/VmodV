@@ -9,6 +9,7 @@
 use egui::emath::GuiRounding as _;
 use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec2};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::layout::{LayoutState, WINDOW_PERFORMANCE_ROW_NAMES, WINDOW_SCENE_TIMING};
 use crate::model::{
@@ -337,6 +338,16 @@ fn row_display_name(snapshot: &EngineSnapshot, row: usize) -> String {
         .unwrap_or_else(|| format!("Row {}", row + 1))
 }
 
+/// The name of the Scene currently live in `row`, if the snapshot names one.
+fn live_scene_name(snapshot: &EngineSnapshot, row: usize) -> Option<&str> {
+    let scene_id = snapshot.active_scene_rows.get(&row)?;
+    snapshot
+        .scenes
+        .iter()
+        .find(|scene| &scene.id == scene_id)
+        .map(|scene| scene.name.as_str())
+}
+
 /// `Scenes.vue`'s `addRow`: append a blank name and start renaming it.
 fn add_row_action(names: &[String]) -> UiAction {
     let mut next = names.to_vec();
@@ -453,7 +464,13 @@ fn draw_scene_column(
         // advance this cursor, or a column with more populated cells would
         // drift away from the others.
         ui.spacing_mut().item_spacing.y = 0.0;
-        let current = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
+        let applied = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
+        // In performance mode every row advances on its own, so an applied
+        // Scene header must not read like a whole live column: it keeps only
+        // a thin dim accent and an `APPLIED` tag. The accent column highlight
+        // belongs to performance-off mode, where the applied Scene really is
+        // live in every row.
+        let per_row = snapshot.performance.enabled;
         let renaming = grid
             .renaming
             .as_ref()
@@ -512,37 +529,38 @@ fn draw_scene_column(
             };
             let painter = ui.painter();
             painter.rect_filled(rect, CornerRadius::same(0), fill);
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(0),
-                Stroke::new(
-                    if drop_target || dragging || current {
-                        1.5
-                    } else {
-                        1.0
-                    },
-                    if drop_target || current {
-                        theme::ACCENT
-                    } else {
-                        theme::BORDER
-                    },
-                ),
-                StrokeKind::Inside,
-            );
+            let stroke = if drop_target {
+                Stroke::new(1.5, theme::ACCENT)
+            } else if dragging {
+                Stroke::new(1.5, theme::BORDER)
+            } else if applied && per_row {
+                Stroke::new(1.0, theme::ACCENT_DIM)
+            } else if applied {
+                Stroke::new(1.5, theme::ACCENT)
+            } else {
+                Stroke::new(1.0, theme::BORDER)
+            };
+            painter.rect_stroke(rect, CornerRadius::same(0), stroke, StrokeKind::Inside);
             let dot = if scene.enabled {
                 theme::OK
             } else {
                 theme::DANGER
             };
             painter.circle_filled(rect.left_center() + egui::vec2(7.0, 0.0), 3.0, dot);
-            let clipped = painter.with_clip_rect(rect.shrink2(egui::vec2(16.0, 0.0)));
+            // Leave room for the `APPLIED` tag so a long Scene name cannot
+            // run underneath it.
+            let clip_right = if applied && per_row { 52.0 } else { 16.0 };
+            let clipped = painter.with_clip_rect(egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 16.0, rect.top()),
+                egui::pos2(rect.right() - clip_right, rect.bottom()),
+            ));
             clipped.text(
                 rect.left_center() + egui::vec2(14.0, 0.0),
                 Align2::LEFT_CENTER,
                 &scene.name,
                 FontId::proportional(13.0),
                 if scene.enabled {
-                    if current {
+                    if applied && !per_row {
                         theme::ACCENT
                     } else {
                         theme::FOREGROUND
@@ -551,6 +569,15 @@ fn draw_scene_column(
                     theme::MUTED
                 },
             );
+            if applied && per_row {
+                painter.text(
+                    rect.right_center() + egui::vec2(-6.0, 0.0),
+                    Align2::RIGHT_CENTER,
+                    "APPLIED",
+                    FontId::monospace(9.5),
+                    theme::MUTED,
+                );
+            }
 
             if header.clicked() {
                 actions.push(apply_scene_action(&scene.id));
@@ -564,11 +591,18 @@ fn draw_scene_column(
             if grid.scene_drag.is_some() && !dragging && header.contains_pointer() {
                 grid.scene_drop_target = Some(scene.id.clone());
             }
-            let header = header.on_hover_text(
-                "Apply this Scene. Drag to reorder columns; double-click to rename.",
-            );
+            let header = header.on_hover_text(if per_row {
+                "Apply this Scene. In performance mode each row advances independently; APPLIED does not mean the whole column is live."
+            } else {
+                "Apply this Scene. Drag to reorder columns; double-click to rename."
+            });
+            let header_label = if applied && per_row {
+                format!("{} (applied Scene)", scene.name)
+            } else {
+                scene.name.clone()
+            };
             header.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, true, scene.name.clone())
+                egui::WidgetInfo::labeled(egui::Role::Button, true, header_label.clone())
             });
             header.context_menu(|ui| scene_column_menu(ui, scene, snapshot, grid, actions));
             if is_last && grid.scroll_to_last_scene {
@@ -773,14 +807,39 @@ fn row_label_cell(
         theme::FOREGROUND,
     );
 
+    // The row's live Scene name sits under the row name, in the strip left of
+    // the monitor thumbnail. The full name is also in the accessible label so
+    // kittest can assert it without reading pixels.
+    if let Some(scene_name) = live_scene_name(snapshot, row) {
+        let scene_rect = egui::Rect::from_min_max(
+            rect.left_top() + egui::vec2(6.0, 40.0),
+            egui::pos2(
+                rect.right() - ROW_MONITOR_THUMB.x - 6.0,
+                rect.bottom() - 2.0,
+            ),
+        );
+        painter.with_clip_rect(scene_rect).text(
+            scene_rect.left_top(),
+            Align2::LEFT_TOP,
+            scene_name,
+            FontId::proportional(10.0),
+            if snapshot.performance.enabled {
+                theme::ACCENT
+            } else {
+                theme::MUTED
+            },
+        );
+    }
+
     draw_row_monitor(ui, snapshot, row, rect);
 
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::Role::Button,
-            ui.is_enabled(),
-            format!("Layer row {}: {label}", row + 1),
-        )
+    let accessible_label = match live_scene_name(snapshot, row) {
+        Some(scene_name) => format!("Layer row {}: {label} (live {scene_name})", row + 1),
+        None => format!("Layer row {}: {label}", row + 1),
+    };
+    let row_enabled = ui.is_enabled();
+    response.widget_info(move || {
+        egui::WidgetInfo::labeled(egui::Role::Button, row_enabled, accessible_label.clone())
     });
 
     if response.double_clicked() {
@@ -1236,6 +1295,46 @@ fn scene_dialogs(
     }
 }
 
+/// How one Scene cell is highlighted against the live state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneCellHighlight {
+    /// Performance mode is off and the engine renders this whole Scene.
+    Applied,
+    /// Performance mode is on and this cell is its row's live Scene.
+    Live,
+    /// The cell belongs to neither the live row nor an applied Scene.
+    None,
+}
+
+/// Decide how a cell is marked.
+///
+/// With performance mode off the engine renders the applied Scene as a whole,
+/// so every cell in that column is an [`SceneCellHighlight::Applied`] cell.
+/// With performance mode on each row advances independently: only the cell
+/// whose Scene id matches `active_scene_rows[row]` is
+/// [`SceneCellHighlight::Live`], even if the applied Scene names a different
+/// Scene (or the same Scene in another row). A row with no live entry marks
+/// nothing.
+pub fn scene_cell_highlight(
+    performance_enabled: bool,
+    applied_scene_id: Option<&str>,
+    active_scene_rows: &BTreeMap<usize, String>,
+    scene_id: &str,
+    row: usize,
+) -> SceneCellHighlight {
+    if performance_enabled {
+        if active_scene_rows.get(&row).is_some_and(|id| id == scene_id) {
+            SceneCellHighlight::Live
+        } else {
+            SceneCellHighlight::None
+        }
+    } else if applied_scene_id == Some(scene_id) {
+        SceneCellHighlight::Applied
+    } else {
+        SceneCellHighlight::None
+    }
+}
+
 /// The visual treatment of the per-cell performance toggle.
 ///
 /// Enabled cells keep the green dot and their normal chrome. Disabled cells
@@ -1324,7 +1423,18 @@ fn draw_scene_cell(
         grid.hovered = Some(target.clone());
     }
 
-    let current = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
+    let highlight = scene_cell_highlight(
+        snapshot.performance.enabled,
+        snapshot.performance.current_scene_id.as_deref(),
+        &snapshot.active_scene_rows,
+        &scene.id,
+        row,
+    );
+    let live = highlight == SceneCellHighlight::Live;
+    // Performance off keeps the historical applied-column highlight; with
+    // performance on the applied Scene is not live in this row unless
+    // `active_scene_rows` says so, so the cell stays unmarked.
+    let current = live || highlight == SceneCellHighlight::Applied;
     let copying = grid.copy_source.as_ref() == Some(&target);
     let enable_style = cell_enable_style(cell.disabled);
     let fill = if copying || current {
@@ -1471,6 +1581,30 @@ fn draw_scene_cell(
         );
     }
 
+    // The live marker sits below the timing badge, on the right edge: clear of
+    // the enable dot (top-left), the timing badge (top-right), the old `OFF`
+    // chip (left) and the `COPY` badge (bottom-right).
+    if live {
+        let label = egui::Rect::from_min_size(
+            rect.right_top() + egui::vec2(-44.0, 20.0),
+            egui::vec2(38.0, 13.0),
+        );
+        painter.rect_filled(label, CornerRadius::same(0), theme::ACCENT_DIM);
+        painter.rect_stroke(
+            label,
+            CornerRadius::same(0),
+            Stroke::new(1.0, theme::ACCENT),
+            StrokeKind::Inside,
+        );
+        painter.text(
+            label.center(),
+            Align2::CENTER_CENTER,
+            "LIVE",
+            FontId::monospace(9.5),
+            theme::ACCENT,
+        );
+    }
+
     if copying {
         let label = egui::Rect::from_min_size(
             rect.right_bottom() + egui::vec2(-44.0, -17.0),
@@ -1517,12 +1651,14 @@ fn draw_scene_cell(
         actions.push(action);
     }
 
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::Role::Button,
-            ui.is_enabled(),
-            format!("{} row {}", scene.name, row + 1),
-        )
+    let cell_label = if live {
+        format!("LIVE {} row {}", scene.name, row + 1)
+    } else {
+        format!("{} row {}", scene.name, row + 1)
+    };
+    let cell_enabled = ui.is_enabled();
+    response.widget_info(move || {
+        egui::WidgetInfo::labeled(egui::Role::Button, cell_enabled, cell_label.clone())
     });
 
     // Context menu.
@@ -1902,5 +2038,83 @@ mod tests {
         grid.scene_drop_target = Some("scene-a".to_string());
         assert_eq!(grid.drop_scene(0), None);
         assert!(grid.scene_drag.is_none());
+    }
+
+    fn live_rows(entries: &[(usize, &str)]) -> BTreeMap<usize, String> {
+        entries
+            .iter()
+            .map(|(row, scene)| (*row, (*scene).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn performance_mode_marks_only_each_rows_live_cell() {
+        let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
+
+        assert_eq!(
+            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-a", 0),
+            SceneCellHighlight::Live,
+            "row 0 is live on Scene A"
+        );
+        assert_eq!(
+            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-b", 1),
+            SceneCellHighlight::Live,
+            "row 1 is live on Scene B"
+        );
+        assert_eq!(
+            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-a", 1),
+            SceneCellHighlight::None,
+            "Scene A is not live in row 1 even though it is the applied Scene"
+        );
+        assert_eq!(
+            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-c", 2),
+            SceneCellHighlight::None,
+            "a row with no live entry marks nothing"
+        );
+    }
+
+    #[test]
+    fn performance_mode_ignores_the_applied_scene_when_rows_diverge() {
+        let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
+
+        // The applied Scene is C, but the rows are on A and B: only A/0 and
+        // B/1 are live. C never gets a whole-column highlight.
+        for row in 0..3 {
+            assert_eq!(
+                scene_cell_highlight(true, Some("scene-c"), &rows, "scene-c", row),
+                SceneCellHighlight::None,
+                "applied Scene C is not live at row {row}"
+            );
+        }
+        assert_eq!(
+            scene_cell_highlight(true, Some("scene-c"), &rows, "scene-a", 0),
+            SceneCellHighlight::Live
+        );
+        assert_eq!(
+            scene_cell_highlight(true, Some("scene-c"), &rows, "scene-b", 1),
+            SceneCellHighlight::Live
+        );
+    }
+
+    #[test]
+    fn performance_off_keeps_the_applied_scene_as_a_whole_column() {
+        let rows = live_rows(&[(1, "scene-b")]);
+
+        for row in 0..3 {
+            assert_eq!(
+                scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", row),
+                SceneCellHighlight::Applied,
+                "the applied Scene highlights every row while performance is off"
+            );
+        }
+        assert_eq!(
+            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-b", 1),
+            SceneCellHighlight::None
+        );
+        assert_eq!(
+            scene_cell_highlight(false, None, &rows, "scene-a", 0),
+            SceneCellHighlight::None,
+            "no applied Scene highlights nothing"
+        );
     }
 }
