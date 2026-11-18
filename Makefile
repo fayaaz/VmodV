@@ -74,7 +74,7 @@ NATIVE_VERSION ?= 2.0.0
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-native native-deb native-deb-check clean docker-deps docker-node-modules docker-reset install dev dev-native native native-debug lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
+.PHONY: build appimage appimage-native native-deb native-deb-check clean docker-deps docker-node-modules docker-reset install dev dev-native dev-electron native native-debug lint format test-e2e test-e2e-all test-unit yarn shell rave-reencode docker-rust docker-cargo-volume engine engine-test engine-lint engine-run disk-guard disk-clean
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -89,6 +89,8 @@ disk-clean:
 	-$(DOCKER) image prune -f
 	-$(DOCKER) container prune -f
 
+# Electron release build, kept while the native 2.0 shell waits for sign-off.
+# The native installers are `appimage-native` (AppImage) and `native-deb` (.deb).
 build: disk-guard
 	mkdir -p "$(DIST_DIR)"
 	find "$(DIST_DIR)" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -144,6 +146,8 @@ native-deb-check: docker-rust
 		$(RUST_IMAGE) \
 		bash /app/tools/native-deb-check.sh
 
+# Electron AppImage only (used for quick local release checks). The native
+# AppImage is `appimage-native`.
 appimage: disk-guard
 	mkdir -p "$(DIST_DIR)"
 	find "$(DIST_DIR)" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -197,16 +201,25 @@ install: docker-deps
 	$(DOCKER) run --rm -v "$(NODE_MODULES_VOLUME):/app/node_modules" "$(TOOLCHAIN_IMAGE)" \
 		chown -R "$(HOST_UID):$(HOST_GID)" /app/node_modules
 
-# `MODV_UI=native` switches the development entry point from Electron to the
-# native egui shell. The legacy Vue UI remains the default and the two paths
-# share the same engine state plane.
+# `make dev` runs the native egui shell, the Linux 2.0 default. The legacy
+# Electron UI remains available until sign-off: `make dev-electron` or
+# `MODV_UI=electron make dev`. `MODV_UI=native` stays as an explicit alias for
+# the default, and `ENGINE_MODE=1` still means "Rust engine inside Electron", so
+# it selects the Electron entry point unless MODV_UI=native is explicit.
 ifeq ($(MODV_UI),native)
 dev: dev-native
+else ifeq ($(MODV_UI),electron)
+dev: dev-electron
+else ifeq ($(ENGINE_MODE),1)
+dev: dev-electron
 else
-dev: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS) -e NO_SANDBOX=1 $(if $(filter 1,$(ENGINE_MODE)),-e MODV_ENGINE=1,)
-dev: docker-node-modules
-	$(call run-yarn,dev $(ARGS))
+dev: dev-native
 endif
+
+# The Electron escape hatch. Same Vite HMR setup as the old `make dev`.
+dev-electron: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS) -e NO_SANDBOX=1 $(if $(filter 1,$(ENGINE_MODE)),-e MODV_ENGINE=1,)
+dev-electron: docker-node-modules
+	$(call run-yarn,dev $(ARGS))
 
 # The native P0/P1 shell. Release by default so frame pacing matches the
 # packaged engine; use `native-debug` for iteration.
