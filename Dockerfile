@@ -129,6 +129,24 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/*
+# The native e2e harness spawns its own virtual X server when the container has
+# no DISPLAY/WAYLAND_DISPLAY. Xvfb plus winit's X11 runtime libraries (some are
+# dlopened, so -dev packages alone are not enough) let the real `modv` binary
+# open a window under lavapipe.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      xvfb \
+      xauth \
+      libx11-6 \
+      libxcursor1 \
+      libxrandr2 \
+      libxi6 \
+      libxinerama1 \
+      libxcb-render0 \
+      libxcb-shape0 \
+      libxcb-xfixes0 \
+      libxcb-xkb1 \
+    && rm -rf /var/lib/apt/lists/*
 # The engine needs libxkbcommon-x11 for the X11 fallback at runtime
 # (dlopened by winit's xkbcommon-dl).
 RUN apt-get update \
