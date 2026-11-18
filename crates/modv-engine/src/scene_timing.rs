@@ -73,7 +73,7 @@ pub const MIN_SCENE_SECONDS: f64 = 1.0;
 /// A crossfade never runs shorter than this (`scene-timing.js:8`).
 pub const MIN_TRANSITION_SECONDS: f64 = 0.1;
 
-/// Beats in a bar. Unger's bar-based Scene timing is always 4/4.
+/// Beats in a bar. Bar-based Scene timing is always 4/4.
 pub const BEATS_PER_BAR: f64 = 4.0;
 
 /// Tempo used when the beat detector has no usable BPM. This is the same
