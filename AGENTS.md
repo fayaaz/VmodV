@@ -24,7 +24,7 @@ Everything runs in Docker. The host only needs Docker (with Buildx) and make —
 
 Commands run against the repo bind-mounted at `/app`. Cargo's registry/target cache lives in the `modv-cargo` named volume, seeded from the `modv-rust:local` toolchain image.
 
-CI is `.github/workflows/native.yml` (Rust lint/tests + both installers on pushes/PRs to `main`/`rust-hybrid`) and `.github/workflows/nightly.yml` (native-only lint/tests/package, published as the rolling `nightly` prerelease). There is no Node/browser CI workflow.
+CI is `.github/workflows/native.yml` (Rust lint/tests + both installers on pushes/PRs to `main`/`rust-hybrid`), `.github/workflows/nightly.yml` (native-only lint/tests/package, published as the rolling `nightly` prerelease) and `.github/workflows/release.yml` (automatic semantic-versioning releases from `main`). There is no Node/browser CI workflow.
 
 Guards ported from the deleted JS tree live in `crates/modv-app/tests/notices.rs` (third-party notices / NC-SA attribution) and `crates/modv-app/tests/removed_content.rs` (removed Point10 scenes/modules, Cube/three renderer). Do not reintroduce the removed content.
 
@@ -87,7 +87,7 @@ Point10 scenes are ported (not vendored) into `crates/modv-renderers` — WGSL/T
 
 ## Packaging & release
 
-`make build` (Dockerfile `appimage`/`deb` stages) empties `dist/` and emits the AppImage and `.deb` (`vmodv-native` package: `modv` binary + `vmodv-native` compat symlink, desktop file, icon, ISF corpus and textures under `/usr/share/vmodv`). Runtime dependencies (Vulkan/lavapipe, PipeWire, ALSA, GStreamer, `libxkbcommon-x11`) are host packages; the `.deb` declares them. `NATIVE_VERSION` names the artifacts (CI appends `-nightly.<YYYYMMDD>`); the Cargo workspace stays at `0.1.0` internally. Installer checks: `make native-deb-check`, `tools/native-smoke.sh`. Nightly releases are native-only; there is no semantic-release/manual version bump (CI overrides). **The Electron build is not maintained here** — do not "fix" the archived tree; retrieve it read-only from `legacy-electron`/`v1.x-final`.
+`make build` (Dockerfile `appimage`/`deb` stages) empties `dist/` and emits the AppImage and `.deb` (`vmodv-native` package: `modv` binary + `vmodv-native` compat symlink, desktop file, icon, ISF corpus and textures under `/usr/share/vmodv`). Runtime dependencies (Vulkan/lavapipe, PipeWire, ALSA, GStreamer, `libxkbcommon-x11`) are host packages; the `.deb` declares them. `NATIVE_VERSION` names the artifacts; CI passes `${NATIVE_VERSION}-nightly.<YYYYMMDD>` for the nightly and lets `release.yml` pass the computed release version for stable releases. The Cargo workspace stays at `0.1.0` internally. Installer checks: `make native-deb-check`, `tools/native-smoke.sh`. **Stable releases are automatic:** `.github/workflows/release.yml` bumps `NATIVE_VERSION` from conventional commits on `main` (`feat:` → minor, `fix:` → patch, `<type>!:` / `BREAKING CHANGE:` → major, anything else → no release), commits it as `chore(release): vX.Y.Z`, tags `vX.Y.Z`, builds and publishes a GitHub release. The `v2.0.0` tag seeds the base line. See `docs/releasing.md`. Nightly releases are native-only. **The Electron build is not maintained here** — do not "fix" the archived tree; retrieve it read-only from `legacy-electron`/`v1.x-final`.
 
 ## Known residuals (see `docs/rust-full-rewrite-progress.md`)
 
@@ -98,6 +98,6 @@ Point10 scenes are ported (not vendored) into `crates/modv-renderers` — WGSL/T
 ## Key documents
 
 - `docs/rust-full-rewrite.md` / `docs/rust-full-rewrite-progress.md` — the native plan and the live progress/parity tracker (milestone status, verification evidence, known issues).
-- `docs/rust-full-rewrite-progress.md` is the source of truth for what works; `docs/native-parity-map.md` maps legacy specs to their native coverage; `docs/native-2.0-release.md` describes the 2.0 release artifacts; `docs/native-e2e.md` specifies the control socket and harness; `docs/legacy-electron.md` explains the archive.
+- `docs/rust-full-rewrite-progress.md` is the source of truth for what works; `docs/native-parity-map.md` maps legacy specs to their native coverage; `docs/native-2.0-release.md` describes the 2.0 release artifacts; `docs/releasing.md` documents automated releases; `docs/native-e2e.md` specifies the control socket and harness; `docs/legacy-electron.md` explains the archive.
 - `docs/rust-hybrid*.md` — the earlier opt-in engine port (historical; the hybrid path is gone).
 - `docs/audio-capture-rate.md`, `docs/isf-translation-notes.md`, `docs/isf-corpus-report.md`, `docs/module-parity.md` — subsystem notes worth reading before touching audio capture or the ISF translator.

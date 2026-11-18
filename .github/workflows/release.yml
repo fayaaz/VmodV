@@ -1,0 +1,143 @@
+name: Release
+
+# Automatic semantic versioning from conventional commits on `main`.
+#
+# Bump rules (highest precedence wins, see tools/semver-next.sh):
+#   feat:                              -> minor   (2.1.0 -> 2.2.0)
+#   fix:                               -> patch   (2.1.0 -> 2.1.1)
+#   <type>! / BREAKING CHANGE:         -> major   (2.1.0 -> 3.0.0)
+#   anything else (chore, docs, perf…) -> no release
+#
+# Every push to `main` that contains qualifying commits cuts a release: the
+# workflow bumps NATIVE_VERSION in the Makefile, commits it as
+# `chore(release): vX.Y.Z`, tags `vX.Y.Z`, builds the AppImage and .deb and
+# publishes a GitHub release with them. Versions are tagged `vX.Y.Z`; the
+# `v2.0.0` tag seeds the base for the first automated release (v2.1.0).
+# Commits without feat:/fix:/breaking types do not produce a release.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+env:
+  MIN_FREE_GB: 8
+
+jobs:
+  version:
+    name: Compute next version
+    runs-on: ubuntu-latest
+    # Pushes made with GITHUB_TOKEN don't trigger workflows anyway; this also
+    # keeps manual `chore(release):` commits from spawning an empty release.
+    if: ${{ github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      previous_tag: ${{ steps.next.outputs.previous_tag }}
+      should_release: ${{ steps.next.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: next
+        run: |
+          VERSION=$(tools/semver-next.sh)
+          if [ -z "$VERSION" ]; then
+            echo "No qualifying commits since the last tag; nothing to release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$PREV" >> "$GITHUB_OUTPUT"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "Next release: v$VERSION (previous tag: ${PREV:-none})"
+
+  release:
+    name: Tag, build and publish
+    runs-on: ubuntu-latest
+    needs: version
+    if: ${{ needs.version.outputs.should_release == 'true' }}
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PREV_TAG: ${{ needs.version.outputs.previous_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+
+      - name: Bump NATIVE_VERSION in the Makefile
+        run: |
+          sed -i -E "s/^NATIVE_VERSION \?= .*/NATIVE_VERSION ?= ${VERSION}/" Makefile
+          grep -n '^NATIVE_VERSION' Makefile
+
+      - name: Commit and tag v${{ env.VERSION }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Makefile
+          git commit -m "chore(release): v${VERSION}"
+          git tag -a "v${VERSION}" -m "VmodV ${VERSION}"
+          git push origin HEAD:main
+          git push origin "v${VERSION}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Rust toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: rust
+          tags: modv-rust:local
+          load: true
+          cache-from: type=gha,scope=rust-toolchain
+
+      - name: Build native AppImage and .deb
+        run: make build
+        env:
+          NATIVE_VERSION: ${{ env.VERSION }}
+
+      - name: Inspect installers
+        run: |
+          ls -lh dist
+          dpkg-deb -I dist/VmodV-Native-*.deb
+
+      - name: Generate release notes
+        run: |
+          if [ -n "$PREV_TAG" ]; then RANGE="$PREV_TAG..v${VERSION}"; else RANGE="v${VERSION}"; fi
+          {
+            echo "Automated release cut from \`main\` by the semantic-versioning workflow."
+            echo
+            echo "## Changes"
+            git log --no-merges --format='- %s (%h)' --grep='chore(release)' --invert-grep "$RANGE"
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full diff:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...v${VERSION}"
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Publish GitHub release
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file release-notes.md \
+            dist/VmodV-Native-*.AppImage dist/VmodV-Native-*.deb
