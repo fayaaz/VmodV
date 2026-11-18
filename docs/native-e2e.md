@@ -305,8 +305,9 @@ wall-clock sleeps; the harness timeouts are failure bounds, not pacing.
   has no test seam that survives without Electron, so the native
   single-process shell ports the intent: the same snapshot format, the same
   kill without a graceful quit, and a clean replacement process. The
-  supervisor's watchdog/restart budget itself is covered by its own Rust unit
-  tests, not the process harness.
+  supervisor's watchdog/restart budget stays covered by the existing Electron
+  unit tests (`tests/unit/engine-supervisor.test.js`,
+  `tests/unit/engine-restart-budget.test.js`), not by the native harness.
 - `renders_the_main_window_at_the_requested_size` — readiness, live
   `runtime.frames`, `runtime.window` equals the requested 640×360, and a
   decoded 640×360 (16:9) PNG.
