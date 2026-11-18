@@ -17,10 +17,10 @@
 //!
 //! This module talks to the NDI SDK directly through a hand-written FFI layer
 //! that is **loaded at runtime** (`dlopen` via `libloading`). libndi is not a
-//! link-time dependency: the Docker toolchain installs the SDK for
-//! `grandiose`, but CI images and user machines routinely lack it. Every
-//! public entry point therefore degrades to [`NdiError::Unavailable`] and a
-//! single log line instead of failing to start.
+//! link-time dependency and is not bundled: CI images and user machines
+//! routinely lack it. Every public entry point therefore degrades to
+//! [`NdiError::Unavailable`] and a single log line instead of failing to
+//! start.
 //!
 //! # Library resolution order
 //!
@@ -29,18 +29,12 @@
 //! 1. `$MODV_NDI_LIB` (an explicit override — a file or soname);
 //! 2. `/usr/lib/libndi.so.5`;
 //! 3. `/usr/local/lib/libndi.so.5`;
-//! 4. the SDK copy shipped inside `grandiose`, relative to the running
-//!    executable:
-//!    `app.asar.unpacked/node_modules/grandiose/ndi/lib/lnx-x64/libndi.so.5`
-//!    (the engine binary is `resources/modv-engine`, so this is
-//!    `resources/app.asar.unpacked/…` in a packaged app), then
-//!    `node_modules/grandiose/…`, `grandiose/…` and `ndi/…` for packaged,
-//!    development and extracted layouts.
+//! 4. `libndi.so.5` next to the running executable (useful for an AppImage or
+//!    a local unpacked build);
+//! 5. `ndi/libndi.so.5` next to the executable.
 //!
-//! Note that `electron-builder.yml:22` excludes `node_modules/grandiose/ndi/**`
-//! from the app bundle (the SDK is only needed while *building* grandiose), so
-//! on a normal install candidates 2/3 or `$MODV_NDI_LIB` are the ones that
-//! matter.
+//! On a normal install candidates 2/3 or `$MODV_NDI_LIB` are the ones that
+//! matter; the packaged AppImage/.deb do not ship libndi.
 //!
 //! # Frame lifetime strategy
 //!
@@ -124,12 +118,9 @@ pub const COLOR_FORMAT_RGBX_RGBA: c_int = 2;
 /// `NDIlib_recv_bandwidth_highest` (`Processing.NDI.Recv.h:39`).
 pub const BANDWIDTH_HIGHEST: c_int = 100;
 
-/// The soname installed by the NDI SDK and by the Docker toolchain
-/// (`/usr/local/lib/libndi.so.5`).
+/// The soname installed by the NDI SDK (`/usr/local/lib/libndi.so.5` is the
+/// usual SDK install location).
 pub const NDI_SONAME: &str = "libndi.so.5";
-
-/// The NDI SDK copy shipped by `grandiose` (`node_modules/grandiose/ndi/lib/lnx-x64`).
-pub const GRANDIOSE_NDI_SUFFIX: &str = "node_modules/grandiose/ndi/lib/lnx-x64/libndi.so.5";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -498,8 +489,6 @@ fn warn_unavailable_once(reason: &str) {
 }
 
 /// The library search path, in resolution order (see the module docs).
-///
-/// The executable's directory is used for the `grandiose`-shipped candidates.
 pub fn ndi_library_search_path() -> Vec<PathBuf> {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -515,29 +504,20 @@ pub fn ndi_library_search_path() -> Vec<PathBuf> {
 /// `env_override` is `$MODV_NDI_LIB`; `exe_dir` is the directory containing the
 /// running engine binary.
 pub fn ndi_library_candidates_with_env(env_override: Option<&str>, exe_dir: &Path) -> Vec<PathBuf> {
-    let mut candidates = Vec::with_capacity(9);
+    let mut candidates = Vec::with_capacity(5);
 
     if let Some(path) = env_override.filter(|path| !path.is_empty()) {
         candidates.push(PathBuf::from(path));
     }
 
-    // The two install locations the Docker toolchain / NDI SDK use.
+    // The two install locations the NDI SDK uses.
     candidates.push(PathBuf::from("/usr/lib").join(NDI_SONAME));
     candidates.push(PathBuf::from("/usr/local/lib").join(NDI_SONAME));
 
-    // The `grandiose`-shipped copy, relative to the running executable:
-    // packaged (`resources/modv-engine` → `resources/app.asar.unpacked/…`),
-    // plain-asar, development and extracted layouts.
-    for prefix in [
-        "app.asar.unpacked",
-        "resources/app.asar.unpacked",
-        ".",
-        "../../..",
-    ] {
-        candidates.push(exe_dir.join(prefix).join(GRANDIOSE_NDI_SUFFIX));
-    }
-    // The `grandiose` package layout without the `node_modules/` prefix.
-    candidates.push(exe_dir.join("grandiose/ndi/lib/lnx-x64/libndi.so.5"));
+    // Optional side-by-side copies for an AppImage or an unpacked build. The
+    // native packages do not bundle libndi.
+    candidates.push(exe_dir.join(NDI_SONAME));
+    candidates.push(exe_dir.join("ndi").join(NDI_SONAME));
 
     candidates
 }
@@ -1166,16 +1146,21 @@ mod tests {
 
     #[test]
     fn resolution_order_prefers_the_env_override_then_the_system_paths() {
-        let exe_dir = Path::new("/opt/vmodv/resources");
+        let exe_dir = Path::new("/opt/vmodv");
 
         let with_env = ndi_library_candidates_with_env(Some("/tmp/libndi.so.5"), exe_dir);
         assert_eq!(with_env[0], PathBuf::from("/tmp/libndi.so.5"));
         assert_eq!(with_env[1], PathBuf::from("/usr/lib/libndi.so.5"));
         assert_eq!(with_env[2], PathBuf::from("/usr/local/lib/libndi.so.5"));
-        assert!(
-            with_env.iter().any(|path| path
-                .ends_with("app.asar.unpacked/node_modules/grandiose/ndi/lib/lnx-x64/libndi.so.5")),
-            "the packaged grandiose copy must be a candidate: {with_env:?}"
+        assert_eq!(
+            with_env[3],
+            PathBuf::from("/opt/vmodv/libndi.so.5"),
+            "a side-by-side copy must be a candidate: {with_env:?}"
+        );
+        assert_eq!(
+            with_env[4],
+            PathBuf::from("/opt/vmodv/ndi/libndi.so.5"),
+            "the nested side-by-side copy must be a candidate: {with_env:?}"
         );
 
         let without_env = ndi_library_candidates_with_env(None, exe_dir);
