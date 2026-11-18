@@ -90,11 +90,21 @@ renderer stays the default until the plan's M7.
   republishes UI meter bands at 10 Hz. `--list-audio-devices` prints cpal
   devices. Input Links evaluate getters (`meyda/getFeature`), state paths
   (`beats.kick`, `tweens.tweens[id].value[n]`, MIDI) and kick mutations, with
-  a 10 Hz mirror-delta throttle.
+  a 10 Hz mirror-delta throttle. Capture is 48 kHz end to end; the picker's
+  `44.1 kHz` labels are a cpal ALSA `default_input_config()` heuristic —
+  see `docs/audio-capture-rate.md` before "fixing" them.
 - Tweens: `crates/modv-engine/src/tweens.rs` ports anime.js `buildFrames`
   (BPM durations, loop/alternate, steps, the penner easings) with a Node
   reference fixture; the store rebuilds on `beats/SET_BPM` and `fps/SET_FPS`
   and link reads advance a tween once, like `dataTypes.tween.get`.
+- Draw links: the native Input Link editor's Draw section
+  (`crates/modv-ui/src/widgets/draw_control.rs`) adds/drags points like the
+  tween editor and paints the whole curve with Shift+drag; the cycle is a
+  direct 1–64 beat span. The curve is stored as a tween descriptor with explicit
+  `keyframeTimes` and link `source: "draw"`.
+  `modv_engine::inputs::source_uses_tween_descriptor` treats `tween` and `draw`
+  alike for descriptor removal, retargeting, Scene capture/copy and preset
+  persistence.
 - Previews: the main panel reads the VMP1 preview ring; Gallery tiles and
   Scene hover cells use deferred `preview/module` and `preview/scene`
   requests (supervisor queue, answered ≤1/frame after present from isolated
