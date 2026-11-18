@@ -2513,6 +2513,50 @@ mod tests {
         assert!(!selection.matches_device(&device("alsa:usb", "USB Microphone")));
     }
 
+    /// The native equivalent of the worker's `mediaStream.systemAudio` record
+    /// (`{ supported, active, label, error }`, systemAudio.spec.js:11-21):
+    /// `AudioSelectionView` carries the source, the live rate and the error,
+    /// and its banner resolves to a human label. Pin that field contract so
+    /// the panel cannot drop one of the facts.
+    #[test]
+    fn the_audio_selection_view_exposes_the_system_audio_state() {
+        let idle = AudioSelectionView::default();
+
+        assert!(
+            idle.is_pipewire(),
+            "the system monitor is the default source"
+        );
+        assert_eq!(idle.source, "pipewire");
+        assert_eq!(idle.device, None, "PipeWire has no cpal device id");
+        assert_eq!(idle.capture_sample_rate, None, "no feed while inactive");
+        assert_eq!(idle.error, None);
+        assert_eq!(
+            idle.active_label(&[]),
+            "System audio",
+            "the supported/active system source has a human label"
+        );
+
+        let active = AudioSelectionView {
+            source: "pipewire".to_string(),
+            device: None,
+            capture_sample_rate: Some(48_000),
+            error: None,
+        };
+
+        assert!(active.is_pipewire());
+        assert_eq!(active.capture_sample_rate, Some(48_000));
+        assert_eq!(active.capture_rate(&[]), Some(48_000));
+
+        // A failed live switch keeps the previous feed running; the error is
+        // surfaced instead of the capture silently stopping.
+        let failed = AudioSelectionView {
+            error: Some("pipewire: node disconnected".to_string()),
+            ..active
+        };
+
+        assert_eq!(failed.error.as_deref(), Some("pipewire: node disconnected"));
+    }
+
     #[test]
     fn input_selection_matches_by_id_or_name_and_marks_the_default() {
         let usb = device("alsa:usb", "USB Microphone");

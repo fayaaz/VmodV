@@ -744,25 +744,76 @@ mod tests {
         }
     }
 
-    // tempo-detector.test.js:20-35 — makeOnsetSignal
-    fn make_onset_signal(bpm: f64, seconds: f64, seed: u32) -> Vec<f64> {
-        let mut random = create_random(seed);
-        let period = 60.0 / bpm;
-        let frames = (seconds * FPS as f64).round() as usize; // Math.round(seconds * FPS)
-        let mut signal = vec![0.0_f64; frames];
+    /// A weak extra onset after every beat (the JS `ghosts` entries,
+    /// tempo-detector.test.js:26-33).
+    #[derive(Clone, Copy)]
+    struct Ghost {
+        /// Offset from the beat in periods (0.5 is the off-beat).
+        offset: f64,
+        strength: f64,
+    }
+
+    /// The JS `makeOnsetSignal` options (tempo-detector.test.js:20-27).
+    struct OnsetOptions {
+        bpm: f64,
+        seconds: f64,
+        jitter: f64,
+        noise: f64,
+        ghosts: &'static [Ghost],
+        seed: u32,
+    }
+
+    // tempo-detector.test.js:20-35 — makeOnsetSignal. The events are Gaussian
+    // pulses (`0.06 s` support, `0.025 s` width) with per-block jitter and
+    // per-frame noise, XORed through the LCG above, so the fixture is
+    // bit-for-bit the e2e one.
+    fn make_onset_signal_with(options: OnsetOptions) -> Vec<f64> {
+        let mut random = create_random(options.seed);
+        let period = 60.0 / options.bpm;
+        let mut events: Vec<(f64, f64)> = Vec::new();
 
         let mut beat = 0.0_f64;
 
-        while beat < seconds {
-            signal[(beat * FPS as f64).round() as usize] = 1.0;
+        while beat < options.seconds {
+            events.push((beat + (random() * 2.0 - 1.0) * options.jitter, 1.0));
+            for ghost in options.ghosts {
+                events.push((beat + period * ghost.offset, ghost.strength));
+            }
             beat += period;
         }
 
-        for i in 1..frames {
-            signal[i] = signal[i].max(signal[i - 1] * 0.5 + random() * 0.001);
+        let frames = (options.seconds * FPS as f64).round() as usize; // Math.round(seconds * FPS)
+        let mut signal = vec![0.0_f64; frames];
+
+        for (i, slot) in signal.iter_mut().enumerate() {
+            let time = i as f64 / FPS as f64;
+
+            for &(event_time, strength) in &events {
+                let distance = (event_time - time).abs();
+
+                if distance < 0.06 {
+                    *slot += strength * (-(distance / 0.025).powi(2)).exp();
+                }
+            }
+
+            if options.noise != 0.0 {
+                *slot += random() * options.noise;
+            }
         }
 
         signal
+    }
+
+    /// A bare on-beat pattern (no jitter, noise or ghosts).
+    fn make_onset_signal(bpm: f64, seconds: f64, seed: u32) -> Vec<f64> {
+        make_onset_signal_with(OnsetOptions {
+            bpm,
+            seconds,
+            jitter: 0.0,
+            noise: 0.0,
+            ghosts: &[],
+            seed,
+        })
     }
 
     // tempo-detector.test.js:37-41 — feed
@@ -848,25 +899,64 @@ mod tests {
         assert_eq!(detector.max_bpm, MAX_BPM);
     }
 
-    // tempo-detector.test.js:54-63 — "detects a 120 BPM onset pattern within 2 BPM"
-    #[test]
-    fn detects_a_120_bpm_onset_pattern_within_2_bpm() {
-        let mut detector = TempoDetector::new(TempoDetectorOptions::default());
-
-        feed(&mut detector, &make_onset_signal(120.0, 12.0, 1));
-
+    /// Assert `bpm` is a valid estimate and genuinely tracked (the JS
+    /// `expectValidTempo`, tempo-detector.test.js:43-52).
+    fn assert_valid_tempo(detector: &TempoDetector) {
         assert!(detector.bpm.is_finite());
         assert!(detector.confidence.is_finite());
+        assert!(detector.bpm >= MIN_BPM);
+        assert!(detector.bpm <= MAX_BPM);
+        assert!(detector.confidence >= 0.0);
+        assert!(detector.confidence <= 1.0);
+    }
+
+    /// Feed the bare on-beat fixture and assert the detector reports `bpm`
+    /// within 2 BPM with real confidence (the parameterised e2e loop,
+    /// tempoDetector.spec.js:76-91).
+    fn assert_detects_bpm(bpm: f64, seed: u32) {
+        let mut detector = TempoDetector::new(TempoDetectorOptions::default());
+
+        feed(&mut detector, &make_onset_signal(bpm, 12.0, seed));
+
+        assert_valid_tempo(&detector);
         assert!(
-            (detector.bpm - 120.0).abs() <= 2.0,
-            "expected bpm within 2 of 120, got {}",
+            (detector.bpm - bpm).abs() <= 2.0,
+            "expected bpm within 2 of {bpm}, got {}",
             detector.bpm
         );
         assert!(
             detector.confidence > 0.2,
-            "expected confidence > 0.2, got {}",
+            "expected confidence > 0.2 for {bpm} BPM, got {}",
             detector.confidence
         );
+    }
+
+    // tempo-detector.test.js:54-63 — "detects a 120 BPM onset pattern within 2 BPM"
+    #[test]
+    fn detects_a_120_bpm_onset_pattern_within_2_bpm() {
+        assert_detects_bpm(120.0, 1);
+    }
+
+    // tests/e2e/spec/audio/tempoDetector.spec.js:76-91 — tempos [120, 128,
+    // 140, 174, 178], `seed: i + 1`; 120 is pinned by the test above.
+    #[test]
+    fn detects_a_128_bpm_onset_pattern_within_2_bpm() {
+        assert_detects_bpm(128.0, 2);
+    }
+
+    #[test]
+    fn detects_a_140_bpm_onset_pattern_within_2_bpm() {
+        assert_detects_bpm(140.0, 3);
+    }
+
+    #[test]
+    fn detects_a_174_bpm_onset_pattern_within_2_bpm() {
+        assert_detects_bpm(174.0, 4);
+    }
+
+    #[test]
+    fn detects_a_178_bpm_onset_pattern_within_2_bpm() {
+        assert_detects_bpm(178.0, 5);
     }
 
     // tempo-detector.test.js:65-72 — "keeps a genuine half-time 87 BPM pattern at 87 BPM"
@@ -882,6 +972,137 @@ mod tests {
             detector.bpm
         );
         assert!(detector.bpm < 100.0);
+    }
+
+    // tempoDetector.spec.js:96-111 — "does not report fast drum & bass at half
+    // time": the off-beat ghost at half strength must not pull the octave
+    // correction down to 87 BPM.
+    #[test]
+    fn does_not_report_fast_drum_and_bass_at_half_time() {
+        let mut detector = TempoDetector::new(TempoDetectorOptions::default());
+
+        feed(
+            &mut detector,
+            &make_onset_signal_with(OnsetOptions {
+                bpm: 174.0,
+                seconds: 12.0,
+                jitter: 0.0,
+                noise: 0.0,
+                ghosts: &[Ghost {
+                    offset: 0.5,
+                    strength: 0.25,
+                }],
+                seed: 12,
+            }),
+        );
+
+        assert_valid_tempo(&detector);
+        assert!(
+            (170.0..=178.0).contains(&detector.bpm),
+            "fast drum & bass must stay above 170 BPM, got {}",
+            detector.bpm
+        );
+    }
+
+    // tempoDetector.spec.js:113-135 — "handles timing jitter, noise and weak
+    // off-beat ghosts".
+    #[test]
+    fn handles_timing_jitter_noise_and_weak_off_beat_ghosts() {
+        let mut detector = TempoDetector::new(TempoDetectorOptions::default());
+
+        feed(
+            &mut detector,
+            &make_onset_signal_with(OnsetOptions {
+                bpm: 174.0,
+                seconds: 12.0,
+                jitter: 0.012,
+                noise: 0.04,
+                ghosts: &[
+                    Ghost {
+                        offset: 0.5,
+                        strength: 0.25,
+                    },
+                    Ghost {
+                        offset: 0.25,
+                        strength: 0.12,
+                    },
+                ],
+                seed: 13,
+            }),
+        );
+
+        assert_valid_tempo(&detector);
+        assert!(
+            (detector.bpm - 174.0).abs() <= 2.0,
+            "expected bpm within 2 of 174, got {}",
+            detector.bpm
+        );
+    }
+
+    // tempoDetector.spec.js:137-156 — "handles jitter and noise at slow
+    // tempos".
+    #[test]
+    fn handles_jitter_and_noise_at_slow_tempos() {
+        let mut detector = TempoDetector::new(TempoDetectorOptions::default());
+
+        feed(
+            &mut detector,
+            &make_onset_signal_with(OnsetOptions {
+                bpm: 87.0,
+                seconds: 12.0,
+                jitter: 0.012,
+                noise: 0.04,
+                ghosts: &[],
+                seed: 14,
+            }),
+        );
+
+        assert_valid_tempo(&detector);
+        assert!(
+            (detector.bpm - 87.0).abs() <= 2.0,
+            "expected bpm within 2 of 87, got {}",
+            detector.bpm
+        );
+        assert!(detector.bpm < 100.0);
+    }
+
+    // tempoDetector.spec.js:158-179 — "stays stable once it has a confident
+    // estimate": a later stretch of the same signal must not move the octave.
+    #[test]
+    fn stays_stable_once_it_has_a_confident_estimate() {
+        let mut detector = TempoDetector::new(TempoDetectorOptions::default());
+        let signal = make_onset_signal_with(OnsetOptions {
+            bpm: 174.0,
+            seconds: 14.0,
+            jitter: 0.008,
+            noise: 0.02,
+            ghosts: &[Ghost {
+                offset: 0.5,
+                strength: 0.2,
+            }],
+            seed: 15,
+        });
+
+        feed(&mut detector, &signal[..8 * FPS]);
+        let early_bpm = detector.bpm;
+        let early_confidence = detector.confidence;
+
+        feed(&mut detector, &signal[8 * FPS..]);
+
+        assert_valid_tempo(&detector);
+        assert!(
+            early_confidence > 0.2,
+            "expected a confident early estimate, got {early_confidence}"
+        );
+        assert!(
+            (early_bpm - 174.0).abs() <= 2.0,
+            "expected an early estimate within 2 of 174, got {early_bpm}"
+        );
+        assert!(
+            (detector.bpm - early_bpm).abs() <= 2.0,
+            "the estimate drifted from {early_bpm} to {}",
+            detector.bpm
+        );
     }
 
     // tempo-detector.test.js:74-81 — "stays inside the supported BPM range"
