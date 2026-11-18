@@ -262,8 +262,9 @@ fn inherit_combo<'a>(harness: &'a Harness<'static, UiState>) -> egui_kittest::No
 }
 
 /// Open the `inheritFrom` selector and click `option`. The option text is
-/// shared with the Group's own header (and the closed combo repeats it), so
-/// the matching node closest below the opened combo is the popup row.
+/// shared with the Group's own header, the Group list and the Gallery
+/// categories, so the popup row is the matching node inside the combo's own
+/// horizontal span and closest below its button.
 fn choose_inherit(harness: &mut Harness<'static, UiState>, option: &str) {
     let combo = inherit_combo(harness);
     let button = combo.rect();
@@ -271,7 +272,12 @@ fn choose_inherit(harness: &mut Harness<'static, UiState>, option: &str) {
     harness.run();
     let choice = harness
         .get_all_by_label(option)
-        .filter(|node| node.rect().top() >= button.bottom() - 1.0)
+        .filter(|node| {
+            let rect = node.rect();
+            rect.top() >= button.bottom() - 1.0
+                && rect.left() >= button.left()
+                && rect.right() <= button.right()
+        })
         .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
         .unwrap_or_else(|| panic!("no {option:?} option under the Inherit from selector"));
     choice.click();

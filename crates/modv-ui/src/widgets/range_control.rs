@@ -250,6 +250,7 @@ pub fn chip(ui: &mut egui::Ui, text: &str, colour: Color32) -> egui::Response {
         .layout_no_wrap(text.to_string(), FontId::monospace(11.0), colour);
     let size = galley.size() + egui::vec2(8.0, 3.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(0), colour.gamma_multiply(0.18));
     painter.rect_stroke(

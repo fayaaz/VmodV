@@ -43,6 +43,122 @@ fn shell_draws_with_an_empty_engine_snapshot() {
     harness.get_by_label("No Scenes yet");
 }
 
+/// The largest allowed difference between the vertical centres of the header
+/// controls. One `ui.horizontal` row centres every widget, and the labels are a
+/// point or two shorter than a button or a `DragValue`, so a few points of slack
+/// keep the assertion about *rows* rather than exact font metrics.
+const HEADER_LINE_SPREAD: f32 = 6.0;
+
+/// Assert that every named widget's centre is on the same horizontal line.
+fn assert_shared_header_line(harness: &Harness<'_, UiState>, labels: &[&str]) {
+    let rects: Vec<(&str, egui::Rect)> = labels
+        .iter()
+        .map(|label| (*label, harness.get_by_label(label).rect()))
+        .collect();
+    let centres: Vec<f32> = rects.iter().map(|(_, rect)| rect.center().y).collect();
+    let lowest = centres.iter().copied().fold(f32::INFINITY, f32::min);
+    let highest = centres.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        highest - lowest <= HEADER_LINE_SPREAD,
+        "the performance header must be one line: centres {centres:?} span {:.1} px \
+         (max {HEADER_LINE_SPREAD}) for {rects:?}",
+        highest - lowest
+    );
+}
+
+#[test]
+fn the_performance_header_controls_share_one_line() {
+    let mut snapshot = EngineSnapshot::default();
+    snapshot.performance.min_value = 8.0;
+    snapshot.performance.max_value = 64.0;
+    snapshot.performance.transition_seconds = 1.0;
+    let state = UiState::new();
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    assert_shared_header_line(
+        &harness,
+        &["Start performance", "min", "max", "fade", "Open output"],
+    );
+
+    // `Open output` stays pinned to the right and the controls must not run
+    // underneath it even at the narrowest supported shell width.
+    let open = harness.get_by_label("Open output").rect();
+    for label in ["Start performance", "min", "max", "fade"] {
+        let rect = harness.get_by_label(label).rect();
+        assert!(
+            rect.right() <= open.left(),
+            "{label} at {rect:?} overlaps Open output at {open:?}"
+        );
+    }
+}
+
+#[test]
+fn the_running_performance_header_keeps_the_chip_on_the_same_line() {
+    let mut snapshot = EngineSnapshot::default();
+    snapshot.performance.enabled = true;
+    // The widest header: Random's label plus the bar-based hint with its
+    // resolved second durations, which is what the running UI shows.
+    snapshot.performance.order = "random".to_string();
+    snapshot.performance.timing_unit = modv_ui::TimingUnit::Bars;
+    snapshot.performance.min_value = 8.0;
+    snapshot.performance.max_value = 64.0;
+    snapshot.performance.transition_seconds = 1.0;
+    snapshot.audio.bpm = 128.0;
+    let hint = modv_ui::timing_hint(8.0, 64.0, modv_ui::TimingUnit::Bars, 128.0);
+    let state = UiState::new();
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    assert_shared_header_line(
+        &harness,
+        &[
+            "Stop performance",
+            "min",
+            "max",
+            "fade",
+            "PERFORMANCE",
+            "Open output",
+        ],
+    );
+    assert!(
+        harness.get_all_by_value(&hint).count() >= 1,
+        "the resolved-duration hint stays visible in the running header: expected {hint:?}"
+    );
+
+    let open = harness.get_by_label("Open output").rect();
+    let chip = harness.get_by_label("PERFORMANCE").rect();
+    let hint_rect = harness
+        .query_all_by_value(&hint)
+        .next()
+        .map(|node| node.rect())
+        .expect("the hint has a rect");
+    assert!(
+        hint_rect.right() <= chip.left(),
+        "the header must not run under the PERFORMANCE chip: hint {hint_rect:?}, chip {chip:?}"
+    );
+    assert!(
+        chip.right() <= open.left(),
+        "the chip stays left of Open output: chip {chip:?}, Open output {open:?}"
+    );
+}
+
 #[test]
 fn shell_scene_grid_renders_scene_columns_and_cells() {
     let mut snapshot = EngineSnapshot::default();

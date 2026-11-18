@@ -989,8 +989,9 @@ fn row_label_menu(
     }
 }
 
-/// Row 1 of the performance controls: the run toggle, Scene order and the
-/// timing unit. The shell places this in its top header.
+/// The start of the performance controls: the run toggle, Scene order and the
+/// timing unit. The shell places this and [`draw_timing_controls`] on the one
+/// header line.
 pub fn draw_performance_bar(
     ui: &mut egui::Ui,
     snapshot: &EngineSnapshot,
@@ -1072,9 +1073,9 @@ fn performance_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, actions: &mut V
     }
 }
 
-/// Row 2 of the performance controls: the min/max/fade values and the
-/// resolved-duration hint. Drawn on its own line so the header never
-/// overlaps `Open output`.
+/// The rest of the performance controls: the min/max/fade values and the
+/// resolved-duration hint. These are grouped label/value pairs, so the shell
+/// draws them on the same header line as [`draw_performance_bar`].
 pub fn draw_timing_controls(
     ui: &mut egui::Ui,
     snapshot: &EngineSnapshot,

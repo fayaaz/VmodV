@@ -59,6 +59,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
         .ensure_strip_active(&mut state.side_panel_tab);
     handle_shortcuts(ui, snapshot, state);
     menu_bar(ui, snapshot, state);
+    performance_header(ui, snapshot, state);
     status_bar(ui, snapshot, state);
     groups_panel(ui, snapshot, state);
     inspector_panel(ui, snapshot, state);
@@ -4244,20 +4245,26 @@ fn draw_prop(
     }
 }
 
-fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
-    let response = egui::CentralPanel::default()
+/// The performance toolbar: the run toggle, Scene order, timing unit, the
+/// min/max/fade values with their resolved-duration hint, and the right-pinned
+/// `Open output` button, all on one line.
+///
+/// It spans the whole window rather than the centre column: the centre column
+/// is narrower than the full control set at 1280x800, so a one-line row there
+/// would run under `Open output`.
+fn performance_header(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    egui::Panel::top("modv-performance")
         .frame(
             egui::Frame::NONE
-                .fill(theme::BACKGROUND)
-                .inner_margin(Margin::same(8)),
+                .fill(theme::PANEL)
+                .stroke(Stroke::new(1.0, theme::BORDER))
+                .inner_margin(Margin::symmetric(8, 4)),
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                // Row 1 of the performance controls, with `Open output`
-                // pinned to the right. The timing values and the Scenes
-                // summary take their own rows below so nothing collides in a
-                // narrow centre panel.
                 crate::panels::scene_grid::draw_performance_bar(ui, snapshot, &mut state.actions);
+                ui.separator();
+                crate::panels::scene_grid::draw_timing_controls(ui, snapshot, &mut state.actions);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Open output").clicked() {
                         state.queue(UiCommand::OpenOutputWindow);
@@ -4267,12 +4274,17 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                     }
                 });
             });
-            ui.horizontal_wrapped(|ui| {
-                crate::panels::scene_grid::draw_timing_controls(ui, snapshot, &mut state.actions);
-            });
-            ui.add_space(4.0);
-            ui.separator();
+        });
+}
 
+fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let response = egui::CentralPanel::default()
+        .frame(
+            egui::Frame::NONE
+                .fill(theme::BACKGROUND)
+                .inner_margin(Margin::same(8)),
+        )
+        .show(ui, |ui| {
             // Live Output and Gallery are resizable top sections; the Scenes
             // grid takes the remainder. The saved heights are applied as the
             // first-show defaults and captured from the real section rects so
