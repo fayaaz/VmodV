@@ -70,7 +70,9 @@ use crate::ui_layout::{LAYOUT_SETTINGS_FILENAME, LayoutSettings};
 use crate::video_sources::VideoSources;
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
-use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group, ModuleInstance, js_truthy};
+use modv_engine::engine_state::{
+    GALLERY_GROUP_NAME, GROUP_ENABLED, Group, ModuleInstance, js_truthy,
+};
 use modv_engine::tweens::TweenDescriptor;
 use modv_media::video::{PortalError, PortalStream, ScreenSupport, TestPattern, VideoSourceConfig};
 
@@ -551,7 +553,10 @@ impl NativeApp {
         let profiles = prepared.profiles;
         let extra_isf_dirs = project_settings.isf_dirs.clone();
         let user_isf_dirs = user_isf_dirs(&media_root, &active_profile, &extra_isf_dirs);
-        let mut store = build_native_store(
+        let NativeStoreBootstrap {
+            mut store,
+            restored_snapshot,
+        } = build_native_store(
             cli.state.as_deref(),
             &user_data,
             isf_dir.as_deref(),
@@ -592,6 +597,7 @@ impl NativeApp {
         let osc_view = osc_snapshot(&store, &osc_servers);
 
         let mut preset_path = cli.preset.clone();
+        let mut startup_live_stack_replaced = false;
         if let Some(path) = crate::cli::startup_document_path(
             cli.preset.as_deref(),
             cli.scene.as_deref(),
@@ -599,6 +605,10 @@ impl NativeApp {
         ) {
             match media_dialogs::open_document(&mut store, path) {
                 Ok(kind) => {
+                    // A preset/Scene supplies the live Groups (possibly none,
+                    // like Electron's swap); a playlist only imports Scenes,
+                    // so the boot Group still belongs there.
+                    startup_live_stack_replaced = kind != DocumentKind::Playlist;
                     if kind != DocumentKind::Preset {
                         // A Scene/playlist is not a preset document: saving a
                         // preset over it would drop its metadata.
@@ -616,7 +626,15 @@ impl NativeApp {
                 ),
             }
         }
-        apply_startup_scene(&mut store, cli.apply_scene.as_deref());
+        let startup_scene_applied = apply_startup_scene(&mut store, cli.apply_scene.as_deref());
+        // The legacy renderer creates one enabled user Group at boot, after a
+        // restored engine state and before it signals ready
+        // (`application/index.js:446-456`, `groups/createsADefaultGroup`). The
+        // native shell owns the store instead, so it seeds the same Group only
+        // when the startup flow left the live stack untouched and empty.
+        if !restored_snapshot && !startup_live_stack_replaced && !startup_scene_applied {
+            seed_default_group(&mut store);
+        }
         start_cli_performance(&mut store, cli.start_performance);
 
         // Audio capture selection: explicit `--audio-source`/`--audio-device`
@@ -3460,6 +3478,20 @@ impl NativeApp {
                 let result = self.control_screenshot(&path, width, height);
                 request.respond(result);
             }
+            Command::Save => {
+                let path = self.state_path.clone();
+                let result = match self.store.save_snapshot(&path, self.frames) {
+                    Ok(()) => {
+                        self.last_state_save = Instant::now();
+                        Ok(serde_json::json!({
+                            "path": path.to_string_lossy(),
+                            "framesPresented": self.frames,
+                        }))
+                    }
+                    Err(error) => Err(format!("could not save {}: {error}", path.display())),
+                };
+                request.respond(result);
+            }
             Command::Quit => {
                 request.respond(Ok(serde_json::json!({ "quitting": true })));
                 // The acknowledgement is on the wire before the process
@@ -3484,6 +3516,22 @@ impl NativeApp {
             .compositor
             .as_ref()
             .map(Compositor::main_texture_size)
+            .unwrap_or((self.cli.width, self.cli.height));
+        // The main window's live logical size. After the first run,
+        // `window-state.json` overrides `--width`/`--height`, so reporting the
+        // CLI values would hide whether the saved placement was honoured.
+        let (window_width, window_height) = self
+            .ui_window
+            .as_ref()
+            .map(|window| {
+                let size = window.inner_size();
+                let scale = window.scale_factor();
+                (
+                    (f64::from(size.width) / scale).round() as u32,
+                    (f64::from(size.height) / scale).round() as u32,
+                )
+            })
+            .filter(|(width, height)| *width > 0 && *height > 0)
             .unwrap_or((self.cli.width, self.cli.height));
 
         if let Value::Object(map) = &mut state {
@@ -3522,7 +3570,7 @@ impl NativeApp {
                     "fps": self.fps,
                     "frameMs": self.frame_ms,
                     "resolution": [compositor_width, compositor_height],
-                    "window": [self.cli.width, self.cli.height],
+                    "window": [window_width, window_height],
                     "outputOpen": self.output.is_some(),
                     "userData": self.user_data.to_string_lossy(),
                     "statePath": self.state_path.to_string_lossy(),
@@ -4164,10 +4212,11 @@ fn acquire_surface(
 /// Apply a Scene by exact name or id after the store has seeded its defaults.
 ///
 /// Used by `modv --apply-scene <name>` for reproducible performance demos and
-/// P0 frame traces; a no-op when the query is absent.
-fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
+/// P0 frame traces; returns `false` (a no-op) when the query is absent or the
+/// Scene cannot be applied.
+fn apply_startup_scene(store: &mut Store, query: Option<&str>) -> bool {
     let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) else {
-        return;
+        return false;
     };
     let Some(scene) = store
         .scenes_state()
@@ -4180,24 +4229,56 @@ fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
         .cloned()
     else {
         eprintln!("ui: WARN --apply-scene: no Scene named or id {query:?}");
-        return;
+        return false;
     };
     let Some(scene_id) = scene.get("id").and_then(Value::as_str) else {
-        return;
+        return false;
     };
     match store.dispatch(
         "scenes/applyScene",
         serde_json::json!({ "sceneId": scene_id }),
     ) {
-        Ok(_) => eprintln!(
-            "ui: INFO applied Scene {:?} ({} groups)",
-            scene
+        Ok(_) => {
+            eprintln!(
+                "ui: INFO applied Scene {:?} ({} groups)",
+                scene
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(scene_id),
+                store.state().groups.len()
+            );
+            true
+        }
+        Err(error) => {
+            eprintln!("ui: WARN --apply-scene failed: {error}");
+            false
+        }
+    }
+}
+
+/// Create Electron's default user Group on a fresh native start.
+///
+/// Mirrors the renderer's boot dispatch (`application/index.js:446-456`):
+/// `groups/createGroup` with only `enabled: GROUP_ENABLED`, so the name falls
+/// back to `"New Group"` and the six control inputs are minted by the normal
+/// path. A live stack with any Group already wins, so a restored snapshot or
+/// an applied Scene never gains an extra Group; repeated calls are no-ops.
+fn seed_default_group(store: &mut Store) {
+    if !store.state().groups.is_empty() {
+        return;
+    }
+    match store.dispatch(
+        "groups/createGroup",
+        serde_json::json!({ "enabled": GROUP_ENABLED }),
+    ) {
+        Ok(group) => eprintln!(
+            "ui: INFO created the default Group {:?}",
+            group
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or(scene_id),
-            store.state().groups.len()
+                .unwrap_or_default()
         ),
-        Err(error) => eprintln!("ui: WARN --apply-scene failed: {error}"),
+        Err(error) => eprintln!("ui: WARN could not create the default Group: {error}"),
     }
 }
 
@@ -4214,6 +4295,14 @@ fn start_cli_performance(store: &mut Store, requested: bool) {
     }
 }
 
+/// The native shell's store plus what the startup flow needs to know about it.
+struct NativeStoreBootstrap {
+    store: Store,
+    /// A saved `engine-state.json` was restored, so the live stack belongs to
+    /// the user and must not gain a default Group.
+    restored_snapshot: bool,
+}
+
 /// Build the native shell's store: restore the shared engine snapshot, then
 /// hydrate/seed the Scene list beside it.
 ///
@@ -4227,16 +4316,20 @@ fn build_native_store(
     user_data: &Path,
     isf_dir: Option<&Path>,
     user_isf_dirs: &[PathBuf],
-) -> Store {
+) -> NativeStoreBootstrap {
     let state_path = crate::cli::native_state_path(explicit_state, user_data);
     let mut store = Store::with_state_path_and_isf_dirs(Some(&state_path), isf_dir, user_isf_dirs);
+    let mut restored_snapshot = false;
     match store.restore_from_file(&state_path) {
-        Ok(true) => eprintln!(
-            "ui: INFO restored engine state from {} ({} groups, {} modules)",
-            state_path.display(),
-            store.state().groups.len(),
-            store.state().modules.len()
-        ),
+        Ok(true) => {
+            restored_snapshot = true;
+            eprintln!(
+                "ui: INFO restored engine state from {} ({} groups, {} modules)",
+                state_path.display(),
+                store.state().groups.len(),
+                store.state().modules.len()
+            );
+        }
         Ok(false) => eprintln!(
             "ui: INFO no state snapshot at {}; starting empty",
             state_path.display()
@@ -4245,7 +4338,7 @@ fn build_native_store(
             eprintln!(
                 "ui: WARN could not load state snapshot {}: {error}",
                 state_path.display()
-            )
+            );
         }
     }
 
@@ -4255,7 +4348,10 @@ fn build_native_store(
     if let Err(error) = store.dispatch("scenes/ensureDefaultScenes", serde_json::json!({})) {
         eprintln!("ui: WARN could not seed default Scenes: {error}");
     }
-    store
+    NativeStoreBootstrap {
+        store,
+        restored_snapshot,
+    }
 }
 
 /// Point the store's media root at the shell's `<userData>/media` tree.
@@ -5095,6 +5191,31 @@ module.exports = {
     }
 
     #[test]
+    fn seed_default_group_creates_electrons_group_once() {
+        // `application/index.js:446-456` dispatches `groups/createGroup` with
+        // `enabled: GROUP_ENABLED` on every renderer boot; only the name is
+        // defaulted ("New Group"), matching `groups/createsADefaultGroup`.
+        let mut store = Store::new();
+        seed_default_group(&mut store);
+        assert_eq!(store.state().groups.len(), 1);
+        assert_eq!(store.state().groups[0].name, "New Group");
+        assert_eq!(store.state().groups[0].enabled, GROUP_ENABLED);
+
+        // A second startup over a restored snapshot must not duplicate it.
+        seed_default_group(&mut store);
+        assert_eq!(store.state().groups.len(), 1, "seeding is idempotent");
+
+        // Any live Group (restored state, Scene, preset) wins.
+        let mut store = Store::new();
+        store
+            .dispatch("groups/createGroup", serde_json::json!({ "name": "User" }))
+            .expect("create group");
+        seed_default_group(&mut store);
+        assert_eq!(store.state().groups.len(), 1);
+        assert_eq!(store.state().groups[0].name, "User");
+    }
+
+    #[test]
     fn user_isf_dirs_follow_the_active_profile_and_extras() {
         let root = temp_dir("modv-user-isf");
         std::fs::create_dir_all(root.join("media/isf")).expect("flat isf");
@@ -5228,7 +5349,7 @@ module.exports = {
             ],
         );
 
-        let store = build_native_store(None, &user_data, None, &[]);
+        let store = build_native_store(None, &user_data, None, &[]).store;
 
         assert_eq!(
             scene_names(&store),
@@ -5260,7 +5381,7 @@ module.exports = {
         )
         .expect("write scenes.json");
 
-        let store = build_native_store(None, &user_data, None, &[]);
+        let store = build_native_store(None, &user_data, None, &[]).store;
 
         assert_eq!(
             store.row_names(),
@@ -5294,7 +5415,8 @@ module.exports = {
             &user_data,
             None,
             &[],
-        );
+        )
+        .store;
 
         assert_eq!(
             scene_names(&store),

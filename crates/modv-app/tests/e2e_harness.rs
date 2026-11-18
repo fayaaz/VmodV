@@ -45,10 +45,14 @@ fn native_shell_serves_state_seeds_defaults_and_quits_cleanly() {
     assert!(version["version"].is_string(), "{version}");
 
     let state = app.state();
-    assert!(
-        state["groups"].as_array().expect("groups array").is_empty(),
-        "a fresh userData starts with no live Groups: {state}"
+    let groups = state["groups"].as_array().expect("groups array");
+    assert_eq!(
+        groups.len(),
+        1,
+        "a fresh userData starts with Electron's default Group: {state}"
     );
+    assert_eq!(groups[0]["name"], json!("New Group"), "{state}");
+    assert_eq!(groups[0]["enabled"], json!(1), "{state}");
     let scenes = state["scenes"].as_array().expect("scenes array");
     assert!(
         !scenes.is_empty(),
