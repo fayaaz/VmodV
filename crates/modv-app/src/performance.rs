@@ -1214,7 +1214,7 @@ mod tests {
             store
                 .dispatch(
                     "scenes/loadSceneFromJson",
-                    json!({ "scene": scene(id, name), "persist": false }),
+                    json!({ "scene": scene(id, name), "apply": false, "persist": false }),
                 )
                 .expect("scene loads");
         }
@@ -1411,7 +1411,7 @@ mod tests {
             store
                 .dispatch(
                     "scenes/loadSceneFromJson",
-                    json!({ "scene": scene(id, name), "persist": false }),
+                    json!({ "scene": scene(id, name), "apply": false, "persist": false }),
                 )
                 .expect("scene loads");
         }
@@ -2334,7 +2334,7 @@ void main() {
             store
                 .dispatch(
                     "scenes/loadSceneFromJson",
-                    json!({ "scene": scene(id, name), "persist": false }),
+                    json!({ "scene": scene(id, name), "apply": false, "persist": false }),
                 )
                 .expect("scene loads");
         }

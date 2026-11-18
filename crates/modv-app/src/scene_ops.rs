@@ -1908,9 +1908,10 @@ impl Store {
     /// `scenes/loadSceneFromJson` (`scenes.js:2059-2092`).
     ///
     /// Normalises a Scene document (including the legacy `group` + `layers`
-    /// shape) and upserts it by id. `apply` defaults to `false` in the engine
-    /// action so a file open does not silently replace the live stack unless
-    /// the caller asks for it.
+    /// shape) and upserts it by id. `apply` defaults to `true`, matching the
+    /// JS action: opening a Scene JSON applies it (the worker's `loadPreset`
+    /// branch and File → Open Scene both rely on that). Importers that only
+    /// want to add the document pass `"apply": false`.
     pub fn load_scene_from_json(
         &mut self,
         params: &Map<String, Value>,
@@ -1945,7 +1946,7 @@ impl Store {
         self.touch_scene_list();
         self.deltas.push("scenes/ADD_SCENE", imported.clone());
 
-        if params.get("apply").and_then(Value::as_bool) == Some(true) {
+        if params.get("apply").and_then(Value::as_bool) != Some(false) {
             let mut apply_params = Map::new();
             apply_params.insert("sceneId".to_string(), json!(scene_id));
             self.apply_scene_action(&apply_params)?;
@@ -4154,7 +4155,7 @@ mod tests {
         store
             .dispatch(
                 "scenes/loadSceneFromJson",
-                json!({ "scene": scene, "persist": false }),
+                json!({ "scene": scene, "apply": false, "persist": false }),
             )
             .expect("scene loads");
     }
@@ -4366,6 +4367,66 @@ mod tests {
             effects.inherit_from,
             InheritFrom::Group(background.id.clone())
         );
+    }
+
+    #[test]
+    fn load_scene_from_json_applies_by_default_and_skips_it_when_asked() {
+        // `scenes.js:2048-2074` defaults `apply` to `true`: opening a Scene
+        // JSON (File → Open Scene, the worker's `loadPreset` branch) applies
+        // it, so the native action must do the same.
+        let mut store = Store::new();
+        let opened = store
+            .dispatch(
+                "scenes/loadSceneFromJson",
+                json!({ "scene": two_row_scene("scene-opened") }),
+            )
+            .expect("loadSceneFromJson dispatches");
+        assert_eq!(opened["id"], json!("scene-opened"));
+        assert_eq!(
+            store.scenes_state().performance["currentSceneId"],
+            json!("scene-opened"),
+            "the Scene is applied, not just upserted"
+        );
+        assert_eq!(store.applied_scene_id.as_deref(), Some("scene-opened"));
+        let names: Vec<&str> = store
+            .state()
+            .groups
+            .iter()
+            .map(|group| group.name.as_str())
+            .collect();
+        assert_eq!(names, ["Background", "Effects"]);
+        assert!(
+            store
+                .state()
+                .modules
+                .values()
+                .any(|module| module.module_name == "Bands"),
+            "the Scene's Modules are live"
+        );
+
+        // Imports and seeding upsert only: an explicit `apply: false` must
+        // leave the live stack and the applied Scene alone.
+        let mut store = Store::new();
+        store
+            .dispatch(
+                "scenes/loadSceneFromJson",
+                json!({ "scene": two_row_scene("scene-imported"), "apply": false }),
+            )
+            .expect("loadSceneFromJson dispatches");
+        assert!(
+            store
+                .scenes_state()
+                .scenes
+                .iter()
+                .any(|scene| scene["id"] == json!("scene-imported")),
+            "the Scene is still upserted"
+        );
+        assert!(store.state().groups.is_empty(), "apply:false is load-only");
+        assert_eq!(
+            store.scenes_state().performance["currentSceneId"],
+            json!(null)
+        );
+        assert!(store.applied_scene_id.is_none());
     }
 
     #[test]
@@ -5432,7 +5493,7 @@ mod tests {
         store
             .dispatch(
                 "scenes/loadSceneFromJson",
-                json!({ "scene": two_row_scene("scene-a") }),
+                json!({ "scene": two_row_scene("scene-a"), "apply": false }),
             )
             .expect("load");
 

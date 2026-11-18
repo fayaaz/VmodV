@@ -209,7 +209,9 @@ pub fn import_profile_documents(
                 }
                 match store.dispatch(
                     "scenes/loadSceneFromJson",
-                    serde_json::json!({ "scene": scene, "persist": false }),
+                    // Import only: the live stack is the user's; the Scene
+                    // becomes part of the list (JS `apply` defaults to true).
+                    serde_json::json!({ "scene": scene, "apply": false, "persist": false }),
                 ) {
                     Ok(_) => {
                         imported_any = true;
@@ -459,7 +461,7 @@ mod tests {
         store
             .dispatch(
                 "scenes/loadSceneFromJson",
-                json!({ "scene": scene_document("scene-existing", "Existing") }),
+                json!({ "scene": scene_document("scene-existing", "Existing"), "apply": false }),
             )
             .expect("existing scene");
 

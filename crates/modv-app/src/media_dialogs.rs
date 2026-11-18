@@ -314,7 +314,9 @@ mod tests {
         );
         assert_eq!(store.state().groups[0].name, "Opened");
 
-        // A Scene document is upserted into the Scene list, not applied.
+        // A Scene document is upserted into the Scene list and applied, like
+        // the JS preset/Scene open path (`scenes.js:2048`, `apply` defaults to
+        // true).
         let scene_path = root.join("scene.json");
         std::fs::write(
             &scene_path,
@@ -332,6 +334,11 @@ mod tests {
                 .iter()
                 .any(|scene| scene.get("id").and_then(Value::as_str) == Some("scene-opened")),
             "the Scene is added to the authoritative list"
+        );
+        assert_eq!(
+            store.scenes_state().performance["currentSceneId"],
+            serde_json::json!("scene-opened"),
+            "opening a Scene JSON applies it"
         );
 
         // A playlist document.

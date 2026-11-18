@@ -873,7 +873,7 @@ mod tests {
         store
             .dispatch(
                 "scenes/loadSceneFromJson",
-                json!({"scene": scene, "persist": false}),
+                json!({"scene": scene, "apply": false, "persist": false}),
             )
             .expect("Scene upsert");
         assert!(store.scene_list_revision() > before);

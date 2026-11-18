@@ -1724,7 +1724,7 @@ mod tests {
         store
             .dispatch(
                 "scenes/loadSceneFromJson",
-                serde_json::json!({ "scene": scene("scene-a", "default/video/a.mp4"), "persist": false }),
+                serde_json::json!({ "scene": scene("scene-a", "default/video/a.mp4"), "apply": false, "persist": false }),
             )
             .expect("Scene A loads");
         store
@@ -1732,6 +1732,7 @@ mod tests {
                 "scenes/loadSceneFromJson",
                 serde_json::json!({
                     "scene": scene("scene-b", "default/video/b.mp4"),
+                    "apply": false,
                     "persist": false
                 }),
             )
