@@ -138,10 +138,10 @@ fn cargo_lock_packages(lock: &str) -> Vec<LockPackage> {
             }
         }
     }
-    if let Some(package) = current {
-        if !package.name.is_empty() {
-            packages.push(package);
-        }
+    if let Some(package) = current
+        && !package.name.is_empty()
+    {
+        packages.push(package);
     }
 
     packages
@@ -305,11 +305,10 @@ fn obligation_bullets(section: &str) -> Vec<String> {
             && !line.starts_with('#')
             && !line.starts_with('|')
             && !line.starts_with('-')
+            && let Some(bullet) = bullets.last_mut()
         {
-            if let Some(bullet) = bullets.last_mut() {
-                bullet.push(' ');
-                bullet.push_str(line);
-            }
+            bullet.push(' ');
+            bullet.push_str(line);
         }
     }
     bullets
@@ -396,12 +395,12 @@ fn credit(source: &str) -> Option<String> {
     let raw = raw.trim();
 
     let lower = raw.to_ascii_lowercase();
-    if lower.starts_with("port of ") {
-        if let Some(index) = lower.find(" by ") {
-            let after_by = &raw[index + " by ".len()..];
-            let end = after_by.find('(').unwrap_or(after_by.len());
-            return Some(after_by[..end].trim().to_string());
-        }
+    if lower.starts_with("port of ")
+        && let Some(index) = lower.find(" by ")
+    {
+        let after_by = &raw[index + " by ".len()..];
+        let end = after_by.find('(').unwrap_or(after_by.len());
+        return Some(after_by[..end].trim().to_string());
     }
 
     let raw = raw
