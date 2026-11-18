@@ -16,7 +16,7 @@ use crate::layout::{
     WINDOW_TEMPO,
 };
 use crate::model::{
-    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView,
+    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView, ScreenCaptureView,
     gallery_preview_key, sample_rate_label,
 };
 use crate::panels::scene_grid::draw_scene_grid;
@@ -2988,6 +2988,8 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
         media_camera_row(ui, camera, &running, state);
     }
     ui.separator();
+    media_screen_section(ui, &media.screen, state);
+    ui.separator();
     ui.label(egui::RichText::new("SOURCES").strong().size(12.0));
     if media.sources.is_empty() {
         ui.label(
@@ -3026,6 +3028,90 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                 }
             });
         });
+    }
+}
+
+/// The Media panel's screen-capture section.
+///
+/// The two buttons raise the XDG desktop portal's own picker, which is also
+/// what chooses *which* monitor or window: there is nothing to enumerate in the
+/// panel. A request is one at a time (the shell owns a single `screen:portal`
+/// source), so both buttons are disabled while a dialog is open or a screen is
+/// running; the running source is stopped from the existing Sources list.
+fn media_screen_section(ui: &mut egui::Ui, screen: &ScreenCaptureView, state: &mut UiState) {
+    ui.label(egui::RichText::new("SCREEN CAPTURE").strong().size(12.0));
+    ui.label(
+        egui::RichText::new(
+            "Share a monitor or a window through the desktop's own picker. \
+             The source runs as screen:portal like a camera.",
+        )
+        .size(11.0)
+        .color(theme::MUTED),
+    );
+    if let Some(reason) = &screen.unavailable {
+        ui.colored_label(
+            theme::DANGER,
+            format!("Screen capture is unavailable: {reason}"),
+        );
+    }
+
+    let can_request = screen.can_request();
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(can_request, egui::Button::new("Share monitor…"))
+            .on_hover_text("Ask the desktop portal for a monitor to capture")
+            .clicked()
+        {
+            state.push_media_action(MediaAction::ShareScreen { window: false });
+        }
+        if ui
+            .add_enabled(can_request, egui::Button::new("Share window…"))
+            .on_hover_text("Ask the desktop portal for an application window to capture")
+            .clicked()
+        {
+            state.push_media_action(MediaAction::ShareScreen { window: true });
+        }
+    });
+
+    if let Some(pending) = screen.pending {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Waiting for the portal dialog…")
+                    .size(12.0)
+                    .color(theme::ACCENT),
+            );
+            if ui
+                .small_button("Cancel")
+                .on_hover_text(
+                    "Stop waiting for the dialog; the portal session closes when it is answered",
+                )
+                .clicked()
+            {
+                state.push_media_action(MediaAction::CancelScreenShare);
+            }
+        });
+        ui.label(
+            egui::RichText::new(format!("Sharing a {}", pending.label()))
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+    }
+
+    if let Some(running) = &screen.running {
+        ui.label(
+            egui::RichText::new(format!(
+                "Sharing a {} (PipeWire node {}). Stop it in Sources to share something else.",
+                running.kind.label(),
+                running.node_id
+            ))
+            .size(11.0)
+            .color(theme::ACCENT),
+        )
+        .on_hover_text(format!("Source id: {}", running.source_id));
+    }
+
+    if let Some(error) = &screen.error {
+        ui.colored_label(theme::DANGER, error);
     }
 }
 
