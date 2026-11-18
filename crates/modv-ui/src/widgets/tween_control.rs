@@ -12,6 +12,18 @@
 //! its first curve edit (a duplicate first row plus the even grid), and its
 //! duration is re-expressed as a total so the visible cycle does not change.
 //! Two-row tweens keep Electron's `[from, to]` shorthand.
+//!
+//! # Palette tweens
+//!
+//! A tween whose rows look like colours (`Ball`/`Waveform`/`Polygon` `color`)
+//! gets a swatch palette at the top of the curve window instead of only the
+//! channel graph; the collapsed row shows a read-only swatch strip. Clicking a
+//! swatch opens an egui colour picker, right-click removes it (two rows are the
+//! minimum) and `+` appends a copy of the last colour. Palette edits dispatch
+//! `tweens/createTween` only (the Input Link already exists), rewrite just the
+//! RGB(A) channels and re-normalise explicit `keyframeTimes` evenly whenever a
+//! row is added or removed. The numeric curve editor stays available for every
+//! tween, colour or not.
 
 use egui::{Align2, FontId, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
@@ -19,6 +31,7 @@ use crate::layout::WINDOW_TWEEN_CURVE;
 use crate::model::TweenView;
 use crate::state::{TweenCurveEditor, TweenHandleDrag, UiState};
 use crate::theme;
+use crate::widgets::palette_editor::{self, PaletteShape};
 use crate::widgets::tween_curve::{
     CHANNEL_COLORS, TweenAxis, TweenCurve, canvas_size, handle_pos, nearest_handle,
     parse_tween_json, progress_to_x, tween_axis, value_to_y, x_to_progress, y_to_value,
@@ -101,6 +114,9 @@ impl TweenControl {
                 (Some(_), Some(view)) => {
                     if ui.button("Edit curve").clicked() {
                         open_curve = true;
+                    }
+                    if let Some(shape) = palette_editor::palette_shape(&view.data) {
+                        palette_preview(ui, &view.data, shape);
                     }
                     let mut easing = view.easing.clone();
                     egui::ComboBox::from_id_salt(("tween-easing", &self.label))
@@ -274,6 +290,47 @@ impl TweenControl {
         self.tween = Some(view);
     }
 
+    /// Dispatch a descriptor edit without touching the Input Link.
+    ///
+    /// Palette edits rewrite an existing tween's `data`; the link is already
+    /// there (and re-creating it on every colour drag would churn the store).
+    fn update_descriptor(&mut self, state: &mut UiState, mut view: TweenView) {
+        let Some(input_id) = self.input_id.clone() else {
+            return;
+        };
+        view.id = input_id;
+        state.push_action("tweens/createTween", descriptor_payload(&view));
+        self.tween = Some(view);
+    }
+
+    /// Apply one palette gesture and queue the rewritten descriptor.
+    fn apply_palette_edit(&mut self, state: &mut UiState, edit: PaletteEdit) {
+        let Some(mut view) = self.tween.clone() else {
+            return;
+        };
+        let Some(shape) = palette_editor::palette_shape(&view.data) else {
+            return;
+        };
+        let changed = match edit {
+            PaletteEdit::Add => palette_editor::add_row(&mut view.data).is_some(),
+            PaletteEdit::Remove(index) => palette_editor::remove_row(&mut view.data, index),
+            PaletteEdit::Set { index, rgba } => view
+                .data
+                .get_mut(index)
+                .is_some_and(|row| palette_editor::set_row_rgba(row, shape, rgba)),
+        };
+        if !changed {
+            return;
+        }
+        if !matches!(edit, PaletteEdit::Set { .. }) {
+            view.keyframe_times = palette_editor::times_after_row_change(
+                view.keyframe_times.as_deref(),
+                view.data.len(),
+            );
+        }
+        self.update_descriptor(state, view);
+    }
+
     /// Dispatch an edited curve.
     ///
     /// A row-count change re-expresses the duration as the total cycle so the
@@ -332,6 +389,7 @@ impl TweenControl {
         let mut open = editor.open;
         let mut dispatch = false;
         let mut json_edited = false;
+        let mut palette_edit = None;
         let min = self.min;
         let max = self.max;
 
@@ -352,6 +410,9 @@ impl TweenControl {
                     .size(12.0)
                     .color(theme::MUTED),
             );
+            if let Some(shape) = palette_editor::palette_shape(&view.data) {
+                palette_edit = palette_section(ui, &view.data, shape);
+            }
             curve_canvas(ui, &mut editor, min, max, &axis, &mut dispatch);
             ui.horizontal_wrapped(|ui| {
                 for (channel, colour) in CHANNEL_COLORS
@@ -411,6 +472,14 @@ impl TweenControl {
                 .record_window_rect(WINDOW_TWEEN_CURVE, response.response.rect);
         }
         editor.open = open;
+        if let Some(edit) = palette_edit {
+            // Add/remove shifts the swatch indexes; an anchored picker would
+            // otherwise point at a different colour on the next frame.
+            if !matches!(edit, PaletteEdit::Set { .. }) {
+                egui::Popup::close_all(ctx);
+            }
+            self.apply_palette_edit(state, edit);
+        }
         if dispatch {
             self.apply_curve(state, &mut editor);
         }
@@ -444,6 +513,182 @@ impl TweenControl {
             state.tween_editor = None;
         }
     }
+}
+
+/// One palette gesture from the swatch strip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PaletteEdit {
+    Set { index: usize, rgba: [u8; 4] },
+    Add,
+    Remove(usize),
+}
+
+/// The read-only swatch strip in the collapsed tween row.
+fn palette_preview(ui: &mut egui::Ui, data: &[Vec<f64>], shape: PaletteShape) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (index, row) in data.iter().take(8).enumerate() {
+            let hex = palette_editor::row_hex(row, shape);
+            let (rect, response) = ui.allocate_exact_size(vec2(11.0, 11.0), Sense::hover());
+            paint_swatch(ui, rect, palette_editor::row_color(row, shape));
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::Image,
+                    true,
+                    format!("Palette preview swatch {index} {hex}"),
+                )
+            });
+            response.on_hover_text(format!("swatch {index} · {hex}"));
+        }
+        if data.len() > 8 {
+            ui.label(
+                egui::RichText::new(format!("+{}", data.len() - 8))
+                    .size(11.0)
+                    .color(theme::MUTED),
+            );
+        }
+    })
+    .response
+    .on_hover_text("Colour palette · edit the swatches in the curve window");
+}
+
+/// The editable swatch strip at the top of the curve window.
+fn palette_section(
+    ui: &mut egui::Ui,
+    data: &[Vec<f64>],
+    shape: PaletteShape,
+) -> Option<PaletteEdit> {
+    let mut edit = None;
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("Palette")
+                .size(12.0)
+                .color(theme::MUTED),
+        );
+        ui.label(
+            egui::RichText::new("click: edit · right-click: remove")
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for (index, row) in data.iter().enumerate() {
+            let hex = palette_editor::row_hex(row, shape);
+            let (rect, response) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+            if ui.is_rect_visible(rect) {
+                paint_swatch(ui, rect, palette_editor::row_color(row, shape));
+            }
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    true,
+                    format!("Palette swatch {index} {hex}"),
+                )
+            });
+            if response.secondary_clicked() {
+                edit = Some(PaletteEdit::Remove(index));
+            }
+            let response = response.on_hover_text(format!("swatch {index} · {hex}"));
+            egui::Popup::from_toggle_button_response(&response)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    if let Some(rgba) =
+                        palette_popup(ui, index, palette_editor::row_rgba(row, shape), shape)
+                    {
+                        edit = Some(PaletteEdit::Set { index, rgba });
+                    }
+                });
+        }
+        if ui
+            .small_button("+")
+            .on_hover_text("Add a colour swatch")
+            .clicked()
+        {
+            edit = Some(PaletteEdit::Add);
+        }
+    });
+    edit
+}
+
+/// Paint one swatch with the app's square chrome.
+fn paint_swatch(ui: &egui::Ui, rect: Rect, color: egui::Color32) {
+    let corner = egui::CornerRadius::same(3);
+    ui.painter().rect_filled(rect, corner, color);
+    ui.painter().rect_stroke(
+        rect,
+        corner,
+        Stroke::new(1.0, theme::BORDER),
+        StrokeKind::Inside,
+    );
+}
+
+/// The popup colour picker for one swatch, with a hex field for exact values.
+fn palette_popup(
+    ui: &mut egui::Ui,
+    index: usize,
+    mut rgba: [u8; 4],
+    shape: PaletteShape,
+) -> Option<[u8; 4]> {
+    let mut color = egui::Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+    let alpha = if shape.channels == 4 {
+        egui::color_picker::Alpha::OnlyBlend
+    } else {
+        egui::color_picker::Alpha::Opaque
+    };
+    let mut changed = false;
+
+    ui.set_max_width(280.0);
+    ui.spacing_mut().slider_width = 220.0;
+    ui.label(
+        egui::RichText::new(format!(
+            "Swatch {index} · {}",
+            palette_editor::rgba_hex(rgba, shape)
+        ))
+        .size(12.0)
+        .color(theme::MUTED),
+    );
+    if egui::color_picker::color_picker_color32(ui, &mut color, alpha) {
+        rgba = color.to_srgba_unmultiplied();
+        changed = true;
+    }
+
+    let text_id = ui.scope_id().with(("palette-hex-text", index));
+    let fresh = palette_editor::rgba_hex(rgba, shape);
+    let mut text = ui
+        .ctx()
+        .data(|data| data.get_temp::<String>(text_id))
+        .unwrap_or_else(|| fresh.clone());
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .id(ui.scope_id().with(("palette-hex-field", index)))
+            .desired_width(90.0)
+            .hint_text("#RRGGBB"),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("Swatch {index} hex"))
+    });
+    if response.lost_focus()
+        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+        && let Some(parsed) = palette_editor::parse_hex(&text)
+    {
+        rgba = parsed;
+        changed = true;
+    }
+    if changed {
+        text = palette_editor::rgba_hex(rgba, shape);
+    } else if !response.has_focus() && !response.lost_focus() {
+        // Keep the field in step with the picker unless the user is typing.
+        text = fresh;
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(text_id, text));
+    ui.label(
+        egui::RichText::new("Hex + Enter applies · right-click a swatch removes it")
+            .size(11.0)
+            .color(theme::MUTED),
+    );
+
+    changed.then_some(rgba)
 }
 
 /// Draw the graph and handle its interactions, updating `editor.curve` in
@@ -664,6 +909,32 @@ mod tests {
         }
     }
 
+    fn palette_two_row() -> TweenView {
+        TweenView {
+            id: "input-1".to_string(),
+            data: vec![vec![0.0, 0.0, 0.0], vec![255.0, 255.0, 255.0]],
+            duration: 1000.0,
+            direction: "alternate".to_string(),
+            easing: "linear".to_string(),
+            looping: true,
+            use_bpm: false,
+            bpm_division: 16.0,
+            ..Default::default()
+        }
+    }
+
+    fn palette_three_row() -> TweenView {
+        TweenView {
+            data: vec![
+                vec![0.0, 0.0, 0.0, 255.0],
+                vec![255.0, 0.0, 0.0, 128.0],
+                vec![0.0, 255.0, 0.0, 0.0],
+            ],
+            keyframe_times: Some(vec![0.0, 0.2, 1.0]),
+            ..palette_two_row()
+        }
+    }
+
     fn editor_for(view: &TweenView) -> TweenCurveEditor {
         TweenCurveEditor::new(
             "input-1",
@@ -862,6 +1133,147 @@ mod tests {
         assert_eq!(actions[1].action, "inputs/removeInputLink");
         assert!(control.tween.is_none());
         assert!(state.tween_editor.is_none());
+    }
+
+    #[test]
+    fn palette_add_dispatches_the_descriptor_without_recreating_the_link() {
+        let mut state = UiState::new();
+        let mut control = TweenControl::new(
+            "color",
+            Some("input-1".to_string()),
+            Some(palette_two_row()),
+            0.0,
+            255.0,
+        );
+        control.apply_palette_edit(&mut state, PaletteEdit::Add);
+
+        let actions = state.take_actions();
+        assert_eq!(actions.len(), 1, "the Input Link already exists");
+        assert_eq!(actions[0].action, "tweens/createTween");
+        assert_eq!(
+            actions[0].payload["data"],
+            serde_json::json!([
+                [0.0, 0.0, 0.0],
+                [255.0, 255.0, 255.0],
+                [255.0, 255.0, 255.0]
+            ]),
+            "the new swatch duplicates the last colour"
+        );
+        assert!(actions[0].payload.get("keyframeTimes").is_none());
+        assert_eq!(control.tween.as_ref().map(|view| view.data.len()), Some(3));
+    }
+
+    #[test]
+    fn palette_add_renormalises_explicit_keyframe_times() {
+        let mut state = UiState::new();
+        let mut control = TweenControl::new(
+            "color",
+            Some("input-1".to_string()),
+            Some(palette_three_row()),
+            0.0,
+            255.0,
+        );
+        control.apply_palette_edit(&mut state, PaletteEdit::Add);
+
+        let payload = &state.take_actions()[0].payload;
+        assert_eq!(
+            payload["keyframeTimes"],
+            serde_json::json!([0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0])
+        );
+        assert_eq!(payload["data"].as_array().map(Vec::len), Some(4));
+    }
+
+    #[test]
+    fn palette_remove_keeps_two_rows_and_drops_explicit_times() {
+        let mut state = UiState::new();
+        let mut control = TweenControl::new(
+            "color",
+            Some("input-1".to_string()),
+            Some(palette_three_row()),
+            0.0,
+            255.0,
+        );
+        control.apply_palette_edit(&mut state, PaletteEdit::Remove(1));
+
+        let payload = &state.take_actions()[0].payload;
+        assert_eq!(
+            payload["data"],
+            serde_json::json!([[0.0, 0.0, 0.0, 255.0], [0.0, 255.0, 0.0, 0.0]])
+        );
+        assert!(
+            payload.get("keyframeTimes").is_none(),
+            "two rows use the [from, to] shorthand"
+        );
+        assert_eq!(control.tween.as_ref().map(|view| view.data.len()), Some(2));
+
+        // A two-row palette cannot lose another swatch.
+        control.apply_palette_edit(&mut state, PaletteEdit::Remove(0));
+        assert!(state.take_actions().is_empty());
+    }
+
+    #[test]
+    fn palette_colour_edit_rewrites_only_that_row() {
+        let mut state = UiState::new();
+        let mut control = TweenControl::new(
+            "color",
+            Some("input-1".to_string()),
+            Some(palette_three_row()),
+            0.0,
+            255.0,
+        );
+        control.apply_palette_edit(
+            &mut state,
+            PaletteEdit::Set {
+                index: 1,
+                rgba: [10, 20, 30, 64],
+            },
+        );
+
+        let payload = &state.take_actions()[0].payload;
+        assert_eq!(
+            payload["data"],
+            serde_json::json!([
+                [0.0, 0.0, 0.0, 255.0],
+                [10.0, 20.0, 30.0, 64.0],
+                [0.0, 255.0, 0.0, 0.0]
+            ])
+        );
+        assert_eq!(
+            payload["keyframeTimes"],
+            serde_json::json!([0.0, 0.2, 1.0]),
+            "a colour edit keeps the timing"
+        );
+        assert_eq!(payload["duration"], 1000.0);
+    }
+
+    #[test]
+    fn palette_edits_ignore_numeric_tweens_and_unknown_rows() {
+        let mut state = UiState::new();
+        let mut control = TweenControl::new(
+            "gain",
+            Some("input-1".to_string()),
+            Some(two_row()),
+            0.0,
+            1.0,
+        );
+        control.apply_palette_edit(&mut state, PaletteEdit::Add);
+        assert!(state.take_actions().is_empty(), "not a palette");
+
+        let mut control = TweenControl::new(
+            "color",
+            Some("input-1".to_string()),
+            Some(palette_two_row()),
+            0.0,
+            255.0,
+        );
+        control.apply_palette_edit(
+            &mut state,
+            PaletteEdit::Set {
+                index: 9,
+                rgba: [1, 2, 3, 255],
+            },
+        );
+        assert!(state.take_actions().is_empty(), "no such swatch");
     }
 
     #[test]

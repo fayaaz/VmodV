@@ -5,6 +5,7 @@
 
 pub mod color_control;
 pub mod input_link;
+pub mod palette_editor;
 pub mod range_control;
 pub mod texture_control;
 pub mod tween_control;
