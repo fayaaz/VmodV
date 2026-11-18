@@ -37,6 +37,7 @@ pub mod store_ops;
 pub mod supervisor;
 pub mod texture_sources;
 pub mod ui_layout;
+pub mod video_sources;
 pub mod window;
 pub mod window_state;
 pub mod windows;

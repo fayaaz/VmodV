@@ -36,7 +36,8 @@ use modv_ui::{
     MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView,
     PerformanceView, PluginInfoView, PluginPropView, PluginView, PreviewRequest, PreviewTexture,
     ProjectView, PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView,
-    SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
+    SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand, UiState,
+    VideoSourceProblemView, VideoTransportAction, VideoTransportView, gallery_preview_key,
     scene_preview_key,
 };
 use serde_json::Value;
@@ -65,6 +66,7 @@ use crate::screen_share::{
 };
 use crate::store_ops::Store;
 use crate::ui_layout::{LAYOUT_SETTINGS_FILENAME, LayoutSettings};
+use crate::video_sources::VideoSources;
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
 use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group, ModuleInstance, js_truthy};
@@ -378,6 +380,9 @@ pub struct NativeApp {
     layout_error_logged: bool,
     media_hub: MediaHub,
     last_media_health: Instant,
+    /// Video-file sources started from `video` texture props (one per unique
+    /// absolute path, reference-counted by module/prop).
+    video_sources: VideoSources,
     /// Cached V4L2 enumeration; rescanning every frame is 50–500 µs per camera.
     media_cameras: Vec<modv_media::video::CameraInfo>,
     last_camera_scan: Instant,
@@ -768,6 +773,7 @@ impl NativeApp {
             layout_error_logged: false,
             media_hub,
             last_media_health: start,
+            video_sources: VideoSources::new(),
             media_cameras: Vec::new(),
             last_camera_scan: start.checked_sub(Duration::from_secs(10)).unwrap_or(start),
             media_settings,
@@ -1238,6 +1244,11 @@ impl NativeApp {
             if burst.has(MediaFolder::Isf) {
                 self.rescan_modules();
             }
+            if burst.has(MediaFolder::Video) {
+                // A clip may have appeared/changed under a path a prop already
+                // names: retry missing files and a failed decode now.
+                self.video_sources.note_media_change();
+            }
             let others = burst.other_folders();
             if !others.is_empty() {
                 let labels: Vec<&str> = others.iter().map(|folder| folder.label()).collect();
@@ -1258,6 +1269,9 @@ impl NativeApp {
         self.ui_state.sync_status(&snapshot);
         self.run_ui(&snapshot);
         self.drain_ui_actions();
+        // Texture-prop writes from this frame have landed: reconcile the video
+        // file sources before the compositor samples their textures.
+        self.reconcile_video_sources(now);
         // Plugin `preProcessFrame` sees this frame's audio plus the state after
         // the UI actions, and runs before the composition is rendered.
         self.plugin_pre_frame();
@@ -1541,6 +1555,14 @@ impl NativeApp {
                     }
                 }
                 MediaAction::Stop { source_id } => {
+                    // A video-file source is owned by its texture prop; an
+                    // explicit stop holds it down until the prop changes.
+                    if self
+                        .video_sources
+                        .stop_source(&mut self.media_hub, &source_id)
+                    {
+                        eprintln!("ui: INFO video texture source {source_id:?} stopped");
+                    }
                     // An explicit stop deselects a webcam: forgetting the id is
                     // what stops the restore pass from re-opening it later.
                     if let Some(camera_id) = source_id.strip_prefix("camera:") {
@@ -1565,6 +1587,9 @@ impl NativeApp {
                         }
                     }
                 }
+                MediaAction::VideoTransport { source, action } => {
+                    self.handle_video_transport(&source, action);
+                }
                 MediaAction::ShareScreen { window } => {
                     self.share_screen(ScreenShareKind::for_window(window));
                 }
@@ -1576,6 +1601,90 @@ impl NativeApp {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    /// Reconcile the video-file sources with the live texture props.
+    fn reconcile_video_sources(&mut self, now: Instant) {
+        let requests = crate::video_sources::collect_video_props(self.store.state());
+        let media_root = self
+            .store
+            .media_root()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.media_root.clone());
+        self.video_sources.reconcile(
+            &mut self.media_hub,
+            Some(media_root.as_path()),
+            &requests,
+            now,
+        );
+    }
+
+    /// Apply one UI transport command and persist its option on every prop
+    /// that references the source (pause/loop/speed survive presets/Scenes).
+    fn handle_video_transport(&mut self, source: &str, action: VideoTransportAction) {
+        let transport = match self
+            .video_sources
+            .transport(&mut self.media_hub, source, action)
+        {
+            Ok(transport) => transport,
+            Err(error) => {
+                eprintln!("ui: WARN video transport {action:?} for {source:?} failed: {error}");
+                return;
+            }
+        };
+
+        let (key, value) = match action {
+            VideoTransportAction::Pause
+            | VideoTransportAction::Resume
+            | VideoTransportAction::TogglePause => ("paused", serde_json::json!(transport.paused)),
+            VideoTransportAction::SetLooping { .. } => {
+                ("loop", serde_json::json!(transport.looping))
+            }
+            VideoTransportAction::SetPlaybackRate { .. } => {
+                ("playbackrate", serde_json::json!(transport.playback_rate))
+            }
+            // Restart/seek move the playhead; there is nothing to persist.
+            VideoTransportAction::Restart | VideoTransportAction::Seek { .. } => return,
+        };
+
+        self.persist_video_option(source, key, value);
+    }
+
+    /// Write `options.<key>` back into every prop that references `source`.
+    fn persist_video_option(&mut self, source: &str, key: &str, value: Value) {
+        let references = self.video_sources.references(source);
+        if references.is_empty() {
+            return;
+        }
+
+        let mut updates = Vec::new();
+        for reference in references {
+            let Some(module) = self.store.state().modules.get(&reference.module_id) else {
+                continue;
+            };
+            let Some(current) = module.props.get(&reference.prop).cloned() else {
+                continue;
+            };
+            let mut updated = current.clone();
+            crate::video_sources::set_prop_option(&mut updated, key, value.clone());
+            if updated != current {
+                updates.push((reference, updated));
+            }
+        }
+
+        for (reference, updated) in updates {
+            let payload = serde_json::json!({
+                "moduleId": reference.module_id,
+                "prop": reference.prop,
+                "data": { "value": updated },
+            });
+            if let Err(error) = self.store.dispatch("modules/updateProp", payload) {
+                eprintln!(
+                    "ui: WARN could not persist video option {key:?} on {}/{}: {error}",
+                    reference.module_id, reference.prop
+                );
             }
         }
     }
@@ -2290,6 +2399,10 @@ impl NativeApp {
         // selected after launch imports now. The media root itself is shared,
         // so re-dispatching it is a no-op unless the tree moved.
         dispatch_media_root(&mut self.store, &self.media_root);
+        // Video-file pipelines belong to the old profile's tree: release them
+        // before the media root/asset index changes. The next reconcile starts
+        // the clips the new profile can resolve.
+        self.video_sources.stop_all(&mut self.media_hub);
         crate::media_import::import_profile_documents_once(
             &mut self.store,
             &self.media_root,
@@ -2887,6 +3000,15 @@ impl NativeApp {
             available: self.media_hub.is_available(),
             error: self.media_hub.init_error().map(str::to_string),
             screen: self.screen_view(),
+            video_problems: self
+                .video_sources
+                .problems()
+                .into_iter()
+                .map(|problem| VideoSourceProblemView {
+                    path: problem.path,
+                    message: problem.message,
+                })
+                .collect(),
             cameras: self
                 .media_cameras
                 .iter()
@@ -2940,6 +3062,21 @@ impl NativeApp {
                     frames: source.frames,
                     dropped: source.dropped,
                     last_error: source.last_error,
+                    // Only files have a user-facing transport (a camera has no
+                    // timeline and Restart/Speed would be rejected).
+                    transport: (source.kind == "file")
+                        .then_some(source.transport)
+                        .flatten()
+                        .map(|transport| VideoTransportView {
+                            paused: transport.paused,
+                            playing: transport.playing,
+                            position_ms: transport.position_ms,
+                            duration_ms: transport.duration_ms,
+                            looping: transport.looping,
+                            eos: transport.eos,
+                            seekable: transport.seekable,
+                            playback_rate: transport.playback_rate,
+                        }),
                 })
                 .collect(),
         };
@@ -3234,6 +3371,7 @@ impl NativeApp {
         self.save_layout();
         self.store.flush_link_deltas();
         self.store.shutdown_ndi();
+        self.video_sources.stop_all(&mut self.media_hub);
         self.media_hub.stop_all();
         // Release the portal session (its PipeWire node dies with the D-Bus
         // connection) and stop waiting for a dialog nobody can answer.

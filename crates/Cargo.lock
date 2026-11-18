@@ -2802,6 +2802,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "gstreamer",
  "image",
  "libc",
  "midir",

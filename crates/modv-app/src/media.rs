@@ -50,10 +50,11 @@
 //! camera-only index, not the full source order.)
 //!
 //! `state` is the renderer's vocabulary (`engine-media.js`
-//! `MEDIA_SOURCE_STATE_LABELS`): `running`, `starting`, `stopped` or `error`.
-//! A source the engine is retrying reports `starting` (with the failure in
-//! `lastError`), never `error`, so the renderer's own camera reconcile does not
-//! race the engine's reconnect loop.
+//! `MEDIA_SOURCE_STATE_LABELS`): `running`, `paused`, `starting`, `stopped` or
+//! `error`. A source the engine is retrying reports `starting` (with the failure
+//! in `lastError`), never `error`, so the renderer's own camera reconcile does
+//! not race the engine's reconnect loop. A pipeline paused through the
+//! transport reports `paused`; health polling never restarts it.
 //!
 //! Start failures are `Response::err` with `media_unavailable` (GStreamer did
 //! not initialise), `media_plugin_missing` (a GStreamer element is not
@@ -67,7 +68,7 @@ use serde_json::{Value, json};
 
 use modv_media::video::{
     self, CameraInfo, ScreenSupport, VideoError, VideoFrame, VideoHub, VideoSourceConfig,
-    VideoSourceKind, VideoSourceState, list_cameras,
+    VideoSourceKind, VideoSourceState, VideoTransport, list_cameras,
 };
 use modv_render::wgpu;
 
@@ -411,6 +412,7 @@ impl MediaHub {
                 .position(|camera| camera == id)
                 .map_or(0, |position| position + 1);
             let live = entry.running.then(|| self.hub.status(id)).flatten();
+            let transport = live.as_ref().and_then(|_| self.hub.transport(id));
             let status = match live {
                 Some(status) => MediaSourceStatus {
                     source_id: id.clone(),
@@ -422,6 +424,7 @@ impl MediaHub {
                     frames: status.frames,
                     dropped: status.dropped,
                     last_error: status.last_error.or_else(|| entry.last_error.clone()),
+                    transport,
                 },
                 None => MediaSourceStatus {
                     source_id: id.clone(),
@@ -437,6 +440,7 @@ impl MediaHub {
                     frames: entry.last_frames,
                     dropped: entry.last_dropped,
                     last_error: entry.last_error.clone(),
+                    transport: None,
                 },
             };
 
@@ -649,6 +653,63 @@ impl MediaHub {
             .map(|position| position + 1)
     }
 
+    /// Playback transport of a running source, when it has one.
+    pub fn transport(&self, source_id: &str) -> Option<VideoTransport> {
+        self.entries
+            .get(source_id)
+            .filter(|entry| entry.running)
+            .and_then(|_| self.hub.transport(source_id))
+    }
+
+    /// Pause/resume a source (the transport's pause flag, not a restart).
+    pub fn set_paused(
+        &mut self,
+        source_id: &str,
+        paused: bool,
+    ) -> Result<VideoTransport, MediaError> {
+        self.hub.set_paused(source_id, paused).map_err(Into::into)
+    }
+
+    /// Pause a playing source or resume a paused one.
+    pub fn toggle_paused(&mut self, source_id: &str) -> Result<VideoTransport, MediaError> {
+        self.hub.toggle_paused(source_id).map_err(Into::into)
+    }
+
+    /// Seek a file source (clamped to its clip; live sources reject).
+    pub fn seek(
+        &mut self,
+        source_id: &str,
+        position: Duration,
+    ) -> Result<VideoTransport, MediaError> {
+        self.hub
+            .seek_source(source_id, position)
+            .map_err(Into::into)
+    }
+
+    /// Enable/disable file looping and keep the health-restart config in sync.
+    pub fn set_looping(
+        &mut self,
+        source_id: &str,
+        looping: bool,
+    ) -> Result<VideoTransport, MediaError> {
+        let transport = self.hub.set_looping(source_id, looping)?;
+        if let Some(entry) = self.entries.get_mut(source_id) {
+            entry.looping = looping;
+        }
+        Ok(transport)
+    }
+
+    /// Change the playback speed of a file source (0.1–10, 1.0 real time).
+    pub fn set_playback_rate(
+        &mut self,
+        source_id: &str,
+        rate: f64,
+    ) -> Result<VideoTransport, MediaError> {
+        self.hub
+            .set_playback_rate(source_id, rate)
+            .map_err(Into::into)
+    }
+
     /// `VideoSource::set_looping` for file sources (no-op for the others).
     fn apply_looping(&mut self, source_id: &str, looping: bool) {
         if let Some(source) = self.hub.source_mut(source_id) {
@@ -789,9 +850,9 @@ impl Drop for MediaHub {
 fn state_label(state: VideoSourceState) -> &'static str {
     match state {
         VideoSourceState::Playing => "running",
-        // A live source is `Paused` until it prerolls; no frame has reached the
-        // engine yet.
-        VideoSourceState::Paused => "starting",
+        // A paused file (or a live source that has not prerolled yet): no new
+        // frames are arriving, but the pipeline is alive and can resume.
+        VideoSourceState::Paused => "paused",
         VideoSourceState::Ended => "stopped",
         VideoSourceState::Error => "error",
         VideoSourceState::Stopped => "stopped",
@@ -799,7 +860,7 @@ fn state_label(state: VideoSourceState) -> &'static str {
 }
 
 /// The `media/status` entry for one source.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MediaSourceStatus {
     /// Caller id the source was started with.
     pub source_id: String,
@@ -819,6 +880,8 @@ pub struct MediaSourceStatus {
     pub dropped: u64,
     /// Why the source is not running, when it is not.
     pub last_error: Option<String>,
+    /// Playback state of a file source (the transport panel's read model).
+    pub transport: Option<VideoTransport>,
 }
 
 impl MediaSourceStatus {
@@ -834,6 +897,16 @@ impl MediaSourceStatus {
             "frames": self.frames,
             "dropped": self.dropped,
             "lastError": self.last_error,
+            "transport": self.transport.map(|transport| json!({
+                "paused": transport.paused,
+                "playing": transport.playing,
+                "positionMs": transport.position_ms,
+                "durationMs": transport.duration_ms,
+                "looping": transport.looping,
+                "eos": transport.eos,
+                "seekable": transport.seekable,
+                "playbackRate": transport.playback_rate,
+            })),
         })
     }
 }
@@ -1017,6 +1090,78 @@ mod tests {
         assert_eq!(wire["width"], json!(64));
         assert_eq!(wire["height"], json!(48));
         assert_eq!(wire["lastError"], Value::Null);
+    }
+
+    #[test]
+    fn paused_sources_report_paused_not_starting() {
+        assert_eq!(state_label(VideoSourceState::Paused), "paused");
+        assert_eq!(state_label(VideoSourceState::Playing), "running");
+        assert_eq!(state_label(VideoSourceState::Ended), "stopped");
+
+        let status = MediaSourceStatus {
+            source_id: "video:/media/clip.mp4".to_string(),
+            kind: "file",
+            index: 0,
+            state: "paused",
+            width: 160,
+            height: 120,
+            frames: 12,
+            dropped: 0,
+            last_error: None,
+            transport: Some(VideoTransport {
+                paused: true,
+                playing: false,
+                position_ms: 500,
+                duration_ms: Some(2_000),
+                looping: true,
+                eos: false,
+                seekable: true,
+                playback_rate: 2.0,
+            }),
+        };
+        let wire = status.to_json();
+        assert_eq!(wire["state"], json!("paused"));
+        assert_eq!(wire["transport"]["paused"], json!(true));
+        assert_eq!(wire["transport"]["positionMs"], json!(500));
+        assert_eq!(wire["transport"]["durationMs"], json!(2_000));
+        assert_eq!(wire["transport"]["playbackRate"], json!(2.0));
+    }
+
+    #[test]
+    fn pausing_a_source_is_reported_and_health_stays_green() {
+        let mut media = MediaHub::new();
+        if !media.is_available() {
+            return;
+        }
+        if start_pattern(&mut media, "cam-a", TestPattern::Checkers1, 64, 48).is_none() {
+            return;
+        }
+        wait_for_frame(&mut media, "cam-a", Duration::from_secs(8));
+
+        media.set_paused("cam-a", true).expect("pause");
+        poll_health_now(&mut media);
+
+        let status = &media.statuses()[0];
+        assert_eq!(status.state, "paused");
+        assert!(status.transport.is_some_and(|transport| transport.paused));
+        assert!(status.last_error.is_none(), "{status:?}");
+        assert!(
+            media.entries["cam-a"].running,
+            "a paused source is still registered, not restarted"
+        );
+        assert!(
+            !media.entries["cam-a"]
+                .retry_at
+                .is_some_and(|at| at <= Instant::now()),
+            "health polling leaves a paused source alone"
+        );
+
+        media.set_paused("cam-a", false).expect("resume");
+        assert!(
+            !media.statuses()[0]
+                .transport
+                .is_some_and(|transport| transport.paused)
+        );
     }
 
     #[test]
