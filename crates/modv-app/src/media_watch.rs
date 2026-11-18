@@ -141,6 +141,9 @@ impl MediaWatcher {
             let Ok(event) = result else {
                 return;
             };
+            if !event_kind_relevant(&event.kind) {
+                return;
+            }
             for path in &event.paths {
                 if let Some(folder) = classify(&watched_targets, path) {
                     let _ = tx.send(folder);
@@ -232,6 +235,16 @@ fn classify(targets: &[WatchTarget], path: &Path) -> Option<MediaFolder> {
 /// A media file or folder name the read handlers must not react to.
 pub(crate) fn is_ignored_media_name(name: &str) -> bool {
     name.starts_with('.') || name.ends_with('~') || name.ends_with(".tmp")
+}
+
+/// Whether an event kind can change the media tree.
+///
+/// Reading a video/image for a library thumbnail touches its access time on
+/// some filesystems, and inotify reports that as `Access`; reacting to those
+/// makes a library rescan read the same file again and loop forever. Only
+/// create/modify/remove events matter to the read handlers.
+fn event_kind_relevant(kind: &notify::EventKind) -> bool {
+    !matches!(kind, notify::EventKind::Access(_))
 }
 
 /// Whether any component below the watched root is hidden/temporary.
@@ -530,5 +543,21 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn access_events_do_not_wake_the_media_handlers() {
+        use notify::EventKind;
+        use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind};
+
+        assert!(!event_kind_relevant(&EventKind::Access(AccessKind::Read)));
+        assert!(!event_kind_relevant(&EventKind::Access(AccessKind::Close(
+            notify::event::AccessMode::Read
+        ))));
+        assert!(event_kind_relevant(&EventKind::Create(CreateKind::File)));
+        assert!(event_kind_relevant(&EventKind::Modify(ModifyKind::Data(
+            notify::event::DataChange::Content
+        ))));
+        assert!(event_kind_relevant(&EventKind::Remove(RemoveKind::File)));
     }
 }
