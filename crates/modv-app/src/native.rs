@@ -1,15 +1,11 @@
 //! The native single-process shell (`modv` binary): winit + egui + the
 //! in-process engine.
 //!
-//! P0 scope: one egui UI window and one compositor-owned output window sharing
-//! a single `wgpu::Device`/`Queue`. The compositor's main texture is registered
-//! with `egui-wgpu` as a native texture, so the live output preview has no
-//! readback and no IPC. The UI reads an [`EngineSnapshot`] built from the
-//! authoritative [`Store`] and emits [`UiAction`]s that are dispatched before
-//! the next render.
-//!
-//! The legacy Electron app remains the shipping product; this binary is the
-//! opt-in native path (`MODV_UI=native`, `make native`).
+//! One egui UI window and one compositor-owned output window sharing a single
+//! `wgpu::Device`/`Queue`. The compositor's main texture is registered with
+//! `egui-wgpu` as a native texture, so the live output preview has no readback
+//! and no IPC. The UI reads an [`EngineSnapshot`] built from the authoritative
+//! [`Store`] and emits [`UiAction`]s that are dispatched before the next render.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};

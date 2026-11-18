@@ -141,9 +141,7 @@ pub fn run_engine() -> ExitCode {
 
 /// Entry point for the `modv` native-UI binary.
 ///
-/// The legacy Electron app still selects the Rust engine with `MODV_ENGINE=1`;
-/// the native shell is a separate binary so neither path can regress the
-/// other. `--headless` and `--screenshot` keep the engine-only behaviour.
+/// `--headless` and `--screenshot` keep the engine-only behaviour.
 pub fn native_main() -> ExitCode {
     die_with_parent();
 

@@ -5058,7 +5058,7 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
                 .size(20.0)
                 .color(theme::ACCENT),
         );
-        ui.label("A native Rust rewrite of modV. The legacy Electron UI and JS engine remain available behind the environment switch until parity is signed off.");
+        ui.label("A native Rust build of modV — one binary, no Electron. The 1.x tree is archived (branch `legacy-electron`, tag `v1.x-final`).");
         ui.separator();
         ui.label(format!("Adapter: {}", state.status.adapter));
         ui.label(format!("Backend: {}", state.status.backend));
