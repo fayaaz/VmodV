@@ -50,16 +50,16 @@ fn harness(snapshot: EngineSnapshot, state: UiState) -> Harness<'static, UiState
 }
 
 #[test]
-fn the_bpm_readouts_show_the_live_capture_rate() {
+fn the_tempo_window_reports_the_capture_rate_without_duplicating_it_by_the_bpm() {
     // 128.4 BPM: the status bar rounds, the Tempo window keeps one decimal.
     let mut harness = harness(snapshot(128.4, Some(48_000)), UiState::new());
     harness.state_mut().show_bpm = true;
     harness.run();
 
     assert_eq!(
-        harness.get_all_by_label("BPM 128 · 48 kHz").count(),
+        harness.get_all_by_label("BPM 128").count(),
         2,
-        "the menu bar and the status bar both report tempo + capture rate"
+        "the menu bar and the status bar show the bare tempo"
     );
     harness.get_by_label("Detected 128.4 BPM");
     harness.get_by_label("Capture 48 kHz");
@@ -91,8 +91,8 @@ fn the_info_panel_tempo_row_agrees_with_the_status_bar() {
 
     harness.get_by_label("Tempo");
     assert!(
-        harness.get_all_by_label("BPM 128 · 48 kHz").count() >= 3,
-        "the Info panel Tempo row plus the menu bar and status bar all report the live rate"
+        harness.get_all_by_label("BPM 128").count() >= 3,
+        "the Info panel Tempo row plus the menu bar and status bar show the bare tempo"
     );
     harness.get_by_label("System audio (PipeWire monitor)  (engine · 48 kHz)");
 }

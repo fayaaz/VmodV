@@ -16,7 +16,7 @@ use crate::layout::{
     WINDOW_TEMPO,
 };
 use crate::model::{
-    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView, bpm_with_rate,
+    COMPOSITE_OPERATIONS, EngineSnapshot, MediaAction, ModuleMetaView, PropView,
     gallery_preview_key, sample_rate_label,
 };
 use crate::panels::scene_grid::draw_scene_grid;
@@ -371,11 +371,8 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(bpm_with_rate(
-                                    state.status.bpm,
-                                    snapshot.audio.sample_rate,
-                                ))
-                                .monospace()
+                                egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
+                                    .monospace()
                                 .color(theme::MUTED),
                             )
                             .frame(false),
@@ -463,11 +460,8 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 );
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(bpm_with_rate(
-                        state.status.bpm,
-                        snapshot.audio.sample_rate,
-                    ))
-                    .monospace()
+                    egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
+                        .monospace()
                     .size(12.0)
                     .color(theme::MUTED),
                 )
@@ -1793,10 +1787,7 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
             ));
             ui.end_row();
             ui.label(egui::RichText::new("Tempo").color(theme::MUTED));
-            ui.label(bpm_with_rate(
-                snapshot.audio.bpm,
-                snapshot.audio.sample_rate,
-            ));
+            ui.label(format!("BPM {:.0}", snapshot.audio.bpm));
             ui.end_row();
             ui.label(egui::RichText::new("Scenes").color(theme::MUTED));
             ui.label(format!(

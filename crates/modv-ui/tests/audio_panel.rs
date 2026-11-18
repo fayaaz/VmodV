@@ -82,8 +82,9 @@ fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
     assert_eq!(harness.get_all_by_label("2 ch · 48 kHz").count(), 1);
     harness.get_by_label("4 ch · 48 kHz");
     harness.get_by_label("audio: engine · 48 kHz");
-    // The status bar and the menu bar both carry the tempo + rate readout.
-    assert_eq!(harness.get_all_by_label("BPM 128 · 48 kHz").count(), 2);
+    // The tempo readouts stay compact; the capture rate is shown by the
+    // audio indicator above, not repeated next to the BPM.
+    assert_eq!(harness.get_all_by_label("BPM 128").count(), 2);
 }
 
 #[test]
