@@ -2547,6 +2547,7 @@ impl NativeApp {
             expressions: expression_views(state),
             media,
             midi,
+            plugins: Default::default(),
             ndi: self.ndi_view.clone(),
             osc: self.osc_view.clone(),
             audio_devices: self.audio_devices.clone(),

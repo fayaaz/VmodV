@@ -11,15 +11,18 @@
 //!   `<userData>/plugins`, sorted by path, de-duplicated and capped at
 //!   [`MAX_PLUGINS`] scripts of at most [`MAX_PLUGIN_SOURCE_BYTES`] each;
 //! * per-plugin enable switches keyed by absolute path;
+//! * user prop values keyed by path + prop name, reapplied after every load so
+//!   a reload/restart does not reset a control the user moved;
 //! * the per-frame IO bundle: the current audio feature payload, a small
 //!   **allow-listed** read-only state reader and a transport placeholder;
 //! * throttled frame capture: at most [`CAPTURE_INTERVAL`], only when a
 //!   running plugin requested `captureWidth`/`captureHeight`;
 //! * `plugin: …` log forwarding (deduplicated) and `shutdown` on quit.
 //!
-//! No UI is wired yet. The Plugins panel is a later change and calls the
-//! public methods here (`set_enabled`, `set_consented`,
-//! `set_plugin_enabled`, `reload`, `rescan`, `plugins`).
+//! The native Plugins panel calls the public methods here (`set_enabled`,
+//! `set_consented`, `set_plugin_enabled`, `set_prop`, `reload`, `rescan`,
+//! `plugins`, `logs`) and treats the runtime as authoritative: the UI read
+//! model is rebuilt from it, never written back.
 //!
 //! # Residuals
 //!
@@ -63,6 +66,13 @@ pub const CAPTURE_INTERVAL: Duration = Duration::from_millis(50);
 /// The upper bound of retained deduplicated log lines before the set resets.
 const MAX_LOGGED_LINES: usize = 4096;
 
+/// How many deduplicated `plugin: …` lines the Plugins panel keeps.
+///
+/// This is the UI retention list, separate from [`MAX_LOGGED_LINES`] (the
+/// dedupe seen-set): the panel only needs a recent window, and a plugin that
+/// logs every frame must not grow the read model without bound.
+const MAX_RETAINED_LOGS: usize = 256;
+
 /// The persisted "enable JavaScript plugins" gate.
 ///
 /// Defaults are disabled **and** unconsented. A document that says
@@ -81,6 +91,13 @@ pub struct PluginSettings {
     /// enabled; an explicit `false` disables it.
     #[serde(default)]
     pub plugins: BTreeMap<String, bool>,
+    /// User prop values keyed by absolute script path, then prop name.
+    ///
+    /// The runtime reapplies these after every load/rescan so a control the
+    /// user moved is not reset by a reload or a restart. Values are coerced by
+    /// the host against the plugin's schema before they are stored.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub props: BTreeMap<String, BTreeMap<String, Value>>,
 }
 
 impl PluginSettings {
@@ -384,6 +401,8 @@ pub struct PluginRuntime {
     transport: Rc<RefCell<dyn PluginTransport>>,
     capture: PluginCapture,
     logs_seen: HashSet<String>,
+    /// Deduplicated `plugin: …` lines retained for the Plugins panel.
+    logs: Vec<String>,
 }
 
 impl PluginRuntime {
@@ -413,6 +432,7 @@ impl PluginRuntime {
             transport: Rc::new(RefCell::new(UnsupportedTransport)),
             capture: PluginCapture::default(),
             logs_seen: HashSet::new(),
+            logs: Vec::new(),
         }
     }
 
@@ -450,6 +470,49 @@ impl PluginRuntime {
     /// The host's recorded errors (deduplicated by plugin + phase).
     pub fn errors(&self) -> Vec<PluginError> {
         self.host.errors()
+    }
+
+    /// Deduplicated `plugin: …` lines retained for the Plugins panel.
+    ///
+    /// The same lines go to the daily log file through `eprintln!`; the panel
+    /// renders this retained window and can clear it on reopen.
+    pub fn logs(&self) -> &[String] {
+        &self.logs
+    }
+
+    /// Drop the retained panel lines. The dedupe set is kept, so a line that
+    /// already reached the file is not re-emitted by the next hook.
+    pub fn clear_logs(&mut self) {
+        self.logs.clear();
+    }
+
+    /// Write one plugin prop through the host and persist the coerced value.
+    ///
+    /// The error strings are the host's (`unknown plugin`, `no prop`,
+    /// `not loaded a prop schema yet`); the host has already recorded them.
+    pub fn set_prop(&mut self, path: &str, prop: &str, value: Value) -> Result<Value, String> {
+        let Some(entry) = self.registered.iter().find(|entry| entry.key == path) else {
+            return Err(format!("unknown plugin script {path}"));
+        };
+        let id = entry.id;
+        let coerced = match self.host.set_prop(id, prop, value) {
+            Ok(value) => value,
+            Err(error) => {
+                self.flush_logs();
+                return Err(error.message);
+            }
+        };
+        self.settings
+            .props
+            .entry(path.to_string())
+            .or_default()
+            .insert(prop.to_string(), coerced.clone());
+        if let Err(error) = self.persist() {
+            self.log_line(format!("plugin: {error}"));
+            self.flush_logs();
+            return Err(error);
+        }
+        Ok(coerced)
     }
 
     /// One entry per discovered script, sorted by path.
@@ -543,6 +606,7 @@ impl PluginRuntime {
             if let Err(error) = self.host.set_plugin_enabled(id, enabled, &mut io) {
                 self.log_line(format!("plugin: {}", error.message));
             }
+            self.apply_saved_props();
             self.flush_logs();
         }
         self.capture.clear();
@@ -563,6 +627,7 @@ impl PluginRuntime {
                 self.log_line(format!("plugin: {}", error.message));
             }
         }
+        self.apply_saved_props();
         self.capture.clear();
         self.flush_logs();
     }
@@ -731,18 +796,55 @@ impl PluginRuntime {
         }
         if self.host.enabled() {
             self.host.load_pending(&mut io);
+            self.apply_saved_props();
+        }
+    }
+
+    /// Reapply the persisted prop values to every loaded plugin.
+    ///
+    /// The host has no persisted-prop store of its own, so a rescan/reload or a
+    /// fresh process would otherwise reset every control to the descriptor
+    /// default. Props the current schema does not declare are skipped (a
+    /// plugin update may rename one) and stay in the settings document.
+    fn apply_saved_props(&mut self) {
+        if self.settings.props.is_empty() {
+            return;
+        }
+        let mut assignments = Vec::new();
+        for info in self.host.plugins() {
+            let Some(entry) = self.registered.iter().find(|entry| entry.id == info.id) else {
+                continue;
+            };
+            let Some(saved) = self.settings.props.get(&entry.key) else {
+                continue;
+            };
+            for (prop, value) in saved {
+                if info.props.contains_key(prop) {
+                    assignments.push((info.id, prop.clone(), value.clone()));
+                }
+            }
+        }
+        for (id, prop, value) in assignments {
+            if let Err(error) = self.host.set_prop(id, &prop, value) {
+                self.log_line(format!("plugin: {}", error.message));
+            }
         }
     }
 
     /// Apply the master gate to the host.
     fn apply_enabled(&mut self) {
         let allowed = self.settings.allowed();
-        let mut io = self.io();
-        self.host.set_enabled(allowed, &mut io);
+        {
+            let mut io = self.io();
+            self.host.set_enabled(allowed, &mut io);
+            if allowed {
+                self.host.load_pending(&mut io);
+            } else {
+                self.capture.clear();
+            }
+        }
         if allowed {
-            self.host.load_pending(&mut io);
-        } else {
-            self.capture.clear();
+            self.apply_saved_props();
         }
         self.flush_logs();
     }
@@ -797,6 +899,10 @@ impl PluginRuntime {
             self.logs_seen.clear();
         }
         if self.logs_seen.insert(line.clone()) {
+            if self.logs.len() >= MAX_RETAINED_LOGS {
+                self.logs.remove(0);
+            }
+            self.logs.push(line.clone());
             eprintln!("{line}");
         }
     }
@@ -1083,6 +1189,7 @@ module.exports = {
             enabled: true,
             consented: true,
             plugins: BTreeMap::new(),
+            props: BTreeMap::new(),
         };
         settings.set_plugin_enabled("/plugins/a.js", false);
         settings.write_to(&path).expect("write settings");
@@ -1725,6 +1832,246 @@ module.exports = {
         runtime.start();
         assert!(runtime.enabled());
         assert_eq!(runtime.loaded_count(), 1);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const PROPS: &str = r#"
+module.exports = {
+  name: "Props",
+  props: {
+    count: { type: "int", default: 0, min: 0, max: 10 },
+    gain: { type: "float", default: 0.5, min: 0, max: 2 },
+    label: { type: "text", default: "hello" },
+    tint: { type: "color", default: { r: 0, g: 0, b: 0, a: 1 } },
+    mode: {
+      type: "select",
+      default: "a",
+      options: [
+        { label: "A", value: "a" },
+        { label: "B", value: "b" },
+      ],
+    },
+  },
+};
+"#;
+
+    #[test]
+    fn retained_logs_are_deduplicated_and_cleared() {
+        let dir = temp_dir("logs");
+        let plugins = dir.join("plugins");
+        write_plugin(&plugins, "counter.js", COUNTER);
+        let mut runtime = runtime_for(&dir);
+        runtime.set_consented(true).expect("consent");
+        runtime.start();
+        runtime.set_enabled(true).expect("enable");
+
+        let logs = runtime.logs().to_vec();
+        assert!(
+            logs.iter().any(|line| line == "plugin: info Counter: init"),
+            "the init log is retained for the panel: {logs:?}"
+        );
+
+        // Running the hook twice must not duplicate the line.
+        runtime.pre_frame();
+        runtime.pre_frame();
+        let count = runtime
+            .logs()
+            .iter()
+            .filter(|line| *line == "plugin: info Counter: init")
+            .count();
+        assert_eq!(count, 1, "retained lines are deduplicated");
+
+        // `reload` re-runs init; the line is still one entry.
+        runtime.reload();
+        assert_eq!(
+            runtime
+                .logs()
+                .iter()
+                .filter(|line| *line == "plugin: info Counter: init")
+                .count(),
+            1
+        );
+
+        // Clearing drops the retained window. Already-seen lines stay deduped
+        // (a per-frame logger must not repopulate the panel), while a new
+        // distinct event is recorded again.
+        runtime.clear_logs();
+        assert!(runtime.logs().is_empty(), "{:?}", runtime.logs());
+        runtime.pre_frame();
+        runtime.pre_frame();
+        assert!(
+            runtime.logs().is_empty(),
+            "seen lines are not re-emitted: {:?}",
+            runtime.logs()
+        );
+        write_plugin(&plugins, "second.js", &COUNTER.replace("Counter", "Second"));
+        runtime.rescan();
+        assert!(
+            runtime
+                .logs()
+                .iter()
+                .any(|line| line == "plugin: info Second: init"),
+            "{:?}",
+            runtime.logs()
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn plugin_errors_reach_the_retained_log() {
+        let dir = temp_dir("error-log");
+        write_plugin(
+            &dir.join("plugins"),
+            "fail.js",
+            r#"
+module.exports = {
+  name: "Failer",
+  preProcessFrame() { throw new Error("boom"); },
+};
+"#,
+        );
+        let mut runtime = runtime_for(&dir);
+        runtime.set_consented(true).expect("consent");
+        runtime.start();
+        runtime.set_enabled(true).expect("enable");
+        runtime.pre_frame();
+
+        assert!(
+            runtime
+                .logs()
+                .iter()
+                .any(|line| line.contains("error") && line.contains("boom")),
+            "{:?}",
+            runtime.logs()
+        );
+        let plugin = &runtime.plugins()[0];
+        assert!(
+            plugin
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("boom"))
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prop_writes_are_coerced_persisted_and_reapplied_after_reload() {
+        let dir = temp_dir("props");
+        let plugin = write_plugin(&dir.join("plugins"), "props.js", PROPS);
+        let key = plugin.to_string_lossy().to_string();
+        let mut runtime = runtime_for(&dir);
+        runtime.set_consented(true).expect("consent");
+        runtime.start();
+        runtime.set_enabled(true).expect("enable");
+
+        assert_eq!(
+            runtime
+                .set_prop(&key, "count", json!(42.9))
+                .expect("set int"),
+            json!(10),
+            "the host clamps and rounds against the schema"
+        );
+        assert_eq!(
+            runtime
+                .set_prop(&key, "gain", json!(1.25))
+                .expect("set float"),
+            json!(1.25)
+        );
+        assert_eq!(
+            runtime
+                .set_prop(&key, "label", json!("edited"))
+                .expect("set text"),
+            json!("edited")
+        );
+        assert_eq!(
+            runtime
+                .set_prop(&key, "tint", json!({ "r": 1, "g": 0.5, "b": 0, "a": 1 }))
+                .expect("set colour"),
+            json!({ "r": 1.0, "g": 0.5, "b": 0.0, "a": 1.0 })
+        );
+        assert_eq!(
+            runtime
+                .set_prop(&key, "mode", json!("b"))
+                .expect("set select"),
+            json!("b")
+        );
+        assert_eq!(
+            runtime
+                .set_prop(&key, "mode", json!("unknown"))
+                .expect("coerced"),
+            json!("a"),
+            "an unknown option falls back to the default"
+        );
+
+        // The live descriptor follows the writes.
+        let props = &runtime.plugins()[0].props;
+        assert_eq!(props["count"]["value"], json!(10));
+        assert_eq!(props["gain"]["value"], json!(1.25));
+        assert_eq!(props["label"]["value"], json!("edited"));
+        assert_eq!(props["mode"]["value"], json!("a"));
+
+        // The write is persisted so a reload and a restart restore it.
+        let saved = PluginSettings::read_from(&dir.join(PLUGIN_SETTINGS_FILENAME))
+            .expect("read saved settings")
+            .expect("document");
+        assert_eq!(saved.props[&key]["count"], json!(10));
+        assert_eq!(saved.props[&key]["label"], json!("edited"));
+
+        runtime.reload();
+        assert_eq!(
+            runtime.plugins()[0].props["label"]["value"],
+            json!("edited")
+        );
+        assert_eq!(runtime.plugins()[0].props["count"]["value"], json!(10));
+
+        let mut restarted = runtime_for(&dir);
+        restarted.set_consented(true).expect("consent");
+        restarted.start();
+        restarted.set_enabled(true).expect("enable");
+        assert_eq!(
+            restarted.plugins()[0].props["label"]["value"],
+            json!("edited"),
+            "a fresh runtime applies the saved prop values"
+        );
+        assert_eq!(restarted.plugins()[0].props["gain"]["value"], json!(1.25));
+
+        // Unknown plugins/props are errors, not panics.
+        assert!(runtime.set_prop("/missing.js", "count", json!(1)).is_err());
+        assert!(runtime.set_prop(&key, "missing", json!(1)).is_err());
+        assert!(
+            runtime
+                .set_prop(&key, "count", json!("not a number"))
+                .is_ok()
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prop_writes_require_a_loaded_schema() {
+        let dir = temp_dir("props-disabled");
+        let plugin = write_plugin(&dir.join("plugins"), "props.js", PROPS);
+        let key = plugin.to_string_lossy().to_string();
+        let mut runtime = runtime_for(&dir);
+        runtime.start();
+
+        let error = runtime
+            .set_prop(&key, "count", json!(1))
+            .expect_err("a disabled plugin has no live schema");
+        assert!(
+            error.contains("schema") || error.contains("loaded"),
+            "{error}"
+        );
+        assert!(
+            runtime.plugins().iter().all(|plugin| plugin
+                .props
+                .as_object()
+                .is_none_or(serde_json::Map::is_empty)),
+            "nothing is evaluated while the gate is off"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
