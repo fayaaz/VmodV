@@ -8,6 +8,7 @@ pub mod audio;
 pub mod audio_settings;
 pub mod cli;
 pub mod compositor;
+pub mod control_socket;
 pub mod expressions;
 pub mod fixtures;
 pub mod headless;
@@ -159,10 +160,8 @@ pub fn native_main() -> ExitCode {
         };
     }
 
-    if cli.socket.is_some() {
-        eprintln!(
-            "ui: note — the control socket is not used by the native shell; use `modv --headless` for IPC"
-        );
+    if cli.socket.is_some() && (cli.headless || cli.screenshot.is_some()) {
+        eprintln!("ui: note — the control socket is not served in headless/screenshot mode");
     }
 
     let engine = match Engine::new(&EngineConfig::default()) {

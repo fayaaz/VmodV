@@ -50,6 +50,7 @@ use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
+use crate::control_socket::{Command, ControlServer, QueuedRequest};
 use crate::media::MediaHub;
 use crate::media_dialogs::{self, DocumentKind, FilePicker};
 use crate::media_profiles::{self, DEFAULT_PROFILE, PROJECT_SETTINGS_FILENAME, ProjectSettings};
@@ -77,7 +78,23 @@ use modv_media::video::{PortalError, PortalStream, ScreenSupport, TestPattern, V
 pub fn run(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Result<(), String> {
     let event_loop =
         EventLoop::new().map_err(|error| format!("failed to create event loop: {error}"))?;
-    let mut app = NativeApp::new(cli, engine, adapter);
+    // The control socket is opt-in and bound before the shell starts, so a
+    // harness can connect (and queue requests) while the (expensive) media
+    // library / plugin / GPU initialisation is still running.
+    let control = match cli.socket.as_deref() {
+        Some(path) => {
+            let server = ControlServer::bind(path).map_err(|error| {
+                format!("failed to bind control socket {}: {error}", path.display())
+            })?;
+            eprintln!(
+                "ui: INFO control socket listening on {}",
+                server.path().display()
+            );
+            Some(server)
+        }
+        None => None,
+    };
+    let mut app = NativeApp::new(cli, engine, adapter, control);
     event_loop
         .run_app(&mut app)
         .map_err(|error| format!("native event loop failed: {error}"))?;
@@ -333,6 +350,9 @@ pub struct NativeApp {
     engine: Option<Engine>,
     adapter: AdapterSummary,
     store: Store,
+    /// Opt-in JSON-lines control socket (`--socket`), served by a dedicated
+    /// thread and drained once per frame in [`NativeApp::draw_frame`].
+    control: Option<ControlServer>,
     /// `<userData>` and the shared media tree it owns.
     user_data: PathBuf,
     media_root: PathBuf,
@@ -484,7 +504,12 @@ impl NativeApp {
         &mut self.plugin_runtime
     }
 
-    fn new(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Self {
+    fn new(
+        cli: Cli,
+        engine: Engine,
+        adapter: AdapterSummary,
+        control: Option<ControlServer>,
+    ) -> Self {
         let start = Instant::now();
         let mut media_hub = MediaHub::new();
         // One host query at startup so the Media panel can explain a missing
@@ -742,6 +767,7 @@ impl NativeApp {
             engine: Some(engine),
             adapter,
             store,
+            control,
             media_root,
             applied_media_root: None,
             project_settings,
@@ -1208,6 +1234,13 @@ impl NativeApp {
 
     fn draw_frame(&mut self, event_loop: &ActiveEventLoop) {
         if self.done || self.failed {
+            return;
+        }
+        // Requests from `--socket` are answered at the frame boundary. The
+        // socket thread never touches the store or GPU; a dispatch/render/
+        // read-back happens here, on the thread that owns both.
+        self.drain_control_requests(event_loop);
+        if self.done {
             return;
         }
         let now = Instant::now();
@@ -3369,6 +3402,178 @@ impl NativeApp {
                 }
             }
         }
+    }
+
+    /// Answer every queued `--socket` request for this frame.
+    ///
+    /// The socket thread forwards requests over an mpsc channel; the winit
+    /// loop (the only owner of the store and compositor) answers them here.
+    /// At most one frame of latency is added, and a request that takes a GPU
+    /// read-back (screenshot) can only delay this frame, never the socket
+    /// thread or a subsequent client connection.
+    fn drain_control_requests(&mut self, event_loop: &ActiveEventLoop) {
+        loop {
+            let Some(request) = self.control.as_ref().and_then(ControlServer::try_recv) else {
+                break;
+            };
+            self.handle_control_request(request, event_loop);
+            if self.done {
+                break;
+            }
+        }
+    }
+
+    fn handle_control_request(&mut self, request: QueuedRequest, event_loop: &ActiveEventLoop) {
+        // `Command` is small (one string plus a JSON payload); cloning it lets
+        // `request.respond` consume the request in every arm, including quit.
+        let command = request.command.clone();
+        match command {
+            Command::Ping => {
+                request.respond(Ok(serde_json::json!({
+                    "pong": true,
+                    "pid": std::process::id(),
+                })));
+            }
+            Command::Version => {
+                request.respond(Ok(serde_json::json!({
+                    "binary": "modv",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "protocol": crate::control_socket::PROTOCOL_VERSION,
+                })));
+            }
+            Command::State => {
+                let state = self.control_state();
+                request.respond(Ok(state));
+            }
+            Command::Dispatch { action, payload } => {
+                let result = self
+                    .store
+                    .dispatch(&action, payload)
+                    .map_err(|error| error.to_string());
+                request.respond(result);
+            }
+            Command::Screenshot {
+                path,
+                width,
+                height,
+            } => {
+                let result = self.control_screenshot(&path, width, height);
+                request.respond(result);
+            }
+            Command::Quit => {
+                request.respond(Ok(serde_json::json!({ "quitting": true })));
+                // The acknowledgement is on the wire before the process
+                // starts saving state and tearing down (Drop unlinks the
+                // socket after the event loop returns).
+                if let Some(control) = &self.control
+                    && !control.flush(Duration::from_secs(2))
+                {
+                    eprintln!("ui: WARN control socket quit acknowledgement was not flushed");
+                }
+                self.finish_and_exit(event_loop);
+            }
+        }
+    }
+
+    /// The `state` command: [`Store::sync_state`] plus the runtime pieces that
+    /// are owned by the shell rather than the store.
+    fn control_state(&self) -> Value {
+        let mut state = self.store.sync_state();
+        let audio = self.store.audio();
+        let (compositor_width, compositor_height) = self
+            .compositor
+            .as_ref()
+            .map(Compositor::main_texture_size)
+            .unwrap_or((self.cli.width, self.cli.height));
+
+        if let Value::Object(map) = &mut state {
+            map.insert(
+                "audio".to_string(),
+                serde_json::json!({
+                    "bpm": self.store.bpm(),
+                    "kick": self.store.kick(),
+                    "engineOwned": self.store.engine_audio_active(),
+                    "captureRate": self.audio_capture_rate.get(),
+                    "selection": self.audio_selection.as_str(),
+                    "device": self.audio_device.as_deref(),
+                    "bands": {
+                        "bass": audio.bass,
+                        "mid": audio.mid,
+                        "treble": audio.treble,
+                        "beat": audio.beat,
+                    },
+                    "lanes": audio.lanes,
+                    "cells": audio.cells,
+                    "sampleRate": audio.sample_rate,
+                }),
+            );
+            map.insert(
+                "midiRuntime".to_string(),
+                serde_json::json!({
+                    "available": self.midi_client.available(),
+                    "error": self.midi_client.error(),
+                    "learning": self.midi_client.learning().is_some(),
+                }),
+            );
+            map.insert(
+                "runtime".to_string(),
+                serde_json::json!({
+                    "frames": self.frames,
+                    "fps": self.fps,
+                    "frameMs": self.frame_ms,
+                    "resolution": [compositor_width, compositor_height],
+                    "window": [self.cli.width, self.cli.height],
+                    "outputOpen": self.output.is_some(),
+                    "userData": self.user_data.to_string_lossy(),
+                    "statePath": self.state_path.to_string_lossy(),
+                    "profile": self.active_profile,
+                    "socket": self.control.as_ref().map(|control| {
+                        control.path().to_string_lossy().into_owned()
+                    }),
+                }),
+            );
+            map.insert(
+                "_engine".to_string(),
+                serde_json::json!({ "framesPresented": self.frames }),
+            );
+        }
+        state
+    }
+
+    /// The `screenshot` command: render the current store state and write the
+    /// compositor's main texture as a PNG.
+    fn control_screenshot(
+        &mut self,
+        path: &Path,
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<Value, String> {
+        // The UI renders once per frame; a dispatch earlier in this drain
+        // batch has not reached the compositor yet. Render explicitly so the
+        // screenshot reflects the store the caller just mutated.
+        self.render_engine(None);
+        let Some(compositor) = self.compositor.as_mut() else {
+            return Err("compositor is not ready".to_string());
+        };
+        let (source_width, source_height) = compositor.size();
+        if source_width == 0 || source_height == 0 {
+            return Err("compositor has no output size".to_string());
+        }
+        let width = width.unwrap_or(source_width);
+        let height = height.unwrap_or(source_height);
+        let Some(frame) = compositor
+            .read_frame_at(width, height)
+            .map_err(|error| error.to_string())?
+        else {
+            return Err("compositor has not rendered a frame yet".to_string());
+        };
+        let bytes = crate::control_socket::write_png(path, width, height, &frame)?;
+        Ok(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "width": width,
+            "height": height,
+            "bytes": bytes,
+        }))
     }
 
     fn record_error(&mut self, message: String) {

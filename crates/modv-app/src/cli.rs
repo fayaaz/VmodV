@@ -2,9 +2,11 @@
 //!
 //! Parsed with clap's builder API: the `derive` feature of clap is not
 //! enabled in this workspace and `Cargo.toml` is frozen for this milestone.
-//! The `--socket`/`--state` flags are accepted for forward compatibility
-//! with M1 (WS-14) and are unused here. `--emit-fixtures` writes the M2 parity
-//! fixtures and exits before any GPU/window work (see [`crate::fixtures`]).
+//! The `--state` flag is accepted for forward compatibility with the Electron
+//! supervisor; `--socket` doubles as the native shell's opt-in JSON-lines
+//! control channel (see [`crate::control_socket`]). `--emit-fixtures` writes
+//! the M2 parity fixtures and exits before any GPU/window work (see
+//! [`crate::fixtures`]).
 
 use std::path::{Path, PathBuf};
 
@@ -184,7 +186,9 @@ pub struct Cli {
     /// Dump the adapter info JSON to stderr at startup (a one-line summary is
     /// always logged to stderr regardless of this flag).
     pub log_adapter: bool,
-    /// Reserved for M1 (WS-14): control socket path. Accepted but unused here.
+    /// Control socket path. In windowed engine mode this is the Electron
+    /// supervisor's binary-framed channel; the native shell serves the opt-in
+    /// JSON-lines test protocol instead (see [`crate::control_socket`]).
     pub socket: Option<PathBuf>,
     /// Reserved for M1: state snapshot path. Accepted but unused here.
     pub state: Option<PathBuf>,
@@ -349,8 +353,10 @@ pub fn parse() -> Cli {
         .arg(
             Arg::new("socket")
                 .long("socket")
+                .alias("control-socket")
                 .value_name("PATH")
-                .help("Reserved for M1 (WS-14): control socket path"),
+                .help("Native shell: opt-in Unix control socket (JSON lines; test/debug IPC). \
+                       In engine mode this is the Electron supervisor channel"),
         )
         .arg(
             Arg::new("state")
