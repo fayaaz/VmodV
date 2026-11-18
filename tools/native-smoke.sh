@@ -129,6 +129,9 @@ case "$SOAK_SECONDS" in
 esac
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/modv-native-smoke.XXXXXX")
+# Safety net: even an invocation we forget to give a dedicated profile to must
+# never read or write the real ~/.config/VmodV tree.
+export MODV_USER_DATA="$TMP/user-data-default"
 cleanup() {
     if [ -n "$WATCHDOG" ]; then
         kill "$WATCHDOG" 2>/dev/null || true
@@ -228,7 +231,7 @@ say "temp userData: $TMP (removed on exit unless --keep)"
 
 # ————————————— (a) headless benchmark —————————————
 say "(a) headless --frames $HEADLESS_FRAMES --bench"
-run_app headless --headless --frames "$HEADLESS_FRAMES" --bench
+MODV_USER_DATA="$TMP/user-data-headless" run_app headless --headless --frames "$HEADLESS_FRAMES" --bench
 python3 - "$TMP/headless.out" "$HEADLESS_FRAMES" <<'PY'
 import json
 import sys
@@ -301,7 +304,8 @@ else
 fi
 
 if [ "$DISPLAY_OK" = "1" ]; then
-    run_app windowed --frames "$WINDOWED_FRAMES" --apply-scene "$SCENE"
+    MODV_USER_DATA="$TMP/user-data-windowed" run_app windowed \
+        --frames "$WINDOWED_FRAMES" --apply-scene "$SCENE"
     grep -q 'ui: INFO applied Scene' "$TMP/windowed.err" ||
         {
             show_outputs windowed
@@ -369,8 +373,11 @@ PY
 
     # ————————————— (e) crash recovery —————————————
     say "(e) SIGKILL before the 30 s periodic save, then restart"
+    CRASH_DATA="$TMP/user-data-crash"
+    cp -a "$STATE_DATA" "$CRASH_DATA"
     CRASH_LOG="$TMP/crash-1"
-    setsid "${APP_CMD[@]}" --frames 100000 --apply-scene "$SCENE" \
+    MODV_USER_DATA="$CRASH_DATA" setsid "${APP_CMD[@]}" \
+        --frames 100000 --apply-scene "$SCENE" \
         >"$CRASH_LOG.out" 2>"$CRASH_LOG.err" &
     CRASH_LEADER=$!
     # Wait for the window/Scene to come up, then kill the whole launcher tree
@@ -384,7 +391,7 @@ PY
     kill -KILL -- "-$CRASH_LEADER" 2>/dev/null || true
     wait "$CRASH_LEADER" 2>/dev/null || true
     CRASH_LEADER=""
-    MODV_USER_DATA="$STATE_DATA" timeout --kill-after=5 "$TIMEOUT" \
+    MODV_USER_DATA="$CRASH_DATA" timeout --kill-after=5 "$TIMEOUT" \
         "${APP_CMD[@]}" --frames 10 \
         >"$TMP/crash-2.out" 2>"$TMP/crash-2.err" ||
         {
@@ -415,7 +422,9 @@ if [ "$SOAK_SECONDS" -gt 0 ]; then
     else
         say "soak: windowed --bench-seconds $SOAK_SECONDS"
         SOAK_OUT="$TMP/soak"
-        setsid "${APP_CMD[@]}" --bench-seconds "$SOAK_SECONDS" --apply-scene "$SCENE" \
+        SOAK_DATA="$TMP/user-data-soak"
+        MODV_USER_DATA="$SOAK_DATA" setsid "${APP_CMD[@]}" \
+            --bench-seconds "$SOAK_SECONDS" --apply-scene "$SCENE" \
             >"$SOAK_OUT.out" 2>"$SOAK_OUT.err" &
         SOAK_LEADER=$!
         (
