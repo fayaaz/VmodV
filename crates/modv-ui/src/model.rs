@@ -86,6 +86,12 @@ pub struct EngineSnapshot {
     pub media: MediaSnapshot,
     /// Native MIDI input state.
     pub midi: MidiSnapshot,
+    /// The opt-in JavaScript plugin runtime (the Plugins panel).
+    ///
+    /// `modv-app` rebuilds this from `PluginRuntime` (the runtime stays
+    /// authoritative); it is refreshed at 1 Hz while the panel is visible and
+    /// immediately after a plugin command.
+    pub plugins: PluginView,
     /// Native NDI availability, output sender, discovery and receivers.
     pub ndi: NdiSnapshot,
     /// OSC listeners and the latest received address values.
@@ -866,6 +872,362 @@ pub struct MidiDeviceView {
     pub listen_for_clock: bool,
     pub cc_latch: bool,
     pub note_on_latch: bool,
+}
+
+/// The opt-in JavaScript plugin panel read model.
+///
+/// Built by `modv-app` from the authoritative `PluginRuntime` and never
+/// written back: the UI renders it and emits commands, the runtime applies
+/// them. `plugins` is the discovery list even while the master gate is off, so
+/// the panel can show what *would* run.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PluginView {
+    /// The master switch is on (only possible with consent).
+    pub enabled: bool,
+    /// The user accepted the sandbox consent notice.
+    pub consented: bool,
+    /// How many plugins currently hold a Boa context.
+    pub loaded_count: usize,
+    /// Discovered scripts, sorted by absolute path.
+    pub plugins: Vec<PluginInfoView>,
+    /// Deduplicated `plugin: …` messages retained by the runtime.
+    pub logs: Vec<String>,
+    /// The largest capture a running plugin requested, `(width, height)`.
+    pub capture: Option<[u32; 2]>,
+}
+
+impl PluginView {
+    /// Whether the host may run hooks (`enabled && consented`).
+    pub fn is_running(&self) -> bool {
+        self.enabled && self.consented
+    }
+
+    /// The explanation shown above a greyed plugin list, or `None` when the
+    /// host is running.
+    pub fn gate_reason(&self) -> Option<&'static str> {
+        if !self.consented {
+            Some(
+                "JavaScript plugins need your consent. Review the warning above and enable \
+                 them; the scripts below are discovered but never evaluated.",
+            )
+        } else if !self.enabled {
+            Some(
+                "JavaScript plugins are turned off. The scripts below are discovered but \
+                 not running; enable them to load their controls.",
+            )
+        } else {
+            None
+        }
+    }
+
+    /// The loaded/total line under the master switch.
+    pub fn summary(&self) -> String {
+        if !self.is_running() {
+            return "Not running".to_string();
+        }
+        let total = self.plugins.len();
+        let loaded = self.loaded_count;
+        if total == 1 {
+            format!("{loaded} of 1 plugin loaded")
+        } else {
+            format!("{loaded} of {total} plugins loaded")
+        }
+    }
+
+    /// The capture read-back line (`capture 160×90`), when one is requested.
+    pub fn capture_label(&self) -> Option<String> {
+        self.capture.map(capture_size_label)
+    }
+}
+
+/// The lifecycle state a plugin row's status dot shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PluginStatus {
+    /// A Boa context is loaded and the plugin runs its hooks.
+    Loaded,
+    /// Discovered but not running (master gate or per-plugin switch off).
+    #[default]
+    Disabled,
+    /// Loading/initialising failed, or a hook threw.
+    Error,
+}
+
+impl PluginStatus {
+    /// The visible status label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Loaded => "Loaded",
+            Self::Disabled => "Disabled",
+            Self::Error => "Error",
+        }
+    }
+}
+
+/// One discovered plugin script.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PluginInfoView {
+    /// Absolute script path (the settings key and command payload).
+    pub path: String,
+    /// Descriptor name (empty until the source loads).
+    pub name: String,
+    pub author: String,
+    pub version: String,
+    /// The per-plugin user switch.
+    pub enabled: bool,
+    /// The host slot's active flag (the switch after the host saw it).
+    pub active: bool,
+    /// A Boa context is loaded and `init` succeeded.
+    pub loaded: bool,
+    /// Loading/initialising failed.
+    pub failed: bool,
+    /// The first recorded error for this plugin, if any.
+    pub error: Option<String>,
+    /// The source file's size in bytes.
+    pub source_bytes: usize,
+    /// The plugin's requested capture size, `(width, height)`.
+    pub capture: Option<[u32; 2]>,
+    /// Generated controls, in descriptor order.
+    pub props: Vec<PluginPropView>,
+}
+
+impl PluginInfoView {
+    /// The row title: the descriptor name, else the script's file stem.
+    pub fn title(&self) -> &str {
+        if !self.name.trim().is_empty() {
+            return &self.name;
+        }
+        let file = self.file_name();
+        file.strip_suffix(".js")
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or(file)
+    }
+
+    /// The script's file name (`lumen.js`).
+    pub fn file_name(&self) -> &str {
+        self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
+    }
+
+    /// `author · v1.2.3`, omitting whichever half is missing.
+    pub fn credit(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.author.trim().is_empty() {
+            parts.push(self.author.trim().to_string());
+        }
+        if !self.version.trim().is_empty() {
+            parts.push(format!("v{}", self.version.trim()));
+        }
+        parts.join(" · ")
+    }
+
+    /// The status dot's state. An error outranks a loaded context because the
+    /// plugin is no longer running its hooks reliably.
+    pub fn status(&self) -> PluginStatus {
+        if self.failed || self.error.is_some() {
+            PluginStatus::Error
+        } else if self.loaded {
+            PluginStatus::Loaded
+        } else {
+            PluginStatus::Disabled
+        }
+    }
+
+    /// The capture read-back line, when this plugin asked for one.
+    pub fn capture_label(&self) -> Option<String> {
+        self.capture.map(capture_size_label)
+    }
+}
+
+/// `[160, 90]` → `capture 160×90`.
+fn capture_size_label([width, height]: [u32; 2]) -> String {
+    format!("capture {width}×{height}")
+}
+
+/// The value type of a plugin prop (`PluginPropKind` in `modv-engine`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PluginPropKindView {
+    /// A whole number.
+    #[default]
+    Int,
+    /// A floating-point number.
+    Float,
+    /// A boolean toggle.
+    Bool,
+    /// Free text.
+    Text,
+    /// An RGBA colour whose channels are `0..=1`.
+    Color,
+    /// One of the descriptor's options (the legacy `enum` alias).
+    Select,
+}
+
+impl PluginPropKindView {
+    /// Parse the descriptor's `type` token. Unknown tokens are not props the
+    /// panel can generate a control for.
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            "int" => Some(Self::Int),
+            "float" => Some(Self::Float),
+            "bool" => Some(Self::Bool),
+            "text" => Some(Self::Text),
+            "color" => Some(Self::Color),
+            "select" | "enum" => Some(Self::Select),
+            _ => None,
+        }
+    }
+
+    /// The wire token ([`Self::parse`]'s inverse for the canonical names).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Int => "int",
+            Self::Float => "float",
+            Self::Bool => "bool",
+            Self::Text => "text",
+            Self::Color => "color",
+            Self::Select => "select",
+        }
+    }
+
+    /// Whether the control is a numeric slider.
+    pub fn is_numeric(self) -> bool {
+        matches!(self, Self::Int | Self::Float)
+    }
+}
+
+/// One option of a `select` prop.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PluginPropOptionView {
+    /// Human-readable label for the ComboBox.
+    pub label: String,
+    /// Scalar value written back through `PluginHost::set_prop`.
+    pub value: Value,
+}
+
+/// One generated control for a plugin prop.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PluginPropView {
+    /// Prop key inside the plugin's `props` object.
+    pub name: String,
+    pub kind: PluginPropKindView,
+    /// The current value (the runtime's authoritative copy).
+    pub value: Value,
+    /// The declared default (the slider's reset target).
+    pub default: Value,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub step: Option<f64>,
+    pub options: Vec<PluginPropOptionView>,
+}
+
+impl PluginPropView {
+    /// Parse one serialised `PluginProp` from `PluginRuntime::plugins()`.
+    ///
+    /// Unknown types and malformed options are skipped by the caller, so a
+    /// future descriptor cannot break the whole panel.
+    pub fn from_schema(name: &str, schema: &Value) -> Option<Self> {
+        let kind = PluginPropKindView::parse(schema.get("type")?.as_str()?)?;
+        let default = schema.get("default").cloned().unwrap_or(Value::Null);
+        let value = schema
+            .get("value")
+            .cloned()
+            .unwrap_or_else(|| default.clone());
+        let number = |key: &str| schema.get(key).and_then(Value::as_f64);
+        let options = schema
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        Some(PluginPropOptionView {
+                            label: item.get("label")?.as_str()?.to_string(),
+                            value: item.get("value").cloned()?,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            name: name.to_string(),
+            kind,
+            value,
+            default,
+            min: number("min"),
+            max: number("max"),
+            step: number("step"),
+            options,
+        })
+    }
+
+    /// The slider's `(min, max, step)`, widened to contain the current value
+    /// and the default when the descriptor declares no bounds.
+    pub fn bounds(&self) -> (f64, f64, f64) {
+        let value = self.value.as_f64().unwrap_or(0.0);
+        let default = self.default.as_f64().unwrap_or(value);
+        let floor = value.min(default).min(0.0);
+        let ceiling = value.max(default).max(1.0);
+        let min = self.min.filter(|bound| bound.is_finite()).unwrap_or(floor);
+        let mut max = self
+            .max
+            .filter(|bound| bound.is_finite())
+            .unwrap_or(ceiling);
+        if !max.is_finite() || max <= min {
+            max = min + 1.0;
+        }
+        let step = self
+            .step
+            .filter(|step| step.is_finite() && *step > 0.0)
+            .unwrap_or(if self.kind == PluginPropKindView::Int {
+                1.0
+            } else {
+                0.001
+            });
+        (min, max, step)
+    }
+
+    /// The command payload for a numeric edit: ints round, floats stay floats.
+    pub fn number_value(&self, value: f64) -> Value {
+        if self.kind == PluginPropKindView::Int {
+            Value::from(value.round() as i64)
+        } else {
+            Value::from(value)
+        }
+    }
+
+    /// The index of the option matching the current value.
+    pub fn selected_index(&self) -> Option<usize> {
+        self.options
+            .iter()
+            .position(|option| option.value == self.value)
+    }
+
+    /// The current option's label, when the value matches one.
+    pub fn selected_label(&self) -> Option<&str> {
+        self.selected_index()
+            .map(|index| self.options[index].label.as_str())
+    }
+}
+
+/// Serialise a colour prop edit as the legacy `{r,g,b,a}` ratio object.
+///
+/// Channels clamp to `0..=1`; a non-finite channel becomes `0` so the JSON
+/// payload never contains `null`.
+pub fn plugin_color_value(rgba: [f32; 4]) -> Value {
+    let channel = |value: f32| {
+        if value.is_finite() {
+            // The control is f32; round to a micro-ratio so the persisted JSON
+            // reads `0.1` instead of `0.10000000149011612`.
+            let ratio = f64::from(value.clamp(0.0, 1.0));
+            (ratio * 1_000_000.0).round() / 1_000_000.0
+        } else {
+            0.0
+        }
+    };
+    serde_json::json!({
+        "r": channel(rgba[0]),
+        "g": channel(rgba[1]),
+        "b": channel(rgba[2]),
+        "a": channel(rgba[3]),
+    })
 }
 
 /// A MediaHub operation requested by the UI.
@@ -1927,5 +2289,216 @@ mod tests {
         assert_eq!(TimingUnit::parse("BAR"), TimingUnit::Bars);
         assert_eq!(TimingUnit::parse("nonsense"), TimingUnit::Seconds);
         assert_eq!(TimingUnit::Bars.suffix(), " bar");
+    }
+
+    fn plugin_prop(schema: serde_json::Value) -> PluginPropView {
+        PluginPropView::from_schema("test", &schema).expect("a supported prop schema")
+    }
+
+    #[test]
+    fn plugin_props_parse_the_descriptor_schema() {
+        let gain = plugin_prop(serde_json::json!({
+            "type": "float",
+            "default": 0.5,
+            "value": 0.75,
+            "min": 0.0,
+            "max": 2.0,
+            "step": 0.01
+        }));
+        assert_eq!(gain.kind, PluginPropKindView::Float);
+        assert_eq!(gain.value, serde_json::json!(0.75));
+        assert_eq!(gain.default, serde_json::json!(0.5));
+        assert_eq!(
+            (gain.min, gain.max, gain.step),
+            (Some(0.0), Some(2.0), Some(0.01))
+        );
+        assert!(gain.options.is_empty());
+
+        let mode = plugin_prop(serde_json::json!({
+            "type": "enum",
+            "default": "wide",
+            "value": "wide",
+            "options": [
+                { "label": "Wide", "value": "wide" },
+                { "label": "Square", "value": "square" }
+            ]
+        }));
+        assert_eq!(
+            mode.kind,
+            PluginPropKindView::Select,
+            "the legacy `enum` alias maps to select"
+        );
+        assert_eq!(mode.options.len(), 2);
+        assert_eq!(mode.options[1].label, "Square");
+        assert_eq!(mode.options[1].value, serde_json::json!("square"));
+        assert_eq!(mode.selected_index(), Some(0));
+        assert_eq!(mode.selected_label(), Some("Wide"));
+
+        // A missing current value falls back to the declared default.
+        let text = plugin_prop(serde_json::json!({ "type": "text", "default": "hello" }));
+        assert_eq!(text.value, serde_json::json!("hello"));
+        assert_eq!(text.kind, PluginPropKindView::Text);
+
+        assert_eq!(
+            PluginPropKindView::parse("bool"),
+            Some(PluginPropKindView::Bool)
+        );
+        assert_eq!(
+            PluginPropKindView::parse("color"),
+            Some(PluginPropKindView::Color)
+        );
+        assert_eq!(
+            PluginPropKindView::parse("int"),
+            Some(PluginPropKindView::Int)
+        );
+        assert_eq!(PluginPropKindView::parse("vec3"), None);
+        assert!(
+            PluginPropView::from_schema("bad", &serde_json::json!({ "type": "vec3" })).is_none()
+        );
+        assert!(PluginPropView::from_schema("bad", &serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn plugin_prop_bounds_always_contain_the_value_and_default() {
+        let bounded = plugin_prop(serde_json::json!({
+            "type": "int", "default": 4, "value": 6, "min": 0, "max": 10
+        }));
+        assert_eq!(bounded.bounds(), (0.0, 10.0, 1.0));
+
+        // A float with no declared bounds widens to the value/default.
+        let wide = plugin_prop(serde_json::json!({
+            "type": "float", "default": 5.5, "value": 9.25
+        }));
+        let (min, max, step) = wide.bounds();
+        assert!(min <= 0.0 && max >= 9.25, "{min}..{max}");
+        assert_eq!(step, 0.001);
+
+        // A broken min/max pair still yields a usable slider.
+        let broken = plugin_prop(serde_json::json!({
+            "type": "float", "default": 1.0, "value": 1.0, "min": 4.0, "max": 4.0
+        }));
+        let (min, max, _) = broken.bounds();
+        assert!(max > min, "{min}..{max}");
+
+        let declared_step = plugin_prop(serde_json::json!({
+            "type": "float", "default": 0.0, "value": 0.0, "step": 0.25
+        }));
+        assert_eq!(declared_step.bounds().2, 0.25);
+    }
+
+    #[test]
+    fn plugin_numeric_payloads_round_ints_and_keep_floats() {
+        let int = plugin_prop(serde_json::json!({"type": "int", "default": 0, "value": 0}));
+        assert_eq!(int.number_value(3.6), serde_json::json!(4));
+        let float = plugin_prop(serde_json::json!({"type": "float", "default": 0, "value": 0}));
+        assert_eq!(float.number_value(3.6), serde_json::json!(3.6));
+    }
+
+    #[test]
+    fn plugin_colour_payloads_clamp_and_keep_the_ratio_shape() {
+        assert_eq!(
+            plugin_color_value([0.1, 0.2, 0.3, 0.4]),
+            serde_json::json!({ "r": 0.1, "g": 0.2, "b": 0.3, "a": 0.4 })
+        );
+        assert_eq!(
+            plugin_color_value([-1.0, 2.0, f32::NAN, 0.5]),
+            serde_json::json!({ "r": 0.0, "g": 1.0, "b": 0.0, "a": 0.5 }),
+            "nan clamps to zero instead of serialising as null"
+        );
+    }
+
+    fn plugin_info(name: &str, loaded: bool, failed: bool, error: Option<&str>) -> PluginInfoView {
+        PluginInfoView {
+            path: format!("/plugins/{name}.js"),
+            name: name.to_string(),
+            author: "modV".to_string(),
+            version: "1.0.0".to_string(),
+            enabled: true,
+            active: loaded,
+            loaded,
+            failed,
+            error: error.map(str::to_string),
+            source_bytes: 128,
+            capture: None,
+            props: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn plugin_status_prefers_errors_then_loaded_then_disabled() {
+        assert_eq!(
+            plugin_info("a", true, false, None).status(),
+            PluginStatus::Loaded
+        );
+        assert_eq!(
+            plugin_info("b", false, false, None).status(),
+            PluginStatus::Disabled
+        );
+        assert_eq!(
+            plugin_info("c", false, true, Some("boom")).status(),
+            PluginStatus::Error
+        );
+        assert_eq!(
+            plugin_info("d", true, false, Some("hook threw")).status(),
+            PluginStatus::Error,
+            "a runtime error outranks the loaded context"
+        );
+        assert_eq!(PluginStatus::Loaded.label(), "Loaded");
+        assert_eq!(PluginStatus::Disabled.label(), "Disabled");
+        assert_eq!(PluginStatus::Error.label(), "Error");
+    }
+
+    #[test]
+    fn plugin_rows_fall_back_to_the_file_name_and_combine_author_and_version() {
+        let mut plugin = plugin_info("", false, false, None);
+        plugin.path = "/plugins/plugin.js".to_string();
+        assert_eq!(
+            plugin.title(),
+            "plugin",
+            "the file stem names an unnamed plugin"
+        );
+        assert_eq!(plugin.file_name(), "plugin.js");
+        plugin.name = "Lumen".to_string();
+        assert_eq!(plugin.title(), "Lumen");
+        assert_eq!(plugin.credit(), "modV · v1.0.0");
+        plugin.version.clear();
+        assert_eq!(plugin.credit(), "modV");
+        plugin.author.clear();
+        plugin.version = "1.0.0".to_string();
+        assert_eq!(plugin.credit(), "v1.0.0");
+        plugin.version.clear();
+        assert_eq!(plugin.credit(), "");
+    }
+
+    #[test]
+    fn plugin_view_explains_why_the_list_is_greyed() {
+        let mut view = PluginView {
+            plugins: vec![plugin_info("Lumen", true, false, None)],
+            loaded_count: 1,
+            ..Default::default()
+        };
+        assert!(!view.is_running());
+        assert!(
+            view.gate_reason()
+                .is_some_and(|reason| reason.contains("consent")),
+            "unconsented plugins explain the gate: {:?}",
+            view.gate_reason()
+        );
+        assert_eq!(view.summary(), "Not running");
+
+        view.consented = true;
+        assert!(
+            view.gate_reason()
+                .is_some_and(|reason| reason.contains("turned off")),
+            "{:?}",
+            view.gate_reason()
+        );
+
+        view.enabled = true;
+        assert!(view.is_running());
+        assert_eq!(view.gate_reason(), None);
+        assert_eq!(view.summary(), "1 of 1 plugin loaded");
+        view.capture = Some([160, 90]);
+        assert_eq!(view.capture_label(), Some("capture 160×90".to_string()));
     }
 }
