@@ -1,10 +1,11 @@
 # Electron e2e → Rust parity inventory
 
-`parity.json` maps every Electron Playwright test to a Rust test that asserts
-the same intent, or to an explicit waiver. The port is complete: there are no
-open `port-store`, `port-ui` or `port-process` buckets left. It is not a list
-of tests to delete — each entry names the Rust location that keeps the
-behaviour covered once the Electron suite goes away.
+`parity.json` maps every test in the archived Electron Playwright suite to a
+Rust test that asserts the same intent, or to an explicit waiver. The port is
+complete: there are no open `port-store`, `port-ui` or `port-process` buckets
+left. It is not a list of tests to delete — each entry names the Rust location
+that keeps the behaviour covered. The Electron suite itself now lives on branch
+`legacy-electron`/tag `v1.x-final` and is not executed from this tree.
 
 ## Counts
 
@@ -19,8 +20,9 @@ The tree has **50 `*.spec.js` files and 147 executed test cases**:
   giving 147 executed cases in total.
 
 Final accounting: **137 covered + 10 waived = 147 tests** across 50 files.
-The JS guard pins the live tree and these totals; the Rust guard pins the
-manifest after the Electron suite is deleted.
+The archived JS guard pinned the live Electron tree and these totals; the Rust
+guard (`crates/modv-app/tests/e2e_manifest.rs`) pins the manifest in this
+tree.
 
 ## Statuses
 

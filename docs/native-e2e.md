@@ -4,12 +4,13 @@ Status: harness foundation (first native porting task)
 Binary: `modv` (the native single-process shell, `crates/modv-app/src/bin/modv.rs`)
 Tests: `crates/modv-app/tests/e2e_harness.rs` + `crates/modv-app/tests/e2e/mod.rs`
 
-The Electron suite (`tests/e2e/spec/**`, Playwright) launches Electron and
-drives the worker store through the page object. The native replacement must
-prove the same behaviour against the **real** Rust binary: no mocked store, no
-in-process test host. This document specifies the control protocol, the
-process harness, the display/CI requirements, and the rules for porting the
-existing specs with intent parity plus explicit waivers.
+The archived Electron suite (`tests/e2e/spec/**`, Playwright, branch
+`legacy-electron`) launched Electron and drove the worker store through a page
+object. The native replacement proves the same behaviour against the **real**
+Rust binary: no mocked store, no in-process test host. This document specifies
+the control protocol, the process harness, the display/CI requirements, and
+the rules for porting the archived specs with intent parity plus explicit
+waivers.
 
 The harness covers the process/lifecycle/state/pixel layer. Specs that need a
 specific panel interaction are ported on top of it in buckets (see

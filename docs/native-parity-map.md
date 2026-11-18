@@ -1,14 +1,35 @@
-# Native parity map (P8 draft)
+# Native parity map (P8)
 
-Maps the legacy Playwright suite under `tests/e2e/spec/` to the native
-implementation's coverage: Rust engine tests, native `modv-ui`/`modv-app`
-tests, kittest snapshots, headless CLI checks, manual hardware checks, or an
-explicit waiver. The plan expects every scenario to land in exactly one
-bucket; this is the first pass at HEAD `71f707ad` and is regenerated at P8
-start. Status rows refreshed at `f239ad56` (2026-11-17).
+Maps the legacy Playwright suite to the native implementation's coverage: Rust
+engine tests, native `modv-ui`/`modv-app` tests, kittest snapshots, headless
+CLI checks, manual hardware checks, or an explicit waiver. Every scenario lands
+in exactly one bucket. The rows below are the historical mapping; the legacy
+spec paths were removed from this tree in the Rust-only cleanup and live on
+branch `legacy-electron`/tag `v1.x-final` (see
+[legacy-electron.md](./legacy-electron.md)). The native anchors named in each
+row are the current, executable coverage.
 
-Legend: **C** covered, **P** partially covered (native panel or manual step
-still missing), **W** waived with a reason, **N** not started.
+Status rows last refreshed for the Rust-only tree (2026-11-18). Legend:
+**C** covered, **P** partially covered (native panel or manual step still
+missing), **W** waived with a reason, **N** not started.
+
+## Post-cleanup verification
+
+`tests/` now only contains `tests/e2e-rust/` (the committed parity manifest) and
+`tests/fixtures/module-parity.json` (the registry manifest). The Vitest and
+Playwright suites are archived, not executed. Native coverage is:
+
+| Layer | Command |
+| --- | --- |
+| Workspace unit/integration tests | `make engine-test` (`cargo test --workspace`) |
+| Native process/scene/parity harness | `make test-e2e-native` |
+| Lint | `make engine-lint` (clippy `-D warnings`, rustfmt) |
+| Packaged AppImage/.deb checks | `make native-deb-check`, `tools/native-smoke.sh` |
+
+The two JS guards that still described native content moved into Rust:
+`crates/modv-app/tests/notices.rs` (third-party notices/NC-SA coverage) and
+`crates/modv-app/tests/removed_content.rs` (removed Point10 modules/scenes).
+`crates/modv-app/tests/e2e_manifest.rs` already guards `tests/e2e-rust/parity.json`.
 
 | Legacy spec | Native replacement / anchor | Status |
 | --- | --- | --- |
@@ -36,7 +57,7 @@ still missing), **W** waived with a reason, **N** not started.
 | `inputLinks/inputConfigUpdatesWhenControlIsFocused.spec.js` | native focused-input link editor (`widgets/input_link.rs` tests) | C |
 | `main/quitCleansUp.spec.js` | native `NativeApp::shutdown` + engine snapshot/shutdown tests; `tools/native-smoke.sh` checks exit-snapshot write and SIGKILL recovery | P (packaged quit cleanup still manual) |
 | `main/windowState.spec.js` | `modv-app/src/window_state.rs` unit tests (normalise/atomic/clamp) | C |
-| `packaging/linuxBundleIsTrimmed.spec.js` | `tools/native-deb-check.sh` verifies the native package contents; `native.yml` builds the AppImage/.deb. The Electron bundle is unchanged | C |
+| `packaging/linuxBundleIsTrimmed.spec.js` | `tools/native-deb-check.sh` verifies the native package contents; `native.yml` builds the AppImage/.deb. This is the only bundle now: the Electron build is archived | C |
 | packaged native smoke | `tools/native-smoke.sh`: headless `--frames --bench`, windowed apply-scene, state round-trip, AppRun log, SIGKILL recovery, optional bounded soak | C (native AppImage run) |
 | `presets/generatesAPresetWithExpectedKeys.spec.js` | Rust preset round-trip tests (existing) | C |
 | `scenes/defaultScenes.spec.js` | `default_scenes` Rust tests + native 61-Scene seed | C |
@@ -150,8 +171,9 @@ Still open:
    vector pad.
 6. Multi-output windows (single `output-0` today), a structured daily logger
    and the P1 splash/file dialogs.
-7. P9: Flatpak, the 2.0.0 version bump, switching the nightly release to Rust,
-   deleting Electron/Node after sign-off, and docs/migration guides.
+7. P9: Flatpak and the clean-VM installer pass. The nightly release is
+   Rust-only now; Electron/Node deletion is done and the archived tree is
+   documented in [legacy-electron.md](./legacy-electron.md).
 8. The clean-VM manual checklist for audio/cameras/NDI. No NDI/GPU hardware
    verification is recorded by this refresh; see the hardware waivers above
    for exactly what the native smoke gate does and does not cover.

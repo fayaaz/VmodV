@@ -2,9 +2,11 @@
 
 Tracks the native single-process implementation of
 [rust-full-rewrite.md](./rust-full-rewrite.md) on the `rust-hybrid` branch.
-The Electron app and the JS engine/UI stay in the tree. The native shell is now
-the default development path (`make dev`); Electron remains the fallback
-(`make dev-electron` or `MODV_UI=electron make dev`) until sign-off.
+The tree is now Rust-only: the Electron/Node application was deleted after the
+native 2.0 packaging and test work landed. The final Electron tree is archived
+on branch `legacy-electron` and tag `v1.x-final`
+(see [legacy-electron.md](./legacy-electron.md)); it is not built or released
+from this repository any more.
 
 Last updated: 2026-11-18.
 
@@ -20,7 +22,36 @@ Last updated: 2026-11-18.
 | P5 — docking | **Done (custom layout)** | Resizable Groups/Inspector/dock/centre sections; every right-panel tab detaches to the strip, a dock column or an in-app floating window; panel sizes, dock width, tab placements and window bounds persist to `<userData>/native-layout.json` (atomic, debounced, clamped). This is the hand-rolled `LayoutState`/`LayoutSettings` model, not `egui_tiles`. |
 | P6 — media manager | **Partial** | `MediaHub` is owned by the native shell: camera panel (ordered/remembered/restored inputs + resolution/FPS), test pattern and source status, with engine `media/start-file`/`start-screen` plumbing. User ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Native file/screen pickers, media-manager file dialogs, project profiles and the full media-tree watch remain. |
 | P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits the four device flags. The opt-in Boa plugin host (D5) remains; the Plugins panel is deliberately disabled until it lands. |
-| P8/P9 — parity/packaging | **Started (P8); native 2.0 prep** | `docs/native-parity-map.md` refreshed. `make appimage-native` and `make native-deb` build the native installers in Docker (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. The native shell is now `make dev`; Electron stays the fallback (`make dev-electron`). `NATIVE_VERSION` defaults to 2.0.0 and `nightly.yml` publishes native AppImage/deb next to the Electron installers. Flatpak and deleting Electron remain. |
+| P8/P9 — parity/packaging | **Complete (Rust-only)** | `docs/native-parity-map.md` records the native coverage. `make build` produces the native AppImage and `.deb` (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, `make test-e2e-native` runs the real-binary harness, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. `NATIVE_VERSION` defaults to 2.0.0 and `nightly.yml` is native-only. Electron/Node and the JS suites are gone; the archived tree lives on `legacy-electron`/`v1.x-final`. Flatpak remains. |
+
+## Rust-only cleanup (2026-11-18)
+
+The Electron/Node tree was deleted after the native 2.0 packaging passed:
+
+- removed: `src/`, `tests/e2e/`, `tests/unit/`, `tests/fixtures/engine/`,
+  `package.json`, `yarn.lock`, `electron-builder.yml`, `electron.vite.config.mjs`,
+  `playwright.config.js`, `vitest.config.mjs`, `eslint.config.js`,
+  `notarize.js`, `dev-app-update.yml`, `patches/`, `public/`, `lib/`,
+  `.releaserc`, `.prettierignore` and the Node-only rave wordcodec tools;
+- kept: `crates/`, `resources/`, `docs/`, `packaging/`, `tools/native-*.sh`,
+  `tests/e2e-rust/`, `tests/fixtures/module-parity.json`,
+  `THIRD_PARTY_NOTICES.md`, `README.md`/`CHANGES.md`, Dockerfile/Makefile and CI;
+- guards ported before deletion: `crates/modv-app/tests/notices.rs` (Cargo.lock
+  inventory, SPDX/upstream/obligation checks, NC-SA source scan and credit
+  checks) and `crates/modv-app/tests/removed_content.rs` (removed Point10
+  scenes/modules, Cube/three renderer, Geometric Tunnel + SSAO files, registry
+  and default-Scene references). The archive is branch `legacy-electron` /
+  tag `v1.x-final` (pre-cleanup HEAD `4a2a4164`), documented in
+  [legacy-electron.md](./legacy-electron.md).
+
+Verification from the cleaned tree: workspace tests pass (excluding `modv-app`,
+then `modv-app` lib **668 passed** serial), `make test-e2e-native` passes
+**28 tests** across the harness/process/scenes/defaults/manifest binaries,
+`make engine-lint` is clean, `make build` produces
+`VmodV-Native-2.0.0-x86_64.AppImage` and `VmodV-Native-2.0.0-amd64.deb`,
+`make native-deb-check` passes (354 ISF files, 25 textures) and
+`tools/native-smoke.sh` passes headless/windowed/state/crash-recovery checks
+with a temporary userData directory.
 
 ## What exists today
 
@@ -51,15 +82,14 @@ Last updated: 2026-11-18.
   monitors dim to 35% while performance mode is off, and the snapshot is
   dropped with its Group on Scene applies/resizes so no texture leaks across
   crossfades.
-- `window_state.rs` reads/writes the same `<userData>/window-state.json` as
-  the Electron app, with atomic writes and the JS normalisation rules.
+- `window_state.rs` reads/writes the same `<userData>/window-state.json` as the
+  archived 1.x app, with atomic writes and the legacy normalisation rules.
 - `ui_layout.rs` persists the native panel/tab/window document to
   `<userData>/native-layout.json`; `media_settings.rs` remembers the ordered
   camera selection and per-camera modes in `<userData>/native-media.json`.
-- `make dev` / `make dev-native` run the native shell with the host
-  Wayland/X11 session; `make dev-electron` (or `MODV_UI=electron make dev`)
-  runs the Electron fallback. `make native` and `make native-debug` stay as the
-  direct native entry points.
+- `make dev` / `make native-debug` run the native shell with the host
+  Wayland/X11 session. `make native` and `make native-debug` stay as the direct
+  native entry points.
 
 ## Verification
 
@@ -106,9 +136,9 @@ Last updated: 2026-11-18.
 3. P7: opt-in Boa plugin host (D5) and enabling the Plugins panel.
 4. P8: native e2e/perf/soak harness, multi-output windows, and manual
    GPU/NDI/camera checks (no NDI hardware verification is recorded yet).
-5. P9: Flatpak, retiring the Electron nightly once the native release is
-   signed off, and deleting Electron only after sign-off. Native 2.0.0
-   packaging and the default `make dev` are prepared now
+5. P9: Flatpak and the clean-VM installer pass. The nightly is Rust-only and
+   the Electron tree is deleted (archived on `legacy-electron`/`v1.x-final`);
+   native 2.0.0 packaging and `make dev` are the only build path
    (`docs/native-2.0-release.md`).
 6. P1 residuals: structured daily logger, splash and native file dialogs.
 
@@ -190,17 +220,16 @@ Last updated: 2026-11-18.
   registry supports more, and the window-state map is ready for more keys.
 - **P9** has a native AppImage (`make appimage-native`), Debian package
   (`make native-deb`, checked by `make native-deb-check`) and a Rust-only CI
-  workflow (`.github/workflows/native.yml`). Native installers default to
-  `NATIVE_VERSION=2.0.0`, `make dev` selects the native shell, and
-  `nightly.yml` publishes native AppImage/deb alongside the Electron installers.
-  Flatpak, retiring the Electron nightly and the Electron/Node deletion are
-  still pending.
+  workflow (`.github/workflows/native.yml`). `make build` produces both native
+  installers, `make dev` runs the native shell, and `nightly.yml` is
+  native-only. Flatpak and the clean-VM installer pass remain.
 
 ## Constraints honoured
 
-- No Electron/Chromium/Node deletion in this run.
-- Legacy JS UI and engine remain selectable with `MODV_UI=electron` /
-  `make dev-electron`; the native shell is the default dev path.
+- The tree is Rust-only: `src/`, `tests/e2e/`, `tests/unit/`, Node/Electron
+  configs and the Yarn toolchain were deleted, not merely disabled.
+- The final Electron tree is archived on branch `legacy-electron` and tag
+  `v1.x-final`; see [legacy-electron.md](./legacy-electron.md).
 - Preset/Scene/playlist formats and the media directory are unchanged.
 - `modv-ui` is `#![forbid(unsafe_code)]`; the shell keeps the engine's
   single-device/single-queue rule.
