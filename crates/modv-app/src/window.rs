@@ -1048,7 +1048,7 @@ impl WindowedApp {
         let Some(compositor) = &mut self.compositor else {
             return;
         };
-        let size = compositor.size();
+        let size = compositor.main_texture_size();
         match compositor.read_main_rgba8() {
             Ok(pixels) if !pixels.is_empty() => {
                 self.store.ndi_mut().submit_frame(size.0, size.1, &pixels);

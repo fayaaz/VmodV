@@ -439,6 +439,11 @@ pub struct NativeApp {
     /// The last failed live switch, shown in the Audio panel.
     audio_switch_error: Option<String>,
     audio_settings_path: PathBuf,
+    /// The internal rendering resolution scale (persisted in
+    /// `<userData>/native-render.json`, applied to the compositor at startup
+    /// and on every Preferences change).
+    render_scale: f32,
+    render_settings_path: PathBuf,
     midi_client: MidiClient,
     /// The opt-in sandboxed Boa plugin runtime (settings, discovery, hooks).
     plugin_runtime: PluginRuntime,
@@ -690,6 +695,26 @@ impl NativeApp {
         let audio_devices =
             crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
 
+        // Internal rendering resolution: the persisted choice (Full by
+        // default). Missing/invalid documents fall back to full resolution;
+        // explicit userData paths keep the shell reproducible on test hosts.
+        let render_settings_path = user_data.join(crate::render_settings::RENDER_SETTINGS_FILENAME);
+        let render_scale =
+            match crate::render_settings::RenderSettings::read_from(&render_settings_path) {
+                Ok(Some(settings)) => settings.scale,
+                Ok(None) => 1.0,
+                Err(error) => {
+                    eprintln!("ui: WARN ignoring the saved render settings: {error}");
+                    1.0
+                }
+            };
+        if render_scale != 1.0 {
+            eprintln!(
+                "ui: INFO internal rendering resolution: {:.0}% of the output size",
+                render_scale * 100.0
+            );
+        }
+
         // Webcam selection: Electron persists `mediaStream` (ordered
         // `selectedVideoSources` + per-device `videoSettings`). The native
         // shell stores the same thing in `<userData>/native-media.json` and
@@ -844,6 +869,8 @@ impl NativeApp {
             audio_devices,
             audio_switch_error: None,
             audio_settings_path,
+            render_scale,
+            render_settings_path,
             midi_client,
             plugin_runtime,
             plugin_view,
@@ -962,6 +989,8 @@ impl NativeApp {
         let mut compositor =
             Compositor::with_registry(&engine.device, &engine.queue, self.store.registry_arc());
         compositor.resize(OUTPUT_WIDTH, OUTPUT_HEIGHT);
+        compositor.set_render_scale(self.render_scale);
+        self.ui_state.render_scale = self.render_scale;
 
         self.ui_window = Some(ui_window);
         self.ui_surface = Some(ui_surface);
@@ -1420,7 +1449,7 @@ impl NativeApp {
         let Some(compositor) = &mut self.compositor else {
             return;
         };
-        let size = compositor.size();
+        let size = compositor.main_texture_size();
         match compositor.read_main_rgba8() {
             Ok(pixels) if !pixels.is_empty() => {
                 self.store.ndi_mut().submit_frame(size.0, size.1, &pixels);
@@ -2280,6 +2309,23 @@ impl NativeApp {
                 UiCommand::SaveSnapshot => self.save_snapshot(),
                 UiCommand::SavePreset => self.save_preset(),
                 UiCommand::FlushLogs => {}
+                UiCommand::SetRenderScale(scale) => {
+                    let scale = crate::render_settings::RenderSettings::clamp_scale(scale);
+                    if let Err(error) = (crate::render_settings::RenderSettings { scale })
+                        .write_to(&self.render_settings_path)
+                    {
+                        self.record_error(format!("could not save render settings: {error}"));
+                    }
+                    if let Some(compositor) = &mut self.compositor {
+                        compositor.set_render_scale(scale);
+                    }
+                    self.render_scale = scale;
+                    self.ui_state.render_scale = scale;
+                    // Rebuild the main texture at the new size immediately so
+                    // the panel (and the present path) picks it up this frame.
+                    self.render_engine(None);
+                    self.update_preview_texture();
+                }
                 UiCommand::ShowFileDialog(action) => self.open_file_dialog(action),
                 UiCommand::FileChosen { action, path } => {
                     self.apply_file_choice(action, &path);
@@ -3603,7 +3649,7 @@ impl NativeApp {
         let Some(compositor) = self.compositor.as_mut() else {
             return Err("compositor is not ready".to_string());
         };
-        let (source_width, source_height) = compositor.size();
+        let (source_width, source_height) = compositor.main_texture_size();
         if source_width == 0 || source_height == 0 {
             return Err("compositor has no output size".to_string());
         }

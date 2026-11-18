@@ -825,6 +825,10 @@ pub struct Compositor {
     registry: Arc<ModuleRegistry>,
     isf_runtime: IsfRuntime,
     size: (u32, u32),
+    /// Linear scale of the internal render targets (default 1.0 = full
+    /// output resolution). The window/present path still uses the full
+    /// surface; only the offscreen textures render at `size * scale`.
+    render_scale: f32,
     main: Option<OutputTexture>,
     module_input: Option<OutputTexture>,
     module_output: Option<OutputTexture>,
@@ -1036,6 +1040,7 @@ impl Compositor {
             registry,
             isf_runtime: IsfRuntime::new(device.clone(), queue.clone(), 4),
             size: (0, 0),
+            render_scale: 1.0,
             main: None,
             module_input: None,
             module_output: None,
@@ -1092,6 +1097,12 @@ impl Compositor {
             return;
         }
         self.size = (width, height);
+        self.invalidate_output_textures();
+    }
+
+    /// Drop every output-sized texture and force the modules to rebuild on
+    /// the next frame. Shared by [`Self::resize`] and [`Self::set_render_scale`].
+    fn invalidate_output_textures(&mut self) {
         self.drop_output_textures();
         self.group_targets.clear();
         self.surfaces = TextureSurfaces::new();
@@ -1287,6 +1298,41 @@ impl Compositor {
     /// The compositor's render size (`width`, `height`).
     pub fn size(&self) -> (u32, u32) {
         self.size
+    }
+
+    /// The internal rendering resolution scale (1.0 = full output size).
+    pub fn render_scale(&self) -> f32 {
+        self.render_scale
+    }
+
+    /// The size the internal targets render at: `size` scaled by
+    /// [`Self::render_scale`], clamped to at least one pixel per axis.
+    pub fn render_size(&self) -> (u32, u32) {
+        let scale = self.render_scale;
+        let scale_dim = |dimension: u32| {
+            if dimension == 0 {
+                0
+            } else {
+                (dimension as f32 * scale).round().max(1.0) as u32
+            }
+        };
+        (scale_dim(self.size.0), scale_dim(self.size.1))
+    }
+
+    /// Set the internal rendering resolution scale.
+    ///
+    /// Values are clamped to the admitted range
+    /// ([`crate::render_settings::RenderSettings::clamp_scale`]). The stale
+    /// output-sized textures are dropped so the next frame re-allocates at
+    /// the new size; the window/present path still targets the full
+    /// swapchain, so the visible frame only goes a little softer.
+    pub fn set_render_scale(&mut self, scale: f32) {
+        let scale = crate::render_settings::RenderSettings::clamp_scale(scale);
+        if (scale - self.render_scale).abs() < f32::EPSILON {
+            return;
+        }
+        self.render_scale = scale;
+        self.invalidate_output_textures();
     }
 
     /// The texture the Webcam module should draw this frame.
@@ -1598,7 +1644,7 @@ impl Compositor {
         frame: &FrameInfo,
         retained: &RetainedInstances,
     ) -> Result<(), CompositorError> {
-        if self.size.0 == 0 || self.size.1 == 0 {
+        if self.render_size() == (0, 0) {
             return Ok(());
         }
         // Keep the last frame's clock/audio for `render_module_preview` (a
@@ -1875,7 +1921,7 @@ impl Compositor {
 
         let input_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
 
         self.shader.render(
             slot,
@@ -1995,7 +2041,7 @@ impl Compositor {
             .to_string();
         let blend = self.render_blend_mode(&blend_token);
 
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         // Cheap handle clones (Arc): they keep the instance borrow below
         // separate from the rest of `self`.
         let device = self.device.clone();
@@ -2216,7 +2262,7 @@ impl Compositor {
             .to_string();
         let blend = self.render_blend_mode(&blend_token);
 
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         let texture_id = point10_texture_id(module_id);
 
         // Rebuild the scene target when it is missing or the output resized.
@@ -2368,7 +2414,7 @@ impl Compositor {
             .to_string();
         let blend = self.render_blend_mode(&blend_token);
 
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let texture_id = isf_texture_id(module_id);
 
@@ -2697,7 +2743,7 @@ impl Compositor {
 
     /// Ensure the output-sized textures exist and are registered.
     fn ensure_output_textures(&mut self) {
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         if self.main.is_none() {
             let main = self.create_output_texture("modv-main", width, height);
             self.surfaces.insert(main_id(), main.texture.clone());
@@ -2727,7 +2773,7 @@ impl Compositor {
             return id;
         }
 
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         let texture = self.create_output_texture(&format!("modv-group-{group_id}"), width, height);
         self.clear_texture(&texture.texture, "group-allocate");
         self.surfaces.insert(id.clone(), texture.texture);
@@ -2742,7 +2788,7 @@ impl Compositor {
         if self.row_fade_targets.contains_key(&row) {
             return id;
         }
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         let texture = self.create_output_texture(&format!("modv-row-fade-{row}"), width, height);
         self.surfaces.insert(id.clone(), texture.texture.clone());
         self.row_fade_targets.insert(row, texture);
@@ -3031,7 +3077,7 @@ impl Compositor {
     /// main texture yet, zero-sized output), which makes the caller fall back
     /// to Fade for that change.
     pub fn capture_transition_source(&mut self) -> bool {
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         if width == 0 || height == 0 {
             return false;
         }
@@ -3059,7 +3105,7 @@ impl Compositor {
 
     /// Whether a captured outgoing frame is available for this output size.
     pub fn has_transition_capture(&self) -> bool {
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         width > 0
             && height > 0
             && self.transition_from.as_ref().is_some_and(|target| {
@@ -3091,7 +3137,7 @@ impl Compositor {
         &mut self,
         effect: &crate::scene_transition::TransitionEffect,
     ) -> bool {
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         let pass = self.scene_transition.get_or_insert_with(|| {
             crate::scene_transition::SceneTransitionPass::new(&self.device, &self.queue)
         });
@@ -3110,7 +3156,7 @@ impl Compositor {
         transition: &SceneTransitionInfo,
         time: f32,
     ) -> Result<bool, CompositorError> {
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         let (Some(from), Some(main)) = (self.transition_from.as_ref(), self.main.as_ref()) else {
             return Ok(false);
         };
@@ -3321,10 +3367,9 @@ impl Compositor {
 
     /// The composited main texture's size, or `(0, 0)` before the first frame.
     pub fn main_texture_size(&self) -> (u32, u32) {
-        if self.main.is_some() {
-            self.size
-        } else {
-            (0, 0)
+        match &self.main {
+            Some(main) => (main.texture.width(), main.texture.height()),
+            None => (0, 0),
         }
     }
 
@@ -3341,7 +3386,7 @@ impl Compositor {
         let Some(group_texture) = self.surfaces.get(&group_texture_id(group_id)).cloned() else {
             return false;
         };
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         if width == 0 || height == 0 {
             return false;
         }
@@ -3379,7 +3424,7 @@ impl Compositor {
     /// (≤ 30 fps). The no-readback hot path promised by WS-2 applies to
     /// presentation; shared-memory / DMA-BUF preview transport lands later.
     pub fn read_main_rgba8(&mut self) -> Result<Vec<u8>, CompositorError> {
-        let (width, height) = self.size;
+        let (width, height) = self.render_size();
         let Some(main) = &self.main else {
             return Ok(Vec::new());
         };
@@ -3426,7 +3471,7 @@ impl Compositor {
         width: u32,
         height: u32,
     ) -> Result<Option<Vec<u8>>, CompositorError> {
-        let (source_width, source_height) = self.size;
+        let (source_width, source_height) = self.render_size();
         if width == 0
             || height == 0
             || source_width == 0
@@ -4111,7 +4156,7 @@ pub(crate) fn interim_band_payload(audio: &AudioFrame) -> BandPayload {
 mod tests {
     use super::*;
     use modv_engine::engine_state::ModuleInstance;
-    use modv_render::{Engine, EngineConfig};
+    use modv_render::Engine;
     use modv_renderers::shader::all_modules;
     use serde_json::json;
 
@@ -4124,16 +4169,12 @@ mod tests {
     /// glow tails need more than 64 px to cover pixels reliably.
     const POINT10_SIZE: u32 = 128;
 
-    fn try_engine() -> Option<Engine> {
-        match Engine::new(&EngineConfig {
-            force_fallback_adapter: true,
-        }) {
-            Ok(engine) => Some(engine),
-            Err(error) => {
-                eprintln!("skipping compositor pixel test: no adapter ({error})");
-                None
-            }
+    fn try_engine() -> Option<&'static modv_render::Engine> {
+        let engine = crate::gpu_test::gpu_engine();
+        if engine.is_none() {
+            eprintln!("skipping compositor pixel test: no adapter");
         }
+        engine
     }
 
     fn frame_info() -> FrameInfo {
@@ -4308,6 +4349,61 @@ mod tests {
             compositor.row_monitor_view("group-a").is_none(),
             "the prune drops the stale monitor with its Group"
         );
+    }
+
+    #[test]
+    fn render_scale_allocates_targets_at_the_scaled_size() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+
+        compositor
+            .render_frame(&invert_state(1.0), &frame_info())
+            .expect("frame renders at full size");
+        assert_eq!(compositor.main_texture_size(), (SIZE, SIZE));
+
+        compositor.set_render_scale(0.5);
+        assert_eq!(compositor.render_scale(), 0.5);
+        assert_eq!(
+            compositor.main_texture_size(),
+            (0, 0),
+            "the stale full-size target must be dropped so the next frame re-allocates"
+        );
+
+        compositor
+            .render_frame(&invert_state(1.0), &frame_info())
+            .expect("frame renders at half size");
+        assert_eq!(compositor.main_texture_size(), (SIZE / 2, SIZE / 2));
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert_eq!(
+            pixels.len(),
+            (SIZE / 2) as usize * (SIZE / 2) as usize * 4,
+            "read_main_rgba8 returns one RGBA8 pixel per texel of the scaled main texture"
+        );
+
+        compositor.set_render_scale(1.0);
+        compositor
+            .render_frame(&invert_state(1.0), &frame_info())
+            .expect("frame renders at full size again");
+        assert_eq!(compositor.main_texture_size(), (SIZE, SIZE));
+    }
+
+    #[test]
+    fn render_scale_is_clamped_to_the_admitted_range() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.set_render_scale(4.0);
+        assert_eq!(compositor.render_scale(), 1.0);
+        compositor.set_render_scale(0.05);
+        assert_eq!(compositor.render_scale(), 0.25);
+        compositor.set_render_scale(f32::NAN);
+        assert_eq!(compositor.render_scale(), 1.0);
+        compositor.set_render_scale(f32::INFINITY);
+        assert_eq!(compositor.render_scale(), 1.0);
     }
 
     #[test]
@@ -4671,7 +4767,7 @@ void main() {
         let registry = Arc::new(ModuleRegistry::build(Some(&dir)));
         let effect = TransitionEffect::from_name("Scene Fade", &registry)
             .expect("the shader is transition-shaped");
-        let mut compositor = isf_compositor(&engine, Arc::clone(&registry));
+        let mut compositor = isf_compositor(engine, Arc::clone(&registry));
 
         // The outgoing Scene is opaque white; the incoming Scene is empty
         // (transparent), exactly like the native crossfade test.
@@ -5258,7 +5354,7 @@ void main() {
             compositor.read_main_rgba8().expect("main reads back")
         };
 
-        let silent = render_with(&engine, AudioFrame::default());
+        let silent = render_with(engine, AudioFrame::default());
 
         let mut loud = AudioFrame {
             bass: 1.0,
@@ -5275,7 +5371,7 @@ void main() {
         for (index, bin) in loud.byte_frequency_data.iter_mut().enumerate() {
             *bin = (index.min(255)) as u8;
         }
-        let loud = render_with(&engine, loud);
+        let loud = render_with(engine, loud);
 
         assert_ne!(
             silent, loud,
@@ -5680,7 +5776,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         let state = isf_state(&[("module-a", "Checkerboard", json!({}))]);
         compositor
@@ -5750,7 +5846,7 @@ void main() {
         };
 
         for name in names {
-            let mut compositor = isf_compositor(&engine, registry.clone());
+            let mut compositor = isf_compositor(engine, registry.clone());
             let state = isf_state(&[("module-a", name, json!({}))]);
 
             // Multi-pass shaders keep a one-frame lag per buffer, so a
@@ -5801,7 +5897,7 @@ void main() {
         };
 
         for name in TUNNEL_ISF_MODULES {
-            let mut compositor = isf_compositor(&engine, registry.clone());
+            let mut compositor = isf_compositor(engine, registry.clone());
             let state = isf_state(&[("module-a", name, json!({}))]);
             let mut frames = Vec::new();
 
@@ -5865,7 +5961,7 @@ void main() {
         .expect("shader written");
 
         let registry = Arc::new(ModuleRegistry::build(Some(&dir)));
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
         let state = isf_state(&[("module-a", "Audio Probe", json!({}))]);
 
         let mut frame = frame_info();
@@ -5917,7 +6013,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         // Checkerboard draws into the group; Color Invert then samples the
         // group canvas through its `inputImage` and inverts it — the JS
@@ -5953,7 +6049,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         // Vignette is a filter with an `inputImage` input: it samples the
         // (empty, transparent) group canvas and writes alpha 1. Without the
@@ -5994,7 +6090,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         // A solid red PNG stands in for a media-library image. `Color Invert`
         // samples its `inputImage`; with the image assigned it must invert the
@@ -6041,7 +6137,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         let dir = isf_temp_dir("isf-image-fallback");
         let missing_path = dir.join("not-there.png");
@@ -6099,7 +6195,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         // Checkerboard (module-a) is covered in the group canvas by an opaque
         // yellow solid (module-b), so sampling the canvas and sampling
@@ -6163,7 +6259,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         // A module naming itself would alias its render target with an input
         // bind group entry, which wgpu rejects. The canvas is the composited
@@ -6214,7 +6310,7 @@ void main() {
             return;
         }
 
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
         sync_until_uploaded(&mut compositor, &mut media, "cam-a");
 
         // `Color Invert` samples the white test pattern through an image input
@@ -6251,7 +6347,7 @@ void main() {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         // Edge Blur computes its blur offsets and Sobel taps in `Edge Blur.vs`.
         // The runtime must translate that sidecar and link its outputs as
@@ -6357,7 +6453,7 @@ void main() {
         .expect("write probe vertex");
 
         let registry = Arc::new(ModuleRegistry::build(Some(&dir)));
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         let source = isf_state(&[("module-a", "Orientation Source", json!({}))]);
         compositor
@@ -6444,7 +6540,7 @@ void main(void) {
         .expect("write quad probe vertex");
 
         let registry = Arc::new(ModuleRegistry::build(Some(&dir)));
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
         let state = isf_state(&[("module-a", "Quad Probe", json!({}))]);
         compositor
             .render_frame(&state, &frame_info())
@@ -6496,7 +6592,7 @@ void main(void) {
         let Some(registry) = corpus_registry() else {
             return;
         };
-        let mut compositor = isf_compositor(&engine, registry);
+        let mut compositor = isf_compositor(engine, registry);
 
         // Bloom is a 7-pass filter: every pass renders into its own buffer and
         // the last one blits into the module target.

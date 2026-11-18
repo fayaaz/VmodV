@@ -9,7 +9,9 @@ use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, Vec2, vec2,
 };
 
-use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_window};
+use crate::file_dialog::{
+    FileDialogAction, file_dialog_window, preferences_window, profile_dialog_window,
+};
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
 use crate::layout::{
     LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
@@ -70,6 +72,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     shortcuts_window(ui.ctx(), state);
     file_dialog_window(ui.ctx(), state);
     profile_dialog_window(ui.ctx(), state);
+    preferences_window(ui.ctx(), state);
     plugin_consent_window(ui.ctx(), state);
     link_editor_window(ui, snapshot, state);
     bpm_window(ui.ctx(), snapshot, state);
@@ -95,14 +98,17 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
     });
     // A modal picker owns the keyboard: Ctrl+S while naming a file must not
     // save a preset, and Ctrl+O must not stack a second picker.
-    let modal =
-        state.file_dialog.is_some() || state.show_profile_dialog || state.show_plugin_consent;
+    let modal = state.file_dialog.is_some()
+        || state.show_profile_dialog
+        || state.show_plugin_consent
+        || state.show_preferences_dialog;
     // Backspace removes the focused Group (`Group.vue`'s `keydown.self`), but
     // only outside a text field and while no dialog owns the keyboard.
     let backspace = ui.input(|input| input.key_pressed(egui::Key::Backspace));
     let dialog_open = modal
         || state.link_editor.is_some()
         || state.tween_editor.is_some()
+        || state.draw_editor.is_some()
         || state.scene_grid.timing_edit.is_some()
         || state.scene_grid.row_names_edit.is_some()
         || state.scene_grid.clear_cell_edit.is_some()
@@ -158,6 +164,7 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.show_profile_dialog = false;
         state.profile_error = None;
         state.show_plugin_consent = false;
+        state.show_preferences_dialog = false;
         state.scene_grid.renaming = None;
         state.scene_grid.timing_edit = None;
         state.scene_grid.row_names_edit = None;
@@ -317,7 +324,8 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                     ui.add_enabled(false, egui::Button::new("Undo"));
                     ui.add_enabled(false, egui::Button::new("Redo"));
                     ui.separator();
-                    if ui.button("Preferences (P1)").clicked() {
+                    if ui.button("Preferences…").clicked() {
+                        state.open_preferences();
                         ui.close();
                     }
                 });

@@ -504,7 +504,6 @@ fn build_scene_preview_module(
 mod tests {
     use super::*;
     use modv_engine::scene_rows::normalize_row_names;
-    use modv_render::{Engine, EngineConfig};
 
     use crate::compositor::FrameInfo;
     use crate::module_preview::base64_encode;
@@ -537,16 +536,12 @@ mod tests {
         })
     }
 
-    fn try_engine() -> Option<Engine> {
-        match Engine::new(&EngineConfig {
-            force_fallback_adapter: true,
-        }) {
-            Ok(engine) => Some(engine),
-            Err(error) => {
-                eprintln!("skipping Scene preview pixel test: no adapter ({error})");
-                None
-            }
+    fn try_engine() -> Option<&'static modv_render::Engine> {
+        let engine = crate::gpu_test::gpu_engine();
+        if engine.is_none() {
+            eprintln!("skipping Scene preview pixel test: no adapter");
         }
+        engine
     }
 
     fn frame_info() -> FrameInfo {

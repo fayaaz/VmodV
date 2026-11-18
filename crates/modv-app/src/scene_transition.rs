@@ -888,8 +888,8 @@ mod tests {
     use super::*;
     use crate::compositor::read_back_texture;
     use modv_engine::scene_transition_pick::NATIVE_TRANSITION_NAMES;
+    use modv_render::Engine;
     use modv_render::wgpu::naga;
-    use modv_render::{Engine, EngineConfig};
 
     const WIDTH: u32 = 128;
     const HEIGHT: u32 = 72;
@@ -1081,16 +1081,12 @@ void main() {
         }
     }
 
-    fn try_engine() -> Option<Engine> {
-        match Engine::new(&EngineConfig {
-            force_fallback_adapter: true,
-        }) {
-            Ok(engine) => Some(engine),
-            Err(error) => {
-                eprintln!("skipping scene-transition pixel test: no adapter ({error})");
-                None
-            }
+    fn try_engine() -> Option<&'static modv_render::Engine> {
+        let engine = crate::gpu_test::gpu_engine();
+        if engine.is_none() {
+            eprintln!("skipping scene-transition pixel test: no adapter");
         }
+        engine
     }
 
     fn solid_frame(engine: &Engine, label: &str, pixel: [u8; 4]) -> wgpu::Texture {
@@ -1196,20 +1192,20 @@ void main() {
             return;
         };
         let mut pass = SceneTransitionPass::new(&engine.device, &engine.queue);
-        let red = solid_frame(&engine, "transition-red", [255, 0, 0, 255]);
-        let blue = solid_frame(&engine, "transition-blue", [0, 0, 255, 255]);
+        let red = solid_frame(engine, "transition-red", [255, 0, 0, 255]);
+        let blue = solid_frame(engine, "transition-blue", [0, 0, 255, 255]);
         let red_view = red.create_view(&wgpu::TextureViewDescriptor::default());
         let blue_view = blue.create_view(&wgpu::TextureViewDescriptor::default());
 
         for effect in TransitionEffect::ALL {
             let effect = &effect;
-            let start = run_effect(&engine, &mut pass, effect, &red_view, &blue_view, 0.0);
+            let start = run_effect(engine, &mut pass, effect, &red_view, &blue_view, 0.0);
             assert_dominant(&start, true, &format!("{effect:?} at progress 0"));
 
-            let end = run_effect(&engine, &mut pass, effect, &red_view, &blue_view, 1.0);
+            let end = run_effect(engine, &mut pass, effect, &red_view, &blue_view, 1.0);
             assert_dominant(&end, false, &format!("{effect:?} at progress 1"));
 
-            let middle = run_effect(&engine, &mut pass, effect, &red_view, &blue_view, 0.5);
+            let middle = run_effect(engine, &mut pass, effect, &red_view, &blue_view, 0.5);
             let r = mean_channel(&middle, 0, None);
             let b = mean_channel(&middle, 2, None);
             if *effect == TransitionEffect::Crossfade
@@ -1246,18 +1242,18 @@ void main() {
             "the ISF transition compiles before the first frame"
         );
 
-        let red = solid_frame(&engine, "transition-red", [255, 0, 0, 255]);
-        let blue = solid_frame(&engine, "transition-blue", [0, 0, 255, 255]);
+        let red = solid_frame(engine, "transition-red", [255, 0, 0, 255]);
+        let blue = solid_frame(engine, "transition-blue", [0, 0, 255, 255]);
         let red_view = red.create_view(&wgpu::TextureViewDescriptor::default());
         let blue_view = blue.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let start = run_effect(&engine, &mut pass, &effect, &red_view, &blue_view, 0.0);
+        let start = run_effect(engine, &mut pass, &effect, &red_view, &blue_view, 0.0);
         assert_dominant(&start, true, "ISF transition at progress 0");
 
-        let end = run_effect(&engine, &mut pass, &effect, &red_view, &blue_view, 1.0);
+        let end = run_effect(engine, &mut pass, &effect, &red_view, &blue_view, 1.0);
         assert_dominant(&end, false, "ISF transition at progress 1");
 
-        let middle = run_effect(&engine, &mut pass, &effect, &red_view, &blue_view, 0.5);
+        let middle = run_effect(engine, &mut pass, &effect, &red_view, &blue_view, 0.5);
         let r = mean_channel(&middle, 0, None);
         let b = mean_channel(&middle, 2, None);
         assert!(
@@ -1313,13 +1309,13 @@ void main() {
             return;
         };
         let mut pass = SceneTransitionPass::new(&engine.device, &engine.queue);
-        let red = solid_frame(&engine, "transition-red", [255, 0, 0, 255]);
-        let blue = solid_frame(&engine, "transition-blue", [0, 0, 255, 255]);
+        let red = solid_frame(engine, "transition-red", [255, 0, 0, 255]);
+        let blue = solid_frame(engine, "transition-blue", [0, 0, 255, 255]);
         let red_view = red.create_view(&wgpu::TextureViewDescriptor::default());
         let blue_view = blue.create_view(&wgpu::TextureViewDescriptor::default());
 
         let middle = run_effect(
-            &engine,
+            engine,
             &mut pass,
             &TransitionEffect::Wipe,
             &red_view,
@@ -1346,13 +1342,13 @@ void main() {
             return;
         };
         let mut pass = SceneTransitionPass::new(&engine.device, &engine.queue);
-        let red = solid_frame(&engine, "transition-red", [255, 0, 0, 255]);
-        let blue = solid_frame(&engine, "transition-blue", [0, 0, 255, 255]);
+        let red = solid_frame(engine, "transition-red", [255, 0, 0, 255]);
+        let blue = solid_frame(engine, "transition-blue", [0, 0, 255, 255]);
         let red_view = red.create_view(&wgpu::TextureViewDescriptor::default());
         let blue_view = blue.create_view(&wgpu::TextureViewDescriptor::default());
 
         let middle = run_effect(
-            &engine,
+            engine,
             &mut pass,
             &TransitionEffect::Circle,
             &red_view,

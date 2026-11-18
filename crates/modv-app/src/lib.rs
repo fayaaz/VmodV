@@ -4,6 +4,9 @@
 //! compositor: windowed rendering of the engine state, control socket,
 //! snapshot/restore and the shared-memory preview ring.
 
+#[cfg(test)]
+mod gpu_test;
+
 pub mod audio;
 pub mod audio_settings;
 pub mod cli;
@@ -29,6 +32,7 @@ pub mod ndi_runtime;
 pub mod pacing;
 pub mod performance;
 pub mod plugin_runtime;
+pub mod render_settings;
 pub mod report;
 pub mod scene_ops;
 pub mod scene_preview;

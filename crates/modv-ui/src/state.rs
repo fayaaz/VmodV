@@ -118,6 +118,8 @@ pub enum UiCommand {
         action: FileDialogAction,
         path: PathBuf,
     },
+    /// Set the internal rendering resolution scale (linear, 0.25..=1.0).
+    SetRenderScale(f32),
     /// Create `<userData>/media/<name>` with the Electron profile folders.
     CreateProfile(String),
     /// Switch the active media profile and rescan the user ISF folders.
@@ -309,6 +311,12 @@ pub struct UiState {
     pub profile_error: Option<String>,
     /// The JavaScript-plugin consent modal, shown by the first enable attempt.
     pub show_plugin_consent: bool,
+    /// The Preferences modal.
+    pub show_preferences_dialog: bool,
+    /// The internal rendering resolution scale, mirrored from the value the
+    /// shell persists and applied to the compositor. `1.0` is full output
+    /// resolution.
+    pub render_scale: f32,
 }
 
 /// Which panel the right side shows.
@@ -1255,6 +1263,8 @@ impl UiState {
             profile_name: String::new(),
             profile_error: None,
             show_plugin_consent: false,
+            show_preferences_dialog: false,
+            render_scale: 1.0,
         }
     }
 
@@ -1273,6 +1283,27 @@ impl UiState {
     /// Show the JavaScript-plugin consent dialog (the first enable attempt).
     pub fn open_plugin_consent(&mut self) {
         self.show_plugin_consent = true;
+    }
+
+    /// Open the Preferences modal.
+    pub fn open_preferences(&mut self) {
+        self.show_preferences_dialog = true;
+    }
+
+    /// Record the requested internal rendering resolution and ask the shell
+    /// to apply it. The shell clamps, persists and re-allocates the
+    /// compositor's internal targets; the UI updates its own mirror now so
+    /// the radio buttons respond immediately. The clamp here mirrors
+    /// `modv_app::render_settings::{MIN_SCALE, MAX_SCALE}` so a bogus value
+    /// from a caller cannot make the UI disagree with the shell.
+    pub fn set_render_scale(&mut self, scale: f32) {
+        let scale = if scale.is_finite() {
+            scale.clamp(0.25, 1.0)
+        } else {
+            1.0
+        };
+        self.render_scale = scale;
+        self.commands.push(UiCommand::SetRenderScale(scale));
     }
 
     /// Accept the consent notice **and** turn the host on.
@@ -1840,6 +1871,30 @@ mod tests {
             "a floating/docked tab is on screen regardless of the strip selection"
         );
         assert!(!state.is_tab_visible(SidePanelTab::Osc));
+    }
+
+    #[test]
+    fn the_preferences_dialog_opens_and_queues_a_render_scale() {
+        let mut state = UiState::new();
+        assert!(!state.show_preferences_dialog);
+        assert_eq!(state.render_scale, 1.0);
+
+        state.open_preferences();
+        assert!(state.show_preferences_dialog);
+
+        state.set_render_scale(0.5);
+        assert_eq!(state.render_scale, 0.5);
+        assert_eq!(state.commands, vec![UiCommand::SetRenderScale(0.5)]);
+
+        state.set_render_scale(1.0);
+        assert_eq!(state.render_scale, 1.0);
+        assert_eq!(
+            state.commands,
+            vec![
+                UiCommand::SetRenderScale(0.5),
+                UiCommand::SetRenderScale(1.0)
+            ]
+        );
     }
 
     #[test]
