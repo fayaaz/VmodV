@@ -50,9 +50,11 @@
 // Version 17 moves the deliberately background-free Point10 Scenes (Rolling
 // Fire, Ball of Fire, DVD Room, Smoke Room) into the Foreground row of every
 // default Scene that placed them in Background, keeping the emptied source row
-// in place; the changed Scenes are refreshed for installs on v16.
+// in place; the changed Scenes are refreshed for installs on v16. Version 18
+// retires Strobe Riot (see REMOVED_DEFAULT_SCENES): existing installs drop the
+// seeded Scene, while a custom Scene with the same name is kept.
 export const LEGACY_DEFAULTS_VERSION = 1;
-export const DEFAULTS_VERSION = 17;
+export const DEFAULTS_VERSION = 18;
 
 // The Cube Floor module was removed in version 7. Existing installs may still
 // hold default Scenes that reference it, so the migration below rebuilds those
@@ -66,7 +68,8 @@ export const REMOVED_DEFAULT_SCENE_MODULES = [
 
 // Default Scenes retired without a replacement. Installs upgrading drop these
 // Scenes, but only when they were seeded from the defaults. Version 8 retires
-// the first seven; version 10 retires Roto Zoom Riot (reapplied in version 11).
+// the first seven, version 10 retires Roto Zoom Riot (reapplied in version 11)
+// and version 18 retires Strobe Riot.
 export const REMOVED_DEFAULT_SCENES = [
   "Ferrofluid Pulse",
   "Kaleidoscope Cathedral",
@@ -76,6 +79,7 @@ export const REMOVED_DEFAULT_SCENES = [
   "Fractured Kaleidoscope",
   "Broken Mirror Ball",
   "Roto Zoom Riot",
+  "Strobe Riot",
 ];
 
 const RENAMED_DEFAULT_SCENES = [
@@ -128,7 +132,8 @@ const RENAMED_DEFAULT_SCENES = [
 // refresh for libraries that saved version 10 before those edits landed.
 // Version 12 re-runs it again for the Bands removal. Version 17 refreshes the
 // Scenes whose transparent Point10 hero moved from Background to Foreground
-// (only Smoke Room was not already a member).
+// (only Smoke Room was not already a member). Version 18 retires Strobe Riot
+// instead of refreshing it.
 export const REFRESHED_DEFAULT_SCENES = [
   "Mycelium Bloom",
   "Chromatic Waveform",
@@ -142,7 +147,6 @@ export const REFRESHED_DEFAULT_SCENES = [
   "Water Ripple Dreams",
   "Waveform Drive",
   "Rolling Fire Bloom",
-  "Strobe Riot",
   "Prism Reliquary",
   "Spiral Static",
   "Ultimate Drift",
@@ -1346,73 +1350,6 @@ const DEFAULT_SCENES = [
         feature: "bass",
         min: 0.45,
         max: 1,
-      },
-    ],
-  },
-
-  {
-    name: "Strobe Riot",
-    introducedVersion: 2,
-    minSeconds: 7,
-    maxSeconds: 18,
-    groups: [
-      {
-        name: "Background",
-        inherit: false,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "normal",
-        modules: [
-          {
-            name: "Point10 Chromatic Wave",
-            props: {
-              gain: 1.25,
-              bassGain: 1.45,
-              smoothing: 0.06,
-            },
-          },
-        ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [],
-      },
-      {
-        name: "Effects",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "normal",
-        modules: [
-          {
-            name: "Strobe",
-            props: {
-              // A beat-length flash at low alpha reads as a pulse instead of a
-              // hard flicker; the tween below keeps the period in time with
-              // the detected BPM so it flashes on the beat rather than at a
-              // fixed, unrelated rate.
-              strobeRate: 0.5,
-              strobeMode: 0,
-              strobeColor: [1, 1, 1, 1],
-            },
-            meta: { alpha: 0.16 },
-          },
-        ],
-      },
-    ],
-    inputLinks: [
-      {
-        group: "Effects",
-        module: "Strobe",
-        control: "strobeRate",
-        source: "tween",
-        min: 0.48,
-        max: 0.56,
-        bpmDivision: 16,
       },
     ],
   },

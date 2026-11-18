@@ -68,7 +68,10 @@ use serde_json::{Map, Value};
 /// Room`) into the `Foreground` row of every default Scene that placed them in
 /// `Background`, keeping the emptied source row in place. The changed Scenes
 /// are refreshed in place for version-16 installs.
-pub const DEFAULTS_VERSION: i64 = 17;
+///
+/// Version 18 retires `Strobe Riot` (see [`REMOVED_DEFAULT_SCENES`]). Existing
+/// installs drop the seeded Scene; a custom Scene with the same name is kept.
+pub const DEFAULTS_VERSION: i64 = 18;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
@@ -88,6 +91,7 @@ pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
     "Fractured Kaleidoscope",
     "Broken Mirror Ball",
     "Roto Zoom Riot",
+    "Strobe Riot",
 ];
 
 /// Scenes whose definitions changed in the current defaults version and are
@@ -100,6 +104,9 @@ pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
 ///
 /// Version 17 only adds `Smoke Room`: the other Scenes whose transparent
 /// Point10 hero moved to the Foreground row are already members.
+///
+/// Version 18 retires `Strobe Riot` instead of refreshing it, so the list does
+/// not change with the bump.
 pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Mycelium Bloom",
     "Chromatic Waveform",
@@ -113,7 +120,6 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Water Ripple Dreams",
     "Waveform Drive",
     "Rolling Fire Bloom",
-    "Strobe Riot",
     "Prism Reliquary",
     "Spiral Static",
     "Ultimate Drift",
@@ -811,9 +817,9 @@ mod tests {
     // ————————————————— data integrity —————————————————
 
     #[test]
-    fn bumps_the_defaults_version_to_17() {
+    fn bumps_the_defaults_version_to_18() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 17);
+        assert_eq!(DEFAULTS_VERSION, 18);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
     }
 
@@ -1045,7 +1051,9 @@ mod tests {
             .filter(|scene| scene.introduced_version < 3)
             .collect();
 
-        assert!(legacy.len() >= 15);
+        // 14 of the 15 version-1/2 Scenes survive; version 18 retired Strobe
+        // Riot.
+        assert!(legacy.len() >= 14);
         assert!(
             legacy
                 .iter()
@@ -1615,35 +1623,16 @@ mod tests {
     }
 
     #[test]
-    fn keeps_strobe_subtle_and_synced_to_the_beat() {
-        // default-scenes.test.js:541-564
-        let scene = scene_by_name("Strobe Riot");
-        let strobe = scene
-            .group("Effects")
-            .and_then(|group| group.modules.iter().find(|module| module.name == "Strobe"))
-            .expect("Strobe");
-
-        let alpha = strobe
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get("alpha"))
-            .and_then(Value::as_f64)
-            .expect("strobe alpha");
-        assert!(alpha <= 0.25);
+    fn does_not_ship_strobe_riot_and_retires_it_from_existing_installs() {
+        // default-scenes.test.js:541-549
         assert!(
-            strobe.props.as_ref().unwrap()["strobeRate"]
-                .as_f64()
-                .unwrap()
-                >= 0.4
+            default_scenes()
+                .iter()
+                .all(|scene| scene.name != "Strobe Riot"),
+            "Strobe Riot is still in the defaults"
         );
-
-        let link = scene
-            .link("Strobe", "strobeRate")
-            .expect("strobe rate link");
-        assert_eq!(link.group, "Effects");
-        assert_eq!(link.source.as_deref(), Some("tween"));
-        assert!(link.min.unwrap() < link.max.unwrap());
-        assert!(link.bpm_division.unwrap() > 0);
+        assert!(REMOVED_DEFAULT_SCENES.contains(&"Strobe Riot"));
+        assert!(!REFRESHED_DEFAULT_SCENES.contains(&"Strobe Riot"));
     }
 
     #[test]
@@ -1853,6 +1842,34 @@ mod tests {
                 name: "Roto Zoom Riot".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn removes_strobe_riot_for_installs_upgrading_to_version_18() {
+        // default-scenes.test.js:1481-1501
+        let scenes = vec![seeded_with_id("Strobe Riot", "strobe-id")];
+        let result = get_default_scenes_to_remove(
+            DEFAULTS_VERSION - 1,
+            &scenes,
+            Some(&["Strobe Riot".to_string()]),
+        );
+
+        assert_eq!(
+            result,
+            vec![SceneRemoval {
+                id: json!("strobe-id"),
+                name: "Strobe Riot".to_string(),
+            }]
+        );
+
+        let user_scene = vec![seeded_with_id("Strobe Riot", "user-id")];
+        let preserved = get_default_scenes_to_remove(
+            DEFAULTS_VERSION - 1,
+            &user_scene,
+            Some(&["Something Else".to_string()]),
+        );
+
+        assert!(preserved.is_empty(), "a custom Scene must be kept");
     }
 
     #[test]
@@ -2118,7 +2135,6 @@ mod tests {
         // default-scenes.test.js:1312-1319
         for name in [
             "Circuit Ritual",
-            "Strobe Riot",
             "Soft Bands",
             "Quiet Bloom",
             "It Twirls At Night",

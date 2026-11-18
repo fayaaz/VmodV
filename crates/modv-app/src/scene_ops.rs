@@ -5310,6 +5310,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_seeding_retires_strobe_riot_for_version_17_installs() {
+        let mut store = Store::new();
+        store.scenes.scenes = vec![json!({
+            "id": "scene-strobe",
+            "name": "Strobe Riot",
+            "enabled": true,
+            "minSeconds": 7,
+            "maxSeconds": 18,
+            "groups": [],
+            "modules": {},
+            "inputs": { "inputs": {}, "inputLinks": {} },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+        })];
+        store.scenes.defaults_version = DEFAULTS_VERSION - 1;
+        store.scenes.seeded_default_scenes = vec!["Strobe Riot".to_string()];
+
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("seeding");
+
+        assert!(
+            store.scenes_state().scenes.is_empty(),
+            "the seeded Strobe Riot Scene was not retired"
+        );
+        assert!(
+            !store
+                .scenes_state()
+                .seeded_default_scenes
+                .iter()
+                .any(|name| name == "Strobe Riot"),
+            "Strobe Riot is still marked seeded"
+        );
+        assert_eq!(store.scenes_state().defaults_version, DEFAULTS_VERSION);
+    }
+
+    #[test]
+    fn default_seeding_keeps_an_unseeded_strobe_riot_scene() {
+        let mut store = Store::new();
+        store.scenes.scenes = vec![json!({
+            "id": "scene-user-strobe",
+            "name": "Strobe Riot",
+            "enabled": true,
+            "groups": [],
+            "modules": {},
+            "inputs": { "inputs": {}, "inputLinks": {} },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+        })];
+        store.scenes.defaults_version = DEFAULTS_VERSION - 1;
+
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("seeding");
+
+        assert_eq!(
+            store.scenes_state().scenes.len(),
+            1,
+            "a custom Scene must survive the retirement"
+        );
+        assert_eq!(
+            store.scenes_state().scenes[0]["id"],
+            json!("scene-user-strobe")
+        );
+    }
+
     // ————————————————— persistence —————————————————
 
     #[test]

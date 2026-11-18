@@ -101,10 +101,10 @@ const allTransparentPlacements = () =>
   );
 
 describe("default scenes", () => {
-  it("bumps the defaults version to 17", () => {
-    // Version 17 moves the transparent Point10 scenes into the Foreground row
-    // in every default Scene that placed them anywhere else.
-    expect(DEFAULTS_VERSION).toBe(17);
+  it("bumps the defaults version to 18", () => {
+    // Version 18 retires Strobe Riot; the removal list drops the seeded copy
+    // from existing installs without touching a same-named user Scene.
+    expect(DEFAULTS_VERSION).toBe(18);
   });
 
   it("does not use CMYK Halftone in any default Scene", () => {
@@ -147,7 +147,8 @@ describe("default scenes", () => {
       (scene) => scene.introducedVersion < 3,
     );
 
-    expect(legacy.length).toBeGreaterThanOrEqual(15);
+    // 14 of the 15 version-1/2 Scenes survive; version 18 retired Strobe Riot.
+    expect(legacy.length).toBeGreaterThanOrEqual(14);
     expect(
       legacy.every(
         (scene) =>
@@ -587,29 +588,12 @@ describe("default scenes", () => {
     expect(linkOffenders.map((scene) => scene.name)).toEqual([]);
   });
 
-  it("keeps Strobe subtle and synced to the beat", () => {
-    const scene = DEFAULT_SCENES.find(
-      (candidate) => candidate.name === "Strobe Riot",
+  it("does not ship Strobe Riot and retires it from existing installs", () => {
+    expect(DEFAULT_SCENES.some((scene) => scene.name === "Strobe Riot")).toBe(
+      false,
     );
-
-    expect(scene).toBeTruthy();
-
-    const strobe = getGroup(scene, "Effects").modules.find(
-      (module) => module.name === "Strobe",
-    );
-
-    expect(strobe).toBeTruthy();
-    expect(strobe.meta.alpha).toBeLessThanOrEqual(0.25);
-    expect(Number(strobe.props.strobeRate)).toBeGreaterThanOrEqual(0.4);
-
-    const link = (scene.inputLinks || []).find(
-      (candidate) =>
-        candidate.module === "Strobe" && candidate.control === "strobeRate",
-    );
-
-    expect(link).toMatchObject({ group: "Effects", source: "tween" });
-    expect(link.min).toBeLessThan(link.max);
-    expect(link.bpmDivision).toBeGreaterThan(0);
+    expect(REMOVED_DEFAULT_SCENES).toContain("Strobe Riot");
+    expect(REFRESHED_DEFAULT_SCENES).not.toContain("Strobe Riot");
   });
 
   it("keeps RGB Shift and Digital Glitch in Effects groups", () => {
@@ -891,6 +875,7 @@ describe("version 8 default scenes", () => {
       "Fractured Kaleidoscope",
       "Broken Mirror Ball",
       "Roto Zoom Riot",
+      "Strobe Riot",
     ]);
 
     const names = DEFAULT_SCENES.map((scene) => sceneKey(scene.name));
@@ -1362,7 +1347,7 @@ describe("version 11 default scene refresh", () => {
 
   it("lists the Scenes whose definitions changed", () => {
     expect(REFRESHED_DEFAULT_SCENES).toContain("Circuit Ritual");
-    expect(REFRESHED_DEFAULT_SCENES).toContain("Strobe Riot");
+    expect(REFRESHED_DEFAULT_SCENES).not.toContain("Strobe Riot");
     expect(REFRESHED_DEFAULT_SCENES).toContain("Soft Bands");
     expect(REFRESHED_DEFAULT_SCENES).toContain("Quiet Bloom");
     expect(REFRESHED_DEFAULT_SCENES).toContain("It Twirls At Night");
@@ -1531,6 +1516,28 @@ describe("default scene removal migration", () => {
     });
 
     expect(result).toEqual([{ id: "roto-id", name: "Roto Zoom Riot" }]);
+  });
+
+  it("removes Strobe Riot from installs upgrading to version 18", () => {
+    const scenes = [seededScene("Strobe Riot", "strobe-id")];
+    const result = getDefaultScenesToRemove({
+      defaultsVersion: 17,
+      scenes,
+      seededNames: ["Strobe Riot"],
+    });
+
+    expect(result).toEqual([{ id: "strobe-id", name: "Strobe Riot" }]);
+  });
+
+  it("keeps a custom Strobe Riot Scene that was not seeded", () => {
+    const scenes = [seededScene("Strobe Riot", "user-id")];
+    const result = getDefaultScenesToRemove({
+      defaultsVersion: 17,
+      scenes,
+      seededNames: ["Something Else"],
+    });
+
+    expect(result).toEqual([]);
   });
 
   it("keeps user-created scenes that share a retired name but were not seeded", () => {
@@ -1870,7 +1877,7 @@ describe("version 16 default scenes", () => {
   it("removes the Geometric Tunnel hero from every seeded Scene", () => {
     const names = new Set(DEFAULT_SCENES.flatMap(getModuleNames));
 
-    expect(DEFAULTS_VERSION).toBe(17);
+    expect(DEFAULTS_VERSION).toBe(18);
     expect(names.has(REMOVED_HERO)).toBe(false);
   });
 

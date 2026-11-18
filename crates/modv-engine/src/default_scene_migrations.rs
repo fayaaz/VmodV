@@ -31,7 +31,7 @@
 //! once. The `the_production_table_is_consistent` test guards the invariants:
 //! the old name must be gone from the data, the new name must exist.
 //!
-//! ## Why the production table is empty
+//! ## The production table
 //!
 //! The historical edits in the JS file are **not** version-keyed:
 //! `RENAMED_DEFAULT_SCENES` (`default-scenes.js:60-100`) and
@@ -41,11 +41,12 @@
 //! ([`crate::default_scenes::get_default_scenes_to_replace`],
 //! [`crate::default_scenes::get_default_scenes_to_remove`]). Keying those rows
 //! here would invent which bump each rename shipped in — and re-remove Scenes
-//! the in-place refresh already handles — so the version-keyed table starts
-//! empty. The first rename/removal that ships *with* a version bump is recorded
-//! here. The mechanism is exercised by
-//! [`get_default_scene_migrations_with`]/[`ensure_default_scene_migrations_with`],
-//! which accept an explicit rule table.
+//! the in-place refresh already handles.
+//!
+//! Version 18 is the first bump that ships a version-keyed removal: it retires
+//! `Strobe Riot`, which is recorded here so the engine store drops the seeded
+//! Scene on upgrade. Re-running the rule is inert because the name is gone
+//! from both the Scene list and `seeded_names`.
 //!
 //! Version 13 is the first bump whose edits are refresh-only (no Scene was
 //! renamed or retired): `Halftone Harbor` loses CMYK Halftone and `MBOX Light
@@ -110,10 +111,13 @@ pub struct DefaultSceneMigrationRule {
 
 /// The version-keyed rename/removal table.
 ///
-/// Empty on purpose: see the module docs ("Why the production table is
-/// empty"). Add one row per defaults-version bump that renames or retires a
-/// seeded Scene, in ascending `version` order.
-pub const DEFAULT_SCENE_MIGRATIONS: &[DefaultSceneMigrationRule] = &[];
+/// Version 18 retires `Strobe Riot`. Add one row per defaults-version bump that
+/// renames or retires a seeded Scene, in ascending `version` order.
+pub const DEFAULT_SCENE_MIGRATIONS: &[DefaultSceneMigrationRule] = &[DefaultSceneMigrationRule {
+    version: 18,
+    renames: &[],
+    removed: &["Strobe Riot"],
+}];
 
 /// The aggregated edits for a version span.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -410,8 +414,8 @@ fn rename_seeded_entry(seeded_names: &mut Vec<String>, old_key: &str, new_name: 
 
 #[cfg(test)]
 mod tests {
-    //! The mechanism is exercised with an explicit fixture table because the
-    //! production table is empty (see the module docs).
+    //! The mechanism is exercised with an explicit fixture table; the
+    //! production table's version-18 rule is covered separately.
     use super::*;
     use crate::default_scenes::{
         DEFAULTS_VERSION, LEGACY_DEFAULTS_VERSION, get_default_definition,
@@ -1019,28 +1023,59 @@ mod tests {
     }
 
     #[test]
-    fn the_production_path_is_a_no_op_until_a_rule_ships() {
-        let mut scenes = vec![scene("Smoke Room", "smoke-id")];
-        let mut seeded = vec!["Smoke Room".to_string()];
+    fn the_production_path_retires_strobe_riot_for_installs_on_the_previous_version() {
+        let mut scenes = vec![scene("Strobe Riot", "strobe-id")];
+        let mut seeded = vec!["Strobe Riot".to_string()];
 
-        let plan = ensure_default_scene_migration(0, DEFAULTS_VERSION, &mut scenes, &mut seeded);
+        let plan = ensure_default_scene_migration(
+            DEFAULTS_VERSION - 1,
+            DEFAULTS_VERSION,
+            &mut scenes,
+            &mut seeded,
+        );
 
-        assert!(plan.migration.is_empty());
+        assert_eq!(plan.migration, migration(&[], &["Strobe Riot"]));
+        assert_eq!(plan.report.removed, vec!["Strobe Riot".to_string()]);
         assert!(plan.report.renamed.is_empty());
-        assert!(plan.report.removed.is_empty());
         assert!(plan.report.skipped.is_empty());
-        assert_eq!(scenes.len(), 1);
-        assert_eq!(seeded, vec!["Smoke Room".to_string()]);
+        assert!(scenes.is_empty(), "the seeded Scene was not removed");
+        assert!(
+            seeded
+                .iter()
+                .all(|name| scene_key(name) != scene_key("Strobe Riot")),
+            "Strobe Riot is still marked seeded"
+        );
+    }
+
+    #[test]
+    fn the_production_path_keeps_a_custom_strobe_riot_scene() {
+        let mut scenes = vec![scene("Strobe Riot", "user-id")];
+        let mut seeded = vec!["Something Else".to_string()];
+
+        let plan = ensure_default_scene_migration(
+            DEFAULTS_VERSION - 1,
+            DEFAULTS_VERSION,
+            &mut scenes,
+            &mut seeded,
+        );
+
+        assert!(plan.report.removed.is_empty());
+        assert_eq!(plan.report.skipped, vec!["Strobe Riot".to_string()]);
+        assert_eq!(names(&scenes), vec!["Strobe Riot".to_string()]);
+        assert_eq!(seeded, vec!["Something Else".to_string()]);
     }
 
     #[test]
     fn the_previous_version_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
         // Versions 13/14 only edit definitions in place — CMYK Halftone leaves
         // Halftone Harbor, MBOX3's hue is fixed and Point10 Old Movie becomes
-        // Sepia Tone — so no rename/removal rule ships and the version-keyed
-        // table stays empty. Installs on the previous version receive the edits
-        // through `get_default_scenes_to_replace`.
-        assert!(get_default_scene_migrations(12, DEFAULTS_VERSION).is_empty());
+        // Sepia Tone. Version 18 retires Strobe Riot without a rename, so the
+        // only version-keyed edit in this span is its removal. Installs on the
+        // previous version receive the in-place edits through
+        // `get_default_scenes_to_replace`.
+        let migration = get_default_scene_migrations(12, DEFAULTS_VERSION);
+        assert!(migration.rename.is_empty());
+        assert_eq!(migration.remove, vec!["Strobe Riot".to_string()]);
 
         let names = ["Halftone Harbor", "MBOX Light Tunnel", "Boxy Arcade"];
         let scenes: Vec<Value> = names
