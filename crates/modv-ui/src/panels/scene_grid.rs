@@ -47,9 +47,10 @@ pub struct SceneGridState {
     last_preview_request: Option<std::time::Instant>,
     hover_scene: Option<(String, usize)>,
     /// Cells whose cached preview keeps painting after the pointer leaves
-    /// (the legacy grid "leaves a still"). Inserted on hover and pruned when
-    /// the saved cell disappears or is emptied.
-    still_cells: std::collections::BTreeSet<CellRef>,
+    /// (the legacy grid "leaves a still"), keyed by the saved modules they
+    /// showed. Inserted on hover and pruned when the saved cell disappears,
+    /// empties or changes.
+    still_cells: BTreeMap<CellRef, Vec<String>>,
     /// The in-flight `Clear cell` confirmation, if any.
     pub clear_cell_edit: Option<ClearCellEdit>,
     /// Inline Scene-name editor: `(scene_id, draft)`.
@@ -238,25 +239,27 @@ impl SceneGridState {
     /// live, and every cell hovered before keeps its last rendered frame as a
     /// still (the legacy grid's `scenes__gridPreviewCanvas--visible`).
     pub fn paints_preview(&self, cell: &CellRef, hovered: bool) -> bool {
-        hovered || self.still_cells.contains(cell)
+        hovered || self.still_cells.contains_key(cell)
     }
 
     /// Remember `cell` as a still so its cached preview keeps painting once
-    /// the pointer moves on.
-    pub fn keep_preview(&mut self, cell: &CellRef) {
-        self.still_cells.insert(cell.clone());
+    /// the pointer moves on. `module_names` is the saved content the preview
+    /// shows; a later edit drops the still rather than painting stale pixels.
+    pub fn keep_preview(&mut self, cell: &CellRef, module_names: &[String]) {
+        self.still_cells.insert(cell.clone(), module_names.to_vec());
     }
 
-    /// Drop stills whose Scene or saved cell disappeared or became empty, so
-    /// a removed/cleared cell cannot keep painting a stale frame.
+    /// Drop stills whose Scene or saved cell disappeared, became empty or
+    /// changed modules, so a removed/cleared/edited cell cannot keep painting
+    /// a stale frame.
     pub fn prune_preview_stills(&mut self, snapshot: &EngineSnapshot) {
-        self.still_cells.retain(|cell| {
+        self.still_cells.retain(|cell, module_names| {
             snapshot
                 .scenes
                 .iter()
                 .find(|scene| scene.id == cell.scene_id)
                 .and_then(|scene| scene.cell(cell.row))
-                .is_some_and(|saved| !saved.is_empty())
+                .is_some_and(|saved| !saved.is_empty() && saved.module_names == *module_names)
         });
     }
 
@@ -1518,7 +1521,7 @@ fn draw_scene_cell(
     if hovered {
         grid.hovered = Some(target.clone());
         if !cell.is_empty() {
-            grid.keep_preview(&target);
+            grid.keep_preview(&target, &cell.module_names);
         }
     }
 

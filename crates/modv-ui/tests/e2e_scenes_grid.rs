@@ -290,6 +290,25 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
         "the first row's preview texture remains available as a still"
     );
 
+    // Editing the saved cell drops its still; the cached frame no longer
+    // matches what the Scene holds.
+    snapshot.lock().unwrap().scenes[0].cells[1].module_names = vec!["Ball".to_string()];
+    harness.run();
+    assert!(
+        !harness
+            .state()
+            .scene_grid
+            .paints_preview(&second_cell, false),
+        "a changed cell stops painting the stale still"
+    );
+    assert!(
+        harness
+            .state()
+            .scene_grid
+            .paints_preview(&first_cell, false),
+        "an unchanged cell keeps its still"
+    );
+
     // Clearing the cell drops its still; the Scene no longer has a preview to
     // show.
     snapshot.lock().unwrap().scenes[0].cells[0]
