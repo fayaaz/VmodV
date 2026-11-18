@@ -4558,7 +4558,7 @@ mod tests {
         assert_eq!(module.status, Vec::<Value>::new(), "registered, no error");
         // The registry meta survives the apply (the snapshot merges on top).
         assert_eq!(module.meta["type"], json!("2d"));
-        assert_eq!(module.meta["category"], json!("3d-scenes"));
+        assert_eq!(module.meta["category"], json!("2d-scenes"));
         assert_eq!(module.meta["author"], json!("Point10"));
         // Scene props are coerced against the Point10 schema: `opacity` is
         // strict-clamped to its 0..1 range, `speed` keeps its saved value and
@@ -4627,6 +4627,148 @@ mod tests {
         assert_eq!(module.meta["author"], json!("by VIDVOX"));
         assert_eq!(module.props["blurAmount"], json!(6.0));
         assert_eq!(module.props["intensity"], json!(0));
+    }
+
+    #[test]
+    fn restore_merges_registry_default_props_the_snapshot_lacks() {
+        // Regression: engine-state.json written before the synthetic `quality`
+        // prop existed has no `quality` in the modules' props, so the
+        // Inspector shows no Quality row for restored ISF/Point10 modules.
+        // `restore` must merge the registry defaults (additive only) and mint
+        // the missing inputs, mirroring `modules/makeActiveModule`.
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
+        if !corpus.is_dir() {
+            eprintln!("skipping restore test: {} is missing", corpus.display());
+            return;
+        }
+        let mut store = Store::with_state_path_and_isf(None, Some(&corpus));
+        let live = store
+            .dispatch(
+                "modules/makeActiveModule",
+                serde_json::json!({"moduleName": "Hot Shower"}),
+            )
+            .expect("makeActiveModule dispatches");
+        let id = live["$id"].as_str().expect("id").to_string();
+
+        // Capture a snapshot shaped exactly like an old saved engine state:
+        // the module's props match the pre-Quality-prop registry.
+        let live_module = store.state().modules.get(&id).expect("module").clone();
+        let mut old_props = live_module.props.as_object().cloned().expect("props");
+        old_props.remove("quality");
+        let mut dollar = live_module
+            .dollar_props
+            .as_object()
+            .cloned()
+            .expect("$props");
+        dollar.remove("quality");
+        let snapshot = json!({
+            "groups": [],
+            "modules": {
+                id.clone(): {
+                    "$id": id,
+                    "$moduleName": "Hot Shower",
+                    "meta": live_module.meta.clone(),
+                    "props": old_props,
+                    "data": {},
+                    "$props": dollar,
+                },
+            },
+            "inputs": { "focusedInput": null, "inputs": {}, "inputLinks": {} },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+            "midi": {},
+        });
+        store.restore(&snapshot).expect("restore succeeds");
+
+        let module = store.state().modules.get(&id).expect("module survives");
+        assert_eq!(module.props["quality"], json!("global"));
+        let quality_id = module
+            .dollar_props
+            .get("quality")
+            .and_then(|d| d.get("id"))
+            .and_then(Value::as_str)
+            .expect("quality input id minted");
+        assert!(
+            store.state().inputs.contains_key(quality_id),
+            "the minted input is registered"
+        );
+        // Pre-existing props and inputs survive untouched.
+        assert_eq!(module.props["windspeed"], json!(0.4));
+    }
+
+    #[test]
+    fn apply_scene_materialises_isf_modules_with_the_quality_prop() {
+        // A Scene materialised from a saved preset (the exact Hot Shower
+        // document shape a user would save) must still carry the Quality
+        // prop so the Inspector shows the dropdown.
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
+        if !corpus.is_dir() {
+            eprintln!("skipping ISF Scene test: {} is missing", corpus.display());
+            return;
+        }
+        let mut store = Store::with_state_path_and_isf(None, Some(&corpus));
+        seed_scene(
+            &mut store,
+            json!({
+                "id": "scene-hot-shower",
+                "name": "HOTSHOWERRAVE",
+                "groups": [{
+                    "id": "doc-background",
+                    "name": "Background",
+                    "hidden": false,
+                    "modules": ["doc-hot-shower"],
+                    "enabled": true,
+                    "alpha": 1,
+                    "inherit": true,
+                    "inheritFrom": -1,
+                    "pipeline": false,
+                    "clearing": true,
+                    "compositeOperation": "normal",
+                }],
+                "modules": {
+                    "doc-hot-shower": {
+                        "$id": "doc-hot-shower",
+                        "$moduleName": "Hot Shower",
+                        "meta": { "name": "Hot Shower", "type": "isf", "category": "3d-scenes" },
+                        "props": { "windspeed": 0.4 },
+                        "data": {},
+                        "$props": {
+                            "windspeed": { "id": "prop-windspeed", "type": "float" }
+                        },
+                    },
+                },
+            }),
+        );
+        store
+            .dispatch(
+                "scenes/applyScene",
+                json!({ "sceneId": "scene-hot-shower" }),
+            )
+            .expect("applyScene dispatches");
+
+        let group = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| group.name == "Background")
+            .expect("Background group");
+        let module_id = &group.modules[0];
+        let module = store.state().modules.get(module_id).expect("module exists");
+        assert_eq!(module.module_name, "Hot Shower");
+        assert_eq!(
+            module.props["quality"],
+            json!("global"),
+            "a scene-materialised ISF module keeps the synthetic Quality prop"
+        );
+        assert_eq!(
+            module.meta["category"],
+            json!("3d-scenes"),
+            "the saved category survives the materialisation"
+        );
+        assert!(
+            module.dollar_props.get("quality").is_some(),
+            "the quality prop gets an input minted so the dropdown can drive it"
+        );
     }
 
     #[test]

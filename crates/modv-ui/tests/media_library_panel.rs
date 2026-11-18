@@ -129,7 +129,7 @@ fn module_snapshot(prop_type: &str) -> EngineSnapshot {
                 input_id: None,
                 components: Vec::new(),
                 tween: None,
-                options: Vec::new(),
+                enum_members: Vec::new(),
             }],
         }],
         library: library(),

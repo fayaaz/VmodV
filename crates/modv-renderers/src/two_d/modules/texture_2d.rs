@@ -95,6 +95,9 @@ impl TwoDModule for Texture2d {
 
         let width = ctx.canvas.width() as f32;
         let height = ctx.canvas.height() as f32;
+        // The `none` (Scale) mode lays out in output pixels; other modes are
+        // relative to the canvas and need no adjustment.
+        let pixel_scale = ctx.pixel_scale;
 
         // `Texture2d.js:106-147`: destination size from the CROPPED source
         // aspect ratio.
@@ -130,8 +133,8 @@ impl TwoDModule for Texture2d {
                 )
             }
         } else {
-            let image_width = source_width * scale;
-            let image_height = source_height * scale;
+            let image_width = source_width * scale * pixel_scale;
+            let image_height = source_height * scale * pixel_scale;
             (
                 image_width,
                 image_height,

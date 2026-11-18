@@ -2169,6 +2169,17 @@ pub struct ModuleView {
     pub props: Vec<PropView>,
 }
 
+/// One member of an `enum`-typed module prop: a label shown in the control,
+/// a value stored on the module. Numeric ISF `long` enums keep their numbers;
+/// the Quality prop uses lowercase strings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PropEnumMember {
+    /// Display label for the member.
+    pub label: String,
+    /// Stored value for the member.
+    pub value: Value,
+}
+
 /// A single editable property of an active Module.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PropView {
@@ -2190,8 +2201,8 @@ pub struct PropView {
     pub components: Vec<PropComponentView>,
     /// The tween descriptor linked to this prop, when one exists.
     pub tween: Option<TweenView>,
-    /// Enum options, when the prop declares them.
-    pub options: Vec<String>,
+    /// Enum members, when the prop is `enum`-typed.
+    pub enum_members: Vec<PropEnumMember>,
 }
 
 /// One component sub-input of a prop (a Vec lane or Color channel).
@@ -2922,7 +2933,7 @@ mod tests {
                 input_id: "in-component".to_string(),
             }],
             tween: None,
-            options: Vec::new(),
+            enum_members: Vec::new(),
         });
         module.props.push(PropView {
             name: "alpha".to_string(),
@@ -2935,7 +2946,7 @@ mod tests {
             input_id: Some("in-unbounded".to_string()),
             components: Vec::new(),
             tween: None,
-            options: Vec::new(),
+            enum_members: Vec::new(),
         });
         let snapshot = EngineSnapshot {
             modules: vec![module],

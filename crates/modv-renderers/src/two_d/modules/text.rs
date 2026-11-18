@@ -69,14 +69,14 @@ impl TwoDModule for Text {
     fn draw(&mut self, ctx: &mut DrawContext) {
         // `Text.js:139-184` (`drawText`).
         let text = prop_str(ctx.props, "text", "");
-        let size = prop_f64(ctx.props, "size", 16.0) as f32;
+        let size = prop_f64(ctx.props, "size", 16.0) as f32 * ctx.pixel_scale;
         if text.trim().is_empty() || size <= 0.0 {
             // `0px` font / empty text draw nothing in the browser too.
             return;
         }
         let offset_x_prop = prop_f64(ctx.props, "offsetX", 0.0) as f32;
         let offset_y_prop = prop_f64(ctx.props, "offsetY", 0.0) as f32;
-        let stroke_size = prop_f64(ctx.props, "strokeSize", 1.0) as f32;
+        let stroke_size = prop_f64(ctx.props, "strokeSize", 1.0) as f32 * ctx.pixel_scale;
         let font = prop_str(ctx.props, "font", "sans-serif");
         let weight = prop_str(ctx.props, "weight", "bold");
         let fill = prop_bool(ctx.props, "fill", true);

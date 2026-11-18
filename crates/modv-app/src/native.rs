@@ -35,8 +35,8 @@ use modv_ui::{
     EngineSnapshot, FileDialogAction, GroupView, InputLinkView, MediaAction, MediaLibraryView,
     MediaSnapshot, MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView,
     PerformanceView, PluginInfoView, PluginPropView, PluginView, PreviewRequest, PreviewTexture,
-    ProjectView, PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView,
-    SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand, UiState,
+    ProjectView, PropComponentView, PropEnumMember, PropView, RowMonitorView, SceneCellView,
+    SceneView, SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand, UiState,
     VideoSourceProblemView, VideoTransportAction, VideoTransportView, gallery_preview_key,
     scene_preview_key,
 };
@@ -3994,7 +3994,19 @@ fn module_view(
                             .as_ref()
                             .and_then(|id| tween_by_id.get(id))
                             .cloned(),
-                        options: Vec::new(),
+                        enum_members: schema
+                            .as_ref()
+                            .and_then(|schema| schema.enum_members.as_ref())
+                            .map(|members| {
+                                members
+                                    .iter()
+                                    .map(|member| PropEnumMember {
+                                        label: member.label.clone(),
+                                        value: member.value.clone(),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
                     }
                 })
                 .collect()
@@ -4765,6 +4777,101 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("plugins")).expect("plugin temp dir");
         dir
+    }
+
+    fn inline_isf_dir(source: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-native-inline-isf-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("inline isf dir");
+        std::fs::write(dir.join("Quality Test.fs"), source).expect("inline shader written");
+        dir
+    }
+
+    const INLINE_ISF: &str = r#"/*{
+        "CREDIT": "by test",
+        "VSN": "1.0.0",
+        "ISFVSN": "2",
+        "INPUTS": [
+            { "NAME": "mode", "TYPE": "long", "DEFAULT": 1,
+              "VALUES": [0, 1], "LABELS": ["a", "b"] }
+        ]
+    }*/
+    void main() { gl_FragColor = vec4(1.0); }
+    "#;
+
+    #[test]
+    fn the_module_view_carries_the_enum_members_for_every_enum_prop() {
+        // Regression for the Quality prop (and every other enum prop): the
+        // Inspector builds PropViews from the registry schemas, and without
+        // the members the Quality dropdown would be empty.
+        let dir = inline_isf_dir(INLINE_ISF);
+        let mut store = Store::with_state_path_and_isf(None, Some(&dir));
+        let module = store
+            .dispatch(
+                "modules/makeActiveModule",
+                serde_json::json!({"moduleName": "Quality Test"}),
+            )
+            .expect("makeActiveModule dispatches");
+        let module_id = module["$id"].as_str().expect("id").to_string();
+
+        let registry = crate::module_registry::ModuleRegistry::build(Some(&dir));
+        let engine_module = store.state().modules.get(&module_id).expect("module");
+        let view = module_view(
+            engine_module,
+            String::new(),
+            &registry,
+            &HashMap::new(),
+            store.state(),
+        );
+
+        let quality = view
+            .props
+            .iter()
+            .find(|prop| prop.name == "quality")
+            .expect("quality prop view");
+        assert_eq!(quality.prop_type, "enum");
+        assert_eq!(
+            quality
+                .enum_members
+                .iter()
+                .map(|m| m.value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["global", "full", "balanced", "performance"]
+        );
+        assert_eq!(
+            quality
+                .enum_members
+                .iter()
+                .map(|m| m.label.as_str())
+                .collect::<Vec<_>>(),
+            quality
+                .enum_members
+                .iter()
+                .map(|m| m.label.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        let mode = view
+            .props
+            .iter()
+            .find(|prop| prop.name == "mode")
+            .expect("mode prop view");
+        assert_eq!(mode.prop_type, "enum");
+        assert_eq!(
+            mode.enum_members
+                .iter()
+                .map(|m| m.value.as_i64())
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1)],
+            "an ISF long enum keeps its numeric values"
+        );
+        assert_eq!(mode.default, Some(serde_json::json!(1)));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

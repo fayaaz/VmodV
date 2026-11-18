@@ -90,7 +90,7 @@ impl TwoDModule for GridStretch {
             (ctx.audio.features.zcr / 10.0) * intensity
         } else {
             ctx.audio.features.rms * 10.0 * intensity
-        };
+        } * ctx.pixel_scale;
         if !analysed.is_finite() {
             return;
         }

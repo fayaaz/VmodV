@@ -82,7 +82,7 @@ fn snapshot(prop_value: serde_json::Value, sources: Vec<MediaSourceView>) -> Eng
                 input_id: None,
                 components: Vec::new(),
                 tween: None,
-                options: Vec::new(),
+                enum_members: Vec::new(),
             }],
         }],
         media: MediaSnapshot {

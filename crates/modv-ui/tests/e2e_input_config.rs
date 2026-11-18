@@ -42,7 +42,7 @@ fn prop(name: &str, value: f64, input_id: &str) -> PropView {
         input_id: Some(input_id.to_string()),
         components: Vec::new(),
         tween: None,
-        options: Vec::new(),
+        enum_members: Vec::new(),
     }
 }
 

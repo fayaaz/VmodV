@@ -970,9 +970,22 @@ impl ModuleRegistry {
         }
 
         if let Some(definition) = self.isf_definition(module_name) {
-            return Some(schema_for_isf(definition.prop(prop)?));
+            // A shader that declares its own `quality` input keeps it; only
+            // modules without a declared prop get the synthetic one.
+            if let Some(prop) = definition.prop(prop) {
+                return Some(schema_for_isf(prop));
+            }
+            return (prop == QUALITY_PROP).then(quality_schema);
         }
 
+        if prop == QUALITY_PROP {
+            // Only ISF/Point10 report the synthetic prop; anything else
+            // returns None like any other unknown prop name.
+            return self
+                .point10_definition(module_name)
+                .is_some()
+                .then(quality_schema);
+        }
         let definition = self.point10_definition(module_name)?;
         let declared = definition
             .props
@@ -1051,6 +1064,7 @@ impl ModuleRegistry {
                 .props
                 .iter()
                 .map(|prop| prop.name.to_string())
+                .chain(std::iter::once(QUALITY_PROP.to_string()))
                 .collect();
         }
         if let Some(definition) = self.isf_definition(module_name) {
@@ -1058,6 +1072,7 @@ impl ModuleRegistry {
                 .props
                 .iter()
                 .map(|(name, _)| name.clone())
+                .chain(std::iter::once(QUALITY_PROP.to_string()))
                 .collect();
         }
         Vec::new()
@@ -1081,6 +1096,9 @@ impl ModuleRegistry {
             for (name, prop) in &definition.props {
                 props.insert(name.clone(), default_isf_prop_value(prop));
             }
+            if !props.contains_key(QUALITY_PROP) {
+                props.insert(QUALITY_PROP.to_string(), quality_default());
+            }
             return Some(Value::Object(props));
         }
 
@@ -1088,6 +1106,9 @@ impl ModuleRegistry {
         let mut props = Map::new();
         for prop in &definition.props {
             props.insert(prop.name.to_string(), default_scene_prop_value(prop));
+        }
+        if !props.contains_key(QUALITY_PROP) {
+            props.insert(QUALITY_PROP.to_string(), quality_default());
         }
         Some(Value::Object(props))
     }
@@ -1144,12 +1165,66 @@ fn prop_kind_name(kind: PropKind) -> &'static str {
     }
 }
 
+/// The synthetic `quality` prop: every ISF module and Point10 scene reports
+/// it, regardless of what the header declares. The inspector renders it as
+/// a dropdown; the compositor reads it to pick a render target size.
+const QUALITY_PROP: &str = "quality";
+
+fn quality_members() -> Vec<modv_engine::props::EnumMember> {
+    [
+        ("Global (follow the Quality setting)", "global"),
+        ("Full (100%)", "full"),
+        ("Balanced (75%)", "balanced"),
+        ("Performance (50%)", "performance"),
+    ]
+    .into_iter()
+    .map(|(label, value)| modv_engine::props::EnumMember {
+        label: label.to_string(),
+        value: Value::String(value.to_string()),
+    })
+    .collect()
+}
+
+/// The synthetic Quality prop descriptor shared by ISF and Point10 modules.
+fn quality_schema() -> PropSchema {
+    PropSchema {
+        type_: "enum".to_string(),
+        min: None,
+        max: None,
+        strict: false,
+        abs: false,
+        default: Some(Value::String("global".to_string())),
+        enum_members: Some(quality_members()),
+    }
+}
+
+/// The Quality prop's default value.
+fn quality_default() -> Value {
+    Value::String("global".to_string())
+}
+
 /// Serialise a [`PropSchema`] the way the JS prop descriptors are shaped.
 fn schema_json(schema: &PropSchema) -> Value {
     let mut map = Map::new();
     map.insert("type".to_string(), json!(schema.type_));
     if let Some(default) = &schema.default {
         map.insert("default".to_string(), default.clone());
+    }
+    if let Some(members) = &schema.enum_members {
+        map.insert(
+            "options".to_string(),
+            Value::Array(
+                members
+                    .iter()
+                    .map(|member| {
+                        json!({
+                            "label": member.label,
+                            "value": member.value,
+                        })
+                    })
+                    .collect(),
+            ),
+        );
     }
     if let Some(min) = schema.min {
         map.insert("min".to_string(), json!(min));
@@ -1176,6 +1251,7 @@ fn schema_for_shader(prop: &ShaderProp) -> PropSchema {
         strict: false,
         abs: false,
         default: Some(default_shader_prop_value(prop)),
+        enum_members: None,
     }
 }
 
@@ -1189,6 +1265,15 @@ fn schema_for_two_d(module_name: &str, prop: &TwoDProp) -> PropSchema {
         strict,
         abs,
         default: Some(prop.default.clone()),
+        enum_members: prop.enum_members.as_ref().map(|members| {
+            members
+                .iter()
+                .map(|member| modv_engine::props::EnumMember {
+                    label: member.label.to_string(),
+                    value: Value::String(member.value.to_string()),
+                })
+                .collect()
+        }),
     }
 }
 
@@ -1217,6 +1302,7 @@ fn schema_for_point10(prop: &SceneProp) -> PropSchema {
         strict: prop.kind == ScenePropKind::Float,
         abs: false,
         default: Some(default_scene_prop_value(prop)),
+        enum_members: None,
     }
 }
 
@@ -1288,6 +1374,19 @@ fn schema_for_isf(prop: &IsfProp) -> PropSchema {
         strict: false,
         abs: false,
         default: Some(default_isf_prop_value(prop)),
+        enum_members: prop.enum_members.as_ref().map(|members| {
+            members
+                .iter()
+                .map(|member| modv_engine::props::EnumMember {
+                    label: if member.label.is_empty() {
+                        member.value.to_string()
+                    } else {
+                        member.label.clone()
+                    },
+                    value: member.value.clone(),
+                })
+                .collect()
+        }),
     }
 }
 
@@ -1829,8 +1928,9 @@ mod tests {
             );
         }
 
-        // Only the fullscreen 2D scene overrides the default category
-        // (`Point10ChromaticWave.js:7`).
+        // The three cheap full-quality scenes are filed under 2D Scenes;
+        // the other full-quality scenes (Particle Field, Spiral Particles,
+        // Sun, Earth) stay under 3D Scenes, as do the heavy ones.
         let category = |name: &str| {
             registry
                 .point10_definition(name)
@@ -1838,10 +1938,13 @@ mod tests {
                 .meta
                 .category
         };
+        assert_eq!(category("Point10 Chromatic Line"), "2d-scenes");
         assert_eq!(category("Point10 Chromatic Wave"), "2d-scenes");
+        assert_eq!(category("Point10 Waveform"), "2d-scenes");
         assert_eq!(category("Point10 Particle Field"), "3d-scenes");
         assert_eq!(category("Point10 Spiral Particles"), "3d-scenes");
-        assert_eq!(category("Point10 Waveform"), "3d-scenes");
+        assert_eq!(category("Point10 Sun"), "3d-scenes");
+        assert_eq!(category("Point10 Earth"), "3d-scenes");
     }
 
     #[test]
@@ -1860,7 +1963,7 @@ mod tests {
         let waveform = registry
             .meta_fields("Point10 Waveform")
             .expect("registered");
-        assert_eq!(waveform["category"], json!("3d-scenes"));
+        assert_eq!(waveform["category"], json!("2d-scenes"));
     }
 
     #[test]
@@ -2644,6 +2747,88 @@ void main() { gl_FragColor = vec4(1.0); }
         assert!(
             !names.is_empty(),
             "default-Scene resolution guard found no modules to check"
+        );
+    }
+}
+
+#[cfg(test)]
+mod quality_prop_tests {
+    use super::*;
+
+    fn inline_isf(source: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-quality-inline-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("create inline isf dir");
+        std::fs::write(dir.join("Quality Test.fs"), source).expect("write inline isf");
+        dir
+    }
+
+    const SIMPLE_ISF: &str = r#"/*{
+  "NAME": "Quality Test",
+  "CREDIT": "test",
+  "INPUTS": []
+}*/
+void main() { gl_FragColor = vec4(1.0); }
+"#;
+
+    #[test]
+    fn an_isf_module_reports_the_quality_prop_last() {
+        let dir = inline_isf(SIMPLE_ISF);
+        let registry = ModuleRegistry::build(Some(&dir));
+        let names: Vec<&str> = registry
+            .prop_names("Quality Test")
+            .into_iter()
+            .map(|name| Box::leak(name.into_boxed_str()) as &str)
+            .collect();
+        assert_eq!(names.last(), Some(&"quality"));
+        let defaults = registry.default_props("Quality Test").expect("registered");
+        assert_eq!(defaults["quality"], json!("global"));
+        let schema = registry
+            .prop_schema("Quality Test", "quality")
+            .expect("quality prop");
+        assert_eq!(schema.type_, "enum");
+        assert_eq!(schema.default, Some(json!("global")));
+        let members = schema.enum_members.as_ref().expect("members");
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["global", "full", "balanced", "performance"]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_point10_scene_reports_the_quality_prop_last() {
+        let registry = ModuleRegistry::builtin();
+        let names: Vec<&str> = registry
+            .prop_names("Point10 Smoke Room")
+            .into_iter()
+            .map(|name| Box::leak(name.into_boxed_str()) as &str)
+            .collect();
+        assert_eq!(names.last(), Some(&"quality"));
+        let defaults = registry
+            .default_props("Point10 Smoke Room")
+            .expect("registered");
+        assert_eq!(defaults["quality"], json!("global"));
+        let schema = registry
+            .prop_schema("Point10 Smoke Room", "quality")
+            .expect("quality prop");
+        assert_eq!(schema.type_, "enum");
+        assert_eq!(schema.default, Some(json!("global")));
+        let members = schema.enum_members.as_ref().expect("members");
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["global", "full", "balanced", "performance"]
         );
     }
 }

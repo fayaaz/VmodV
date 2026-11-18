@@ -118,7 +118,7 @@ fn the_expression_section_loads_the_assignment_for_the_focused_input() {
             input_id: Some("in-gain".to_string()),
             components: Vec::new(),
             tween: None,
-            options: Vec::new(),
+            enum_members: Vec::new(),
         }],
     };
     let snapshot = EngineSnapshot {
@@ -189,7 +189,7 @@ fn the_audio_section_saves_a_bpm_link_for_the_engine() {
             input_id: Some("in-bpm".to_string()),
             components: Vec::new(),
             tween: None,
-            options: Vec::new(),
+            enum_members: Vec::new(),
         }],
     };
     let snapshot = EngineSnapshot {
@@ -281,7 +281,7 @@ fn the_draw_section_creates_a_curve_and_a_draw_link() {
             input_id: Some("in-draw".to_string()),
             components: Vec::new(),
             tween: None,
-            options: Vec::new(),
+            enum_members: Vec::new(),
         }],
     };
     let snapshot = EngineSnapshot {
@@ -373,7 +373,7 @@ fn component_sub_inputs_get_link_rows_under_their_parent_prop() {
                 })
                 .collect(),
             tween: None,
-            options: Vec::new(),
+            enum_members: Vec::new(),
         }],
     };
     let mut snapshot = EngineSnapshot {

@@ -149,9 +149,9 @@ impl TwoDModule for Ball {
     fn update(&mut self, ctx: &mut ModuleContext) {
         // `Ball.js:100-114`.
         let amount = prop_i64(ctx.props, "amount", 10).clamp(0, 300) as usize;
-        let speed = prop_f64(ctx.props, "speed", 2.0) as f32;
+        let speed = prop_f64(ctx.props, "speed", 2.0) as f32 * ctx.pixel_scale;
         let wrap = prop_bool(ctx.props, "wrap", false);
-        let radius = prop_f64(ctx.props, "size", 2.0) as f32;
+        let radius = prop_f64(ctx.props, "size", 2.0) as f32 * ctx.pixel_scale;
         let width = ctx.canvas_width as f32;
         let height = ctx.canvas_height as f32;
 

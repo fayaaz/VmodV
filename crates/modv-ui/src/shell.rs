@@ -9,9 +9,7 @@ use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, Vec2, vec2,
 };
 
-use crate::file_dialog::{
-    FileDialogAction, file_dialog_window, preferences_window, profile_dialog_window,
-};
+use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_window};
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
 use crate::layout::{
     LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
@@ -72,7 +70,6 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     shortcuts_window(ui.ctx(), state);
     file_dialog_window(ui.ctx(), state);
     profile_dialog_window(ui.ctx(), state);
-    preferences_window(ui.ctx(), state);
     plugin_consent_window(ui.ctx(), state);
     link_editor_window(ui, snapshot, state);
     bpm_window(ui.ctx(), snapshot, state);
@@ -98,10 +95,8 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
     });
     // A modal picker owns the keyboard: Ctrl+S while naming a file must not
     // save a preset, and Ctrl+O must not stack a second picker.
-    let modal = state.file_dialog.is_some()
-        || state.show_profile_dialog
-        || state.show_plugin_consent
-        || state.show_preferences_dialog;
+    let modal =
+        state.file_dialog.is_some() || state.show_profile_dialog || state.show_plugin_consent;
     // Backspace removes the focused Group (`Group.vue`'s `keydown.self`), but
     // only outside a text field and while no dialog owns the keyboard.
     let backspace = ui.input(|input| input.key_pressed(egui::Key::Backspace));
@@ -164,7 +159,6 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.show_profile_dialog = false;
         state.profile_error = None;
         state.show_plugin_consent = false;
-        state.show_preferences_dialog = false;
         state.scene_grid.renaming = None;
         state.scene_grid.timing_edit = None;
         state.scene_grid.row_names_edit = None;
@@ -323,11 +317,6 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                 ui.menu_button("Edit", |ui| {
                     ui.add_enabled(false, egui::Button::new("Undo"));
                     ui.add_enabled(false, egui::Button::new("Redo"));
-                    ui.separator();
-                    if ui.button("Preferences…").clicked() {
-                        state.open_preferences();
-                        ui.close();
-                    }
                 });
 
                 ui.menu_button("Scene", |ui| {
@@ -1689,6 +1678,7 @@ fn tab_content(
         SidePanelTab::Inspector => inspector_content(ui, snapshot, state),
         SidePanelTab::Media => media_panel(ui, snapshot, state),
         SidePanelTab::Library => library_panel(ui, snapshot, state),
+        SidePanelTab::Quality => quality_panel(ui, snapshot, state),
         SidePanelTab::Audio => audio_panel(ui, snapshot, state),
         SidePanelTab::Info => info_panel(ui, snapshot),
         SidePanelTab::Plugins => plugins_panel(ui, snapshot, state),
@@ -2037,6 +2027,44 @@ fn paint_window_grip(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
             );
         }
     }
+}
+
+/// The Quality tab: performance vs fidelity knobs (internal rendering is the
+/// first). Kept next to Library in the strip because low-resolution output
+/// is a quality decision, not a resolution one.
+fn quality_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    ui.label(egui::RichText::new("Internal rendering resolution").strong());
+    ui.label(
+        egui::RichText::new(
+            "Only the heavy modules (3D Scenes ISF and Point10 scenes) render at this scale of the output size, upscaled at composite time. Light modules — 2D scenes, shaders, effects — always render at the output resolution. Persisted across restarts.",
+        )
+        .size(11.0)
+        .color(theme::MUTED),
+    );
+    ui.add_space(4.0);
+    const PRESETS: [(f32, &str); 3] = [
+        (1.0, "Full (100%)"),
+        (0.75, "Balanced (75%)"),
+        (0.5, "Performance (50%)"),
+    ];
+    for (scale, label) in PRESETS {
+        let selected = (state.render_scale - scale).abs() < f32::EPSILON;
+        if ui.radio(selected, label).clicked() {
+            state.set_render_scale(scale);
+        }
+    }
+    ui.add_space(4.0);
+    let (width, height) = (snapshot.resolution[0], snapshot.resolution[1]);
+    let scale = state.render_scale;
+    let heavy_width = (width as f32 * scale).round().max(1.0) as u32;
+    let heavy_height = (height as f32 * scale).round().max(1.0) as u32;
+    ui.label(
+        egui::RichText::new(format!(
+            "Heavy modules (3D Scenes and Point10) render at {heavy_width}x{heavy_height}, upscaled to the output size. Light modules always render at full output resolution."
+        ))
+        .size(11.0)
+        .color(theme::MUTED),
+    );
 }
 
 fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
@@ -4072,22 +4100,30 @@ fn draw_prop(
             }
         }
         "enum" => {
-            let current = prop.value.as_str().unwrap_or("").to_string();
+            let current = prop.value.clone();
+            let current_label = prop
+                .enum_members
+                .iter()
+                .find(|member| member.value == current)
+                .map(|member| member.label.clone())
+                .unwrap_or_else(|| {
+                    current
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| current.to_string())
+                });
             egui::ComboBox::from_id_salt((module_id, &prop.name))
-                .selected_text(if current.is_empty() {
-                    prop.name.clone()
-                } else {
-                    current.clone()
-                })
+                .selected_text(current_label)
                 .show_ui(ui, |ui| {
-                    for option in &prop.options {
-                        if ui.selectable_label(&current == option, option).clicked() {
+                    for member in &prop.enum_members {
+                        let selected = member.value == current;
+                        if ui.selectable_label(selected, &member.label).clicked() {
                             state.push_action(
                                 "modules/updateProp",
                                 serde_json::json!({
                                     "moduleId": module_id,
                                     "prop": prop.name,
-                                    "data": { "value": option },
+                                    "data": { "value": member.value },
                                 }),
                             );
                         }

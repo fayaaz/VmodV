@@ -311,8 +311,6 @@ pub struct UiState {
     pub profile_error: Option<String>,
     /// The JavaScript-plugin consent modal, shown by the first enable attempt.
     pub show_plugin_consent: bool,
-    /// The Preferences modal.
-    pub show_preferences_dialog: bool,
     /// The internal rendering resolution scale, mirrored from the value the
     /// shell persists and applied to the compositor. `1.0` is full output
     /// resolution.
@@ -326,6 +324,7 @@ pub enum SidePanelTab {
     Inspector,
     Media,
     Library,
+    Quality,
     Audio,
     Info,
     Plugins,
@@ -336,10 +335,11 @@ pub enum SidePanelTab {
 
 impl SidePanelTab {
     /// Every right-panel tab, in strip order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Inspector,
         Self::Media,
         Self::Library,
+        Self::Quality,
         Self::Audio,
         Self::Info,
         Self::Plugins,
@@ -356,12 +356,13 @@ impl SidePanelTab {
             Self::Inspector => 0,
             Self::Media => 1,
             Self::Library => 2,
-            Self::Audio => 3,
-            Self::Info => 4,
-            Self::Plugins => 5,
-            Self::Midi => 6,
-            Self::Ndi => 7,
-            Self::Osc => 8,
+            Self::Quality => 3,
+            Self::Audio => 4,
+            Self::Info => 5,
+            Self::Plugins => 6,
+            Self::Midi => 7,
+            Self::Ndi => 8,
+            Self::Osc => 9,
         }
     }
 
@@ -371,6 +372,7 @@ impl SidePanelTab {
             Self::Inspector => "inspector",
             Self::Media => "media",
             Self::Library => "library",
+            Self::Quality => "quality",
             Self::Audio => "audio",
             Self::Info => "info",
             Self::Plugins => "plugins",
@@ -386,6 +388,7 @@ impl SidePanelTab {
             Self::Inspector => "Inspector",
             Self::Media => "Media",
             Self::Library => "Library",
+            Self::Quality => "Quality",
             Self::Audio => "Audio",
             Self::Info => "Info",
             Self::Plugins => "Plugins",
@@ -1263,7 +1266,6 @@ impl UiState {
             profile_name: String::new(),
             profile_error: None,
             show_plugin_consent: false,
-            show_preferences_dialog: false,
             render_scale: 1.0,
         }
     }
@@ -1283,11 +1285,6 @@ impl UiState {
     /// Show the JavaScript-plugin consent dialog (the first enable attempt).
     pub fn open_plugin_consent(&mut self) {
         self.show_plugin_consent = true;
-    }
-
-    /// Open the Preferences modal.
-    pub fn open_preferences(&mut self) {
-        self.show_preferences_dialog = true;
     }
 
     /// Record the requested internal rendering resolution and ask the shell
@@ -1706,7 +1703,7 @@ mod tests {
             &SidePanelTab::ALL[SidePanelTab::COUNT - 2..],
             &[SidePanelTab::Ndi, SidePanelTab::Osc]
         );
-        for (index, tab) in [(7, SidePanelTab::Ndi), (8, SidePanelTab::Osc)] {
+        for (index, tab) in [(8, SidePanelTab::Ndi), (9, SidePanelTab::Osc)] {
             assert_eq!(tab.index(), index);
             assert_eq!(SidePanelTab::from_key(tab.key()), Some(tab));
         }
@@ -1717,7 +1714,7 @@ mod tests {
     }
 
     #[test]
-    fn the_library_tab_sits_between_media_and_audio() {
+    fn the_library_and_quality_tabs_sit_between_media_and_audio() {
         assert_eq!(SidePanelTab::Library.index(), 2);
         assert_eq!(SidePanelTab::Library.key(), "library");
         assert_eq!(SidePanelTab::Library.title(), "Library");
@@ -1725,15 +1722,23 @@ mod tests {
             SidePanelTab::from_key("library"),
             Some(SidePanelTab::Library)
         );
+        assert_eq!(SidePanelTab::Quality.index(), 3);
+        assert_eq!(SidePanelTab::Quality.key(), "quality");
+        assert_eq!(SidePanelTab::Quality.title(), "Quality");
         assert_eq!(
-            &SidePanelTab::ALL[1..4],
+            SidePanelTab::from_key("quality"),
+            Some(SidePanelTab::Quality)
+        );
+        assert_eq!(
+            &SidePanelTab::ALL[1..5],
             &[
                 SidePanelTab::Media,
                 SidePanelTab::Library,
+                SidePanelTab::Quality,
                 SidePanelTab::Audio
             ]
         );
-        assert_eq!(SidePanelTab::ALL.len(), 9);
+        assert_eq!(SidePanelTab::ALL.len(), 10);
     }
 
     #[test]
@@ -1874,13 +1879,9 @@ mod tests {
     }
 
     #[test]
-    fn the_preferences_dialog_opens_and_queues_a_render_scale() {
+    fn set_render_scale_clamps_and_queues_the_shell_command() {
         let mut state = UiState::new();
-        assert!(!state.show_preferences_dialog);
         assert_eq!(state.render_scale, 1.0);
-
-        state.open_preferences();
-        assert!(state.show_preferences_dialog);
 
         state.set_render_scale(0.5);
         assert_eq!(state.render_scale, 0.5);
@@ -1895,6 +1896,31 @@ mod tests {
                 UiCommand::SetRenderScale(1.0)
             ]
         );
+
+        state.set_render_scale(9.0);
+        assert_eq!(state.render_scale, 1.0);
+        state.set_render_scale(0.001);
+        assert_eq!(state.render_scale, 0.25);
+        state.set_render_scale(f32::NAN);
+        assert_eq!(state.render_scale, 1.0);
+    }
+
+    #[test]
+    fn the_quality_tab_sits_alongside_media_and_library() {
+        let quality = SidePanelTab::Quality;
+        let library = SidePanelTab::ALL
+            .iter()
+            .position(|tab| *tab == SidePanelTab::Library)
+            .expect("Library is in the strip");
+        let index = SidePanelTab::ALL
+            .iter()
+            .position(|tab| *tab == quality)
+            .expect("Quality is in the strip");
+        assert_eq!(index, library + 1, "Quality is right after Library");
+        assert_eq!(quality.index(), index);
+        assert_eq!(quality.key(), "quality");
+        assert_eq!(quality.title(), "Quality");
+        assert_eq!(SidePanelTab::from_key("quality"), Some(quality));
     }
 
     #[test]

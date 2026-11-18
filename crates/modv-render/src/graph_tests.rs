@@ -292,13 +292,13 @@ fn composite_missing_texture_reports_error() {
 }
 
 #[test]
-fn composite_size_mismatch_reports_error() {
+fn composite_scales_a_larger_source_down_onto_the_destination() {
     let Some(engine) = try_engine() else {
         return;
     };
     let mut surfaces = TextureSurfaces::new();
-    insert_surfaces(&engine, &mut surfaces, &[("src", RED), ("dst", BLUE)]);
-    // Replace dst with a smaller texture (32x32).
+    insert_surfaces(&engine, &mut surfaces, &[("src", RED)]);
+    // dst is a smaller, solid blue canvas; the source must stretch into it.
     let small = engine.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("modv-test-small"),
         size: wgpu::Extent3d {
@@ -312,9 +312,29 @@ fn composite_size_mismatch_reports_error() {
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    engine.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &small,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[0u8, 0, 255, 255].repeat(32 * 32),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(32 * 4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 32,
+            height: 32,
+            depth_or_array_layers: 1,
+        },
+    );
     surfaces.insert(id("dst"), small);
     let graph = FrameGraph {
         nodes: vec![PassNode::Composite {
@@ -325,10 +345,23 @@ fn composite_size_mismatch_reports_error() {
         }],
     };
     let mut executor = Executor::new(&engine.device, &engine.queue);
-    let error = executor
+    executor
         .execute(&graph, &mut surfaces)
-        .expect_err("size mismatch must error");
-    assert!(format!("{error}").contains("64x64"));
+        .expect("a larger source composites over a smaller destination");
+    let texture = surfaces.get(&id("dst")).expect("destination survives");
+    let target = HeadlessTarget {
+        texture: texture.clone(),
+        view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        width: 32,
+        height: 32,
+    };
+    let pixels = read_back_rgba8(&engine, &target).expect("read-back must succeed");
+    for (index, chunk) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        assert!(
+            chunk[0] > 200 && chunk[1] < 60 && chunk[2] < 60 && chunk[3] > 200,
+            "pixel {index} is {chunk:?} (expected red)"
+        );
+    }
 }
 
 /// The composite writes its destination with `copy_texture_to_texture`, which

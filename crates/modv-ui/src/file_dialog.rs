@@ -485,56 +485,6 @@ impl FileDialogState {
     }
 }
 
-/// Draw the Preferences modal.
-///
-/// One setting so far: the internal rendering resolution. Everything else in
-/// the shell resolves through here too as Preferences grow beyond the P1 stub.
-pub fn preferences_window(ctx: &egui::Context, state: &mut UiState) {
-    if !state.show_preferences_dialog {
-        return;
-    }
-    let mut open = true;
-    egui::Window::new("Preferences")
-        .id(egui::Id::unique("modv-preferences"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(380.0)
-        .show(ctx, |ui| {
-            ui.label(egui::RichText::new("Internal rendering resolution").strong());
-            ui.label(
-                egui::RichText::new(
-                    "Every module, group and scene renders into a texture at this scale of the \
-                     output size, and the window upscales it. Lower is faster but softer. \
-                     Persisted across restarts; applies to all 2D and 3D scenes.",
-                )
-                .size(11.0)
-                .color(crate::theme::MUTED),
-            );
-            ui.add_space(6.0);
-            const PRESETS: [(f32, &str); 3] = [
-                (1.0, "Full (100%)"),
-                (0.75, "Balanced (75%)"),
-                (0.5, "Performance (50%)"),
-            ];
-            for (scale, label) in PRESETS {
-                let selected = (state.render_scale - scale).abs() < f32::EPSILON;
-                if ui.radio(selected, label).clicked() {
-                    state.set_render_scale(scale);
-                }
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button("Done").clicked() {
-                    state.show_preferences_dialog = false;
-                }
-            });
-        });
-    if !open {
-        state.show_preferences_dialog = false;
-    }
-}
-
 /// Draw the "New project profile" modal.
 pub fn profile_dialog_window(ctx: &egui::Context, state: &mut UiState) {
     if !state.show_profile_dialog {

@@ -946,6 +946,7 @@ impl ModulePreviews {
                         props,
                         device,
                         queue,
+                        pixel_scale: 1.0,
                     };
                     instance.init(&mut ctx);
                 }
@@ -959,6 +960,7 @@ impl ModulePreviews {
                     props,
                     device,
                     queue,
+                    pixel_scale: 1.0,
                 };
                 instance.update(&mut ctx);
 
@@ -982,6 +984,7 @@ impl ModulePreviews {
                         input_texture: None,
                         input_size: None,
                         is_gallery: true,
+                        pixel_scale: 1.0,
                     };
                     instance.draw(&mut draw);
                 }

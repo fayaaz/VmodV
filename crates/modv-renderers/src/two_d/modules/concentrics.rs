@@ -88,7 +88,7 @@ impl TwoDModule for Concentrics {
         }
         let width_half = ctx.canvas_width as f32 / 2.0;
         let height_half = ctx.canvas_height as f32 / 2.0;
-        let distance = prop_f64(ctx.props, "objectDistance", 40.0) as f32;
+        let distance = prop_f64(ctx.props, "objectDistance", 40.0) as f32 * ctx.pixel_scale;
         let phase = ctx.delta / 1000.0;
 
         Self::update_circles(
@@ -105,8 +105,8 @@ impl TwoDModule for Concentrics {
 
     fn draw(&mut self, ctx: &mut DrawContext) {
         // `Concentrics.js:91-118`.
-        let stroke_weight = prop_f64(ctx.props, "strokeWeight", 1.0) as f32;
-        let spacing = prop_f64(ctx.props, "spacing", 5.0) as f32;
+        let stroke_weight = prop_f64(ctx.props, "strokeWeight", 1.0) as f32 * ctx.pixel_scale;
+        let spacing = prop_f64(ctx.props, "spacing", 5.0) as f32 * ctx.pixel_scale;
         let rms = prop_bool(ctx.props, "rms", true);
         let intensity = prop_f64(ctx.props, "intensity", 1.0) as f32;
 

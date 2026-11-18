@@ -35,10 +35,10 @@ impl TwoDModule for Smear {
 
     fn draw(&mut self, ctx: &mut DrawContext) {
         // `Smear.js:36-41`.
-        let speed_x = prop_i64(ctx.props, "speedX", 0) as f32;
-        let speed_y = prop_i64(ctx.props, "speedY", 10) as f32;
-        let size_x = prop_i64(ctx.props, "sizeX", 0) as f32;
-        let size_y = prop_i64(ctx.props, "sizeY", 0) as f32;
+        let speed_x = prop_i64(ctx.props, "speedX", 0) as f32 * ctx.pixel_scale;
+        let speed_y = prop_i64(ctx.props, "speedY", 10) as f32 * ctx.pixel_scale;
+        let size_x = prop_i64(ctx.props, "sizeX", 0) as f32 * ctx.pixel_scale;
+        let size_y = prop_i64(ctx.props, "sizeY", 0) as f32 * ctx.pixel_scale;
 
         let width = ctx.canvas.width() as f32;
         let height = ctx.canvas.height() as f32;

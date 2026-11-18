@@ -4332,8 +4332,115 @@ impl Store {
     /// outright (a crossfade cannot be completed — its Groups are already gone)
     /// and the rows implied by the restored Groups are re-published, so the
     /// mirror does not keep drawing fades for objects that no longer exist.
+    /// Forward-compatibility for restored snapshots.
+    ///
+    /// Registries grow synthetic props (the `quality` enum on ISF and
+    /// Point10 modules, so the UI/presets can keep a Control row for value).
+    /// A saved `engine-state.json`/`*.movd` written before such a prop
+    /// existed has no `quality` in the module's `props`, and the Inspector
+    /// renders no Quality row for the module. This walks every restored
+    /// module and merges the registry defaults in (additive only — no saved
+    /// value is replaced), minting the missing Inputs and `$props`
+    /// descriptors exactly like `modules/makeActiveModule`.
+    fn merge_restored_default_props(&mut self) {
+        let ids: Vec<String> = self.state.modules.keys().cloned().collect();
+        for module_id in ids {
+            let Some(module) = self.state.modules.get(&module_id) else {
+                continue;
+            };
+            let is_gallery = module
+                .meta
+                .get("isGallery")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if is_gallery {
+                // JS skips Inputs for gallery tiles; restoring them would
+                // mint inputs nothing reads.
+                continue;
+            }
+            let module_name = module.module_name.clone();
+            let Some(defaults) = self.registry.default_props(&module_name) else {
+                continue;
+            };
+            let Some(defaults_obj) = defaults.as_object() else {
+                continue;
+            };
+            let missing: Vec<(String, Value)> = defaults_obj
+                .iter()
+                .filter(|(key, _)| {
+                    !module
+                        .props
+                        .as_object()
+                        .is_some_and(|p| p.contains_key(*key))
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+
+            for (prop, default_value) in missing {
+                let schema = self.registry.prop_schema(&module_name, &prop);
+                let input_id = crate::ids::uuid_v4();
+                let input = Input {
+                    id: input_id.clone(),
+                    type_: "action".to_string(),
+                    data: json!({ "moduleId": module_id, "prop": prop }),
+                    get_location: Some(format!(
+                        "modules.active[\"{module_id}\"].props[\"{prop}\"]"
+                    )),
+                    location: Some("modules/updateProp".to_string()),
+                };
+                self.insert_module_input(input);
+
+                if let Some(schema) = &schema {
+                    for key in modv_engine::inputs::data_type_input_keys(&schema.type_) {
+                        let input = Input {
+                            id: format!("{input_id}-{key}"),
+                            type_: "action".to_string(),
+                            data: json!({
+                                "moduleId": module_id,
+                                "prop": prop,
+                                "path": format!("[{key}]"),
+                            }),
+                            get_location: Some(format!(
+                                "modules.active[\"{module_id}\"].props[\"{prop}\"][\"{key}\"]"
+                            )),
+                            location: Some("modules/updateProp".to_string()),
+                        };
+                        self.insert_module_input(input);
+                    }
+                }
+
+                if let Some(module) = self.state.modules.get_mut(&module_id) {
+                    if let Some(props) = module.props.as_object_mut() {
+                        props.insert(prop.clone(), default_value.clone());
+                    }
+                    if let Some(dollar) = module.dollar_props.as_object_mut() {
+                        let mut descriptor = Map::new();
+                        if let Some(schema) = &schema {
+                            descriptor.insert("type".to_string(), json!(schema.type_));
+                            if let Some(min) = schema.min {
+                                descriptor.insert("min".to_string(), json!(min));
+                            }
+                            if let Some(max) = schema.max {
+                                descriptor.insert("max".to_string(), json!(max));
+                            }
+                        }
+                        descriptor.insert("default".to_string(), default_value);
+                        descriptor.insert("id".to_string(), json!(input_id));
+                        dollar.insert(prop, Value::Object(descriptor));
+                    }
+                }
+            }
+        }
+    }
+
     pub fn restore(&mut self, preset: &Value) -> Result<(), StoreError> {
         load_preset_into_state(&mut self.state, preset)?;
+        // A saved snapshot carries whatever props existed when it was saved,
+        // so registry-injected props (e.g. the synthetic `quality` enum on
+        // ISF/Point10 modules) are missing from it. Merge them in — additive
+        // only, seeded with the registry default — and mint the Inputs the
+        // Inspector needs, mirroring `modules/makeActiveModule`.
+        self.merge_restored_default_props();
         self.deltas.drain();
         // Link smoothing/throttle state belongs to the replaced inputs.
         self.link_smoothing.clear();

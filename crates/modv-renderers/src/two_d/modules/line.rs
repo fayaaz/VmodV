@@ -78,7 +78,7 @@ impl TwoDModule for Line {
         // `Line.js:87-119`.
         let lines_to_show = prop_i64(ctx.props, "linesToShow", 100).clamp(5, 200) as usize;
         let speed = prop_f64(ctx.props, "speed", 1.0) as f32;
-        let spacing = prop_i64(ctx.props, "spacing", 1) as f32;
+        let spacing = prop_i64(ctx.props, "spacing", 1) as f32 * ctx.pixel_scale;
         let width = ctx.canvas_width.max(1) as f32;
         let pixel = (speed / width) * spacing;
 
@@ -118,7 +118,7 @@ impl TwoDModule for Line {
         let height = ctx.canvas.height() as f32;
 
         ctx.canvas.set_stroke_style([1.0, 1.0, 1.0, 1.0]);
-        ctx.canvas.set_line_width(1.0);
+        ctx.canvas.set_line_width(1.0 * ctx.pixel_scale);
 
         for entry in &self.history {
             let [p1, p2] = entry;

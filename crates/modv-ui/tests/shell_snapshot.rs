@@ -100,7 +100,7 @@ fn demo_snapshot() -> EngineSnapshot {
                 input_id: Some("input-1".to_string()),
                 components: Vec::new(),
                 tween: None,
-                options: Vec::new(),
+                enum_members: Vec::new(),
             },
             PropView {
                 name: "enabled".to_string(),
@@ -113,7 +113,7 @@ fn demo_snapshot() -> EngineSnapshot {
                 input_id: None,
                 components: Vec::new(),
                 tween: None,
-                options: Vec::new(),
+                enum_members: Vec::new(),
             },
         ],
     };

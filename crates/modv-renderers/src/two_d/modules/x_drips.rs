@@ -56,23 +56,23 @@ impl Default for XDrips {
 
 impl XDrips {
     /// `generatePattern` (`X-Drips.js:41-79`).
-    fn generate_pattern(&mut self, width: f32) -> Vec<Piece> {
+    fn generate_pattern(&mut self, width: f32, pixel_scale: f32) -> Vec<Piece> {
         let mut pattern = Vec::new();
         let mut overall_width = 0.0f32;
         let mut flip = false;
 
         while overall_width < width {
-            let selected_height = self.heights[self.rng.index(self.heights.len())];
+            let selected_height = self.heights[self.rng.index(self.heights.len())] * pixel_scale;
             let random = self.rng.next_f32();
 
             let (selected_width, kind) = if flip {
                 (
-                    self.widths[self.rng.index(self.widths.len())],
+                    self.widths[self.rng.index(self.widths.len())] * pixel_scale,
                     PieceKind::Width,
                 )
             } else {
                 (
-                    self.spacings[self.rng.index(self.spacings.len())],
+                    self.spacings[self.rng.index(self.spacings.len())] * pixel_scale,
                     PieceKind::Space,
                 )
             };
@@ -125,18 +125,18 @@ impl TwoDModule for XDrips {
     fn init(&mut self, ctx: &mut ModuleContext) {
         // `X-Drips.js:90-94`.
         self.color = self.colors[self.rng.index(self.colors.len())];
-        self.pattern = self.generate_pattern(ctx.canvas_width as f32);
+        self.pattern = self.generate_pattern(ctx.canvas_width as f32, ctx.pixel_scale);
     }
 
     fn resize(&mut self, ctx: &mut ModuleContext) {
         // `X-Drips.js:96-99`.
-        self.pattern = self.generate_pattern(ctx.canvas_width as f32);
+        self.pattern = self.generate_pattern(ctx.canvas_width as f32, ctx.pixel_scale);
     }
 
     fn draw(&mut self, ctx: &mut DrawContext) {
         // `X-Drips.js:101-156`.
-        let drip_base_height = prop_i64(ctx.props, "dripBaseHeight", 70) as f32;
-        let inset_height = prop_i64(ctx.props, "insetHeight", 15) as f32;
+        let drip_base_height = prop_i64(ctx.props, "dripBaseHeight", 70) as f32 * ctx.pixel_scale;
+        let inset_height = prop_i64(ctx.props, "insetHeight", 15) as f32 * ctx.pixel_scale;
         let max_drip_height = prop_f64(ctx.props, "maxDripHeight", 1.0) as f32;
         let color = hex_to_rgba(self.color);
         let width = ctx.canvas.width() as f32;
@@ -149,7 +149,8 @@ impl TwoDModule for XDrips {
 
         let mut x = 0.0f32;
         for piece in &self.pattern {
-            let h = (piece.width / 2.0 + ((ctx.delta / 500.0) * piece.random).sin() * 30.0)
+            let h = (piece.width / 2.0
+                + ((ctx.delta / 500.0) * piece.random).sin() * 30.0 * ctx.pixel_scale)
                 * max_drip_height;
 
             match piece.kind {

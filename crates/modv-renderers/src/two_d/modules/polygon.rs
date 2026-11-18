@@ -81,9 +81,9 @@ impl TwoDModule for Polygon {
         // `Polygon.js:106-151`.
         let intensity = prop_f64(ctx.props, "intensity", 15.0) as f32;
         let sound_type = prop_bool(ctx.props, "soundType", false);
-        let shape_size = prop_f64(ctx.props, "shapeSize", 60.0) as f32;
+        let shape_size = prop_f64(ctx.props, "shapeSize", 60.0) as f32 * ctx.pixel_scale;
         let fill = prop_bool(ctx.props, "fill", false);
-        let stroke_weight = prop_f64(ctx.props, "strokeWeight", 1.0) as f32;
+        let stroke_weight = prop_f64(ctx.props, "strokeWeight", 1.0) as f32 * ctx.pixel_scale;
         let rotate_toggle = prop_bool(ctx.props, "rotateToggle", false);
         let colour = prop_tween_rgb(ctx.props, "color", [1.0, 1.0, 1.0, 1.0], ctx.delta);
 
@@ -101,7 +101,7 @@ impl TwoDModule for Polygon {
 
         let width = ctx.canvas.width() as f32;
         let height = ctx.canvas.height() as f32;
-        let radius = analysed + shape_size;
+        let radius = (analysed + shape_size) * ctx.pixel_scale;
         let sides = 3 + (analysed / 10.0).round() as i32;
         let start_angle = rotate * 0.0174533;
 

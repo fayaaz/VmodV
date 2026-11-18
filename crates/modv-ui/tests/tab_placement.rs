@@ -69,7 +69,7 @@ fn app_with_module() -> Harness<'static, UiState> {
                 input_id: None,
                 components: Vec::new(),
                 tween: None,
-                options: Vec::new(),
+                enum_members: Vec::new(),
             }],
         }],
         ..Default::default()

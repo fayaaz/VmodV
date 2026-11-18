@@ -50,6 +50,10 @@ impl TwoDModule for Counter {
         ctx.canvas.set_fill_style([1.0, 1.0, 1.0, 1.0]);
         ctx.canvas.fill_rect(0.0, 0.0, width, height);
         ctx.canvas.set_fill_style([0.0, 0.0, 0.0, 1.0]);
+        // The JS kept the canvas default `10px sans-serif`; scale it with the
+        // output so the counter looks the same at any quality.
+        ctx.canvas
+            .set_font("normal", 10.0 * ctx.pixel_scale, "sans-serif");
         let text = format!("{}", self.counter);
         ctx.canvas.fill_text(&text, width / 2.0, height / 2.0, None);
     }

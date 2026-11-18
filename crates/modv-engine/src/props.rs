@@ -18,6 +18,19 @@
 
 use serde::{Deserialize, Serialize};
 
+/// One member of an `enum`-typed prop descriptor.
+///
+/// `label` is the control caption; `value` is the value stored on the
+/// module (a JSON string for the common cases, but any JSON value works so
+/// numeric ISF `long` enums round-trip exactly).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct EnumMember {
+    /// Display label for the member.
+    pub label: String,
+    /// Stored value (a JSON string, number or boolean).
+    pub value: serde_json::Value,
+}
+
 /// Schema for a single module prop, as registered by module definitions.
 ///
 /// `type_` is the `dataTypes` key (`"float"`, `"int"`, `"bool"`, `"text"`,
@@ -43,6 +56,10 @@ pub struct PropSchema {
     /// Registered default value for the prop (not applied during coercion).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
+    /// Members of an `enum`-typed prop, in declaration order. Skipped from
+    /// serialisation when unset, like every other optional field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enum_members: Option<Vec<EnumMember>>,
 }
 
 /// The registry slice used for coercion: the prop schemas of one registered
@@ -138,6 +155,7 @@ mod tests {
             strict: false,
             abs: false,
             default: None,
+            enum_members: None,
         }
     }
 

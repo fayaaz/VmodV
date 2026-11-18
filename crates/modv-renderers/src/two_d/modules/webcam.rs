@@ -51,15 +51,17 @@ impl TwoDModule for Webcam {
 
         let width = ctx.canvas.width() as f32;
         let height = ctx.canvas.height() as f32;
-        let video_width = video_width as f32;
-        let video_height = video_height as f32;
+        // The frame keeps its full-output size relative to the canvas, so it
+        // looks identical at any internal rendering resolution.
+        let video_width = video_width as f32 * ctx.pixel_scale;
+        let video_height = video_height as f32 * ctx.pixel_scale;
 
         ctx.canvas.set_image_smoothing(smoothing);
 
         ctx.canvas.draw_image(
             view,
-            width * position[0] - (video_width * scale) / 2.0,
-            height * (1.0 - position[1]) - (video_height * scale) / 2.0,
+            width * position[0] - video_width * scale / 2.0,
+            height * (1.0 - position[1]) - video_height * scale / 2.0,
             video_width * scale,
             video_height * scale,
         );

@@ -37,7 +37,7 @@ impl TwoDModule for Bar {
 
     fn draw(&mut self, ctx: &mut DrawContext) {
         // `Bar.js:51-72`.
-        let thickness = prop_f64(ctx.props, "thickness", 20.0) as f32;
+        let thickness = prop_f64(ctx.props, "thickness", 20.0) as f32 * ctx.pixel_scale;
         let strobe = prop_i64(ctx.props, "strobe", 0) as f32;
         let rotation = prop_f64(ctx.props, "rotation", 0.0) as f32;
         let color1 = prop_rgba_unit(ctx.props, "color1", [0.0, 0.0, 0.0, 1.0]);

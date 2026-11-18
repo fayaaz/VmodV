@@ -1070,6 +1070,7 @@ fn smoke(module_name: &str, overrides: &[(&str, Value)], seed: bool, input: Opti
         props: &props,
         device: &device,
         queue: &queue,
+        pixel_scale: 1.0,
     };
     module.init(&mut module_context);
     module.resize(&mut module_context);
@@ -1091,6 +1092,7 @@ fn smoke(module_name: &str, overrides: &[(&str, Value)], seed: bool, input: Opti
             input_texture: input_texture.as_ref().map(|(_, view)| view),
             input_size: input_texture.as_ref().map(|_| (MODULE_SIZE, MODULE_SIZE)),
             is_gallery: false,
+            pixel_scale: 1.0,
         };
         module.draw(&mut draw_context);
     }
@@ -1203,6 +1205,7 @@ fn self_sampling_output(module_name: &str, overrides: &[(&str, Value)]) -> Optio
         props: &props,
         device: &device,
         queue: &queue,
+        pixel_scale: 1.0,
     };
     module.init(&mut module_context);
     module.resize(&mut module_context);
@@ -1221,6 +1224,7 @@ fn self_sampling_output(module_name: &str, overrides: &[(&str, Value)]) -> Optio
             input_texture: None,
             input_size: None,
             is_gallery: false,
+            pixel_scale: 1.0,
         };
         module.draw(&mut draw_context);
     }
@@ -1275,6 +1279,127 @@ fn smoke_counter() {
     smoke("Counter", &[], false, None);
 }
 
+/// A module drawing its input at the input's native pixel size lays out as
+/// it would at full output resolution, even when the canvas is the reduced
+/// internal-rendering size. With `output_size` 2× the canvas, the frame must
+/// occupy a 32×32 rect (its full-resolution layout downscaled), not a 64×64
+/// one.
+#[test]
+fn webcam_keeps_the_full_output_layout_at_reduced_render_size() {
+    let Some((device, queue)) = gpu() else {
+        return;
+    };
+    let mut module = all_modules()
+        .into_iter()
+        .find(|module| module.meta().name == "Webcam")
+        .unwrap_or_else(|| panic!("Webcam is registered"));
+    let input = solid_texture(&device, &queue, 64, 64, [255, 0, 255, 255]);
+    let props = default_props(&module.props());
+    let audio = AudioFrame::synthetic();
+    let mut canvas = Canvas::new(&device, &queue, MODULE_SIZE, MODULE_SIZE);
+    canvas.begin_frame();
+    {
+        let mut ctx = DrawContext {
+            canvas: &mut canvas,
+            props: &props,
+            audio: &audio,
+            delta: 0.0,
+            frame: 1,
+            device: &device,
+            queue: &queue,
+            input_texture: Some(&input.1),
+            input_size: Some((64, 64)),
+            is_gallery: false,
+            pixel_scale: 0.5,
+        };
+        module.draw(&mut ctx);
+    }
+    canvas.submit();
+    let lit = canvas.read_pixels().chunks(4).filter(|p| p[3] > 0).count();
+    assert!(
+        lit > 64 && lit <= 2048,
+        "the frame must draw at the full-resolution scale when the canvas is reduced (drew {lit} px)"
+    );
+}
+
+#[test]
+fn texture_2d_keeps_the_full_output_layout_at_reduced_render_size() {
+    let Some((device, queue)) = gpu() else {
+        return;
+    };
+    let mut module = all_modules()
+        .into_iter()
+        .find(|module| module.meta().name == "Texture 2D")
+        .unwrap_or_else(|| panic!("Texture 2D is registered"));
+    let input = solid_texture(&device, &queue, 64, 64, [255, 0, 255, 255]);
+    let props = default_props(&module.props());
+    let audio = AudioFrame::synthetic();
+    let mut canvas = Canvas::new(&device, &queue, MODULE_SIZE, MODULE_SIZE);
+    canvas.begin_frame();
+    {
+        let mut ctx = DrawContext {
+            canvas: &mut canvas,
+            props: &props,
+            audio: &audio,
+            delta: 0.0,
+            frame: 1,
+            device: &device,
+            queue: &queue,
+            input_texture: Some(&input.1),
+            input_size: Some((64, 64)),
+            is_gallery: false,
+            pixel_scale: 0.5,
+        };
+        module.draw(&mut ctx);
+    }
+    canvas.submit();
+    let lit = canvas.read_pixels().chunks(4).filter(|p| p[3] > 0).count();
+    assert!(
+        lit > 64 && lit <= 2048,
+        "the image must draw at the full-resolution scale when the canvas is reduced (drew {lit} px)"
+    );
+}
+
+#[test]
+fn bar_keeps_the_full_output_layout_at_reduced_render_size() {
+    let Some((device, queue)) = gpu() else {
+        return;
+    };
+    let mut module = all_modules()
+        .into_iter()
+        .find(|module| module.meta().name == "Bar")
+        .unwrap_or_else(|| panic!("Bar is registered"));
+    let mut props = default_props(&module.props());
+    if let Some(object) = props.as_object_mut() {
+        object.insert("thickness".to_owned(), json!(40.0));
+    }
+    let audio = AudioFrame::synthetic();
+    let mut canvas = Canvas::new(&device, &queue, MODULE_SIZE, MODULE_SIZE);
+    canvas.begin_frame();
+    {
+        let mut ctx = DrawContext {
+            canvas: &mut canvas,
+            props: &props,
+            audio: &audio,
+            delta: 0.0,
+            frame: 1,
+            device: &device,
+            queue: &queue,
+            input_texture: None,
+            input_size: None,
+            is_gallery: false,
+            pixel_scale: 0.5,
+        };
+        module.draw(&mut ctx);
+    }
+    canvas.submit();
+    let lit = canvas.read_pixels().chunks(4).filter(|p| p[3] > 0).count();
+    assert!(
+        lit > 1500 && lit < 3800,
+        "the band must be thinner at reduced render size (drew {lit} px)"
+    );
+}
+
 #[test]
 fn modules_that_need_input_draw_nothing_without_it() {
     for module_name in ["Texture 2D", "Webcam"] {
@@ -1300,6 +1425,7 @@ fn modules_that_need_input_draw_nothing_without_it() {
             input_texture: None,
             input_size: None,
             is_gallery: false,
+            pixel_scale: 1.0,
         };
         module.draw(&mut context);
         canvas.submit();

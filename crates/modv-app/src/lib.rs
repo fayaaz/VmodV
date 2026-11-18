@@ -32,6 +32,7 @@ pub mod ndi_runtime;
 pub mod pacing;
 pub mod performance;
 pub mod plugin_runtime;
+pub mod quality;
 pub mod render_settings;
 pub mod report;
 pub mod scene_ops;

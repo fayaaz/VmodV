@@ -602,7 +602,10 @@ impl Executor {
         let alpha = clamp_unit(alpha, 1.0) as f32;
         let src_texture = self.texture_of(surfaces, source, pass)?;
         let dst_texture = self.texture_of(surfaces, target, pass)?;
-        self.check_same_size(src_texture, dst_texture, pass)?;
+        // The blend pass samples both textures with normalised UVs, so a
+        // source at a different size from the destination just gets
+        // stretched: a reduced-quality module's target fills the group
+        // canvas exactly the same as a matching-size one.
         self.check_usage(src_texture, wgpu::TextureUsages::TEXTURE_BINDING, pass)?;
         self.check_usage(
             dst_texture,
@@ -625,8 +628,8 @@ impl Executor {
         )?;
 
         let scratch = self.acquire_scratch(
-            src_texture.width(),
-            src_texture.height(),
+            dst_texture.width(),
+            dst_texture.height(),
             dst_texture.format(),
             UsageClass::PipelineScratch,
         );

@@ -317,6 +317,7 @@ use modv_renderers::two_d::{AudioFrame, Canvas, DrawContext, ModuleContext, TwoD
 use crate::media::{MediaHub, padded_rows};
 use crate::module_preview::{ModulePreviews, PreviewError};
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
+use crate::quality::{full_quality_point10, module_render_size};
 use crate::scene_preview::ScenePreviews;
 use crate::scene_transition::{SceneTransitionInfo, SceneTransitionPass};
 use crate::texture_sources::{ImageTextures, TextureRequest};
@@ -1305,6 +1306,22 @@ impl Compositor {
         self.render_scale
     }
 
+    /// The size a heavy module renders at: its own `quality` prop decides
+    /// (`global` defers to the heavy/light split; `full`/`balanced`/
+    /// `performance` pin the scale).
+    fn module_target_size(&self, module: &ModuleInstance) -> (u32, u32) {
+        let meta = module.meta.as_object().cloned().unwrap_or_default();
+        let point10_heavy = (self.registry.kind(&module.module_name) == Some(ModuleKind::Point10))
+            .then(|| !full_quality_point10(&module.module_name));
+        module_render_size(
+            self.size,
+            self.render_size(),
+            &module.props,
+            &meta,
+            point10_heavy,
+        )
+    }
+
     /// The size the internal targets render at: `size` scaled by
     /// [`Self::render_scale`], clamped to at least one pixel per axis.
     pub fn render_size(&self) -> (u32, u32) {
@@ -1644,7 +1661,7 @@ impl Compositor {
         frame: &FrameInfo,
         retained: &RetainedInstances,
     ) -> Result<(), CompositorError> {
-        if self.render_size() == (0, 0) {
+        if self.size == (0, 0) {
             return Ok(());
         }
         // Keep the last frame's clock/audio for `render_module_preview` (a
@@ -1921,7 +1938,7 @@ impl Compositor {
 
         let input_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
 
         self.shader.render(
             slot,
@@ -2041,7 +2058,8 @@ impl Compositor {
             .to_string();
         let blend = self.render_blend_mode(&blend_token);
 
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
+        let pixel_scale = 1.0;
         // Cheap handle clones (Arc): they keep the instance borrow below
         // separate from the rest of `self`.
         let device = self.device.clone();
@@ -2097,6 +2115,7 @@ impl Compositor {
                 props,
                 device: &device,
                 queue: &queue,
+                pixel_scale,
             };
             instance.module.init(&mut ctx);
         } else if size_changed {
@@ -2110,6 +2129,7 @@ impl Compositor {
                 props,
                 device: &device,
                 queue: &queue,
+                pixel_scale,
             };
             instance.module.resize(&mut ctx);
         }
@@ -2127,6 +2147,7 @@ impl Compositor {
             props,
             device: &device,
             queue: &queue,
+            pixel_scale,
         };
         instance.module.update(&mut ctx);
 
@@ -2175,6 +2196,7 @@ impl Compositor {
                 input_texture,
                 input_size,
                 is_gallery: false,
+                pixel_scale,
             };
             instance.module.draw(&mut draw);
         }
@@ -2262,7 +2284,7 @@ impl Compositor {
             .to_string();
         let blend = self.render_blend_mode(&blend_token);
 
-        let (width, height) = self.render_size();
+        let (width, height) = self.module_target_size(module);
         let texture_id = point10_texture_id(module_id);
 
         // Rebuild the scene target when it is missing or the output resized.
@@ -2414,7 +2436,7 @@ impl Compositor {
             .to_string();
         let blend = self.render_blend_mode(&blend_token);
 
-        let (width, height) = self.render_size();
+        let (width, height) = self.module_target_size(module);
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let texture_id = isf_texture_id(module_id);
 
@@ -2743,7 +2765,7 @@ impl Compositor {
 
     /// Ensure the output-sized textures exist and are registered.
     fn ensure_output_textures(&mut self) {
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         if self.main.is_none() {
             let main = self.create_output_texture("modv-main", width, height);
             self.surfaces.insert(main_id(), main.texture.clone());
@@ -2773,7 +2795,7 @@ impl Compositor {
             return id;
         }
 
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         let texture = self.create_output_texture(&format!("modv-group-{group_id}"), width, height);
         self.clear_texture(&texture.texture, "group-allocate");
         self.surfaces.insert(id.clone(), texture.texture);
@@ -2788,7 +2810,7 @@ impl Compositor {
         if self.row_fade_targets.contains_key(&row) {
             return id;
         }
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         let texture = self.create_output_texture(&format!("modv-row-fade-{row}"), width, height);
         self.surfaces.insert(id.clone(), texture.texture.clone());
         self.row_fade_targets.insert(row, texture);
@@ -3077,7 +3099,7 @@ impl Compositor {
     /// main texture yet, zero-sized output), which makes the caller fall back
     /// to Fade for that change.
     pub fn capture_transition_source(&mut self) -> bool {
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         if width == 0 || height == 0 {
             return false;
         }
@@ -3105,7 +3127,7 @@ impl Compositor {
 
     /// Whether a captured outgoing frame is available for this output size.
     pub fn has_transition_capture(&self) -> bool {
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         width > 0
             && height > 0
             && self.transition_from.as_ref().is_some_and(|target| {
@@ -3137,7 +3159,7 @@ impl Compositor {
         &mut self,
         effect: &crate::scene_transition::TransitionEffect,
     ) -> bool {
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         let pass = self.scene_transition.get_or_insert_with(|| {
             crate::scene_transition::SceneTransitionPass::new(&self.device, &self.queue)
         });
@@ -3156,7 +3178,7 @@ impl Compositor {
         transition: &SceneTransitionInfo,
         time: f32,
     ) -> Result<bool, CompositorError> {
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         let (Some(from), Some(main)) = (self.transition_from.as_ref(), self.main.as_ref()) else {
             return Ok(false);
         };
@@ -3386,7 +3408,7 @@ impl Compositor {
         let Some(group_texture) = self.surfaces.get(&group_texture_id(group_id)).cloned() else {
             return false;
         };
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         if width == 0 || height == 0 {
             return false;
         }
@@ -3424,7 +3446,7 @@ impl Compositor {
     /// (≤ 30 fps). The no-readback hot path promised by WS-2 applies to
     /// presentation; shared-memory / DMA-BUF preview transport lands later.
     pub fn read_main_rgba8(&mut self) -> Result<Vec<u8>, CompositorError> {
-        let (width, height) = self.render_size();
+        let (width, height) = self.size;
         let Some(main) = &self.main else {
             return Ok(Vec::new());
         };
@@ -3471,7 +3493,7 @@ impl Compositor {
         width: u32,
         height: u32,
     ) -> Result<Option<Vec<u8>>, CompositorError> {
-        let (source_width, source_height) = self.render_size();
+        let (source_width, source_height) = self.size;
         if width == 0
             || height == 0
             || source_width == 0
@@ -3603,24 +3625,34 @@ impl Compositor {
 /// the sampler is clamp/linear, and the sampled premultiplied value is written
 /// as-is (the surface format, often sRGB, is the present boundary).
 const PRESENT_WGSL: &str = r#"// modV present blit — main texture to the swapchain.
+// The uv is derived from the fullscreen triangle's NDC, not from the
+// texture's own size: the main texture may render at a fraction of the
+// target (the internal rendering resolution preference), and a
+// position/target division is exactly the stretch that preference wants.
+// x is y-down-agnostic; y needs the negation because clip space is y-up
+// while texture rows are stored top-down.
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+// Bindings are part of the present pipeline layout and must stay.
 @group(0) @binding(0) var main_texture: texture_2d<f32>;
 @group(0) @binding(1) var main_sampler: sampler;
-
-@vertex fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
-  var positions = array<vec2<f32>, 3>(
+@vertex fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+  let positions = array<vec2<f32>, 3>(
     vec2<f32>(-1.0, -1.0),
     vec2<f32>(3.0, -1.0),
     vec2<f32>(-1.0, 3.0),
   );
-  return vec4<f32>(positions[vertex_index], 0.0, 1.0);
+  var out: VertexOutput;
+  out.position = vec4<f32>(positions[vertex_index], 0.0, 1.0);
+  out.uv = vec2<f32>(positions[vertex_index].x * 0.5 + 0.5, 0.5 - positions[vertex_index].y * 0.5);
+  return out;
 }
-
-@fragment fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-  let size = vec2<f32>(textureDimensions(main_texture));
-  return textureSample(main_texture, main_sampler, position.xy / size);
+@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+  return textureSample(main_texture, main_sampler, input.uv);
 }
 "#;
-
 /// Mask an ISF filter's output by the group canvas alpha.
 ///
 /// ISF filters sample the group canvas as `inputImage` but commonly write
@@ -4351,43 +4383,121 @@ mod tests {
         );
     }
 
+    /// [`isf_module`] with a category in the meta, so the compositor's
+    /// heavy/light classification sees what the registry would produce.
+    fn isf_module_cat(module_id: &str, name: &str, props: Value, category: &str) -> ModuleInstance {
+        serde_json::from_value(json!({
+            "$id": module_id,
+            "$moduleName": name,
+            "meta": {
+                "name": name,
+                "type": "isf",
+                "enabled": true,
+                "alpha": 1.0,
+                "compositeOperation": "normal",
+                "category": category,
+            },
+            "props": props,
+            "data": {}
+        }))
+        .expect("ISF module decodes")
+    }
+
+    fn isf_state_cat(modules: &[(&str, &str, Value, &str)]) -> EngineState {
+        let ids: Vec<&str> = modules.iter().map(|(id, _, _, _)| *id).collect();
+        let mut state = EngineState::new();
+        state.groups.push(group_with(
+            "group-a",
+            "Effects",
+            &ids,
+            GROUP_ENABLED,
+            1.0,
+            true,
+            true,
+            json!(-1),
+        ));
+        for (id, name, props, category) in modules {
+            state.modules.insert(
+                id.to_string(),
+                isf_module_cat(id, name, props.clone(), category),
+            );
+        }
+        state
+    }
+
     #[test]
-    fn render_scale_allocates_targets_at_the_scaled_size() {
+    fn render_scale_keeps_main_at_output_size_and_heavy_targets_follow_it() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(engine, registry);
+
+        let state =
+            isf_state_cat(&[("module-a", "digital-crystal-tunnel", json!({}), "3d-scenes")]);
+        compositor.set_render_scale(1.0);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders at full size");
+        // The main texture is the output resolution, always; the internal
+        // resolution preference only shrinks the heavy modules that draw it.
+        assert_eq!(compositor.main_texture_size(), (SIZE, SIZE));
+        assert_eq!(
+            compositor.module_target_size(&state.modules["module-a"]),
+            (SIZE, SIZE)
+        );
+
+        compositor.set_render_scale(0.5);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders at half size");
+        // The main texture is still the output resolution (light modules and
+        // the light Group canvas stay full-res), but the heavy ISF module
+        // renders at half and the frame graph stretches it into the Group.
+        assert_eq!(compositor.main_texture_size(), (SIZE, SIZE));
+        assert_eq!(
+            compositor.module_target_size(&state.modules["module-a"]),
+            (SIZE / 2, SIZE / 2)
+        );
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+        assert_eq!(
+            pixels.len(),
+            SIZE as usize * SIZE as usize * 4,
+            "read_main_rgba8 returns one RGBA8 pixel per texel of the output texture"
+        );
+
+        compositor.set_render_scale(1.0);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders at full size again");
+        assert_eq!(compositor.main_texture_size(), (SIZE, SIZE));
+    }
+
+    #[test]
+    fn a_point10_scene_renders_at_the_quality_setting_unless_it_opts_out() {
         let Some(engine) = try_engine() else {
             return;
         };
         let mut compositor = Compositor::new(&engine.device, &engine.queue);
         compositor.resize(SIZE, SIZE);
-
-        compositor
-            .render_frame(&invert_state(1.0), &frame_info())
-            .expect("frame renders at full size");
-        assert_eq!(compositor.main_texture_size(), (SIZE, SIZE));
-
         compositor.set_render_scale(0.5);
-        assert_eq!(compositor.render_scale(), 0.5);
-        assert_eq!(
-            compositor.main_texture_size(),
-            (0, 0),
-            "the stale full-size target must be dropped so the next frame re-allocates"
-        );
 
-        compositor
-            .render_frame(&invert_state(1.0), &frame_info())
-            .expect("frame renders at half size");
-        assert_eq!(compositor.main_texture_size(), (SIZE / 2, SIZE / 2));
-        let pixels = compositor.read_main_rgba8().expect("main reads back");
-        assert_eq!(
-            pixels.len(),
-            (SIZE / 2) as usize * (SIZE / 2) as usize * 4,
-            "read_main_rgba8 returns one RGBA8 pixel per texel of the scaled main texture"
-        );
-
-        compositor.set_render_scale(1.0);
-        compositor
-            .render_frame(&invert_state(1.0), &frame_info())
-            .expect("frame renders at full size again");
-        assert_eq!(compositor.main_texture_size(), (SIZE, SIZE));
+        for (name, quality, expected) in [
+            ("Point10 Smoke Room", "global", SIZE / 2),
+            ("Point10 Smoke Room", "full", SIZE),
+            ("Point10 Smoke Room", "balanced", (SIZE * 3) / 4),
+            ("Point10 Waveform", "global", SIZE),
+            ("Point10 Waveform", "performance", SIZE / 2),
+        ] {
+            let module = point10_module("module-a", name, json!({ "quality": quality }));
+            assert_eq!(
+                compositor.module_target_size(&module),
+                (expected, expected),
+                "{name} at quality {quality}"
+            );
+        }
     }
 
     #[test]
@@ -4620,6 +4730,110 @@ mod tests {
     /// `present` clears the surface to opaque black before the premultiplied
     /// main blit, so the window never shows a transparent (desktop/white)
     /// background behind alpha-0 pixels.
+    #[test]
+    fn present_upscales_the_main_texture_to_the_target() {
+        // Regression: PRESENT_WGSL sampled the main texture with
+        // `position.xy / textureDimensions`, i.e. in units relative to the
+        // *texture* rather than the *target*. At render scale < 1.0 the
+        // swapchain is bigger than the main texture, uv ran past 1 and the
+        // clamp sampler smeared the right/bottom edges while the actual
+        // image sat in the top-left quarter.
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        const HALF: u32 = SIZE / 2;
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(HALF, HALF);
+        compositor
+            .render_frame(&invert_state(1.0), &frame_info())
+            .expect("frame renders");
+        assert_eq!(compositor.main_texture_size(), (HALF, HALF));
+
+        // A 2×2-texel white block so bilinear interpolation at exactly 2×
+        // upscale has interior target pixels sampling fully inside the
+        // marker; where it lands distinguishes a stretch from a 1:1 blit.
+        let mut pixels = vec![0u8; (HALF * HALF * 4) as usize];
+        let main = compositor.main.as_ref().expect("main exists after a frame");
+        let (block_x, block_y) = (HALF - 5, HALF - 5);
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                let index = (((block_y + dy) * HALF + block_x + dx) * 4) as usize;
+                pixels[index..index + 4].copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+        engine.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &main.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(HALF * 4),
+                rows_per_image: Some(HALF),
+            },
+            wgpu::Extent3d {
+                width: HALF,
+                height: HALF,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let target = create_output_texture(&engine.device, "present-target", SIZE, SIZE);
+        let view = target
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = engine
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("present-upscale-test"),
+            });
+        compositor.present(&mut encoder, &view, wgpu::TextureFormat::Rgba8Unorm);
+        engine.queue.submit(Some(encoder.finish()));
+
+        let pixels = read_back_texture(&engine.device, &engine.queue, &target.texture, SIZE, SIZE)
+            .expect("present target reads back");
+        // Correct upscale: the marker texel sits at the centre of the
+        // bottom-right quarter, i.e. around (3/4, 3/4) of the target.
+        let lit = |x: i32, y: i32| -> [u8; 4] {
+            let index = ((y * SIZE as i32 + x) * 4) as usize;
+            [
+                pixels[index],
+                pixels[index + 1],
+                pixels[index + 2],
+                pixels[index + 3],
+            ]
+        };
+        let lit_in_region = |x0: i32, y0: i32, x1: i32, y1: i32| -> usize {
+            let mut count = 0usize;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    if lit(x, y).iter().all(|channel| *channel > 200) {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        };
+        let centre = lit_in_region(
+            (SIZE * 11 / 16) as i32,
+            (SIZE * 11 / 16) as i32,
+            SIZE as i32,
+            SIZE as i32,
+        );
+        let quarter = lit_in_region(0, 0, (SIZE / 2) as i32, (SIZE / 2) as i32);
+        assert!(
+            centre > 0,
+            "the marker should land in the bottom-right quarter when the main texture is stretched to the target (found {centre} lit pixels)"
+        );
+        assert_eq!(
+            quarter, 0,
+            "no marker pixels in the top-left quarter; the present must stretch the main texture, not blit it 1:1 anchored at the origin"
+        );
+    }
+
     #[test]
     fn present_flattens_transparency_onto_opaque_black() {
         let Some(engine) = try_engine() else {

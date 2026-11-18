@@ -291,6 +291,11 @@ pub struct ModuleContext<'a> {
     pub device: &'a wgpu::Device,
     /// GPU queue, for modules that own a scratch canvas.
     pub queue: &'a wgpu::Queue,
+    /// The canvas's share of the output resolution (1.0 at full quality).
+    /// Modules lay out in output pixels and multiply absolute pixel values
+    /// (sizes, stroke widths, ...) by this so the image is identical at any
+    /// internal rendering resolution, only softer.
+    pub pixel_scale: f32,
 }
 
 /// Context handed to [`TwoDModule::draw`].
@@ -318,6 +323,8 @@ pub struct DrawContext<'a> {
     pub input_size: Option<(u32, u32)>,
     /// Whether this is a Gallery preview (the JS `isGallery` flag).
     pub is_gallery: bool,
+    /// See [`ModuleContext::pixel_scale`].
+    pub pixel_scale: f32,
 }
 
 impl<'a> DrawContext<'a> {

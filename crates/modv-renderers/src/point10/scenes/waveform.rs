@@ -391,7 +391,7 @@ impl Point10Scene for Waveform {
 
     fn meta(&self) -> SceneMeta {
         // `Point10Waveform.js` sets no category, so the adapter default wins.
-        SceneMeta::for_scene("Point10 Waveform", "3d-scenes")
+        SceneMeta::for_scene("Point10 Waveform", "2d-scenes")
     }
 }
 
