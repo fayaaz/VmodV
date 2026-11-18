@@ -51,6 +51,13 @@ fn quiet_payload() -> BandPayload {
 /// Initialise `scene`, drive it for two frames and present it; returns the
 /// final RGBA8 frame.
 fn render_two_frames(scene: &mut dyn Point10Scene, size: u32) -> Option<Vec<u8>> {
+    render_frames(scene, size, 2)
+}
+
+/// [`render_two_frames`] with an explicit frame count: the transparency tests
+/// let the ring buffers and persistent passes settle over ten frames, matching
+/// the e2e specs.
+fn render_frames(scene: &mut dyn Point10Scene, size: u32, frames: usize) -> Option<Vec<u8>> {
     let (device, queue) = gpu()?;
 
     let mut composer = Composer::new(&device, &queue, size, size, wgpu::TextureFormat::Rgba8Unorm);
@@ -66,9 +73,10 @@ fn render_two_frames(scene: &mut dyn Point10Scene, size: u32) -> Option<Vec<u8>>
         label: Some("point10-scene-smoke"),
     });
 
-    // Two frames: the second proves per-frame state (buffers, uniforms,
-    // instance uploads) survives the first render.
-    for _ in 0..2 {
+    // The second frame proves per-frame state (buffers, uniforms, instance
+    // uploads) survives the first render; the extra frames let the persistent
+    // passes settle.
+    for _ in 0..frames {
         bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
         scene.update(1.0 / 60.0, &bridge);
         scene.render(&mut encoder, composer.scene_view());
@@ -100,6 +108,17 @@ fn render_owned_chain_two_frames_with(
     size: u32,
     payload: &BandPayload,
 ) -> Option<Vec<u8>> {
+    render_owned_chain_n_frames_with(scene, size, payload, 2)
+}
+
+/// [`render_owned_chain_two_frames_with`] with an explicit frame count (the
+/// transparency tests settle the scene over ten frames like the e2e specs).
+fn render_owned_chain_n_frames_with(
+    scene: &mut dyn Point10Scene,
+    size: u32,
+    payload: &BandPayload,
+    frames: usize,
+) -> Option<Vec<u8>> {
     let (device, queue) = gpu()?;
 
     let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -113,7 +132,7 @@ fn render_owned_chain_two_frames_with(
         label: Some("point10-scene-owned-chain-smoke"),
     });
 
-    for _ in 0..2 {
+    for _ in 0..frames {
         bridge.update(1.0 / 60.0, Some(payload), &Default::default());
         scene.update(1.0 / 60.0, &bridge);
         scene.render(&mut encoder, &target.view);
@@ -200,6 +219,31 @@ fn chromatic_wave_renders() {
         any_lit(&pixels),
         "ChromaticWave produced an empty frame at {SIZE}x{SIZE}"
     );
+}
+
+/// The e2e transparency size (`CANVAS_SIZE = 96`).
+const TRANSPARENCY_SIZE: u32 = 96;
+
+/// [`chromatic_line_renders`] plus the e2e alpha contract
+/// (point10ChromaticTransparency.spec.js:96-100): a transparent backdrop, drawn
+/// pixels, and a magenta backdrop that survives a 50% composite.
+#[test]
+fn chromatic_line_keeps_the_background_transparent() {
+    let mut scenes = all_scenes();
+    let Some(pixels) = render_frames(scenes[0].as_mut(), TRANSPARENCY_SIZE, 10) else {
+        return;
+    };
+    assert_transparent_composition(&pixels, 0.2, 0.2);
+}
+
+/// [`chromatic_wave_renders`] plus the e2e alpha contract.
+#[test]
+fn chromatic_wave_keeps_the_background_transparent() {
+    let mut scenes = all_scenes();
+    let Some(pixels) = render_frames(scenes[1].as_mut(), TRANSPARENCY_SIZE, 10) else {
+        return;
+    };
+    assert_transparent_composition(&pixels, 0.2, 0.2);
 }
 
 #[test]
@@ -290,6 +334,21 @@ fn wormhole_renders() {
     );
 }
 
+/// The e2e transparency contract (point10WormholeTransparency.spec.js:95-98):
+/// the point cloud is sparse, so the space between points must leave the
+/// magenta backdrop untouched instead of becoming an opaque bloom veil. The
+/// thresholds are the spec's 5%.
+#[test]
+fn wormhole_keeps_the_background_transparent() {
+    let mut scene = crate::point10::scenes::wormhole::Wormhole::new();
+    let Some(pixels) =
+        render_owned_chain_n_frames_with(&mut scene, TRANSPARENCY_SIZE, &loud_payload(), 10)
+    else {
+        return;
+    };
+    assert_transparent_composition(&pixels, 0.05, 0.05);
+}
+
 /// ItIsComingForYou's sprites are 50-60 px, so a 64 px frame is almost all
 /// sprite. Render at 256 px to see both the cloud and the gaps around it; the
 /// fragment count is the same (the sprite size is constant in pixels).
@@ -338,6 +397,84 @@ fn alpha_counts(pixels: &[u8]) -> (usize, usize, usize) {
         }
     }
     (transparent, opaque, pixels.len() / 4)
+}
+
+/// The e2e backdrop check: composite the frame at 50% over solid magenta
+/// (`point10ChromaticTransparency.spec.js:59-80`) and count the pixels the
+/// magenta survives. A frame with a transparent backdrop leaves the magenta
+/// untouched wherever nothing was drawn; an opaque veil covers it.
+fn composite_half_over_magenta(pixels: &[u8]) -> Vec<u8> {
+    let mut composited = Vec::with_capacity(pixels.len());
+
+    for pixel in pixels.as_chunks::<4>().0 {
+        let source_alpha = f32::from(pixel[3]) / 255.0 * 0.5;
+        let backdrop = 1.0 - source_alpha;
+        let blend = |source: u8, destination: u8| -> u8 {
+            (f32::from(source) * source_alpha + f32::from(destination) * backdrop)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        };
+
+        composited.extend_from_slice(&[
+            blend(pixel[0], 255),
+            blend(pixel[1], 0),
+            blend(pixel[2], 255),
+            255,
+        ]);
+    }
+
+    composited
+}
+
+/// Count the composited pixels that are still the untouched magenta backdrop
+/// (`r >= 240, g <= 15, b >= 240, a == 255`).
+fn magenta_preserved(pixels: &[u8]) -> usize {
+    composite_half_over_magenta(pixels)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] >= 240 && pixel[1] <= 15 && pixel[2] >= 240 && pixel[3] == 255)
+        .count()
+}
+
+/// Assert a background-free frame: a real transparent region (fraction of the
+/// frame), drawn pixels, and a backdrop that survives the 50% magenta
+/// composite (fraction of the frame).
+fn assert_transparent_composition(
+    pixels: &[u8],
+    transparent_fraction: f64,
+    preserved_fraction: f64,
+) {
+    let total = pixels.len() / 4;
+    let transparent = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[3] == 0)
+        .count();
+    let opaque = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[3] > 200)
+        .count();
+
+    assert!(
+        transparent as f64 > total as f64 * transparent_fraction,
+        "expected more than {:.0}% of the {total} px to stay transparent, got {transparent}",
+        transparent_fraction * 100.0
+    );
+    assert!(
+        opaque > 0,
+        "expected drawn pixels, but none reached alpha > 200"
+    );
+
+    let preserved = magenta_preserved(pixels);
+    assert!(
+        preserved as f64 > total as f64 * preserved_fraction,
+        "expected the magenta backdrop to survive on more than {:.0}% of the {total} px, got {preserved}",
+        preserved_fraction * 100.0
+    );
 }
 
 /// Assert the frame has an alpha-0 background *and* drawn pixels, with most of

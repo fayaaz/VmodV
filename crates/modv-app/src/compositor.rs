@@ -5701,6 +5701,138 @@ void main() {
         );
     }
 
+    /// The tunnel corpus entries the e2e Gallery test files under 3D Scenes
+    /// (`isfGalleryCategories.spec.js:4-10`).
+    const TUNNEL_ISF_MODULES: &[&str] = &[
+        "digital-crystal-tunnel",
+        "pixel-tunnel",
+        "fractal-mage-tunnel",
+        "lopy-frac-tunnel",
+        "fractal-mountain-tunnel",
+    ];
+
+    /// The NC-SA Shadertoy ports from the same spec (`:16`).
+    const NC_SA_ISF_MODULES: &[&str] = &["Helix Eye", "Traced Tunnel", "Hot Shower"];
+
+    /// The e2e "nonBlack" test: `r + g + b > 24` in 8-bit terms.
+    fn isf_non_black_pixels(pixels: &[u8]) -> usize {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2]) > 24)
+            .count()
+    }
+
+    /// The e2e "changed" test: the per-channel RGB delta exceeds 12.
+    fn isf_changed_pixels(first: &[u8], second: &[u8]) -> usize {
+        first
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(second.as_chunks::<4>().0)
+            .filter(|(before, after)| {
+                u32::from(before[0].abs_diff(after[0]))
+                    + u32::from(before[1].abs_diff(after[1]))
+                    + u32::from(before[2].abs_diff(after[2]))
+                    > 12
+            })
+            .count()
+    }
+
+    /// Render each named corpus module as the only module in a clearing group
+    /// and assert it draws (`isfGalleryCategories.spec.js:32-100`).
+    fn assert_isf_modules_draw(names: &[&str]) {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+
+        for name in names {
+            let mut compositor = isf_compositor(&engine, registry.clone());
+            let state = isf_state(&[("module-a", name, json!({}))]);
+
+            // Multi-pass shaders keep a one-frame lag per buffer, so a
+            // freshly-added chain needs `passes + 1` frames before the whole
+            // pyramid has content (the same reason the Edge Blur test loops).
+            // Eleven frames also let `TIME`-driven generators produce output.
+            for frame in 0..11 {
+                let mut info = frame_info();
+                info.time_seconds = frame as f32 * 0.04;
+                compositor
+                    .render_frame(&state, &info)
+                    .unwrap_or_else(|error| panic!("{name} failed to render: {error}"));
+            }
+
+            let pixels = compositor.read_main_rgba8().expect("main reads back");
+            assert!(
+                isf_non_black_pixels(&pixels) > 0,
+                "{name} compiled but drew a black frame"
+            );
+        }
+    }
+
+    #[test]
+    fn tunnel_isf_modules_compile_and_draw() {
+        assert_isf_modules_draw(TUNNEL_ISF_MODULES);
+    }
+
+    #[test]
+    fn nc_sa_scene_isf_modules_compile_and_draw() {
+        assert_isf_modules_draw(NC_SA_ISF_MODULES);
+    }
+
+    #[test]
+    fn plexus_cc0_scene_module_compiles_and_draws() {
+        assert_isf_modules_draw(&["Plexus"]);
+    }
+
+    /// `isfGalleryCategories.spec.js:182-219`: every tunnel shader renders
+    /// something (more than 1% of the frame) and its output moves between the
+    /// first draw and ten 40 ms steps later (more than 10 pixels changed).
+    #[test]
+    fn tunnel_isf_modules_render_and_animate() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+
+        for name in TUNNEL_ISF_MODULES {
+            let mut compositor = isf_compositor(&engine, registry.clone());
+            let state = isf_state(&[("module-a", name, json!({}))]);
+            let mut frames = Vec::new();
+
+            // 11 draws at the e2e's 40 ms cadence; the first is the baseline.
+            for frame in 0..11 {
+                let mut info = frame_info();
+                info.time_seconds = frame as f32 * 0.04;
+                compositor
+                    .render_frame(&state, &info)
+                    .unwrap_or_else(|error| panic!("{name} failed to render: {error}"));
+                frames.push(compositor.read_main_rgba8().expect("main reads back"));
+            }
+
+            let first = &frames[0];
+            let last = frames.last().expect("frames were rendered");
+            let total = SIZE as usize * SIZE as usize;
+
+            assert!(
+                isf_non_black_pixels(last) > total / 100,
+                "{name} renders black ({} non-black of {total})",
+                isf_non_black_pixels(last)
+            );
+            assert!(
+                isf_changed_pixels(first, last) > 10,
+                "{name} does not animate ({} pixels changed)",
+                isf_changed_pixels(first, last)
+            );
+        }
+    }
+
     #[test]
     fn isf_audio_input_samples_the_live_fft_texture() {
         let Some(engine) = try_engine() else {

@@ -2090,6 +2090,54 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The vendored ISF corpus directory, or `None` when this checkout does
+    /// not have it (the test then skips).
+    fn corpus_dir() -> Option<PathBuf> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        dir.is_dir().then_some(dir)
+    }
+
+    /// The e2e gallery-category contract (`isfGalleryCategories.spec.js:1-30`):
+    /// every named corpus entry is registered as an ISF module whose meta
+    /// category is `3d-scenes`.
+    fn assert_isf_modules_are_3d_scenes(names: &[&str]) {
+        let Some(corpus) = corpus_dir() else {
+            eprintln!("skipping ISF category test: the corpus is missing");
+            return;
+        };
+        let registry = ModuleRegistry::build(Some(&corpus));
+
+        for name in names {
+            assert_eq!(
+                registry.kind(name),
+                Some(ModuleKind::Isf),
+                "{name} should be registered from the corpus"
+            );
+            let meta = registry
+                .meta_fields(name)
+                .unwrap_or_else(|| panic!("{name} is registered but has no meta"));
+            assert_eq!(meta["type"], json!("isf"), "{name}");
+            assert_eq!(meta["category"], json!("3d-scenes"), "{name}");
+        }
+    }
+
+    #[test]
+    fn tunnel_isf_modules_are_registered_as_3d_scenes() {
+        assert_isf_modules_are_3d_scenes(&[
+            "digital-crystal-tunnel",
+            "pixel-tunnel",
+            "fractal-mage-tunnel",
+            "lopy-frac-tunnel",
+            "fractal-mountain-tunnel",
+        ]);
+    }
+
+    #[test]
+    fn nc_sa_scene_isf_modules_are_registered_as_3d_scenes() {
+        assert_isf_modules_are_3d_scenes(&["Helix Eye", "Traced Tunnel", "Hot Shower"]);
+    }
+
     #[test]
     fn isf_corpus_directory_is_scanned_into_definitions() {
         let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
