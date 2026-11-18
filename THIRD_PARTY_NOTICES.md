@@ -19,8 +19,8 @@ modified versions must remain under the same license ("share-alike").
 
 | File(s) | Source | Author | License |
 | --- | --- | --- | --- |
-| `src/renderer/src/application/renderers/shader/modules/MattiasCRT/mattiasCrt.frag`, `crates/modv-renderers/src/shader/modules/mattias_crt.rs` | [Ms23DR](https://www.shadertoy.com/view/Ms23DR) | Iñigo Quílez (postprocessing shader) | CC BY-NC-SA 3.0 (stated in file) |
-| `src/renderer/src/application/renderers/shader/modules/ChromaticAbberation/chromaticAbberation.frag`, `crates/modv-renderers/src/shader/modules/chromatic_abberation.rs` | [MtXXDr](https://www.shadertoy.com/view/MtXXDr) | author not stated | not stated → Shadertoy default CC BY-NC-SA 3.0 |
+| `crates/modv-renderers/src/shader/modules/mattias_crt.rs` | [Ms23DR](https://www.shadertoy.com/view/Ms23DR) | Iñigo Quílez (postprocessing shader) | CC BY-NC-SA 3.0 (stated in file) |
+| `crates/modv-renderers/src/shader/modules/chromatic_abberation.rs` | [MtXXDr](https://www.shadertoy.com/view/MtXXDr) | author not stated | not stated → Shadertoy default CC BY-NC-SA 3.0 |
 | `resources/isf/ASCII Art.fs` | [lssGDj](https://www.shadertoy.com/view/lssGDj) | IMIMOT | not stated → Shadertoy default CC BY-NC-SA 3.0 |
 | `resources/isf/st_Ms2SD1.fs.fs` | [Ms2SD1](https://www.shadertoy.com/view/Ms2SD1) ("Seascape") | Alexander Alekseev aka TDM | CC BY-NC-SA 3.0 (stated explicitly in file) |
 | `resources/isf/Smoke Screen.fs` | [4t2SRz](https://www.shadertoy.com/view/4t2SRz) | jackdavenport | not stated → Shadertoy default CC BY-NC-SA 3.0 |
@@ -38,7 +38,7 @@ modified versions must remain under the same license ("share-alike").
 | `resources/isf/FractilianParabolicCircleInversion.fs` | based on "Fractal Soup" [lsB3zR](https://www.shadertoy.com/view/lsB3zR) | mojovideotech (module); @P_Malin (original) | CC BY-NC-SA 3.0 (stated in file) |
 | `resources/isf/LogTransWarpSpiral.fs` | [Msd3Dn](https://www.shadertoy.com/view/Msd3Dn) ("Logarithmic Spiral Transform") | mojovideotech (module); Jakob Thomsen (original) | CC BY-NC-SA 3.0 (stated in file) |
 | `resources/isf/UltimateFlame.fs` | "The Blue Flame" [lsjcRt](https://www.shadertoy.com/view/lsjcRt); 3D noise from Nikita Miropolskiy [XsX3zB](https://www.shadertoy.com/view/XsX3zB) | mojovideotech (module); Hadyn Lander (flame); Nikita Miropolskiy (3D noise) | CC BY-NC-SA 3.0 (stated in file) |
-| `resources/isf/GreatBallOfFire.fs`, `src/renderer/src/application/renderers/isf/modules/GreatBallOfFire.js` | glslsandbox [e#30176.0](https://glslsandbox.com/e#30176.0) ("Fireball") | mojovideotech (module); @AlexWDunn (original) | CC BY-NC-SA 3.0 (stated in file) |
+| `resources/isf/GreatBallOfFire.fs` | glslsandbox [e#30176.0](https://glslsandbox.com/e#30176.0) ("Fireball") | mojovideotech (module); @AlexWDunn (original) | CC BY-NC-SA 3.0 (stated in file) |
 | `resources/isf/HexVortex.fs` | based on glslsandbox [e#4671.0](https://glslsandbox.com/e#4671.0) | mojovideotech | CC BY-NC-SA 3.0 (stated in file) |
 | `resources/isf/Boxinator.fs` | mojovideotech; simplex noise by Ian McEwan / Ashima Arts | mojovideotech; Ashima Arts (MIT simplex noise) | CC BY-NC-SA 3.0 (stated in file); Ashima simplex noise is MIT |
 | `resources/isf/UltimateSpiral.fs` | mojovideotech | mojovideotech | CC BY-NC-SA 3.0 (stated in file) |
@@ -50,33 +50,33 @@ License.
 ## Plane9-derived Point10 scenes
 
 The Point10 scene ports are adapted from **Plane9** presets by **Joakim Dahl**.
-The vendored JS and Rust headers state CC BY-NC-SA (some presets 3.0, others
-4.0 — the variant is recorded per scene below). The shared helpers
-(`src/renderer/src/application/point10/plane9/P9Audio.js`,
-`P9Expression.js`, `P9Glsl.js`) are part of the same Plane9/Point10 port and
-are covered by these terms.
+The vendored Rust headers state CC BY-NC-SA (some presets 3.0, others 4.0 —
+the variant is recorded per scene below). The shared Rust helpers (the
+`point10/shared` modules: `p9_glsl`, `p9_shading`, `particle_alpha`,
+`particle_sprite`, `random`, `water_wave`, `phrase_color` and `assets`) are
+part of the same Plane9/Point10 port and are covered by these terms.
 
-| Scene | Module files | License |
+| Scene | Module file | License |
 | --- | --- | --- |
-| Boxy | `src/renderer/src/application/point10/scenes/Boxy.js`, `crates/modv-renderers/src/point10/scenes/boxy.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| Color Cube | `src/renderer/src/application/point10/scenes/ColorCube.js`, `crates/modv-renderers/src/point10/scenes/color_cube.rs` | CC BY-NC-SA 3.0 (stated in file) |
-| Earth | `src/renderer/src/application/point10/scenes/Earth.js`, `crates/modv-renderers/src/point10/scenes/earth.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| Hollow Cube | `src/renderer/src/application/point10/scenes/HollowCube.js`, `crates/modv-renderers/src/point10/scenes/hollow_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| It Is Coming For You | `src/renderer/src/application/point10/scenes/ItIsComingForYou.js`, `crates/modv-renderers/src/point10/scenes/it_is_coming_for_you.rs` | CC BY-NC-SA 3.0 (stated in file) |
-| Light Tunnel | `src/renderer/src/application/point10/scenes/LightTunnel.js`, `crates/modv-renderers/src/point10/scenes/light_tunnel.rs` | CC BY-NC-SA 3.0 (stated in file) |
-| Mirror Cube | `src/renderer/src/application/point10/scenes/MirrorCube.js`, `crates/modv-renderers/src/point10/scenes/mirror_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| Sound Cube | `src/renderer/src/application/point10/scenes/SoundCube.js`, `crates/modv-renderers/src/point10/scenes/sound_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| Square Tunnel | `src/renderer/src/application/point10/scenes/SquareTunnel.js`, `crates/modv-renderers/src/point10/scenes/square_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| Sun | `src/renderer/src/application/point10/scenes/Sun.js`, `crates/modv-renderers/src/point10/scenes/sun.rs` | CC BY-NC-SA 3.0 (stated in file) |
-| Wormhole | `src/renderer/src/application/point10/scenes/Wormhole.js`, `crates/modv-renderers/src/point10/scenes/wormhole.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| Around Plus | `src/renderer/src/application/point10/scenes/AroundPlus.js`, `crates/modv-renderers/src/point10/scenes/around_plus.rs` | port of the Plane9 "Around And Around" preset; the vendored headers state no license, so it is treated as **CC BY-NC-SA** (Plane9 preset terms; variant unverified) |
+| Boxy | `crates/modv-renderers/src/point10/scenes/boxy.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Color Cube | `crates/modv-renderers/src/point10/scenes/color_cube.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Earth | `crates/modv-renderers/src/point10/scenes/earth.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Hollow Cube | `crates/modv-renderers/src/point10/scenes/hollow_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| It Is Coming For You | `crates/modv-renderers/src/point10/scenes/it_is_coming_for_you.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Light Tunnel | `crates/modv-renderers/src/point10/scenes/light_tunnel.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Mirror Cube | `crates/modv-renderers/src/point10/scenes/mirror_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Sound Cube | `crates/modv-renderers/src/point10/scenes/sound_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Square Tunnel | `crates/modv-renderers/src/point10/scenes/square_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Sun | `crates/modv-renderers/src/point10/scenes/sun.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Wormhole | `crates/modv-renderers/src/point10/scenes/wormhole.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Around Plus | `crates/modv-renderers/src/point10/scenes/around_plus.rs` | port of the Plane9 "Around And Around" preset; the vendored headers state no license, so it is treated as **CC BY-NC-SA** (Plane9 preset terms; variant unverified) |
 
 ## Bundled assets
 
 | File | Source | Author | License |
 | --- | --- | --- | --- |
 | `resources/point10/textures/pcb.jpg` | PCB photograph bundled with the Point10/Plane9 Glass Lens scene | Miguel Alba | license variant unverified — treated as **not MIT**; see the note below |
-| `resources/point10/textures/dvd_logo.svg` | Wikimedia Commons DVD text logo, extruded by the DvdRoom scene | Wikimedia Commons contributors | public domain (stated in `DvdRoom.js`) |
+| `resources/point10/textures/dvd_logo.svg` | Wikimedia Commons DVD text logo, extruded by the DvdRoom scene | Wikimedia Commons contributors | public domain (stated in the ported scene) |
 
 Other Point10 textures use ambientCG assets (CC0; e.g. `tinore`, `rubber002`,
 `moon_04`, `concrete044c`), Poly Haven skies (`stormy`, `spruit_sunrise`), or
