@@ -5,9 +5,9 @@ native 2.0 cleanup. It is preserved locally and in the repository history:
 
 | Ref | Points at |
 | --- | --- |
-| branch `legacy-electron` | the complete pre-cleanup Electron tree |
-| tag `v1.x-final` | the same final 1.x/Electron state |
-| commit `4a2a4164` | HEAD before the deletion commits |
+| branch `legacy-electron` | commit `6c74947e`, the complete pre-cleanup Electron tree |
+| tag `v1.x-final` | the same commit (`6c74947e`) |
+| commit `4a2a4164` | this branch's HEAD before the deletion commits (includes the final asset relocation) |
 
 Do not delete or move those refs; they are the only supported way to retrieve
 the old application, its Playwright/Vitest suites and its packaging pipeline.
