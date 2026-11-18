@@ -1,5 +1,6 @@
 //! Port of the legacy `tests/e2e/spec/groups/*.spec.js` intents to the native
-//! Groups pane.
+//! Groups pane, plus `general/defaultGroupIsFocusedByDefault.spec.js` for the
+//! startup focus.
 //!
 //! Each test drives the real shell (so the Groups pane, its selected-Group
 //! editor and the Inspector read the same snapshot the engine would) and
@@ -9,16 +10,10 @@
 //! asserting the same stale value twice.
 //!
 //! Native equivalents of the JS steps are used where the shell has no direct
-//! DOM counterpart (the JS `showControls` click is the Group-name click here,
-//! and the JS drag-reorder is the native Move up/down buttons).
-//!
-//! Not covered here because the native shell has no control for them:
-//! - `enabledStateCanBeToggledBetween01and2.spec.js`'s Alt-click to `2`: the
-//!   read model is a bool (`GroupView.enabled = group.enabled == 1`).
-//! - `inheritAndInheritFromStateCanBeSet.spec.js`'s `inheritFrom`: there is no
-//!   `inheritFrom` field on `GroupView` and no selector in the pane.
-//! - `backspaceRemovesFocusedGroup.spec.js`'s Backspace binding: removal is
-//!   only reachable through the per-Group Remove button (covered below).
+//! DOM counterpart: the JS `showControls` click is the Group-name click here,
+//! and the JS drag-reorder is the native Move up/down buttons. The JS checkbox
+//! is tri-state (`Checkbox.vue` with `allow-partial`): a plain click toggles
+//! 0/1 and an alt-click selects 2 ("drawn but not to the output canvas").
 
 use std::sync::{Arc, Mutex};
 
@@ -89,6 +84,10 @@ fn build() -> (Harness<'static, UiState>, Arc<Mutex<EngineSnapshot>>) {
             UiState::new(),
         );
     modv_ui::theme::apply(&harness.ctx);
+    // The first pass seeds the startup Group focus and measures the panel;
+    // run again so the accesskit rects kittest clicks match the settled
+    // layout.
+    harness.run();
     harness.run();
     (harness, snapshot)
 }
@@ -111,7 +110,15 @@ fn apply(snapshot: &Arc<Mutex<EngineSnapshot>>, action: &UiAction) {
                 "pipeline" => group.pipeline = value.as_bool().unwrap_or(group.pipeline),
                 "inherit" => group.inherit = value.as_bool().unwrap_or(group.inherit),
                 "hidden" => group.hidden = value.as_bool().unwrap_or(group.hidden),
+                // The raw tri-state value: 0 off, 1 drawn, 2 drawn but not to
+                // the output canvas.
                 "enabled" => group.enabled = value.as_i64().unwrap_or(group.enabled),
+                "inheritFrom" => {
+                    group.inherit_from = match value {
+                        serde_json::Value::String(id) => InheritTarget::Group(id.clone()),
+                        _ => InheritTarget::Previous,
+                    }
+                }
                 "compositeOperation" => {
                     group.composite_operation = value.as_str().unwrap_or_default().to_string()
                 }
@@ -234,6 +241,43 @@ fn alpha_slider<'a>(harness: &'a Harness<'static, UiState>) -> egui_kittest::Nod
         .expect("the selected Group shows an Alpha slider")
 }
 
+/// The tri-state Enabled control on the Background row.
+fn enabled_checkbox<'a>(harness: &'a Harness<'static, UiState>) -> egui_kittest::Node<'a> {
+    harness
+        .get_all_by_label("Enable this Group")
+        .next()
+        .expect("Background has an enabled checkbox")
+}
+
+/// The `inheritFrom` selector under the selected Group's Inherit checkbox.
+/// The blend selector is another combo box, so the row is picked by its
+/// `Inherit from` label.
+fn inherit_combo<'a>(harness: &'a Harness<'static, UiState>) -> egui_kittest::Node<'a> {
+    let label = harness.get_by_label("Inherit from").rect();
+    harness
+        .get_all_by_role(Role::ComboBox)
+        .filter(|node| (node.rect().center().y - label.center().y).abs() < 14.0)
+        .min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()))
+        .expect("the selected Group exposes the Inherit from selector")
+}
+
+/// Open the `inheritFrom` selector and click `option`. The option text is
+/// shared with the Group's own header (and the closed combo repeats it), so
+/// the matching node closest below the opened combo is the popup row.
+fn choose_inherit(harness: &mut Harness<'static, UiState>, option: &str) {
+    let combo = inherit_combo(harness);
+    let button = combo.rect();
+    combo.click();
+    harness.run();
+    let choice = harness
+        .get_all_by_label(option)
+        .filter(|node| node.rect().top() >= button.bottom() - 1.0)
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap_or_else(|| panic!("no {option:?} option under the Inherit from selector"));
+    choice.click();
+    harness.run();
+}
+
 #[test]
 // `alphaStateCanBeSet.spec.js`.
 fn alpha_can_be_set() {
@@ -345,19 +389,12 @@ fn clearing_state_can_be_toggled_between_0_and_1() {
 }
 
 #[test]
-// `enabledStateCanBeToggledBetween01and2.spec.js` (the 0/1 half).
-fn enabled_state_can_be_toggled_between_1_and_0() {
+// `enabledStateCanBeToggledBetween01and2.spec.js`.
+fn enabled_state_can_be_toggled_between_0_1_and_2() {
     let (mut harness, snapshot) = build();
 
-    // The per-Group header checkbox is labelled by its hover text; the first
-    // one belongs to Background. (The native read model is a bool, so enabled
-    // is 1 or 0 here; the store's tri-state 2 has no control — see the test
-    // module docs.)
-    harness
-        .get_all_by_label("Enable this Group")
-        .next()
-        .expect("Background has an enabled checkbox")
-        .click();
+    // 1 -> 0: the checkbox's plain click disables the Group.
+    enabled_checkbox(&harness).click();
     let actions = run_and_apply(&mut harness, &snapshot);
     let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
     assert_eq!(updates.len(), 1, "one enabled update: {actions:?}");
@@ -366,15 +403,46 @@ fn enabled_state_can_be_toggled_between_1_and_0() {
     assert_eq!(updates[0].payload["value"], serde_json::json!(0));
     assert_eq!(snapshot.lock().unwrap().groups[0].enabled, 0);
 
-    harness
-        .get_all_by_label("Enable this Group")
-        .next()
-        .expect("Background has an enabled checkbox")
-        .click();
+    // 0 -> 1: the next click draws it again.
+    enabled_checkbox(&harness).click();
     let actions = run_and_apply(&mut harness, &snapshot);
     let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
     assert_eq!(updates.len(), 1, "one enabled update: {actions:?}");
-    assert_eq!(updates[0].payload["key"], "enabled");
+    assert_eq!(updates[0].payload["value"], serde_json::json!(1));
+    assert_eq!(snapshot.lock().unwrap().groups[0].enabled, 1);
+
+    // 1 -> 2: alt-click is the partial state (drawn, output canvas skipped).
+    enabled_checkbox(&harness).click_modifiers(egui::Modifiers::ALT);
+    let actions = run_and_apply(&mut harness, &snapshot);
+    let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
+    assert_eq!(updates.len(), 1, "one enabled update: {actions:?}");
+    assert_eq!(updates[0].payload["value"], serde_json::json!(2));
+    let group = snapshot.lock().unwrap().groups[0].clone();
+    assert_eq!(group.enabled, 2);
+    assert!(group.is_drawn(), "2 is still drawn");
+    assert!(
+        !group.draws_to_output(),
+        "2 is not drawn to the output canvas"
+    );
+    assert_eq!(
+        modv_ui::model::group_enabled_indicator(group.enabled),
+        "partial",
+        "the control shows the partial indicator"
+    );
+
+    // 2 -> 0: a plain click from partial disables it, like `Checkbox.vue`.
+    enabled_checkbox(&harness).click();
+    let actions = run_and_apply(&mut harness, &snapshot);
+    let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
+    assert_eq!(updates.len(), 1, "one enabled update: {actions:?}");
+    assert_eq!(updates[0].payload["value"], serde_json::json!(0));
+    assert_eq!(snapshot.lock().unwrap().groups[0].enabled, 0);
+
+    // 0 -> 1 again.
+    enabled_checkbox(&harness).click();
+    let actions = run_and_apply(&mut harness, &snapshot);
+    let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
+    assert_eq!(updates.len(), 1, "one enabled update: {actions:?}");
     assert_eq!(updates[0].payload["value"], serde_json::json!(1));
     assert_eq!(snapshot.lock().unwrap().groups[0].enabled, 1);
 }
@@ -405,15 +473,55 @@ fn group_name_can_be_changed() {
 }
 
 #[test]
-// `inheritAndInheritFromStateCanBeSet.spec.js` (the inherit half).
-fn inherit_can_be_set() {
+// `inheritAndInheritFromStateCanBeSet.spec.js`.
+fn inherit_and_inherit_from_can_be_set() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
 
-    // `inheritFrom` has no native control: the read model (`GroupView`) has
-    // no field for it, so this test pins the half the shell exposes. The
-    // engine/store coercion is covered by
-    // store_ops.rs:update_group_by_key_inherit_from_number_and_string.
+    // The selector starts on the engine default: the previous Group.
+    assert_eq!(
+        snapshot.lock().unwrap().groups[0].inherit_from,
+        InheritTarget::Previous
+    );
+    assert_eq!(
+        harness.get_all_by_value("Previous Group").count(),
+        1,
+        "the closed selector shows the previous Group target"
+    );
+
+    // Pick another Group by name: `groups/UPDATE_GROUP_BY_KEY` carries its
+    // UUID string, the shape `groups.js` stores in `inheritFrom`.
+    choose_inherit(&mut harness, "Effects");
+    let actions = run_and_apply(&mut harness, &snapshot);
+    let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
+    assert_eq!(updates.len(), 1, "one inheritFrom update: {actions:?}");
+    assert_eq!(updates[0].payload["groupId"], "group-bg");
+    assert_eq!(updates[0].payload["key"], "inheritFrom");
+    assert_eq!(updates[0].payload["value"], serde_json::json!("group-fx"));
+    assert_eq!(
+        snapshot.lock().unwrap().groups[0].inherit_from,
+        InheritTarget::Group("group-fx".to_string())
+    );
+    assert_eq!(
+        harness.get_all_by_value("Effects").count(),
+        1,
+        "the selector now shows the named Group"
+    );
+
+    // Back to the numeric `-1` form.
+    choose_inherit(&mut harness, "Previous Group");
+    let actions = run_and_apply(&mut harness, &snapshot);
+    let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
+    assert_eq!(updates.len(), 1, "one inheritFrom update: {actions:?}");
+    assert_eq!(updates[0].payload["key"], "inheritFrom");
+    assert_eq!(updates[0].payload["value"], serde_json::json!(-1));
+    assert_eq!(
+        snapshot.lock().unwrap().groups[0].inherit_from,
+        InheritTarget::Previous
+    );
+
+    // `Don't Inherit` is the Inherit checkbox: turning it off hides the
+    // selector, turning it back on restores it.
     harness.get_by_label("Inherit").click();
     let actions = run_and_apply(&mut harness, &snapshot);
     let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
@@ -421,6 +529,11 @@ fn inherit_can_be_set() {
     assert_eq!(updates[0].payload["key"], "inherit");
     assert_eq!(updates[0].payload["value"], serde_json::json!(false));
     assert!(!snapshot.lock().unwrap().groups[0].inherit);
+    assert_eq!(
+        harness.query_all_by_label("Inherit from").count(),
+        0,
+        "the target selector is hidden while inheritance is off"
+    );
 
     harness.get_by_label("Inherit").click();
     let actions = run_and_apply(&mut harness, &snapshot);
@@ -428,6 +541,7 @@ fn inherit_can_be_set() {
     assert_eq!(updates.len(), 1, "one inherit update: {actions:?}");
     assert_eq!(updates[0].payload["value"], serde_json::json!(true));
     assert!(snapshot.lock().unwrap().groups[0].inherit);
+    harness.get_by_label("Inherit from");
 }
 
 #[test]
@@ -490,27 +604,53 @@ fn groups_can_be_rearranged() {
 }
 
 #[test]
-fn removing_the_focused_group_clears_it() {
-    // `backspaceRemovesFocusedGroup.spec.js`: focus/select a Group, remove it,
-    // the Group leaves `groups.groups` and the selection clears. The native
-    // shell has no Backspace binding yet, so this test drives the removal
-    // gesture the pane does expose: the per-Group Remove button queues the
-    // same `groups/removeGroup` payload.
+// `backspaceRemovesFocusedGroup.spec.js`.
+fn backspace_removes_the_focused_group() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Effects");
 
-    let remove = row_button(&harness, "x", "Effects");
-
-    remove.click();
+    harness.key_press(egui::Key::Backspace);
     let actions = run_and_apply(&mut harness, &snapshot);
-    let updates = find(&actions, "groups/removeGroup");
-    assert_eq!(updates.len(), 1, "one removal: {actions:?}");
-    assert_eq!(updates[0].payload["groupId"], "group-fx");
+
+    let removes = find(&actions, "groups/removeGroup");
+    assert_eq!(removes.len(), 1, "one removal: {actions:?}");
+    assert_eq!(removes[0].payload["groupId"], "group-fx");
     assert_eq!(snapshot.lock().unwrap().groups.len(), 1);
     assert!(
         harness.state().selected_group.is_none(),
         "removing the focused Group clears the selection"
     );
+
+    // The per-Group Remove button stays as the pointer path to the same
+    // action.
+    select_group(&mut harness, "Background");
+    row_button(&harness, "x", "Background").click();
+    let actions = run_and_apply(&mut harness, &snapshot);
+    let removes = find(&actions, "groups/removeGroup");
+    assert_eq!(removes.len(), 1, "one removal: {actions:?}");
+    assert!(snapshot.lock().unwrap().groups.is_empty());
+}
+
+#[test]
+fn backspace_is_ignored_while_a_text_field_has_focus() {
+    let (mut harness, snapshot) = build();
+    select_group(&mut harness, "Background");
+
+    let field = harness
+        .get_all_by_role(Role::TextInput)
+        .find(|node| node.value().as_deref() == Some("Background"))
+        .expect("the selected Group's name field is a text input");
+    field.focus();
+    harness.run();
+
+    harness.key_press(egui::Key::Backspace);
+    let actions = run_and_apply(&mut harness, &snapshot);
+    assert!(
+        find(&actions, "groups/removeGroup").is_empty(),
+        "Backspace edits text instead of removing the Group: {actions:?}"
+    );
+    assert_eq!(snapshot.lock().unwrap().groups.len(), 2);
+    assert_eq!(harness.state().selected_group.as_deref(), Some("group-bg"));
 }
 
 #[test]
@@ -539,11 +679,11 @@ fn the_new_group_button_creates_a_group() {
 }
 
 #[test]
-#[ignore = "awaits the native startup-focus change: UiState starts with selected_group = None; enable once the shell focuses the first live Group"]
+// `tests/e2e/spec/general/defaultGroupIsFocusedByDefault.spec.js`.
 fn the_default_group_is_focused_by_default() {
-    // `defaultGroupIsFocusedByDefault.spec.js`: the first Group carries the
-    // focus indicator and `focus.id` names it. A fresh `UiState` starts with
-    // no selection, so the shell must focus the first live Group on startup.
+    // The first Group carries the focus indicator and `focus.id` names it. A
+    // fresh `UiState` starts with no selection, so the shell focuses the first
+    // user Group on startup.
     let (harness, _snapshot) = build();
 
     assert_eq!(
