@@ -1,18 +1,13 @@
 .DS_Store
-node_modules
+
+# Native installers and build output
 /dist
+crates/target
 
-# npm lockfile
-package-lock.json
-
-# local env files
+# Local env files
+.env
 .env.local
 .env.*.local
-
-# Log files
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Editor directories and files
 .idea
@@ -21,13 +16,6 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
-
-#Electron-builder output
-/dist_electron
-.env
-out
-
-test-results
 
 # Local scratch space (diagnostic builds, logs)
 tmp
@@ -38,6 +26,3 @@ tmp
 # Crash dumps
 core
 core.*
-
-# Rust engine target dir
-crates/target

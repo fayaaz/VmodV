@@ -2,13 +2,9 @@
 .github
 .vscode
 .idea
-node_modules
-out
+docs
 dist
-dist_electron
-test-results
-playwright-report
-tests
+tmp
 *.log
 **/core
 **/core.*
@@ -17,7 +13,5 @@ tests
 .DS_Store
 README.md
 AGENTS.md
-tmp
-tmp/
 crates/target
 target
