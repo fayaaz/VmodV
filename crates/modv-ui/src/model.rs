@@ -716,6 +716,18 @@ pub struct MediaSnapshot {
     pub sources: Vec<MediaSourceView>,
     /// The XDG-desktop-portal screen capture (`MediaAction::ShareScreen`).
     pub screen: ScreenCaptureView,
+    /// Video texture props whose file could not be started (missing file,
+    /// unsupported codec), with the path saved in the prop.
+    pub video_problems: Vec<VideoSourceProblemView>,
+}
+
+/// One video texture prop whose source is not running.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VideoSourceProblemView {
+    /// The path saved in the prop's `options.path`.
+    pub path: String,
+    /// Why no source runs (shown next to the transport).
+    pub message: String,
 }
 
 /// The native shell's portal screen capture.
@@ -919,6 +931,22 @@ impl MediaLibraryView {
     pub fn count_for(&self, kind: LibraryKind, folder: &str) -> usize {
         self.assets_for(kind, folder).len()
     }
+}
+
+/// Normalise a media path for the `video:` source suffix match.
+pub fn normalise_video_path(raw: &str) -> Option<String> {
+    let normalised = raw.trim().replace('\\', "/");
+    let trimmed = normalised.trim_matches('/');
+    (!trimmed.is_empty() && !trimmed.contains('\0')).then(|| trimmed.to_string())
+}
+
+/// Whether an absolute source path ends with a media-relative path on a path
+/// boundary (so `clip.mp4` does not match `other-clip.mp4`).
+fn path_matches(source_path: &str, needle: &str) -> bool {
+    source_path == needle
+        || source_path
+            .strip_suffix(needle)
+            .is_some_and(|prefix| prefix.ends_with('/'))
 }
 
 /// Normalise a UI folder scope: `/` separators, no surrounding separators.
@@ -1162,8 +1190,94 @@ pub fn mode_for_resolution(
     })
 }
 
+/// A running video source's playback state (the engine `VideoTransport`).
+///
+/// Position/duration are milliseconds, matching the engine and a scrubber.
+/// `paused` is the transport pause flag; `playing` additionally requires the
+/// pipeline to be running and not parked at end-of-stream.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoTransportView {
+    pub paused: bool,
+    pub playing: bool,
+    pub position_ms: u64,
+    pub duration_ms: Option<u64>,
+    pub looping: bool,
+    pub eos: bool,
+    pub seekable: bool,
+    pub playback_rate: f64,
+}
+
+impl Default for VideoTransportView {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            playing: false,
+            position_ms: 0,
+            duration_ms: None,
+            looping: false,
+            eos: false,
+            seekable: false,
+            playback_rate: 1.0,
+        }
+    }
+}
+
+impl VideoTransportView {
+    /// Played fraction in `0.0..=1.0`, or `None` before a duration is known.
+    pub fn progress(&self) -> Option<f64> {
+        let duration = self.duration_ms?;
+        if duration == 0 {
+            return None;
+        }
+        Some((self.position_ms as f64 / duration as f64).clamp(0.0, 1.0))
+    }
+
+    /// `m:ss` (or `h:mm:ss`) for a millisecond position.
+    pub fn clock(ms: u64) -> String {
+        let total = ms / 1_000;
+        let (hours, minutes, seconds) = (total / 3_600, (total / 60) % 60, total % 60);
+        if hours > 0 {
+            format!("{hours}:{minutes:02}:{seconds:02}")
+        } else {
+            format!("{minutes}:{seconds:02}")
+        }
+    }
+
+    /// `position / duration` for the transport readout; `position` alone when
+    /// the duration is still unknown (a live demuxer or a live source).
+    pub fn position_label(&self) -> String {
+        match self.duration_ms {
+            Some(duration) => format!(
+                "{} / {}",
+                Self::clock(self.position_ms),
+                Self::clock(duration)
+            ),
+            None => Self::clock(self.position_ms),
+        }
+    }
+}
+
+/// A video transport command emitted by the Inspector or Media panel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VideoTransportAction {
+    /// Pause a playing source.
+    Pause,
+    /// Resume a paused source (a file parked at end-of-stream replays).
+    Resume,
+    /// Pause a playing source or resume a paused one.
+    TogglePause,
+    /// Seek back to the first frame.
+    Restart,
+    /// Seek to a millisecond position.
+    Seek { position_ms: u64 },
+    /// Change file looping.
+    SetLooping { looping: bool },
+    /// Change the playback speed (0.1–10, 1.0 is real time).
+    SetPlaybackRate { rate: f64 },
+}
+
 /// One running media source.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MediaSourceView {
     pub source_id: String,
     pub kind: String,
@@ -1174,6 +1288,17 @@ pub struct MediaSourceView {
     pub frames: u64,
     pub dropped: u64,
     pub last_error: Option<String>,
+    /// Playback state for a file source (cameras and NDI have no transport).
+    pub transport: Option<VideoTransportView>,
+}
+
+impl MediaSourceView {
+    /// The absolute file path of a `video:<absolute path>` source.
+    pub fn video_path(&self) -> Option<&str> {
+        (self.kind == "file")
+            .then(|| self.source_id.strip_prefix("video:"))
+            .flatten()
+    }
 }
 
 /// Native MIDI availability and devices.
@@ -1554,7 +1679,7 @@ pub fn plugin_color_value(rgba: [f32; 4]) -> Value {
 }
 
 /// A MediaHub operation requested by the UI.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MediaAction {
     /// Start a camera (or restart it with a new mode) at `width`×`height`@`fps`.
     /// The shell validates the mode against the advertised caps and remembers
@@ -1588,6 +1713,14 @@ pub enum MediaAction {
     /// Stop waiting for the open portal dialog; a late answer is discarded
     /// (and closes the session it opened).
     CancelScreenShare,
+    /// Drive a running file source's playback transport.
+    ///
+    /// `source` is the engine source id (`video:<absolute path>`) or the
+    /// media-relative path saved in the prop; the shell resolves either.
+    VideoTransport {
+        source: String,
+        action: VideoTransportAction,
+    },
 }
 
 impl MediaSnapshot {
@@ -1598,6 +1731,36 @@ impl MediaSnapshot {
         self.sources
             .iter()
             .find(|source| source.source_id == source_id)
+    }
+
+    /// The running file source whose absolute path ends with `path`.
+    ///
+    /// A texture prop stores a media-root-relative path
+    /// (`default/video/clip.mp4`) while the engine keys the source by the
+    /// absolute path it resolved (`video:/…/default/video/clip.mp4`), so the
+    /// Inspector matches on the path suffix.
+    pub fn video_source_for_path(&self, path: &str) -> Option<&MediaSourceView> {
+        let needle = normalise_video_path(path)?;
+        self.sources.iter().find(|source| {
+            source
+                .video_path()
+                .and_then(normalise_video_path)
+                .is_some_and(|source_path| path_matches(&source_path, &needle))
+        })
+    }
+
+    /// Why the video source for `path` is not running, when the shell reported
+    /// a problem (missing file, unsupported codec).
+    pub fn video_problem_for_path(&self, path: &str) -> Option<&str> {
+        let needle = normalise_video_path(path)?;
+        self.video_problems
+            .iter()
+            .find(|problem| {
+                normalise_video_path(&problem.path).is_some_and(|saved| {
+                    path_matches(&saved, &needle) || path_matches(&needle, &saved)
+                })
+            })
+            .map(|problem| problem.message.as_str())
     }
 
     /// Running camera-like sources in Webcam-index order.
@@ -3136,5 +3299,88 @@ mod tests {
         assert_eq!(LibraryKind::Video.texture_type(), Some("video"));
         assert_eq!(LibraryKind::Palette.texture_type(), None);
         assert_eq!(LibraryKind::Palette.asset_type(), "palette");
+    }
+
+    #[test]
+    fn video_transport_reads_the_clock_and_progress() {
+        let transport = VideoTransportView {
+            position_ms: 4_200,
+            duration_ms: Some(12_400),
+            looping: true,
+            seekable: true,
+            playback_rate: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(transport.position_label(), "0:04 / 0:12");
+        assert_eq!(transport.progress(), Some(4_200.0 / 12_400.0));
+
+        assert_eq!(VideoTransportView::clock(0), "0:00");
+        assert_eq!(VideoTransportView::clock(59_999), "0:59");
+        assert_eq!(VideoTransportView::clock(3_600_000), "1:00:00");
+        assert_eq!(VideoTransportView::clock(3_661_000), "1:01:01");
+        assert_eq!(
+            VideoTransportView {
+                duration_ms: None,
+                ..transport
+            }
+            .position_label(),
+            "0:04",
+            "a live/unknown duration shows the position alone"
+        );
+        assert_eq!(
+            VideoTransportView {
+                duration_ms: Some(0),
+                ..transport
+            }
+            .progress(),
+            None
+        );
+    }
+
+    fn video_source(source_id: &str) -> MediaSourceView {
+        MediaSourceView {
+            source_id: source_id.to_string(),
+            kind: "file".to_string(),
+            state: "running".to_string(),
+            transport: Some(VideoTransportView {
+                duration_ms: Some(10_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn video_sources_match_a_media_relative_prop_path() {
+        let media = MediaSnapshot {
+            sources: vec![
+                video_source("video:/home/u/VmodV/media/live/video/clip.mp4"),
+                video_source("video:/home/u/VmodV/media/live/video/other-clip.mp4"),
+            ],
+            video_problems: vec![VideoSourceProblemView {
+                path: "live/video/missing.mp4".to_string(),
+                message: "the video file is missing".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            media
+                .video_source_for_path("live/video/clip.mp4")
+                .map(|source| source.source_id.as_str()),
+            Some("video:/home/u/VmodV/media/live/video/clip.mp4")
+        );
+        assert!(
+            media
+                .video_source_for_path("live/video/other-clip.mp4")
+                .is_some_and(|source| source.source_id.ends_with("other-clip.mp4")),
+            "a longer name is matched whole, not as the tail of clip.mp4"
+        );
+        assert_eq!(media.video_source_for_path("live/video/missing.mp4"), None);
+        assert_eq!(
+            media.video_problem_for_path("live/video/missing.mp4"),
+            Some("the video file is missing")
+        );
+        assert_eq!(media.video_problem_for_path("live/video/clip.mp4"), None);
     }
 }

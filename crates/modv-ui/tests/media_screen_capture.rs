@@ -23,6 +23,7 @@ fn source(source_id: &str, kind: &str, index: usize) -> MediaSourceView {
         frames: 120,
         dropped: 1,
         last_error: None,
+        transport: None,
     }
 }
 
@@ -34,6 +35,7 @@ fn snapshot(screen: ScreenCaptureView) -> EngineSnapshot {
             cameras: Vec::new(),
             sources: Vec::new(),
             screen,
+            video_problems: Vec::new(),
         },
         ..Default::default()
     }

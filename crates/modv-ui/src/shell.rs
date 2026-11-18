@@ -17,9 +17,10 @@ use crate::layout::{
 };
 use crate::library_drag::MediaLibraryDrag;
 use crate::model::{
-    COMPOSITE_OPERATIONS, EngineSnapshot, LibraryKind, MediaAction, MediaAssetView, ModuleMetaView,
-    PropView, ScreenCaptureView, asset_meta_label, format_duration, gallery_preview_key,
-    letterbox_rect, sample_rate_label,
+    COMPOSITE_OPERATIONS, EngineSnapshot, LibraryKind, MediaAction, MediaAssetView,
+    MediaSourceView, ModuleMetaView, PropView, ScreenCaptureView, VideoTransportAction,
+    VideoTransportView, asset_meta_label, format_duration, gallery_preview_key, letterbox_rect,
+    sample_rate_label,
 };
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
@@ -3273,6 +3274,11 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
                     .size(10.5)
                     .color(theme::MUTED),
                 );
+                if source.kind == "file"
+                    && let Some(transport) = source.transport
+                {
+                    media_transport_row(ui, source, transport, state);
+                }
                 if let Some(error) = &source.last_error {
                     ui.colored_label(theme::DANGER, error);
                 }
@@ -3286,6 +3292,70 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
             });
         });
     }
+}
+
+/// The Media panel's transport for one running file source.
+///
+/// The shell persists pause/loop/speed into every prop that references the
+/// source, so a change here survives a preset/Scene reload just like the
+/// Inspector's transport row.
+fn media_transport_row(
+    ui: &mut egui::Ui,
+    source: &MediaSourceView,
+    transport: VideoTransportView,
+    state: &mut UiState,
+) {
+    ui.horizontal(|ui| {
+        let (label, action) = if transport.paused || transport.eos {
+            ("Play", VideoTransportAction::Resume)
+        } else {
+            ("Pause", VideoTransportAction::Pause)
+        };
+        if ui.small_button(label).clicked() {
+            state.push_media_action(MediaAction::VideoTransport {
+                source: source.source_id.clone(),
+                action,
+            });
+        }
+        if ui.small_button("Restart").clicked() {
+            state.push_media_action(MediaAction::VideoTransport {
+                source: source.source_id.clone(),
+                action: VideoTransportAction::Restart,
+            });
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().slider_width = 60.0;
+        let mut speed = transport.playback_rate;
+        if ui
+            .add(
+                egui::Slider::new(&mut speed, 0.1..=10.0)
+                    .step_by(0.05)
+                    .text("Speed"),
+            )
+            .changed()
+        {
+            state.push_media_action(MediaAction::VideoTransport {
+                source: source.source_id.clone(),
+                action: VideoTransportAction::SetPlaybackRate { rate: speed },
+            });
+        }
+
+        let mut looping = transport.looping;
+        if ui.checkbox(&mut looping, "Loop").changed() {
+            state.push_media_action(MediaAction::VideoTransport {
+                source: source.source_id.clone(),
+                action: VideoTransportAction::SetLooping { looping },
+            });
+        }
+    });
+    ui.label(
+        egui::RichText::new(transport.position_label())
+            .monospace()
+            .size(10.5)
+            .color(theme::MUTED),
+    );
 }
 
 /// The Media panel's screen-capture section.
@@ -3778,7 +3848,12 @@ fn draw_prop(
         }
         "texture" => {
             let mut control = TextureControl::new(&prop.name, &prop.value);
-            match control.draw(ui, &snapshot.texture_sources, &snapshot.library) {
+            match control.draw(
+                ui,
+                &snapshot.texture_sources,
+                &snapshot.library,
+                &snapshot.media,
+            ) {
                 Some(TextureControlChange::Value(value)) => {
                     state
                         .actions
@@ -3791,6 +3866,18 @@ fn draw_prop(
                         prop_name: prop.name.clone(),
                         kind,
                     });
+                }
+                Some(TextureControlChange::VideoTransport {
+                    value,
+                    source,
+                    action,
+                }) => {
+                    if let Some(value) = value {
+                        state
+                            .actions
+                            .push(texture_prop_action(module_id, &prop.name, value));
+                    }
+                    state.push_media_action(MediaAction::VideoTransport { source, action });
                 }
                 None => {}
             }

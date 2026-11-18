@@ -50,6 +50,7 @@ fn source(source_id: &str, kind: &str, index: usize, width: u32, height: u32) ->
         frames: 42,
         dropped: 0,
         last_error: None,
+        transport: None,
     }
 }
 
@@ -91,6 +92,7 @@ fn demo_snapshot() -> EngineSnapshot {
                 source("camera:/dev/video2", "camera", 2, 640, 480),
             ],
             screen: Default::default(),
+            video_problems: Vec::new(),
         },
         ..Default::default()
     }

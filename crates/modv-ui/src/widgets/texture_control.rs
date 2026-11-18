@@ -10,7 +10,9 @@ use egui::{Sense, Stroke, StrokeKind};
 use serde_json::Value;
 
 use crate::library_drag::{MediaLibraryDrag, USE_FROM_LIBRARY_LABEL, texture_value_for_control};
-use crate::model::{LibraryKind, MediaLibraryView, TextureSourceView};
+use crate::model::{
+    LibraryKind, MediaLibraryView, MediaSnapshot, TextureSourceView, VideoTransportAction,
+};
 use crate::theme;
 
 /// What a texture control gesture asks the shell to do.
@@ -20,6 +22,15 @@ pub enum TextureControlChange {
     Value(Value),
     /// Open the Library tab and wait for an asset of this kind.
     PickFromLibrary { kind: LibraryKind },
+    /// Drive the running video source and (for pause/loop/speed) persist the
+    /// option in the prop.
+    VideoTransport {
+        /// The updated prop value, when the option changed.
+        value: Option<Value>,
+        /// The engine source id (`video:<absolute path>`) or the saved path.
+        source: String,
+        action: VideoTransportAction,
+    },
 }
 
 /// One texture prop editor.
@@ -53,19 +64,24 @@ impl TextureControl {
 
     /// Draw the picker.
     ///
-    /// Returns a change when the prop should be written, or when the user asks
-    /// to pick an asset from the Library tab. A Library tile dropped on the
-    /// control writes the same value as typing the path by hand.
+    /// Returns a change when the prop should be written, when the user asks
+    /// to pick an asset from the Library tab, or when the video transport row
+    /// issues a play/pause/restart/loop/speed command. A Library tile dropped
+    /// on the control writes the same value as typing the path by hand.
     pub fn draw(
         &mut self,
         ui: &mut egui::Ui,
         sources: &[TextureSourceView],
         library: &MediaLibraryView,
+        media: &MediaSnapshot,
     ) -> Option<TextureControlChange> {
         let mut changed = false;
+        let mut path_changed = false;
         let mut pick_from_library = None;
+        let mut transport_change: Option<(Option<(String, Value)>, VideoTransportAction)> = None;
         let mut kind = self.kind().to_string();
         let mut source = self.source_id().unwrap_or_default().to_string();
+
         let inner = ui.scope(|ui| {
             ui.horizontal(|ui| {
                 ui.add_sized(
@@ -105,7 +121,7 @@ impl TextureControl {
                             .desired_width(190.0),
                     );
                     if response.changed() {
-                        changed = true;
+                        path_changed = true;
                     }
                 }
                 "video" => {
@@ -115,7 +131,11 @@ impl TextureControl {
                             .desired_width(190.0),
                     );
                     if response.changed() {
-                        changed = true;
+                        path_changed = true;
+                    }
+
+                    if !source.trim().is_empty() {
+                        video_transport_row(ui, &source, media, &mut transport_change);
                     }
                 }
                 _ => {
@@ -174,6 +194,27 @@ impl TextureControl {
         if let Some(kind) = pick_from_library {
             return Some(TextureControlChange::PickFromLibrary { kind });
         }
+        if let Some((option, action)) = transport_change {
+            let value = match action {
+                VideoTransportAction::Restart | VideoTransportAction::Seek { .. } => None,
+                _ => option.and_then(|(key, option)| {
+                    let updated = self.video_value_with(&key, option);
+                    let value = (updated != self.value).then_some(updated);
+                    if let Some(value) = &value {
+                        self.value = value.clone();
+                    }
+                    value
+                }),
+            };
+            return Some(TextureControlChange::VideoTransport {
+                value,
+                source: media
+                    .video_source_for_path(&source)
+                    .map(|running| running.source_id.clone())
+                    .unwrap_or_else(|| format!("video:{}", source.trim())),
+                action,
+            });
+        }
         if changed {
             let options = match kind.as_str() {
                 "inherit" => serde_json::json!({}),
@@ -182,9 +223,146 @@ impl TextureControl {
             };
             self.value = serde_json::json!({ "type": kind, "options": options });
             Some(TextureControlChange::Value(self.value.clone()))
+        } else if path_changed {
+            // A manual path edit keeps the video options (loop/paused/speed)
+            // already saved on the prop; only the clip changes.
+            let options = if kind == "video" {
+                let mut options = self
+                    .value
+                    .get("options")
+                    .cloned()
+                    .filter(Value::is_object)
+                    .unwrap_or_else(|| serde_json::json!({}));
+                options["path"] = serde_json::json!(source);
+                options
+            } else {
+                serde_json::json!({ "path": source })
+            };
+            self.value = serde_json::json!({ "type": kind, "options": options });
+            Some(TextureControlChange::Value(self.value.clone()))
         } else {
             None
         }
+    }
+
+    /// The prop value with one `options.<key>` replaced, preserving the other
+    /// saved keys (type, path, and unrelated options).
+    fn video_value_with(&self, key: &str, option: Value) -> Value {
+        let mut definition = self.value.clone();
+        if !definition.is_object() {
+            definition = serde_json::json!({ "type": "video", "options": {} });
+        }
+        definition["type"] = serde_json::json!("video");
+        if !definition.get("options").is_some_and(Value::is_object) {
+            definition["options"] = serde_json::json!({});
+        }
+        definition["options"][key] = option.clone();
+        definition
+    }
+}
+
+/// Paint the video clip's transport row: Play/Pause, Restart, Speed and Loop,
+/// plus the position/duration readout and a missing-file message.
+///
+/// The row only issues commands when a source is running; the shell persists
+/// the pause/loop/speed option into the prop so presets and Scenes keep it.
+fn video_transport_row(
+    ui: &mut egui::Ui,
+    path: &str,
+    media: &MediaSnapshot,
+    change: &mut Option<(Option<(String, Value)>, VideoTransportAction)>,
+) {
+    let clip_name = path.rsplit('/').next().unwrap_or(path);
+    ui.label(
+        egui::RichText::new(clip_name)
+            .size(12.0)
+            .color(theme::FOREGROUND),
+    )
+    .on_hover_text(path);
+    ui.label(egui::RichText::new(path).size(10.5).color(theme::MUTED));
+
+    if let Some(problem) = media.video_problem_for_path(path) {
+        ui.colored_label(theme::DANGER, egui::RichText::new(problem).size(11.0));
+        return;
+    }
+
+    let Some(running) = media.video_source_for_path(path) else {
+        ui.label(
+            egui::RichText::new("Starting video source…")
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+        return;
+    };
+    let Some(transport) = running.transport else {
+        ui.label(
+            egui::RichText::new("Starting video source…")
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+        return;
+    };
+
+    ui.horizontal(|ui| {
+        let (label, action) = if transport.paused || transport.eos {
+            ("Play", VideoTransportAction::Resume)
+        } else {
+            ("Pause", VideoTransportAction::Pause)
+        };
+        if ui.button(label).clicked() {
+            *change = Some((
+                Some((
+                    "paused".to_string(),
+                    serde_json::json!(matches!(action, VideoTransportAction::Pause)),
+                )),
+                action,
+            ));
+        }
+        if ui
+            .button("Restart")
+            .on_hover_text("Seek back to the first frame")
+            .clicked()
+        {
+            *change = Some((None, VideoTransportAction::Restart));
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().slider_width = 90.0;
+        let mut speed = transport.playback_rate;
+        let response = ui.add(
+            egui::Slider::new(&mut speed, 0.1..=10.0)
+                .step_by(0.05)
+                .text("Speed"),
+        );
+        if response.changed() {
+            *change = Some((
+                Some(("playbackrate".to_string(), serde_json::json!(speed))),
+                VideoTransportAction::SetPlaybackRate { rate: speed },
+            ));
+        }
+    });
+
+    let mut looping = transport.looping;
+    if ui.checkbox(&mut looping, "Loop").changed() {
+        *change = Some((
+            Some(("loop".to_string(), serde_json::json!(looping))),
+            VideoTransportAction::SetLooping { looping },
+        ));
+    }
+
+    ui.label(
+        egui::RichText::new(transport.position_label())
+            .monospace()
+            .size(10.5)
+            .color(theme::MUTED),
+    );
+    if transport.eos && !transport.looping {
+        ui.label(
+            egui::RichText::new("end of clip")
+                .size(10.5)
+                .color(theme::MUTED),
+        );
     }
 }
 
@@ -268,5 +446,34 @@ mod tests {
         let inherit = TextureControl::new("texture", &serde_json::json!({"type": "inherit"}));
         assert_eq!(inherit.kind(), "inherit");
         assert_eq!(inherit.source_id(), None);
+    }
+
+    #[test]
+    fn video_option_updates_keep_the_clip_and_other_options() {
+        let control = TextureControl::new(
+            "texture",
+            &serde_json::json!({
+                "type": "video",
+                "options": { "path": "live/video/clip.mp4", "loop": false },
+                "id": "saved-video"
+            }),
+        );
+
+        assert_eq!(
+            control.video_value_with("paused", serde_json::json!(true)),
+            serde_json::json!({
+                "type": "video",
+                "options": {
+                    "path": "live/video/clip.mp4",
+                    "loop": false,
+                    "paused": true
+                },
+                "id": "saved-video"
+            })
+        );
+        assert_eq!(
+            control.video_value_with("playbackrate", serde_json::json!(2.0))["options"]["playbackrate"],
+            serde_json::json!(2.0)
+        );
     }
 }
