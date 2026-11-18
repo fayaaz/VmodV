@@ -9,6 +9,7 @@
 use egui::{Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use modv_ui::model::{GROUP_ENABLED, InheritTarget};
 use modv_ui::{EngineSnapshot, GroupView, ModuleMetaView, ModuleView, UiState};
 
 fn meta(name: &str) -> ModuleMetaView {
@@ -26,13 +27,14 @@ fn group(id: &str, name: &str) -> GroupView {
     GroupView {
         id: id.to_string(),
         name: name.to_string(),
-        enabled: true,
+        enabled: GROUP_ENABLED,
         hidden: false,
         alpha: 1.0,
         alpha_input_id: None,
         composite_operation: "normal".to_string(),
         composite_operation_input_id: None,
         inherit: true,
+        inherit_from: InheritTarget::Previous,
         clearing: true,
         pipeline: false,
         module_ids: Vec::new(),
@@ -118,7 +120,12 @@ fn dragging_a_gallery_tile_onto_a_group_queues_the_add_action() {
     harness.run();
 
     let tile = harness.get_by_label("Bands").rect().center();
-    let target = harness.get_by_label("Background").rect().center();
+    let target = harness
+        .get_all_by_label("Background")
+        .min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()))
+        .expect("the Groups pane shows the Background Group")
+        .rect()
+        .center();
     drag(&mut harness, tile, target);
 
     let actions = harness.state_mut().take_actions();

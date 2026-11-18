@@ -9,6 +9,7 @@
 use accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use modv_ui::model::{GROUP_ENABLED, InheritTarget};
 use modv_ui::state::SidePanelTab;
 use modv_ui::{EngineSnapshot, GroupView, ModuleView, PropView, TabPlacement, UiState};
 
@@ -35,13 +36,14 @@ fn app_with_module() -> Harness<'static, UiState> {
         groups: vec![GroupView {
             id: "group-1".to_string(),
             name: "Effects".to_string(),
-            enabled: true,
+            enabled: GROUP_ENABLED,
             hidden: false,
             alpha: 1.0,
             alpha_input_id: None,
             composite_operation: "normal".to_string(),
             composite_operation_input_id: None,
             inherit: true,
+            inherit_from: InheritTarget::Previous,
             clearing: true,
             pipeline: false,
             module_ids: vec!["module-1".to_string()],

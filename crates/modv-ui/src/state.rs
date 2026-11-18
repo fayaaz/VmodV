@@ -203,6 +203,9 @@ pub struct UiState {
     pub selected_module: Option<String>,
     pub selected_scene: Option<String>,
     pub selected_gallery_module: Option<String>,
+    /// Whether the startup Group focus has run. It runs once, so clearing the
+    /// selection later (e.g. after removing the focused Group) stays cleared.
+    initial_focus_done: bool,
     /// Inline Group-name draft and its owner.
     pub group_name_draft: String,
     pub group_name_draft_id: Option<String>,
@@ -417,6 +420,50 @@ pub struct MidiLearnDraft {
     /// The engine arm id, once the snapshot reported it. It lets the editor
     /// notice that another input replaced its arm.
     pub arm: Option<u64>,
+}
+
+/// The focused-input editor's title, `<owner>: <control>`.
+///
+/// Legacy `ActiveModule.vue`/`Group.vue` dispatch
+/// `inputs/setFocusedInput` with `` `${name}: ${title}` ``, so the Input
+/// Config panel reads `Ball: Amount`. The native link rows only carry the
+/// control label and the input id; the owner name is resolved from the
+/// snapshot so every module prop, component sub-input and Group control keeps
+/// the legacy title shape.
+pub fn focused_input_title(input_id: &str, control: &str, snapshot: &EngineSnapshot) -> String {
+    let module = snapshot.modules.iter().find(|module| {
+        module.alpha_input_id.as_deref() == Some(input_id)
+            || module.composite_operation_input_id.as_deref() == Some(input_id)
+            || module.props.iter().any(|prop| {
+                prop.input_id.as_deref() == Some(input_id)
+                    || prop
+                        .components
+                        .iter()
+                        .any(|component| component.input_id == input_id)
+            })
+    });
+    if let Some(module) = module {
+        return format!("{}: {control}", module.module_name);
+    }
+
+    let group = snapshot.groups.iter().find(|group| {
+        group.alpha_input_id.as_deref() == Some(input_id)
+            || group.composite_operation_input_id.as_deref() == Some(input_id)
+    });
+    if let Some(group) = group {
+        // The shell labels Group link rows `Group alpha`/`Group blend`; the
+        // legacy title is the Group name plus the capitalised control
+        // (`Background: Alpha`).
+        let control = control.strip_prefix("Group ").unwrap_or(control);
+        let mut chars = control.chars();
+        let control = match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        };
+        return format!("{}: {control}", group.name);
+    }
+
+    control.to_string()
 }
 
 /// The focused-input link editor's draft values.
@@ -1089,6 +1136,7 @@ impl UiState {
             selected_module: None,
             selected_scene: None,
             selected_gallery_module: None,
+            initial_focus_done: false,
             group_name_draft: String::new(),
             group_name_draft_id: None,
             gallery_category: GalleryCategory::All,
@@ -1387,6 +1435,29 @@ impl UiState {
     pub fn selected_group<'a>(&self, snapshot: &'a EngineSnapshot) -> Option<&'a crate::GroupView> {
         let id = self.selected_group.as_deref()?;
         snapshot.groups.iter().find(|group| group.id == id)
+    }
+
+    /// Focus the first user Group the first time the snapshot has one, so a
+    /// fresh shell opens with that Group's controls visible
+    /// (`defaultGroupIsFocusedByDefault.spec.js`).
+    ///
+    /// Only the first frame with Groups seeds the selection. Clearing it later
+    /// (removing the focused Group, or an explicit deselection) must stay
+    /// cleared instead of snapping back to the first Group.
+    pub fn ensure_default_group_focus(&mut self, snapshot: &EngineSnapshot) {
+        if self.initial_focus_done {
+            return;
+        }
+        let Some(group) = snapshot.groups.iter().find(|group| !group.is_gallery()) else {
+            // An empty snapshot (startup before Scenes/Groups load) retries on
+            // the next frame.
+            return;
+        };
+        if self.selected_group.is_none() {
+            self.selected_group = Some(group.id.clone());
+            self.selected_module = None;
+        }
+        self.initial_focus_done = true;
     }
 }
 
@@ -1744,5 +1815,99 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(explicit.gallery_category(), "3d-scenes");
+    }
+
+    #[test]
+    fn the_focused_input_title_names_the_owner_and_control() {
+        // `ActiveModule.vue`/`Group.vue` dispatch `${name}: ${title}`, so the
+        // Input Config window is `Ball: Amount` / `Background: Alpha`.
+        let module = crate::ModuleView {
+            id: "module-1".to_string(),
+            module_name: "Ball".to_string(),
+            alpha_input_id: Some("in-alpha".to_string()),
+            props: vec![crate::PropView {
+                name: "Amount".to_string(),
+                input_id: Some("in-amount".to_string()),
+                components: vec![crate::PropComponentView {
+                    key: "g".to_string(),
+                    input_id: "in-fill-g".to_string(),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let group = crate::GroupView {
+            name: "Background".to_string(),
+            alpha_input_id: Some("in-group-alpha".to_string()),
+            ..Default::default()
+        };
+        let snapshot = EngineSnapshot {
+            modules: vec![module],
+            groups: vec![group],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            focused_input_title("in-amount", "Amount", &snapshot),
+            "Ball: Amount"
+        );
+        assert_eq!(
+            focused_input_title("in-fill-g", "fillColor.g", &snapshot),
+            "Ball: fillColor.g",
+            "component sub-inputs keep their dotted label"
+        );
+        assert_eq!(
+            focused_input_title("in-alpha", "Alpha", &snapshot),
+            "Ball: Alpha"
+        );
+        assert_eq!(
+            focused_input_title("in-group-alpha", "Group alpha", &snapshot),
+            "Background: Alpha",
+            "Group controls use the Group name and a capitalised control"
+        );
+        assert_eq!(
+            focused_input_title("unowned", "gain", &snapshot),
+            "gain",
+            "an input with no owner keeps the bare control label"
+        );
+    }
+
+    #[test]
+    fn the_startup_focus_runs_once() {
+        let mut state = UiState::new();
+        let snapshot = EngineSnapshot {
+            groups: vec![
+                crate::GroupView {
+                    id: "gallery".to_string(),
+                    name: crate::model::GALLERY_GROUP_NAME.to_string(),
+                    ..Default::default()
+                },
+                crate::GroupView {
+                    id: "group-bg".to_string(),
+                    name: "Background".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        state.ensure_default_group_focus(&snapshot);
+        assert_eq!(
+            state.selected_group.as_deref(),
+            Some("group-bg"),
+            "the internal Gallery Group is skipped"
+        );
+
+        // Clearing the selection must not snap back on the next frame.
+        state.selected_group = None;
+        state.ensure_default_group_focus(&snapshot);
+        assert!(state.selected_group.is_none());
+
+        // An empty first frame retries once Groups exist.
+        let mut state = UiState::new();
+        state.ensure_default_group_focus(&EngineSnapshot::default());
+        assert!(state.selected_group.is_none());
+        state.ensure_default_group_focus(&snapshot);
+        assert_eq!(state.selected_group.as_deref(), Some("group-bg"));
     }
 }

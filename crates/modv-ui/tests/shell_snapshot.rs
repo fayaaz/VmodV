@@ -4,6 +4,7 @@
 //! `tests/snapshots/shell.png` and the next run compares against it.
 
 use egui_kittest::Harness;
+use modv_ui::model::{GROUP_ENABLED, InheritTarget};
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, EngineHealth, EngineSnapshot, GroupView,
     ModuleMetaView, ModuleView, PerformanceView, PropView, SceneCellView, SceneView, TimingUnit,
@@ -65,13 +66,14 @@ fn demo_snapshot() -> EngineSnapshot {
     let group = GroupView {
         id: "group-foreground".to_string(),
         name: "Foreground".to_string(),
-        enabled: true,
+        enabled: GROUP_ENABLED,
         hidden: false,
         alpha: 1.0,
         alpha_input_id: None,
         composite_operation: "screen".to_string(),
         composite_operation_input_id: None,
         inherit: true,
+        inherit_from: InheritTarget::Previous,
         clearing: true,
         pipeline: false,
         module_ids: vec!["module-1".to_string()],

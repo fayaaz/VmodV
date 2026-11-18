@@ -5,19 +5,21 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use modv_ui::model::{GROUP_ENABLED, InheritTarget};
 use modv_ui::{EngineSnapshot, GroupView, ModuleView, UiState};
 
 fn group(id: &str, name: &str, module_id: &str) -> GroupView {
     GroupView {
         id: id.to_string(),
         name: name.to_string(),
-        enabled: true,
+        enabled: GROUP_ENABLED,
         hidden: false,
         alpha: 1.0,
         alpha_input_id: None,
         composite_operation: "normal".to_string(),
         composite_operation_input_id: None,
         inherit: true,
+        inherit_from: InheritTarget::Previous,
         clearing: true,
         pipeline: false,
         module_ids: vec![module_id.to_string()],

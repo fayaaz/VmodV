@@ -17,10 +17,10 @@ use crate::layout::{
 };
 use crate::library_drag::MediaLibraryDrag;
 use crate::model::{
-    COMPOSITE_OPERATIONS, EngineSnapshot, LibraryKind, MediaAction, MediaAssetView,
+    COMPOSITE_OPERATIONS, EngineSnapshot, InheritTarget, LibraryKind, MediaAction, MediaAssetView,
     MediaSourceView, ModuleMetaView, PropView, ScreenCaptureView, VideoTransportAction,
-    VideoTransportView, asset_meta_label, format_duration, gallery_preview_key, letterbox_rect,
-    sample_rate_label,
+    VideoTransportView, asset_meta_label, format_duration, gallery_preview_key,
+    group_enabled_indicator, letterbox_rect, next_group_enabled, sample_rate_label,
 };
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
@@ -50,6 +50,7 @@ const MIN_GALLERY_HEIGHT: f32 = 96.0;
 /// Draw the complete native UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     state.sync_status(snapshot);
+    state.ensure_default_group_focus(snapshot);
     state.tab_drag = egui::DragAndDrop::payload::<TabDrag>(ui.ctx()).map(|payload| *payload);
     state
         .layout
@@ -94,6 +95,31 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
     // save a preset, and Ctrl+O must not stack a second picker.
     let modal =
         state.file_dialog.is_some() || state.show_profile_dialog || state.show_plugin_consent;
+    // Backspace removes the focused Group (`Group.vue`'s `keydown.self`), but
+    // only outside a text field and while no dialog owns the keyboard.
+    let backspace = ui.input(|input| input.key_pressed(egui::Key::Backspace));
+    let dialog_open = modal
+        || state.link_editor.is_some()
+        || state.tween_editor.is_some()
+        || state.scene_grid.timing_edit.is_some()
+        || state.scene_grid.row_names_edit.is_some()
+        || state.scene_grid.clear_cell_edit.is_some()
+        || state.show_search
+        || state.show_shortcuts
+        || state.show_about
+        || state.show_bpm;
+    if backspace
+        && !ui.ctx().text_edit_focused()
+        && !dialog_open
+        && let Some(group_id) = state.selected_group.clone()
+    {
+        state.push_action(
+            "groups/removeGroup",
+            serde_json::json!({ "groupId": group_id }),
+        );
+        state.selected_group = None;
+        state.selected_module = None;
+    }
     if save && !modal {
         state.queue(UiCommand::SavePreset);
     }
@@ -569,6 +595,126 @@ fn audio_meters(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
     }
 }
 
+/// The Groups-pane Enabled control, matching `Checkbox.vue` with
+/// `allow-partial`: a checkmark for `1`, a dash for `2` and an empty box for
+/// `0`. The caller resolves the click into the next value (alt-click is the
+/// partial state) so the gesture stays out of the painting code.
+fn group_enabled_control(ui: &mut egui::Ui, enabled: i64) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(0), theme::INPUT);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(0),
+        Stroke::new(
+            1.0,
+            if response.hovered() {
+                theme::MUTED
+            } else {
+                theme::BORDER
+            },
+        ),
+        StrokeKind::Inside,
+    );
+
+    let indicator = group_enabled_indicator(enabled);
+    if indicator != "off" {
+        let colour = theme::FOREGROUND;
+        let inner = rect.shrink(4.0);
+        if indicator == "partial" {
+            painter.line_segment(
+                [inner.left_center(), inner.right_center()],
+                Stroke::new(2.0, colour),
+            );
+        } else {
+            painter.line_segment(
+                [
+                    egui::pos2(inner.left(), inner.center().y),
+                    egui::pos2(inner.center().x, inner.bottom()),
+                ],
+                Stroke::new(2.0, colour),
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(inner.center().x, inner.bottom()),
+                    egui::pos2(inner.right(), inner.top()),
+                ],
+                Stroke::new(2.0, colour),
+            );
+        }
+    }
+
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::Role::CheckBox,
+            true,
+            enabled != 0,
+            "Enable this Group",
+        )
+    });
+    response.on_hover_text(match indicator {
+        "on" => {
+            "Enabled. Click to disable; Alt-click to draw it without sending it to the output canvas."
+        }
+        "partial" => {
+            "Enabled, but not drawn to the output canvas. Click to disable; Alt-click keeps this state."
+        }
+        _ => {
+            "Disabled. Click to enable; Alt-click to draw it without sending it to the output canvas."
+        }
+    })
+}
+
+/// The `inheritFrom` selector, shown while the Group inherits. It lists the
+/// previous Group (`-1`) plus every other user Group by name; the engine
+/// accepts both the numeric and the UUID-string form in
+/// `groups/UPDATE_GROUP_BY_KEY` (`groups.js`'s `inheritFrom` typedef).
+fn group_inherit_from_selector(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+    group: &crate::GroupView,
+) {
+    ui.horizontal(|ui| {
+        ui.label("Inherit from");
+        let mut chosen: Option<InheritTarget> = None;
+        egui::ComboBox::from_id_salt(("group-inherit-from", &group.id))
+            .selected_text(group.inherit_from.label(&snapshot.groups))
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(group.inherit_from.is_previous(), "Previous Group")
+                    .clicked()
+                {
+                    chosen = Some(InheritTarget::Previous);
+                }
+                for other in snapshot
+                    .groups
+                    .iter()
+                    .filter(|other| other.id != group.id && !other.is_gallery())
+                {
+                    let selected = matches!(
+                        &group.inherit_from,
+                        InheritTarget::Group(id) if id == &other.id
+                    );
+                    if ui.selectable_label(selected, &other.name).clicked() {
+                        chosen = Some(InheritTarget::Group(other.id.clone()));
+                    }
+                }
+            });
+        if let Some(target) = chosen {
+            state.push_action(
+                "groups/UPDATE_GROUP_BY_KEY",
+                serde_json::json!({
+                    "groupId": group.id,
+                    "key": "inheritFrom",
+                    "value": target.value(),
+                }),
+            );
+        }
+    });
+}
+
 fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     let reserved = reserved_side_width(state, state.tab_drag.is_some());
     let max_width = (ui.available_width() - reserved - MIN_CENTRE_WIDTH).max(MIN_GROUPS_WIDTH);
@@ -615,19 +761,16 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                         .collect();
                     for (index, group) in snapshot.groups.iter().enumerate() {
                         let selected = state.selected_group.as_deref() == Some(group.id.as_str());
-                        let mut enabled = group.enabled;
                         let header = ui.horizontal(|ui| {
-                            if ui
-                                .checkbox(&mut enabled, "")
-                                .on_hover_text("Enable this Group")
-                                .changed()
-                            {
+                            if group_enabled_control(ui, group.enabled).clicked() {
+                                let alt = ui.input(|input| input.modifiers.alt);
+                                let next = next_group_enabled(group.enabled, alt);
                                 state.push_action(
                                     "groups/UPDATE_GROUP_BY_KEY",
                                     serde_json::json!({
                                         "groupId": group.id,
                                         "key": "enabled",
-                                        "value": if enabled { 1 } else { 0 },
+                                        "value": next,
                                     }),
                                 );
                             }
@@ -792,6 +935,9 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                         );
                                     }
                                 });
+                                if group.inherit {
+                                    group_inherit_from_selector(ui, snapshot, state, group);
+                                }
 
                                 egui::ComboBox::from_id_salt(("group-blend", &group.id))
                                     .selected_text(&group.composite_operation)

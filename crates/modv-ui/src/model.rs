@@ -1996,12 +1996,90 @@ impl EngineSnapshot {
     }
 }
 
+/// The name of the engine's internal Gallery Group (`GALLERY_GROUP_NAME`).
+///
+/// The Gallery Group is a render target for Gallery hover previews, not a
+/// user Group: the Groups pane and the startup focus skip it.
+pub const GALLERY_GROUP_NAME: &str = "VmodV internal Gallery Group";
+
+/// Group `enabled` value: drawn to the output canvas (`GROUP_ENABLED`).
+pub const GROUP_ENABLED: i64 = 1;
+/// Group `enabled` value: drawn, but skipped on the output canvas
+/// (`GROUP_DRAW_TO_OUTPUT`).
+pub const GROUP_DRAW_TO_OUTPUT: i64 = 2;
+
+/// The target a Group inherits its canvas from (engine `InheritFrom`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum InheritTarget {
+    /// `-1`: the previous Group in `groupIndexRenderOrder`.
+    #[default]
+    Previous,
+    /// The UUID of a specific Group.
+    Group(String),
+}
+
+impl InheritTarget {
+    /// Whether this target is the previous Group (the numeric `-1` form).
+    pub fn is_previous(&self) -> bool {
+        matches!(self, Self::Previous)
+    }
+
+    /// The JSON value `groups/UPDATE_GROUP_BY_KEY` writes for `inheritFrom`:
+    /// a number for the previous Group, a UUID string for a specific Group
+    /// (`groups.js:28`).
+    pub fn value(&self) -> Value {
+        match self {
+            Self::Previous => serde_json::json!(-1),
+            Self::Group(id) => Value::String(id.clone()),
+        }
+    }
+
+    /// The selector label: `Previous Group`, the Group's name, or its id when
+    /// the target no longer exists.
+    pub fn label(&self, groups: &[GroupView]) -> String {
+        match self {
+            Self::Previous => "Previous Group".to_string(),
+            Self::Group(id) => groups
+                .iter()
+                .find(|group| &group.id == id)
+                .map(|group| group.name.clone())
+                .unwrap_or_else(|| id.clone()),
+        }
+    }
+}
+
+/// The next `enabled` value for the Groups-pane control, matching
+/// `Checkbox.vue` with `allow-partial`: an alt-click selects the partial `2`
+/// state ("drawn, but not to the output canvas"), a plain click toggles
+/// between `0` and `1`, and a click from `2` returns to `0`.
+pub fn next_group_enabled(current: i64, alt: bool) -> i64 {
+    if alt {
+        GROUP_DRAW_TO_OUTPUT
+    } else if current == 0 {
+        GROUP_ENABLED
+    } else {
+        0
+    }
+}
+
+/// The visual state of the Groups-pane Enabled control: `off`, `on` (a
+/// checkmark) or `partial` (a dash, the `2` state).
+pub fn group_enabled_indicator(enabled: i64) -> &'static str {
+    match enabled {
+        0 => "off",
+        GROUP_ENABLED => "on",
+        _ => "partial",
+    }
+}
+
 /// One Group (a render-graph row).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GroupView {
     pub id: String,
     pub name: String,
-    pub enabled: bool,
+    /// The raw engine `enabled` value: `0` not drawn, `1` drawn, `2` drawn but
+    /// not to the output canvas.
+    pub enabled: i64,
     pub hidden: bool,
     pub alpha: f32,
     /// Engine `alphaInputId`; a link row is drawn when present.
@@ -2010,6 +2088,8 @@ pub struct GroupView {
     /// Engine `compositeOperationInputId`; a link row is drawn when present.
     pub composite_operation_input_id: Option<String>,
     pub inherit: bool,
+    /// Engine `inheritFrom`: the previous Group (`-1`) or a Group UUID.
+    pub inherit_from: InheritTarget,
     pub clearing: bool,
     pub pipeline: bool,
     /// Module ids in group draw order.
@@ -2019,6 +2099,22 @@ pub struct GroupView {
 impl GroupView {
     pub fn module_count(&self) -> usize {
         self.module_ids.len()
+    }
+
+    /// Whether the engine draws this Group at all (`0` is skipped).
+    pub fn is_drawn(&self) -> bool {
+        self.enabled != 0
+    }
+
+    /// Whether the Group reaches the output canvas (`2` is drawn to an
+    /// intermediate target only).
+    pub fn draws_to_output(&self) -> bool {
+        self.enabled == GROUP_ENABLED
+    }
+
+    /// Whether this is the engine's internal Gallery Group.
+    pub fn is_gallery(&self) -> bool {
+        self.name == GALLERY_GROUP_NAME
     }
 }
 
@@ -3477,5 +3573,90 @@ mod tests {
             Some("the video file is missing")
         );
         assert_eq!(media.video_problem_for_path("live/video/clip.mp4"), None);
+    }
+
+    #[test]
+    fn group_enabled_is_the_raw_tri_state() {
+        // 0 not drawn, 1 drawn, 2 drawn but skipped on the output canvas.
+        let off = GroupView {
+            enabled: 0,
+            ..Default::default()
+        };
+        let on = GroupView {
+            enabled: GROUP_ENABLED,
+            ..Default::default()
+        };
+        let partial = GroupView {
+            enabled: GROUP_DRAW_TO_OUTPUT,
+            ..Default::default()
+        };
+
+        assert!(!off.is_drawn() && !off.draws_to_output());
+        assert!(on.is_drawn() && on.draws_to_output());
+        assert!(
+            partial.is_drawn() && !partial.draws_to_output(),
+            "2 is drawn to an intermediate target, never the output canvas"
+        );
+        assert_eq!(group_enabled_indicator(off.enabled), "off");
+        assert_eq!(group_enabled_indicator(on.enabled), "on");
+        assert_eq!(group_enabled_indicator(partial.enabled), "partial");
+    }
+
+    #[test]
+    fn the_enabled_gesture_matches_checkbox_vue() {
+        // `Checkbox.vue` with `allow-partial`: Alt-click selects 2, a plain
+        // click toggles 0/1, and a click from 2 returns to 0.
+        assert_eq!(next_group_enabled(GROUP_ENABLED, false), 0);
+        assert_eq!(next_group_enabled(0, false), GROUP_ENABLED);
+        assert_eq!(next_group_enabled(GROUP_DRAW_TO_OUTPUT, false), 0);
+        assert_eq!(
+            next_group_enabled(GROUP_ENABLED, true),
+            GROUP_DRAW_TO_OUTPUT
+        );
+        assert_eq!(next_group_enabled(0, true), GROUP_DRAW_TO_OUTPUT);
+    }
+
+    #[test]
+    fn inherit_targets_serialise_as_number_and_uuid() {
+        let background = GroupView {
+            id: "group-bg".to_string(),
+            name: "Background".to_string(),
+            ..Default::default()
+        };
+        let effects = GroupView {
+            id: "group-fx".to_string(),
+            name: "Effects".to_string(),
+            ..Default::default()
+        };
+        let groups = [background, effects];
+
+        let previous = InheritTarget::Previous;
+        assert_eq!(previous.value(), serde_json::json!(-1));
+        assert_eq!(previous.label(&groups), "Previous Group");
+        assert!(previous.is_previous());
+
+        let target = InheritTarget::Group("group-fx".to_string());
+        assert_eq!(target.value(), serde_json::json!("group-fx"));
+        assert_eq!(target.label(&groups), "Effects");
+        assert!(!target.is_previous());
+        assert_eq!(
+            InheritTarget::Group("gone".to_string()).label(&groups),
+            "gone",
+            "a missing target falls back to its id instead of an empty label"
+        );
+    }
+
+    #[test]
+    fn the_gallery_group_is_not_a_user_group() {
+        let gallery = GroupView {
+            name: GALLERY_GROUP_NAME.to_string(),
+            ..Default::default()
+        };
+        let user = GroupView {
+            name: "Background".to_string(),
+            ..Default::default()
+        };
+        assert!(gallery.is_gallery());
+        assert!(!user.is_gallery());
     }
 }

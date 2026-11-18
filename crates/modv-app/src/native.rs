@@ -26,8 +26,8 @@ use modv_render::surface::{SurfaceTarget, create_surface, create_surface_with_pr
 use modv_render::wgpu;
 use modv_renderers::two_d::AudioFrame;
 use modv_ui::model::{
-    ExpressionView, NdiOutputView, NdiReceiverView, NdiSenderView, NdiSnapshot, NdiSourceView,
-    OscServerView, OscSnapshot, osc_addresses,
+    ExpressionView, InheritTarget, NdiOutputView, NdiReceiverView, NdiSenderView, NdiSnapshot,
+    NdiSourceView, OscServerView, OscSnapshot, osc_addresses,
 };
 use modv_ui::model::{ScreenCaptureView, ScreenShareKindView, ScreenSourceView};
 use modv_ui::{
@@ -3999,13 +3999,19 @@ fn group_view(group: &Group) -> GroupView {
     GroupView {
         id: group.id.clone(),
         name: group.name.clone(),
-        enabled: group.enabled == modv_engine::engine_state::GROUP_ENABLED,
+        // Keep the raw tri-state: 0 off, 1 drawn, 2 drawn but not to the
+        // output canvas. The UI decides how to render 2.
+        enabled: group.enabled,
         hidden: group.hidden,
         alpha: group.alpha as f32,
         alpha_input_id: group.alpha_input_id.clone(),
         composite_operation: group.composite_operation.clone(),
         composite_operation_input_id: group.composite_operation_input_id.clone(),
         inherit: group.inherit,
+        inherit_from: match &group.inherit_from {
+            modv_engine::engine_state::InheritFrom::Previous(_) => InheritTarget::Previous,
+            modv_engine::engine_state::InheritFrom::Group(id) => InheritTarget::Group(id.clone()),
+        },
         clearing: group.clearing,
         pipeline: group.pipeline,
         module_ids: group.modules.clone(),
@@ -5480,6 +5486,54 @@ module.exports = {
             view.composite_operation_input_id.as_deref(),
             Some("group-blend")
         );
+    }
+
+    #[test]
+    fn group_view_keeps_the_tri_state_and_named_inherit_target() {
+        // The UI needs the raw `enabled` value: 2 draws to an intermediate
+        // target and skips the output canvas, so collapsing it to a bool
+        // would silently change what the Group does.
+        let partial: Group = serde_json::from_value(serde_json::json!({
+            "id": "group-fx",
+            "name": "Effects",
+            "hidden": false,
+            "modules": [],
+            "enabled": 2,
+            "alpha": 1.0,
+            "inherit": true,
+            "inheritFrom": "group-bg",
+            "pipeline": false,
+            "clearing": false,
+            "compositeOperation": "normal",
+        }))
+        .expect("group JSON");
+        let view = group_view(&partial);
+        assert_eq!(view.enabled, 2);
+        assert!(view.is_drawn());
+        assert!(!view.draws_to_output());
+        assert_eq!(
+            view.inherit_from,
+            InheritTarget::Group("group-bg".to_string())
+        );
+
+        let previous: Group = serde_json::from_value(serde_json::json!({
+            "id": "group-bg",
+            "name": "Background",
+            "hidden": false,
+            "modules": [],
+            "enabled": 1,
+            "alpha": 1.0,
+            "inherit": true,
+            "inheritFrom": -1,
+            "pipeline": false,
+            "clearing": false,
+            "compositeOperation": "normal",
+        }))
+        .expect("group JSON");
+        let view = group_view(&previous);
+        assert_eq!(view.enabled, 1);
+        assert!(view.draws_to_output());
+        assert_eq!(view.inherit_from, InheritTarget::Previous);
     }
 
     #[test]

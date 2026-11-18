@@ -25,19 +25,21 @@ use std::sync::{Arc, Mutex};
 use accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use modv_ui::model::{GROUP_ENABLED, InheritTarget};
 use modv_ui::{EngineSnapshot, GroupView, ModuleView, UiAction, UiState};
 
 fn group(id: &str, name: &str, module_id: &str) -> GroupView {
     GroupView {
         id: id.to_string(),
         name: name.to_string(),
-        enabled: true,
+        enabled: GROUP_ENABLED,
         hidden: false,
         alpha: 1.0,
         alpha_input_id: None,
         composite_operation: "normal".to_string(),
         composite_operation_input_id: None,
         inherit: true,
+        inherit_from: InheritTarget::Previous,
         clearing: false,
         pipeline: false,
         module_ids: vec![module_id.to_string()],
@@ -109,9 +111,7 @@ fn apply(snapshot: &Arc<Mutex<EngineSnapshot>>, action: &UiAction) {
                 "pipeline" => group.pipeline = value.as_bool().unwrap_or(group.pipeline),
                 "inherit" => group.inherit = value.as_bool().unwrap_or(group.inherit),
                 "hidden" => group.hidden = value.as_bool().unwrap_or(group.hidden),
-                "enabled" => {
-                    group.enabled = value.as_i64().unwrap_or(i64::from(group.enabled)) == 1
-                }
+                "enabled" => group.enabled = value.as_i64().unwrap_or(group.enabled),
                 "compositeOperation" => {
                     group.composite_operation = value.as_str().unwrap_or_default().to_string()
                 }
@@ -364,7 +364,7 @@ fn enabled_state_can_be_toggled_between_1_and_0() {
     assert_eq!(updates[0].payload["groupId"], "group-bg");
     assert_eq!(updates[0].payload["key"], "enabled");
     assert_eq!(updates[0].payload["value"], serde_json::json!(0));
-    assert!(!snapshot.lock().unwrap().groups[0].enabled);
+    assert_eq!(snapshot.lock().unwrap().groups[0].enabled, 0);
 
     harness
         .get_all_by_label("Enable this Group")
@@ -376,7 +376,7 @@ fn enabled_state_can_be_toggled_between_1_and_0() {
     assert_eq!(updates.len(), 1, "one enabled update: {actions:?}");
     assert_eq!(updates[0].payload["key"], "enabled");
     assert_eq!(updates[0].payload["value"], serde_json::json!(1));
-    assert!(snapshot.lock().unwrap().groups[0].enabled);
+    assert_eq!(snapshot.lock().unwrap().groups[0].enabled, 1);
 }
 
 #[test]
