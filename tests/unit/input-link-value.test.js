@@ -22,4 +22,20 @@ describe("resolveInputLinkValue", () => {
     expect(resolveInputLinkValue(Number.NaN, 1, 1.2)).toBeUndefined();
     expect(resolveInputLinkValue(Infinity, 1, 1.2)).toBeUndefined();
   });
+
+  it("waits for a real tempo before writing a BPM link", () => {
+    // `beats.bpm` is 0 until the tempo detector has a confident estimate.
+    // Writing it into a BPM input breaks shaders that divide by the tempo.
+    expect(resolveInputLinkValue(0, 0, 1, "bpm")).toBeUndefined();
+    expect(resolveInputLinkValue(-120, 0, 1, "bpm")).toBeUndefined();
+    expect(resolveInputLinkValue(Number.NaN, 0, 1, "bpm")).toBeUndefined();
+    expect(resolveInputLinkValue(174, 0, 1, "bpm")).toBe(174);
+    // A BPM link is an absolute tempo: a stale ranged link must not scale it.
+    expect(resolveInputLinkValue(174, 0.2, 0.8, "bpm")).toBe(174);
+  });
+
+  it("still writes zero for every other link source", () => {
+    expect(resolveInputLinkValue(0, 0, 1, "meyda")).toBe(0);
+    expect(resolveInputLinkValue(0, 1, 1.2, "tween")).toBe(1);
+  });
 });

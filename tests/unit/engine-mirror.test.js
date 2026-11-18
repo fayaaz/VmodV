@@ -224,8 +224,8 @@ describe("engine → JS mirror parity", () => {
 
     // The engine still emits an input record with the module's getLocation
     // so the Inspector can bind each control to its own input.
-    const moduleInput = Object.values(preset.inputs.inputs).find((input) =>
-      input.getLocation,
+    const moduleInput = Object.values(preset.inputs.inputs).find(
+      (input) => input.getLocation,
     );
     expect(moduleInput.getLocation).toMatch(
       /^modules\.active\["module-\d+"\]\.(props|meta)/,

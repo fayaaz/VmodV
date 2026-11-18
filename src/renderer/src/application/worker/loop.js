@@ -182,8 +182,9 @@ async function loop(delta, features, fftOutput) {
     // Audio features are undefined until the bridge delivers a frame (and
     // stay undefined with no input selected). Mapping that to a number would
     // produce NaN and permanently overwrite the linked prop, so leave the
-    // input's saved value alone until a real value arrives.
-    const value = resolveInputLinkValue(rawValue, min, max);
+    // input's saved value alone until a real value arrives. BPM links also
+    // wait for a detected tempo (0 is "no estimate yet").
+    const value = resolveInputLinkValue(rawValue, min, max, source);
 
     if (value === undefined) {
       continue;

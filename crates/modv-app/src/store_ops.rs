@@ -6755,6 +6755,56 @@ mod tests {
     }
 
     #[test]
+    fn bpm_input_links_wait_for_a_tempo_and_then_pass_it_through() {
+        let mut preset = link_preset("bass");
+        // A saved value the sentinel must not overwrite (the engine's
+        // `beats.bpm` starts at 0 until the detector reports).
+        preset["modules"]["m1"]["props"]["amount"] = json!(140.0);
+
+        let mut store = Store::new();
+        store.restore(&preset).expect("preset loads");
+        store.drain_deltas();
+
+        // Exactly what the Audio panel's "bpm" feature dispatches.
+        store
+            .dispatch(
+                "inputs/createInputLink",
+                json!({
+                    "inputId": "input-a",
+                    "type": "state",
+                    "location": "beats.bpm",
+                    "source": "bpm",
+                }),
+            )
+            .expect("create BPM link");
+        store.drain_deltas();
+
+        // No estimate yet: the saved value stays (0 is the sentinel).
+        store.update_input_links(&AudioFrame::default(), Duration::ZERO);
+        assert!((amount(&store) - 140.0).abs() < 1e-6);
+
+        // A detected tempo passes straight through, not through a 0..1 remap.
+        store
+            .dispatch("beats/SET_BPM", json!({ "bpm": 174 }))
+            .expect("set bpm");
+        store.update_input_links(&AudioFrame::default(), Duration::from_millis(200));
+        assert!((amount(&store) - 174.0).abs() < 1e-6);
+
+        // A later zero report cannot overwrite the last real tempo.
+        store
+            .dispatch("beats/SET_BPM", json!({ "bpm": 0 }))
+            .expect("set bpm");
+        store.update_input_links(&AudioFrame::default(), Duration::from_millis(400));
+        assert!((amount(&store) - 174.0).abs() < 1e-6);
+
+        let link = &store.state().input_links["input-a"];
+        assert_eq!(link.kind, modv_engine::inputs::InputLinkKind::State);
+        assert_eq!(link.source.as_deref(), Some("bpm"));
+        assert_eq!(link.min, Some(0.0));
+        assert_eq!(link.max, Some(1.0));
+    }
+
+    #[test]
     fn input_link_deltas_are_throttled_to_one_per_interval() {
         let mut store = Store::new();
         store.restore(&link_preset("bass")).expect("preset loads");

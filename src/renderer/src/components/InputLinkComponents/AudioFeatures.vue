@@ -18,17 +18,11 @@
             </option>
           </Select>
         </c>
-        <c span="1">
-          ({{
-            feature !== "kick"
-              ? $modV.features[feature] && $modV.features[feature].toFixed(2)
-              : Number($modV.store.state.beats.kick)
-          }})
-        </c>
+        <c span="1"> ({{ currentFeatureValue }}) </c>
       </grid>
     </c>
 
-    <c span="1..">
+    <c v-if="feature !== bpmFeature" span="1..">
       <grid columns="4">
         <c span="1">Smoothing</c>
         <c span="3">
@@ -47,6 +41,10 @@
 
 <script>
 import RangeControl from "../Controls/RangeControl.vue";
+import {
+  BPM_LINK_SOURCE,
+  createBpmInputLink,
+} from "../../application/worker/bpm-link";
 
 export default {
   components: {
@@ -68,6 +66,7 @@ export default {
 
       features: [
         "none",
+        "bpm",
         "kick",
         "bass",
         "mid",
@@ -93,6 +92,24 @@ export default {
   },
 
   computed: {
+    bpmFeature() {
+      return BPM_LINK_SOURCE;
+    },
+
+    currentFeatureValue() {
+      if (this.feature === BPM_LINK_SOURCE) {
+        return Math.round(this.$modV.store.state.beats.bpm);
+      }
+
+      if (this.feature === "kick") {
+        return Number(this.$modV.store.state.beats.kick);
+      }
+
+      const value = this.$modV.features[this.feature];
+
+      return value === undefined ? "" : value.toFixed(2);
+    },
+
     MAX_SMOOTHING() {
       return this.$modV.store.state.meyda.MAX_SMOOTHING;
     },
@@ -142,7 +159,11 @@ export default {
     inputId() {
       this.restoreLinkValues();
 
-      if (!this.inputLink || this.inputLink.source !== "meyda") {
+      if (
+        !this.inputLink ||
+        (this.inputLink.source !== "meyda" &&
+          this.inputLink.source !== BPM_LINK_SOURCE)
+      ) {
         this.feature = "none";
         this.smoothingId = null;
         this.smoothingValue = this.MAX_SMOOTHING - this.SMOOTHING_STEP;
@@ -156,20 +177,46 @@ export default {
 
   methods: {
     restoreLinkValues() {
-      if (this.inputLink && this.inputLink.source === "meyda") {
-        if (this.inputLink.args.length > 2) {
-          this.smoothingValue = this.inputLink.args[2];
+      const link = this.inputLink;
+
+      if (link && link.source === BPM_LINK_SOURCE) {
+        this.feature = BPM_LINK_SOURCE;
+        this.smoothingId = null;
+        this.smoothingValue = 0;
+
+        return;
+      }
+
+      if (link && link.source === "meyda") {
+        if (link.args.length > 2) {
+          this.smoothingValue = link.args[2];
           // The id was minted when the link was created; keep it so turning
           // smoothing back down releases it instead of leaking the entry.
-          this.smoothingId = this.inputLink.args[1] ?? null;
+          this.smoothingId = link.args[1] ?? null;
         }
 
-        this.feature = this.inputLink.args[0];
+        this.feature = link.args[0];
       }
     },
 
     makeLink() {
-      if (this.feature === "kick") {
+      if (this.feature === BPM_LINK_SOURCE) {
+        // A BPM link has no smoothing args, so release a smoothing entry the
+        // previous audio link minted instead of leaking it.
+        if (this.smoothingId) {
+          this.$modV.store.dispatch(
+            "meyda/removeSmoothingId",
+            this.smoothingId,
+          );
+          this.smoothingId = null;
+          this.smoothingValue = 0;
+        }
+
+        this.$modV.store.dispatch(
+          "inputs/createInputLink",
+          createBpmInputLink(this.inputId),
+        );
+      } else if (this.feature === "kick") {
         this.$modV.store.dispatch("inputs/createInputLink", {
           inputId: this.inputId,
           type: "mutation",
@@ -213,7 +260,8 @@ export default {
       if (
         this.feature === "none" &&
         this.inputLink &&
-        this.inputLink.source === "meyda"
+        (this.inputLink.source === "meyda" ||
+          this.inputLink.source === BPM_LINK_SOURCE)
       ) {
         this.removeLink();
       } else {

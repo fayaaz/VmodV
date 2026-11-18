@@ -377,10 +377,12 @@ pub const DEFAULT_OSC_PORT: u16 = 3333;
 
 /// The audio features `AudioFeatures.vue` offers, in menu order.
 ///
-/// `none` removes the link; `kick` is a mutation link on `beats/SET_KICK`;
-/// every other entry is a `meyda/getFeature` getter.
+/// `none` removes the link; `bpm` is a state link on `beats.bpm`; `kick` is a
+/// mutation link on `beats/SET_KICK`; every other entry is a
+/// `meyda/getFeature` getter.
 pub const AUDIO_FEATURES: &[&str] = &[
     "none",
+    "bpm",
     "kick",
     "bass",
     "mid",
@@ -501,6 +503,8 @@ impl LinkEditor {
                 .and_then(|value| value.as_str())
                 .unwrap_or("none")
                 .to_string()
+        } else if source == "bpm" {
+            "bpm".to_string()
         } else {
             "none".to_string()
         };
@@ -521,6 +525,14 @@ impl LinkEditor {
                 )
             })
             .unwrap_or((None, 0.0));
+        // A BPM link passes the tempo through unchanged. Force the identity
+        // bounds so a link saved with a ranged meyda link's min/max cannot
+        // scale 174 BPM into the thousands.
+        let (min, max) = if source == "bpm" {
+            (0.0, 1.0)
+        } else {
+            (link.min.unwrap_or(0.0), link.max.unwrap_or(1.0))
+        };
         Self {
             input_id: input_id.into(),
             title: title.into(),
@@ -532,8 +544,8 @@ impl LinkEditor {
                 .as_ref()
                 .map(|args| args.to_string())
                 .unwrap_or_else(|| "[]".to_string()),
-            min: link.min.unwrap_or(0.0),
-            max: link.max.unwrap_or(1.0),
+            min,
+            max,
             matcher: link.matcher.clone(),
             feature,
             smoothing_id,
@@ -589,6 +601,17 @@ impl LinkEditor {
                 self.location = "beats.kick".to_string();
                 self.matcher = Some(serde_json::json!({ "type": "beats/SET_KICK" }));
                 self.args = serde_json::json!(["kick"]).to_string();
+            }
+            "bpm" => {
+                self.kind = "state".to_string();
+                self.source = "bpm".to_string();
+                self.location = "beats.bpm".to_string();
+                self.matcher = None;
+                self.args = "[]".to_string();
+                // Bounds map 0..1 onto themselves; reset a ranged meyda
+                // link's min/max so the tempo is not scaled.
+                self.min = 0.0;
+                self.max = 1.0;
             }
             _ => {
                 self.kind = "getter".to_string();
@@ -748,7 +771,7 @@ impl LinkEditor {
     pub fn audio_args(&self) -> Value {
         match self.feature.as_str() {
             "kick" => serde_json::json!(["kick"]),
-            "none" => serde_json::json!([]),
+            "bpm" | "none" => serde_json::json!([]),
             feature => {
                 if self.smoothing_value > 0.0
                     && let Some(id) = &self.smoothing_id
@@ -809,9 +832,12 @@ impl LinkEditor {
             return Ok(self.remove_actions());
         }
         let mut actions = Vec::new();
-        let release_smoothing = self.source == "meyda"
-            && (self.feature == "kick" || self.smoothing_value <= 0.0)
-            && self.smoothing_id.is_some();
+        // Switching to BPM replaces a meyda link, so release any smoothing id
+        // the previous audio link minted instead of leaking the entry.
+        let release_smoothing = self.smoothing_id.is_some()
+            && (self.source == "bpm"
+                || (self.source == "meyda"
+                    && (self.feature == "kick" || self.smoothing_value <= 0.0)));
         if release_smoothing && let Some(action) = self.release_smoothing_action() {
             actions.push(action);
         }

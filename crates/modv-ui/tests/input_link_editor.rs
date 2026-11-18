@@ -165,6 +165,98 @@ fn the_expression_section_loads_the_assignment_for_the_focused_input() {
 }
 
 #[test]
+fn the_audio_section_saves_a_bpm_link_for_the_engine() {
+    let module = ModuleView {
+        id: "module-1".to_string(),
+        module_name: "rave.exe".to_string(),
+        group_id: "group-1".to_string(),
+        enabled: true,
+        alpha: 1.0,
+        alpha_input_id: Some("in-alpha".to_string()),
+        composite_operation: "normal".to_string(),
+        composite_operation_input_id: None,
+        module_type: "isf".to_string(),
+        props: vec![PropView {
+            name: "bpm".to_string(),
+            prop_type: "float".to_string(),
+            value: serde_json::json!(140.0),
+            min: Some(60.0),
+            max: Some(200.0),
+            step: Some(1.0),
+            default: None,
+            input_id: Some("in-bpm".to_string()),
+            components: Vec::new(),
+            tween: None,
+            options: Vec::new(),
+        }],
+    };
+    let snapshot = EngineSnapshot {
+        groups: vec![group()],
+        modules: vec![module],
+        input_links: std::collections::HashMap::from([(
+            "in-bpm".to_string(),
+            InputLinkView {
+                input_id: "in-bpm".to_string(),
+                kind: "getter".to_string(),
+                location: Some("meyda/getFeature".to_string()),
+                args: Some(serde_json::json!(["bass"])),
+                source: Some("meyda".to_string()),
+                min: Some(0.0),
+                max: Some(1.0),
+                matcher: None,
+            },
+        )]),
+        ..Default::default()
+    };
+
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    // The Audio feature picker's "bpm" entry does exactly this.
+    let mut editor = LinkEditor::for_input("in-bpm", "BPM", &snapshot);
+    editor.set_audio_feature("bpm");
+    state.link_editor = Some(editor);
+
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("Audio");
+    harness.get_by_label("Feature");
+    assert!(
+        harness
+            .get_all_by_label(
+                "BPM is a state link on beats.bpm; it waits for a detected tempo (no smoothing).",
+            )
+            .count()
+            >= 1,
+        "the Audio section explains the BPM link"
+    );
+
+    harness.get_by_label("Save link").click();
+    harness.run();
+
+    let action = harness
+        .state()
+        .actions
+        .iter()
+        .find(|action| action.action == "inputs/createInputLink")
+        .expect("Save queues the engine link action");
+    assert_eq!(action.payload["type"], "state");
+    assert_eq!(action.payload["source"], "bpm");
+    assert_eq!(action.payload["location"], "beats.bpm");
+    assert_eq!(action.payload["min"], 0.0);
+    assert_eq!(action.payload["max"], 1.0);
+}
+
+#[test]
 fn component_sub_inputs_get_link_rows_under_their_parent_prop() {
     // A color prop owns four `${parent}-${key}` sub-inputs
     // (`initialiseModuleProperties`, `modules.js:91-113`); the Inspector

@@ -96,6 +96,19 @@ test.describe("engine behaviour parity (MODV_ENGINE=1)", () => {
         window.__parityMeyda = window.modV.meyda;
         window.modV.meyda = null;
 
+        // A single band commit can be overtaken by a renderer-pump frame that
+        // was already in flight; keep asserting the synthetic frame while
+        // polling so the engine sees it even under full-suite GPU load.
+        const driveBands = async (payload, predicate, timeout = 15_000) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            store.commit("meyda/SET_BANDS", payload);
+            if (predicate()) return true;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          return false;
+        };
+
         const read = () => {
           const state = store.state;
           const link = Object.values(state.inputs.inputLinks || {}).find(
@@ -142,12 +155,19 @@ test.describe("engine behaviour parity (MODV_ENGINE=1)", () => {
           rawCells: Array(16).fill(1),
         };
 
-        store.commit("meyda/SET_BANDS", silent);
-        await new Promise((resolve) => setTimeout(resolve, 700));
+        const isAt = (value, target) =>
+          typeof value === "number" && Math.abs(value - target) < 0.005;
+
+        await driveBands(silent, () => {
+          const readback = read();
+          return !readback.error && isAt(readback.value, readback.min);
+        });
         const quiet = read();
 
-        store.commit("meyda/SET_BANDS", loud);
-        await new Promise((resolve) => setTimeout(resolve, 700));
+        await driveBands(loud, () => {
+          const readback = read();
+          return !readback.error && isAt(readback.value, readback.max);
+        });
         const loudRead = read();
 
         window.modV.meyda = window.__parityMeyda;

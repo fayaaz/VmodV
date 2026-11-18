@@ -9,6 +9,8 @@
         'config',
         'midi',
         'audio feature',
+        'bpm',
+        'tempo',
         'expression',
         'smoothing',
       ],
@@ -22,25 +24,29 @@
         <c span="1.."
           ><div class="input-config__title">{{ focusedInputTitle }}</div></c
         >
-        <c span="1..">
-          <grid columns="4">
-            <c span="1"> Min. Value </c>
-            <c span="3">
-              <Number v-model.number="min" :min="-100" :max="100" />
-            </c>
-          </grid>
-        </c>
+        <template v-if="source !== 'bpm'">
+          <c span="1..">
+            <grid columns="4">
+              <c span="1"> Min. Value </c>
+              <c span="3">
+                <Number v-model.number="min" :min="-100" :max="100" />
+              </c>
+            </grid>
+          </c>
 
-        <c span="1..">
-          <grid columns="4">
-            <c span="1"> Max. Value </c>
-            <c span="3">
-              <Number v-model.number="max" :min="-100" :max="100" />
-            </c>
-          </grid>
-        </c>
+          <c span="1..">
+            <grid columns="4">
+              <c span="1"> Max. Value </c>
+              <c span="3">
+                <Number v-model.number="max" :min="-100" :max="100" />
+              </c>
+            </grid>
+          </c>
+        </template>
 
-        <CollapsibleRow :disabled="source && source !== 'meyda'">
+        <CollapsibleRow
+          :disabled="source && source !== 'meyda' && source !== 'bpm'"
+        >
           <template #label>Audio</template>
 
           <template #body>
@@ -124,7 +130,7 @@ export default {
     return {
       iVTitle: "Input Config",
       iVBody:
-        "The Input Config panel allows creation of Input Links. Select a Module Control in the Module Inspector, then use the Input Config panel to assign an Audio Feature, MIDI control or Tween to automate the Module Control.",
+        "The Input Config panel allows creation of Input Links. Select a Module Control in the Module Inspector, then use the Input Config panel to assign an Audio Feature, the detected BPM, a MIDI control or Tween to automate the Module Control.",
       value: null,
     };
   },

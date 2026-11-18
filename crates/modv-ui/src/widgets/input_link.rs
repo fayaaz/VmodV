@@ -98,6 +98,8 @@ fn link_summary(link: &InputLinkView) -> String {
             link.min.unwrap_or(0.0),
             link.max.unwrap_or(1.0)
         )
+    } else if source == "bpm" {
+        format!("bpm  {location}")
     } else if source == "osc" {
         format!("osc  {location}")
     } else {
@@ -108,6 +110,7 @@ fn link_summary(link: &InputLinkView) -> String {
 /// A small live readout for the audio features the snapshot carries.
 fn feature_readout(feature: &str, snapshot: &EngineSnapshot) -> Option<String> {
     match feature {
+        "bpm" => Some(format!("{:.0} BPM", snapshot.audio.bpm)),
         "kick" => Some(format!(
             "kick {}",
             if snapshot.audio.kick { 1.0 } else { 0.0 }
@@ -179,12 +182,16 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
             ui.separator();
 
             // Legacy `InputConfig.vue`: Min/Max at the top, before any source
-            // section.
-            ui.horizontal(|ui| {
-                ui.label("Min");
-                ui.add(egui::DragValue::new(&mut editor.min).speed(0.001).max_decimals(3));
-                ui.label("Max");
-                ui.add(egui::DragValue::new(&mut editor.max).speed(0.001).max_decimals(3));
+            // section. A BPM link passes the tempo through unchanged (0..1 is
+            // the identity mapping), so bounds are disabled rather than
+            // offering a range that would scale 174 BPM into the thousands.
+            ui.add_enabled_ui(editor.source != "bpm", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Min");
+                    ui.add(egui::DragValue::new(&mut editor.min).speed(0.001).max_decimals(3));
+                    ui.label("Max");
+                    ui.add(egui::DragValue::new(&mut editor.max).speed(0.001).max_decimals(3));
+                });
             });
             ui.separator();
 
@@ -491,9 +498,11 @@ fn audio_section(
     snapshot: &EngineSnapshot,
     state: &mut UiState,
 ) {
-    let audio_enabled = !editor.exists || editor.source.is_empty() || editor.source == "meyda";
+    let audio_enabled = !editor.exists
+        || editor.source.is_empty()
+        || matches!(editor.source.as_str(), "meyda" | "bpm");
     egui::CollapsingHeader::new("Audio")
-        .default_open(editor.source == "meyda")
+        .default_open(matches!(editor.source.as_str(), "meyda" | "bpm"))
         .show(ui, |ui| {
             ui.add_enabled_ui(audio_enabled, |ui| {
                 ui.horizontal(|ui| {
@@ -528,6 +537,14 @@ fn audio_section(
                     ui.label(
                         egui::RichText::new(
                             "Kick is a mutation link on beats/SET_KICK (no smoothing).",
+                        )
+                        .size(12.0)
+                        .color(theme::MUTED),
+                    );
+                } else if editor.feature == "bpm" {
+                    ui.label(
+                        egui::RichText::new(
+                            "BPM is a state link on beats.bpm; it waits for a detected tempo (no smoothing).",
                         )
                         .size(12.0)
                         .color(theme::MUTED),
@@ -635,6 +652,7 @@ mod tests {
             AUDIO_FEATURES,
             &[
                 "none",
+                "bpm",
                 "kick",
                 "bass",
                 "mid",
@@ -682,6 +700,97 @@ mod tests {
             actions[0].payload["match"],
             serde_json::json!({ "type": "beats/SET_KICK" })
         );
+    }
+
+    #[test]
+    fn bpm_saves_a_state_link_to_the_detected_tempo() {
+        let mut editor = LinkEditor::audio("input-1", "bpm");
+        editor.set_audio_feature("bpm");
+        assert_eq!(editor.kind, "state");
+        assert_eq!(editor.source, "bpm");
+        assert_eq!(editor.location, "beats.bpm");
+
+        let payload = editor.link_payload().expect("payload parses");
+        assert_eq!(payload["type"], "state");
+        assert_eq!(payload["source"], "bpm");
+        assert_eq!(payload["location"], "beats.bpm");
+        // Link bounds map 0..1 onto themselves; 0/1 keeps the tempo unchanged.
+        assert_eq!(payload["min"], 0.0);
+        assert_eq!(payload["max"], 1.0);
+        assert!(payload.get("args").is_none());
+        assert!(payload.get("match").is_none());
+    }
+
+    #[test]
+    fn bpm_round_trips_through_a_saved_link() {
+        let link = InputLinkView {
+            input_id: "input-1".to_string(),
+            kind: "state".to_string(),
+            location: Some("beats.bpm".to_string()),
+            args: None,
+            source: Some("bpm".to_string()),
+            min: Some(0.0),
+            max: Some(1.0),
+            matcher: None,
+        };
+        let editor = LinkEditor::from_link("input-1", "bpm", &link);
+
+        assert_eq!(editor.audio_feature(), "bpm");
+        assert_eq!(editor.source, "bpm");
+    }
+
+    #[test]
+    fn switching_a_ranged_link_to_bpm_resets_the_bounds() {
+        let mut editor = LinkEditor::audio("input-1", "bpm");
+        editor.min = 0.2;
+        editor.max = 0.8;
+
+        editor.set_audio_feature("bpm");
+
+        // Bounds remap the incoming 0..1 range; a 174 BPM tempo must not be
+        // scaled through a leftover meyda link's range.
+        let payload = editor.link_payload().expect("payload parses");
+        assert_eq!(payload["min"], 0.0);
+        assert_eq!(payload["max"], 1.0);
+    }
+
+    #[test]
+    fn a_saved_bpm_link_loads_with_identity_bounds() {
+        let link = InputLinkView {
+            input_id: "input-1".to_string(),
+            kind: "state".to_string(),
+            location: Some("beats.bpm".to_string()),
+            args: None,
+            source: Some("bpm".to_string()),
+            min: Some(0.2),
+            max: Some(0.8),
+            matcher: None,
+        };
+        let editor = LinkEditor::from_link("input-1", "bpm", &link);
+
+        assert_eq!(editor.min, 0.0);
+        assert_eq!(editor.max, 1.0);
+    }
+
+    #[test]
+    fn switching_a_smoothed_link_to_bpm_releases_the_smoothing_id() {
+        let mut editor = LinkEditor::audio("input-1", "gain");
+        editor.smoothing_value = 0.25;
+        let smoothing_id = {
+            let payload = editor.link_payload().expect("payload");
+            payload["args"][1]
+                .as_str()
+                .expect("smoothing id")
+                .to_string()
+        };
+
+        editor.set_audio_feature("bpm");
+        let actions = editor.save_actions().expect("bpm payload");
+
+        assert_eq!(actions[0].action, "meyda/removeSmoothingId");
+        assert_eq!(actions[0].payload, serde_json::json!(smoothing_id));
+        assert_eq!(actions[1].action, "inputs/createInputLink");
+        assert_eq!(actions[1].payload["source"], "bpm");
     }
 
     #[test]

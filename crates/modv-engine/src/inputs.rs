@@ -197,8 +197,10 @@ pub fn map_range(value: f64, from_min: f64, from_max: f64, to_min: f64, to_max: 
 /// - A non-finite resolved number → `None` (JS `Number.isFinite` check).
 /// - Otherwise the resolved value is `Some(resolved)`.
 ///
-/// A finite `0` is a valid value — `None` must never be produced for it.
-/// Callers must treat `None` as "keep the saved value".
+/// A finite `0` is a valid value — `None` must never be produced for it,
+/// except for a [`BPM_LINK_SOURCE`] link before the detector reports (see
+/// [`resolve_input_link_value_for_source`]). Callers must treat `None` as
+/// "keep the saved value".
 pub fn resolve_input_link_value(
     value: Option<f64>,
     min: Option<f64>,
@@ -223,6 +225,33 @@ pub fn resolve_input_link_value(
     }
 
     Some(resolved)
+}
+
+/// The Input Link source for the detected tempo (`beats.bpm`).
+pub const BPM_LINK_SOURCE: &str = "bpm";
+
+/// [`resolve_input_link_value`] with the source-specific "no value yet" guard
+/// from `input-link-value.js`.
+///
+/// `beats.bpm` is `0` until the tempo detector has a confident estimate. A BPM
+/// input (e.g. `rave.exe`'s) divides by its tempo, so writing that sentinel
+/// produces `NaN` frames; a BPM link keeps the input's saved value until a
+/// real tempo arrives. Every other source may legitimately write `0`.
+///
+/// A BPM link is an absolute tempo, so `min`/`max` are ignored: link bounds
+/// remap the incoming `0..1` range, which would scale 174 BPM through a stale
+/// ranged link (e.g. `0.2..0.8`). Every other source maps as usual.
+pub fn resolve_input_link_value_for_source(
+    value: Option<f64>,
+    min: Option<f64>,
+    max: Option<f64>,
+    source: Option<&str>,
+) -> Option<f64> {
+    if source == Some(BPM_LINK_SOURCE) {
+        return value.filter(|value| value.is_finite() && *value > 0.0);
+    }
+
+    resolve_input_link_value(value, min, max)
 }
 
 #[cfg(test)]
@@ -321,6 +350,43 @@ mod tests {
         assert_eq!(
             resolve_input_link_value(Some(1.0), Some(0.0), Some(100.0)),
             Some(100.0)
+        );
+    }
+
+    #[test]
+    fn bpm_links_wait_for_a_positive_tempo() {
+        // `beats.bpm` is 0 until the tempo detector has a confident estimate.
+        // A BPM link must keep the input's saved value rather than writing it.
+        assert_eq!(
+            resolve_input_link_value_for_source(Some(0.0), Some(0.0), Some(1.0), Some("bpm")),
+            None
+        );
+        assert_eq!(
+            resolve_input_link_value_for_source(Some(-120.0), Some(0.0), Some(1.0), Some("bpm")),
+            None
+        );
+        assert_eq!(
+            resolve_input_link_value_for_source(Some(f64::NAN), Some(0.0), Some(1.0), Some("bpm")),
+            None
+        );
+        assert_eq!(
+            resolve_input_link_value_for_source(Some(174.0), Some(0.0), Some(1.0), Some("bpm")),
+            Some(174.0)
+        );
+        // A BPM link is an absolute tempo: a stale ranged link must not scale
+        // 174 through 0.2..0.8.
+        assert_eq!(
+            resolve_input_link_value_for_source(Some(174.0), Some(0.2), Some(0.8), Some("bpm")),
+            Some(174.0)
+        );
+        // Every other source still writes a legitimate 0.
+        assert_eq!(
+            resolve_input_link_value_for_source(Some(0.0), Some(0.0), Some(1.0), Some("meyda")),
+            Some(0.0)
+        );
+        assert_eq!(
+            resolve_input_link_value_for_source(Some(0.0), Some(1.0), Some(1.2), Some("tween")),
+            Some(1.0)
         );
     }
 

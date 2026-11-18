@@ -16,7 +16,10 @@
 //! | `mutation` | any other `match.type` | resolved from `location` like a `state` link |
 //!
 //! `beats.kick`, `beats.bpm` and `tweens.tweens['<id>'].value[0]` are resolved
-//! against the engine state rather than a cloned JSON document. The engine
+//! against the engine state rather than a cloned JSON document. A `state` link
+//! whose `source` is `"bpm"` (the Audio panel's BPM feature) is skipped while
+//! `beats.bpm` is `0`, the detector's "no estimate yet" sentinel; writing it
+//! would break tempo inputs that divide by their BPM. The engine
 //! keeps `tweens` as the descriptor array (not the worker's live
 //! `{ tweens: { id: { value } } }` map), so a tween link only produces a value
 //! once WS-12 animates tween values. MIDI links read `state.midi`, which the
@@ -40,7 +43,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use modv_engine::engine_state::EngineState;
-use modv_engine::inputs::{InputLink, InputLinkKind, resolve_input_link_value};
+use modv_engine::inputs::{InputLink, InputLinkKind, resolve_input_link_value_for_source};
 use modv_engine::tweens::{TweenSet, parse_tween_link_location, resolve_tween_link};
 use modv_renderers::two_d::AudioFrame;
 
@@ -301,11 +304,17 @@ pub fn evaluate_input_links(
             InputLinkKind::Mutation => resolve_mutation(link, state, beats),
         };
 
-        // A missing feature (no analyser frame) and a non-finite result keep
-        // the input's saved value (`input-link-value.js`).
-        let Some(value) =
-            raw.and_then(|raw| resolve_input_link_value(Some(raw), link.min, link.max))
-        else {
+        // A missing feature (no analyser frame), a BPM link before the
+        // detector reports, and a non-finite result keep the input's saved
+        // value (`input-link-value.js`).
+        let Some(value) = raw.and_then(|raw| {
+            resolve_input_link_value_for_source(
+                Some(raw),
+                link.min,
+                link.max,
+                link.source.as_deref(),
+            )
+        }) else {
             continue;
         };
 
@@ -888,6 +897,45 @@ mod tests {
             &mut writes,
         );
         writes
+    }
+
+    #[test]
+    fn bpm_state_links_are_skipped_until_the_detector_reports() {
+        let (state, _) = state_with_link(
+            "bpm",
+            "m-bpm",
+            "bpm",
+            None,
+            json!({ "type": "state", "location": "beats.bpm", "source": "bpm" }),
+        );
+
+        let mut smoothing = HashMap::new();
+        let mut writes = Vec::new();
+        let mut tweens = TweenSet::new();
+        evaluate_input_links(
+            &state,
+            &audio(),
+            &BeatsState::default(),
+            &mut tweens,
+            &mut smoothing,
+            &mut writes,
+        );
+        assert!(writes.is_empty(), "0 BPM must not be written");
+
+        writes.clear();
+        evaluate_input_links(
+            &state,
+            &audio(),
+            &BeatsState {
+                bpm: 174.0,
+                kick: false,
+            },
+            &mut tweens,
+            &mut smoothing,
+            &mut writes,
+        );
+        assert_eq!(writes.len(), 1);
+        assert!((writes[0].value - 174.0).abs() < 1e-6);
     }
 
     #[test]
