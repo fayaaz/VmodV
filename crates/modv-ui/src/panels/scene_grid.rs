@@ -6,6 +6,7 @@
 //! menu. P4 adds column headers, the row-name editor, playlist import/export,
 //! scene reordering and the transition picker.
 
+use egui::emath::GuiRounding as _;
 use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec2};
 use serde_json::Value;
 
@@ -200,8 +201,22 @@ const CELL_SIZE: Vec2 = Vec2::new(154.0, 76.0);
 /// Width of the row-label gutter and the column-header height.
 const ROW_LABEL_WIDTH: f32 = 96.0;
 const HEADER_HEIGHT: f32 = 20.0;
+/// Fixed gap between consecutive Scene rows. Row layout must never depend on
+/// cell content: the per-cell dot, timing chip and hover preview are painted
+/// or placed without advancing the column cursor.
+const ROW_GAP: f32 = 5.0;
+/// Fixed gap between the header row and the first Scene row.
+const HEADER_GAP: f32 = 3.0;
+/// Fixed distance between the tops of consecutive rows, shared by the layer
+/// gutter and every Scene column.
+const ROW_PITCH: f32 = CELL_SIZE.y + ROW_GAP;
 /// Fixed size of the row gutter's layer-monitor thumbnail.
 const ROW_MONITOR_THUMB: Vec2 = Vec2::new(48.0, 27.0);
+
+/// Height of the scrolled grid content (header plus every fixed-pitch row).
+fn grid_content_height(row_count: usize) -> f32 {
+    HEADER_HEIGHT + HEADER_GAP + row_count as f32 * ROW_PITCH
+}
 
 /// Draw the row's layer monitor in the gutter's bottom-right corner: a small
 /// aspect-correct letterboxed snapshot of the row's live Group (the same
@@ -347,11 +362,17 @@ pub fn draw_scene_grid(
     ui.separator();
 
     let row_names = grid_row_names(snapshot, row_count);
-    egui::ScrollArea::both()
+    // One scroll offset for both axes. The Scene columns live inside the
+    // scroll area; the layer gutter is painted on top of its left edge with the
+    // same vertical offset (see `draw_layer_gutter`), so it stays pinned while
+    // the columns scroll sideways and still tracks the rows vertically.
+    let scrolled = egui::ScrollArea::both()
         .id_salt("scenes-grid")
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                row_label_column(ui, snapshot, grid, &row_names, actions);
+                // Reserve the pinned gutter's width in the scrolled content so
+                // the first Scene column is clear at the resting offset.
+                ui.add_space(ROW_LABEL_WIDTH + ui.spacing().item_spacing.x);
                 let last = snapshot.scenes.len().saturating_sub(1);
                 for (index, scene) in snapshot.scenes.iter().enumerate() {
                     draw_scene_column(
@@ -362,10 +383,12 @@ pub fn draw_scene_grid(
                         live_preview,
                         actions,
                         index == last,
+                        row_count,
                     );
                 }
             });
         });
+    draw_layer_gutter(ui, &scrolled, snapshot, grid, &row_names, actions);
 
     finish_drags(ui, snapshot, grid, &row_names, actions);
 
@@ -387,8 +410,14 @@ fn draw_scene_column(
     live_preview: Option<egui::TextureId>,
     actions: &mut Vec<UiAction>,
     is_last: bool,
+    row_count: usize,
 ) {
     ui.vertical(|ui| {
+        // The header and rows are placed by hand at a fixed pitch. Cell
+        // decoration (the enable dot, timing chip, hover preview) must never
+        // advance this cursor, or a column with more populated cells would
+        // drift away from the others.
+        ui.spacing_mut().item_spacing.y = 0.0;
         let current = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
         let renaming = grid
             .renaming
@@ -396,8 +425,10 @@ fn draw_scene_column(
             .filter(|(id, _)| id == &scene.id)
             .map(|(_, draft)| draft.clone());
         if let Some(mut draft) = renaming {
-            let response = ui.add_sized(
-                [CELL_SIZE.x, HEADER_HEIGHT],
+            let (rect, _) =
+                ui.allocate_exact_size(Vec2::new(CELL_SIZE.x, HEADER_HEIGHT), Sense::hover());
+            let response = ui.place(
+                rect,
                 egui::TextEdit::singleline(&mut draft)
                     .font(egui::TextStyle::Small)
                     .hint_text("Scene name"),
@@ -511,13 +542,62 @@ fn draw_scene_column(
             }
         }
 
-        for row in 0..grid_row_count(snapshot) {
+        ui.add_space(HEADER_GAP);
+        for row in 0..row_count {
             let cell = scene.cell(row).cloned().unwrap_or_default();
             let _ = draw_scene_cell(ui, scene, row, &cell, snapshot, grid, live_preview, actions);
-            ui.add_space(2.0);
+            ui.add_space(ROW_GAP);
         }
     });
     ui.add_space(6.0);
+}
+
+/// Paint the layer gutter pinned to the left edge of the scroll viewport.
+///
+/// The gutter is a child UI positioned at the scrolled content's vertical
+/// origin but at the viewport's fixed x: it shares the ScrollArea's one
+/// vertical offset (so previews and names stay attached to their rows) and
+/// never moves sideways, while the Scene columns scroll underneath it.
+fn draw_layer_gutter(
+    ui: &mut egui::Ui,
+    scroll: &egui::scroll_area::ScrollAreaOutput<()>,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    names: &[String],
+    actions: &mut Vec<UiAction>,
+) {
+    let offset = scroll.state.clamped_offset();
+    let viewport = scroll.inner_rect.intersect(ui.clip_rect());
+    if viewport.width() <= 0.0 || viewport.height() <= 0.0 {
+        return;
+    }
+    // Match the pixel rounding the ScrollArea applies to its content origin,
+    // so the gutter rows stay glued to the Scene rows while smooth-scrolling.
+    let content_top = (scroll.inner_rect.top() - offset.y)
+        .round_to_pixels(ui.pixels_per_point())
+        .round_ui();
+    let height = scroll.content_size.y.max(grid_content_height(names.len()));
+    let mut gutter = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                egui::pos2(viewport.left(), content_top),
+                Vec2::new(ROW_LABEL_WIDTH, height),
+            ))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    gutter.set_clip_rect(viewport);
+    // Opaque backing: the gutter sits on top of the scrolled Scene content, so
+    // the header, row gaps and any uncovered sliver must not let cells or
+    // headers show through while the columns slide underneath.
+    gutter.painter().rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(viewport.left(), content_top),
+            Vec2::new(ROW_LABEL_WIDTH, height),
+        ),
+        CornerRadius::same(0),
+        theme::PANEL,
+    );
+    row_label_column(&mut gutter, snapshot, grid, names, actions);
 }
 
 /// The fixed row-label gutter: names, inline rename, drag reorder and delete.
@@ -528,25 +608,24 @@ fn row_label_column(
     names: &[String],
     actions: &mut Vec<UiAction>,
 ) {
-    ui.vertical(|ui| {
-        ui.allocate_ui_with_layout(
-            Vec2::new(ROW_LABEL_WIDTH, HEADER_HEIGHT),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new("Layers")
-                        .size(12.0)
-                        .color(theme::MUTED)
-                        .strong(),
-                );
-            },
-        );
-        for (row, _) in names.iter().enumerate() {
-            row_label_cell(ui, snapshot, grid, names, row, actions);
-            ui.add_space(2.0);
-        }
-    });
-    ui.add_space(4.0);
+    // Same fixed pitch as the Scene columns; the header uses the same height
+    // and gap as a Scene header so every row line matches.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let (header, header_response) =
+        ui.allocate_exact_size(Vec2::new(ROW_LABEL_WIDTH, HEADER_HEIGHT), Sense::hover());
+    header_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Layers"));
+    ui.painter().text(
+        header.left_center() + egui::vec2(4.0, 0.0),
+        Align2::LEFT_CENTER,
+        "Layers",
+        FontId::proportional(12.0),
+        theme::MUTED,
+    );
+    ui.add_space(HEADER_GAP);
+    for row in 0..names.len() {
+        row_label_cell(ui, snapshot, grid, names, row, actions);
+        ui.add_space(ROW_GAP);
+    }
 }
 
 fn row_label_cell(
@@ -607,7 +686,7 @@ fn row_label_cell(
             rect.left_top() + egui::vec2(4.0, 22.0),
             Vec2::new(rect.width() - 8.0, 22.0),
         );
-        let edit = ui.put(
+        let edit = ui.place(
             edit_rect,
             egui::TextEdit::singleline(&mut draft)
                 .font(egui::TextStyle::Small)
@@ -654,12 +733,20 @@ fn row_label_cell(
     clipped.text(
         rect.left_top() + egui::vec2(6.0, 24.0),
         Align2::LEFT_TOP,
-        label,
+        &label,
         FontId::proportional(13.0),
         theme::FOREGROUND,
     );
 
     draw_row_monitor(ui, snapshot, row, rect);
+
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            ui.is_enabled(),
+            format!("Layer row {}: {label}", row + 1),
+        )
+    });
 
     if response.double_clicked() {
         grid.begin_row_rename(row, names.get(row).cloned().unwrap_or_default());
@@ -1231,7 +1318,10 @@ fn draw_scene_cell(
         egui::Rect::from_center_size(rect.left_top() + egui::vec2(10.0, 27.0), Vec2::splat(20.0));
     let mut cell_dot_clicked = false;
     if !cell.is_empty() {
-        let dot_response = ui.put(
+        // `place` registers the widget without advancing the cell column's
+        // cursor: `put` would rewind it to the dot's bottom, pulling every
+        // following row of this column upward.
+        let dot_response = ui.place(
             dot_hit,
             CellEnableDot {
                 disabled: cell.disabled,
@@ -1320,6 +1410,14 @@ fn draw_scene_cell(
     {
         actions.push(action);
     }
+
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            ui.is_enabled(),
+            format!("{} row {}", scene.name, row + 1),
+        )
+    });
 
     // Context menu.
     response.context_menu(|ui| {
