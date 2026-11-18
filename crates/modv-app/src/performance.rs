@@ -18,6 +18,12 @@
 //!   the cell becomes active and advances independently; dwell does not
 //!   advance while that row is transitioning, nor while the whole-scene
 //!   crossfade runs (`scenes.js:4786-4790` returns before the row loop).
+//! * **Phrase-triggered advances** — `scenes/tick` accepts the frame's
+//!   phrase-detector pulse. [`modv_engine::scene_rows::should_advance_row`]
+//!   ports `shouldAdvanceRow`: the deadline always advances, and a phrase flip
+//!   advances only when `random() < switchChance(dwell, min, max)` (0 before
+//!   the minimum window, 1 at/after the maximum). Without a flip the seeded
+//!   RNG is untouched, so the pre-phrase stream is preserved.
 //! * **Always Fade under performance** — `pickTransitionName`
 //!   (`scene-transition-pick.js`) returns `"Fade"` whenever performance mode
 //!   is enabled; the allowed-transition list only matters for manual changes
@@ -52,9 +58,12 @@
 //!
 //! ## Not implemented here
 //!
-//! * Phrase detection (`phrase-detector.js`) — WS-9/M6 audio owns it. With no
-//!   phrase flips the dwell deadline (`shouldAdvanceRow`'s `forced`) alone
-//!   advances rows, which is the JS behaviour when the bass band is 0.
+//! * Phrase *detection* (`phrase-detector.js`) — `modv-media`'s analyser owns
+//!   it; this module only consumes the one-frame `phrase_drop` pulse the loop
+//!   forwards. The JS engine also runs the legacy whole-Scene autopilot for
+//!   Groups with no Modules (`scenes.js:3940-3978`); the native runtime's
+//!   `tick_scenes` has no such branch, so there is no legacy phrase rule to
+//!   mirror.
 //! * Point10 pre-warming — the engine builds scenes synchronously; the
 //!   `nextSceneId` field is still tracked so the selection is made once.
 //! * Scene hover previews — M5d.
@@ -65,12 +74,12 @@ use serde_json::{Map, Value, json};
 
 use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group};
 use modv_engine::scene_rows::{
-    PickNextRowScene, ResolveRowAdvanceScene, get_row_count, is_row_cell_empty,
+    PickNextRowScene, ResolveRowAdvanceScene, ShouldAdvanceRow, get_row_count, is_row_cell_empty,
     is_scene_cell_disabled, is_scene_enabled, normalize_disabled_cells, normalize_row_names,
-    pick_next_row_scene_with_disabled, resolve_row_advance_scene_with_disabled,
+    pick_next_row_scene_with_disabled, resolve_row_advance_scene_with_disabled, should_advance_row,
 };
 use modv_engine::scene_timing::{
-    normalize_transition_duration, pick_cell_dwell_numeric, resolve_scene_timing,
+    normalize_transition_duration, pick_cell_dwell_numeric, resolve_scene_timing_at,
 };
 use modv_engine::scene_transition_pick::{
     FADE_TRANSITION, NATIVE_TRANSITION_NAMES, NONE_TRANSITION, pick_transition_name,
@@ -535,7 +544,8 @@ impl Store {
                 .iter()
                 .find(|scene| scene.get("id").and_then(Value::as_str) == Some(id))
         });
-        let scene_timing = resolve_scene_timing(scene, Some(&self.scenes.performance));
+        let scene_timing =
+            resolve_scene_timing_at(scene, Some(&self.scenes.performance), self.bpm());
         let roll = self.performance.rng.next_f64();
         let target = pick_cell_dwell_numeric(
             Some(scene_timing.min_seconds),
@@ -678,6 +688,21 @@ impl Store {
     /// `delta_ms` is the real frame delta in milliseconds (`loop.js:94-111`).
     /// Returns the number of rows that changed Scene this frame.
     pub fn tick_scenes(&mut self, delta_ms: f64) -> Result<Value, StoreError> {
+        self.tick_scenes_with_phrase(delta_ms, false)
+    }
+
+    /// `scenes/tick` with the frame's phrase-detector pulse.
+    ///
+    /// `phrase_flipped` is [`crate::audio::AudioSnapshot::phrase_drop`] for
+    /// this frame (a one-frame pulse). It is only consumed while performance
+    /// mode is running, exactly like the JS `phraseUpdate.flipped`. Without a
+    /// flip the seeded RNG is not touched, so the dwell stream is unchanged
+    /// from the pre-phrase engine.
+    pub fn tick_scenes_with_phrase(
+        &mut self,
+        delta_ms: f64,
+        phrase_flipped: bool,
+    ) -> Result<Value, StoreError> {
         let numeric = if delta_ms.is_finite() {
             delta_ms.max(0.0) / 1000.0
         } else {
@@ -811,6 +836,10 @@ impl Store {
 
             let scene = current_scene.expect("validated above");
             let scene_id = scene.get("id").and_then(Value::as_str).map(str::to_string);
+            // Resolve the window in seconds at the live tempo: a bar-based
+            // Scene override is stored in bars and only converted here.
+            let scene_timing =
+                resolve_scene_timing_at(current_scene, Some(&self.scenes.performance), self.bpm());
 
             // Pick the next Scene once, mid-dwell, so the advance is stable
             // even if another Scene is added meanwhile (`scenes.js:4035-4064`).
@@ -833,7 +862,20 @@ impl Store {
 
             runtime.dwell_elapsed += dt;
 
-            if runtime.dwell_elapsed + f64::EPSILON < runtime.dwell_target {
+            // `shouldAdvanceRow`: the deadline forces the change, while a
+            // phrase flip only changes Scene when its chance roll passes.
+            // `should_advance_row` calls the RNG only on a phrase flip.
+            let decision = should_advance_row(
+                &ShouldAdvanceRow {
+                    dwell: runtime.dwell_elapsed,
+                    min_seconds: Some(scene_timing.min_seconds),
+                    max_seconds: Some(scene_timing.max_seconds),
+                    target_seconds: Some(runtime.dwell_target),
+                    phrase_flipped,
+                },
+                || self.performance.rng.next_f64(),
+            );
+            if !decision.advance {
                 self.performance.rows.insert(row, runtime);
                 continue;
             }
@@ -1209,6 +1251,15 @@ mod tests {
             .expect("tick dispatches");
     }
 
+    fn tick_with_phrase(store: &mut Store, seconds: f64, phrase_flipped: bool) {
+        store
+            .dispatch(
+                "scenes/tick",
+                json!({ "delta": seconds * 1000.0, "phraseFlipped": phrase_flipped }),
+            )
+            .expect("tick dispatches");
+    }
+
     /// Simulate `seconds` at 60 fps (the tick clamps dwell time per frame, so
     /// a single large delta would not advance the dwell).
     fn advance(store: &mut Store, seconds: f64) {
@@ -1476,6 +1527,148 @@ mod tests {
             "row 1 kept dwelling: {}",
             second.dwell_elapsed
         );
+    }
+
+    #[test]
+    fn phrase_flip_before_the_minimum_window_never_advances() {
+        let mut store = store_with_scenes();
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({ "config": { "minSeconds": 2, "maxSeconds": 10 } }),
+            )
+            .expect("timing");
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+        // A single long target so only the phrase chance can move the row.
+        store.performance.rows.get_mut(&0).unwrap().dwell_target = 10.0;
+        store.performance.rows.get_mut(&1).unwrap().dwell_target = 10.0;
+        advance(&mut store, 1.0);
+
+        store.performance.rng = Rng::seeded(16); // first roll 0.076
+        tick_with_phrase(&mut store, 0.05, true);
+
+        assert!(
+            store.row_transition(0).is_none(),
+            "a phrase before minSeconds has a 0% chance"
+        );
+        assert_eq!(
+            store.row_runtime(0).unwrap().current_scene_id.as_deref(),
+            Some("scene-a")
+        );
+    }
+
+    #[test]
+    fn phrase_flip_mid_window_advances_only_when_the_seeded_roll_passes() {
+        fn run(seed: u64) -> bool {
+            let mut store = store_with_scenes();
+            store
+                .dispatch(
+                    "scenes/updatePerformance",
+                    json!({ "config": { "minSeconds": 1, "maxSeconds": 10 } }),
+                )
+                .expect("timing");
+            store
+                .dispatch("scenes/startPerformance", json!({}))
+                .expect("start");
+            store.performance.rows.get_mut(&0).unwrap().dwell_target = 10.0;
+            store.performance.rows.get_mut(&1).unwrap().dwell_target = 10.0;
+            advance(&mut store, 5.0);
+
+            store.performance.rng = Rng::seeded(seed);
+            tick_with_phrase(&mut store, 0.0, true);
+            store.row_transition(0).is_some()
+        }
+
+        // Midpoint chance is (5 - 1) / (10 - 1) ≈ 0.444.
+        assert!(run(16), "roll 0.076 is below the midpoint chance");
+        assert!(!run(19), "roll 0.918 is above the midpoint chance");
+    }
+
+    #[test]
+    fn phrase_flip_at_or_after_the_maximum_window_always_advances() {
+        let mut store = store_with_scenes();
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({ "config": { "minSeconds": 1, "maxSeconds": 2 } }),
+            )
+            .expect("timing");
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+        store.performance.rows.get_mut(&0).unwrap().dwell_target = 2.0;
+        store.performance.rows.get_mut(&1).unwrap().dwell_target = 60.0;
+        advance(&mut store, 2.0);
+
+        store.performance.rng = Rng::seeded(35); // first roll 0.994
+        tick_with_phrase(&mut store, 0.05, true);
+
+        assert!(
+            store.row_transition(0).is_some(),
+            "the deadline forces the row regardless of the roll"
+        );
+    }
+
+    #[test]
+    fn no_phrase_flip_keeps_the_current_dwell_and_does_not_touch_the_rng() {
+        let mut store = store_with_scenes();
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({ "config": { "minSeconds": 1, "maxSeconds": 10 } }),
+            )
+            .expect("timing");
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+        store.performance.rows.get_mut(&0).unwrap().dwell_target = 10.0;
+        store.performance.rows.get_mut(&1).unwrap().dwell_target = 60.0;
+        advance(&mut store, 2.0);
+        let dwell = store.row_runtime(0).unwrap().dwell_elapsed;
+        let rng = store.performance.rng.clone();
+
+        tick_with_phrase(&mut store, 0.05, false);
+
+        assert!(store.row_transition(0).is_none());
+        let runtime = store.row_runtime(0).unwrap();
+        assert!((runtime.dwell_elapsed - (dwell + 0.05)).abs() < 1e-9);
+        assert_eq!(
+            store.performance.rng, rng,
+            "without a phrase flip the random stream is untouched"
+        );
+    }
+
+    #[test]
+    fn per_row_dwell_windows_use_the_bar_unit_at_the_live_tempo() {
+        let mut store = store_with_scenes();
+        store
+            .dispatch("beats/SET_BPM", json!({ "bpm": 120 }))
+            .expect("bpm");
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({
+                    "config": {
+                        "timingUnit": "bars",
+                        "minSeconds": 1,
+                        "maxSeconds": 2,
+                    }
+                }),
+            )
+            .expect("bar timing");
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start");
+
+        for row in 0..2 {
+            let target = store.row_runtime(row).unwrap().dwell_target;
+            assert!(
+                (2.0..=4.0).contains(&target),
+                "1-2 bars at 120 BPM is 2-4 s, got {target}"
+            );
+        }
     }
 
     #[test]
@@ -1752,8 +1945,9 @@ mod tests {
         store
             .dispatch("scenes/startPerformance", json!({}))
             .expect("start");
-        store.performance.rows.get_mut(&0).unwrap().dwell_target = 0.0;
-        advance(&mut store, 0.05);
+        // The window's minimum is 1 s: park the target there and cross it.
+        store.performance.rows.get_mut(&0).unwrap().dwell_target = 1.0;
+        advance(&mut store, 1.05);
         assert!(
             store.row_transition(0).is_some(),
             "a row crossfade is in flight"
@@ -1934,8 +2128,8 @@ mod tests {
         store
             .dispatch("scenes/startPerformance", json!({}))
             .expect("start");
-        store.performance.rows.get_mut(&0).unwrap().dwell_target = 0.0;
-        advance(&mut store, 0.05);
+        store.performance.rows.get_mut(&0).unwrap().dwell_target = 1.0;
+        advance(&mut store, 1.05);
 
         let transition = store.row_transition(0).cloned().expect("row crossfade");
         let order = store.state().group_index_render_order();

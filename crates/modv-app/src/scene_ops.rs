@@ -120,8 +120,8 @@ use modv_engine::scene_rows::{
     row_family_is_shared, set_scene_cell_disabled, strict_matches_row_name,
 };
 use modv_engine::scene_timing::{
-    normalize_performance_timing, normalize_scene_timing, normalize_transition_duration,
-    to_finite_number,
+    TimingUnit, normalize_scene_timing_values, normalize_timing_config,
+    normalize_transition_duration, seconds_to_unit, to_finite_number, unit_to_seconds,
 };
 use modv_engine::scene_transition_pick::{FADE_TRANSITION, NONE_TRANSITION};
 use modv_engine::scenes_playlist::{
@@ -267,6 +267,7 @@ pub fn default_performance() -> Value {
     json!({
         "enabled": false,
         "currentSceneId": Value::Null,
+        "timingUnit": "seconds",
         "minSeconds": 8,
         "maxSeconds": 24,
         "transitionSeconds": 2,
@@ -1600,14 +1601,14 @@ impl Store {
         self.complete_all_row_transitions();
         self.complete_whole_scene_transition();
 
-        let timing = normalize_performance_timing(Some(&self.scenes.performance));
+        let timing = normalize_timing_config(Some(&self.scenes.performance));
         let mut scene = create_preset_from_state(&self.state);
         if let Value::Object(object) = &mut scene {
             object.insert("id".to_string(), json!(generate_scene_id()));
             object.insert("name".to_string(), json!(name));
             object.insert("enabled".to_string(), json!(true));
-            object.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-            object.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+            object.insert("minSeconds".to_string(), json_number(timing.min));
+            object.insert("maxSeconds".to_string(), json_number(timing.max));
             object.insert("timingOverride".to_string(), json!(false));
         }
 
@@ -1620,10 +1621,10 @@ impl Store {
 
     /// `scenes/addEmptyScene` (`scenes.js:1892-1905`).
     pub fn add_empty_scene(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
-        let timing = normalize_performance_timing(Some(&self.scenes.performance));
+        let timing = normalize_timing_config(Some(&self.scenes.performance));
         let timing = json!({
-            "minSeconds": timing.min_seconds,
-            "maxSeconds": timing.max_seconds,
+            "minSeconds": timing.min,
+            "maxSeconds": timing.max,
         });
         let existing_names: Vec<Value> = self
             .scenes
@@ -1754,31 +1755,32 @@ impl Store {
             return Ok(Value::Null);
         };
 
-        let current = normalize_scene_timing(Some(&existing), Some(&self.scenes.performance));
+        let current =
+            normalize_scene_timing_values(Some(&existing), Some(&self.scenes.performance));
         let mut candidate = Map::new();
         candidate.insert(
             "minSeconds".to_string(),
             params
                 .get("minSeconds")
                 .cloned()
-                .unwrap_or_else(|| json_number(current.min_seconds)),
+                .unwrap_or_else(|| json_number(current.min)),
         );
         candidate.insert(
             "maxSeconds".to_string(),
             params
                 .get("maxSeconds")
                 .cloned()
-                .unwrap_or_else(|| json_number(current.max_seconds)),
+                .unwrap_or_else(|| json_number(current.max)),
         );
         candidate.insert("timingOverride".to_string(), json!(true));
-        let timing = normalize_scene_timing(
+        let timing = normalize_scene_timing_values(
             Some(&Value::Object(candidate)),
             Some(&self.scenes.performance),
         );
 
         let Some(scene) = self.update_scene_document(scene_id, |scene| {
-            scene.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-            scene.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+            scene.insert("minSeconds".to_string(), json_number(timing.min));
+            scene.insert("maxSeconds".to_string(), json_number(timing.max));
             scene.insert("timingOverride".to_string(), json!(true));
         }) else {
             return Ok(Value::Null);
@@ -1794,16 +1796,91 @@ impl Store {
             .or_else(|| params.get("id"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let timing = normalize_performance_timing(Some(&self.scenes.performance));
+        let timing = normalize_timing_config(Some(&self.scenes.performance));
 
         let Some(scene) = self.update_scene_document(scene_id, |scene| {
-            scene.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-            scene.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+            scene.insert("minSeconds".to_string(), json_number(timing.min));
+            scene.insert("maxSeconds".to_string(), json_number(timing.max));
             scene.insert("timingOverride".to_string(), json!(false));
         }) else {
             return Ok(Value::Null);
         };
         Ok(scene)
+    }
+
+    /// `scenes/setTimingUnit` — switch the performance timing unit while
+    /// keeping the configured durations.
+    ///
+    /// The global pair and every Scene with `timingOverride: true` are
+    /// converted through seconds at the current BPM, then written back in
+    /// `unit`. Scenes without an override are left untouched (their stored
+    /// values are ignored until an override is created, at which point the
+    /// global values are used). Emits the performance config and one
+    /// `ADD_SCENE` per converted override, then persists.
+    pub fn set_timing_unit(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let requested = TimingUnit::parse(params.get("unit").or_else(|| params.get("timingUnit")));
+        let current = normalize_timing_config(Some(&self.scenes.performance));
+        let bpm = self.bpm();
+
+        let min_seconds = unit_to_seconds(current.min, current.unit, bpm);
+        let max_seconds = unit_to_seconds(current.max, current.unit, bpm);
+        let min = seconds_to_unit(min_seconds, requested, bpm);
+        let max = seconds_to_unit(max_seconds, requested, bpm);
+
+        if !self.scenes.performance.is_object() {
+            self.scenes.performance = default_performance();
+        }
+        if let Some(object) = self.scenes.performance.as_object_mut() {
+            object.insert(
+                "timingUnit".to_string(),
+                Value::String(requested.as_str().to_string()),
+            );
+            object.insert("minSeconds".to_string(), json_number(min));
+            object.insert("maxSeconds".to_string(), json_number(max));
+        }
+        self.emit_performance();
+
+        if requested != current.unit {
+            let scene_ids: Vec<String> = self
+                .scenes
+                .scenes
+                .iter()
+                .filter(|scene| {
+                    scene
+                        .get("timingOverride")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .filter_map(|scene| scene.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect();
+
+            for scene_id in scene_ids {
+                self.update_scene_document(&scene_id, |scene| {
+                    let scene_min = to_finite_number(scene.get("minSeconds"));
+                    let scene_max = to_finite_number(scene.get("maxSeconds"));
+                    let min_seconds =
+                        unit_to_seconds(scene_min.unwrap_or(current.min), current.unit, bpm);
+                    let max_seconds =
+                        unit_to_seconds(scene_max.unwrap_or(current.max), current.unit, bpm);
+                    scene.insert(
+                        "minSeconds".to_string(),
+                        json_number(seconds_to_unit(min_seconds, requested, bpm)),
+                    );
+                    scene.insert(
+                        "maxSeconds".to_string(),
+                        json_number(seconds_to_unit(max_seconds, requested, bpm)),
+                    );
+                });
+            }
+        }
+
+        // `update_scene_document` already persisted each override; writing once
+        // more keeps the performance delta and the document in sync when no
+        // Scene changed. A no-op unit switch still emits the config so the
+        // selector is authoritative.
+        self.persist_best_effort();
+        Ok(self.scenes.performance.clone())
     }
 
     /// Apply `mutate` to one Scene document, persist, and emit the upsert
@@ -3703,10 +3780,10 @@ fn scene_tween_entries(scene: &Value) -> Vec<(String, Value)> {
 /// `writeStoredScenes` (`scenes.js:1660-1683`) minus IO: normalise a Scene
 /// document's timing against the current performance config.
 fn with_scene_timing(scene: &Value, performance: &Value) -> Value {
-    let timing = normalize_scene_timing(Some(scene), Some(performance));
+    let timing = normalize_scene_timing_values(Some(scene), Some(performance));
     let mut document = scene.as_object().cloned().unwrap_or_default();
-    document.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-    document.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+    document.insert("minSeconds".to_string(), json_number(timing.min));
+    document.insert("maxSeconds".to_string(), json_number(timing.max));
     document.insert("timingOverride".to_string(), json!(timing.timing_override));
     Value::Object(document)
 }
@@ -3799,9 +3876,13 @@ fn merge_performance(current: &Value, data: &Value) -> Value {
             merged.insert(key.clone(), value.clone());
         }
     }
-    let timing = normalize_performance_timing(Some(&Value::Object(merged.clone())));
-    merged.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-    merged.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+    let timing = normalize_timing_config(Some(&Value::Object(merged.clone())));
+    merged.insert(
+        "timingUnit".to_string(),
+        Value::String(timing.unit.as_str().to_string()),
+    );
+    merged.insert("minSeconds".to_string(), json_number(timing.min));
+    merged.insert("maxSeconds".to_string(), json_number(timing.max));
     merged.insert(
         "transitionSeconds".to_string(),
         json_number(timing.transition_seconds),
@@ -5608,6 +5689,97 @@ mod tests {
         assert_eq!(performance["maxSeconds"], json!(2));
         assert_eq!(performance["order"], json!("random"));
         assert_eq!(performance["enabled"], json!(true));
+    }
+
+    #[test]
+    fn set_timing_unit_converts_globals_and_overrides_and_persists() {
+        let dir = temp_dir();
+        let state_path = dir.join("engine-state.json");
+        let mut store = Store::with_state_path(Some(&state_path));
+        seed_scene(&mut store, two_row_scene("scene-a"));
+        seed_scene(&mut store, two_row_scene("scene-b"));
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({
+                    "config": {
+                        "minSeconds": 8,
+                        "maxSeconds": 24,
+                        "transitionSeconds": 2,
+                    }
+                }),
+            )
+            .expect("performance config");
+        store
+            .dispatch("beats/SET_BPM", json!({ "bpm": 120 }))
+            .expect("bpm");
+        store
+            .dispatch(
+                "scenes/updateSceneTiming",
+                json!({ "sceneId": "scene-a", "minSeconds": 1, "maxSeconds": 3 }),
+            )
+            .expect("scene override");
+        store.drain_deltas();
+
+        let config = store
+            .dispatch("scenes/setTimingUnit", json!({ "unit": "bars" }))
+            .expect("setTimingUnit");
+        assert_eq!(config["timingUnit"], json!("bars"));
+        assert_eq!(config["minSeconds"], json!(4), "8 s at 120 BPM is 4 bars");
+        assert_eq!(config["maxSeconds"], json!(12));
+        assert_eq!(
+            store.scenes_state().scenes[0]["minSeconds"],
+            json!(0.5),
+            "the Scene override keeps its own minimum, in bars"
+        );
+        assert_eq!(store.scenes_state().scenes[0]["maxSeconds"], json!(1.5));
+        assert_eq!(
+            store.scenes_state().scenes[1]["minSeconds"],
+            json!(8),
+            "a Scene without an override is not rewritten"
+        );
+
+        let types = delta_types(&mut store);
+        assert!(
+            types.iter().any(|kind| kind == "scenes/UPDATE_PERFORMANCE"),
+            "the performance config is mirrored: {types:?}"
+        );
+        assert!(
+            types.iter().any(|kind| kind == "scenes/ADD_SCENE"),
+            "the converted override is mirrored: {types:?}"
+        );
+
+        let saved: Value = serde_json::from_slice(
+            &fs::read(dir.join("scenes.json")).expect("scenes.json is written"),
+        )
+        .expect("scenes.json is JSON");
+        assert_eq!(saved["performance"]["timingUnit"], json!("bars"));
+        assert_eq!(saved["performance"]["minSeconds"], json!(4));
+        assert_eq!(saved["scenes"][0]["minSeconds"], json!(0.5));
+
+        // Switching back at the same tempo restores the original durations.
+        let config = store
+            .dispatch("scenes/setTimingUnit", json!({ "unit": "seconds" }))
+            .expect("setTimingUnit back");
+        assert_eq!(config["timingUnit"], json!("seconds"));
+        assert_eq!(config["minSeconds"], json!(8));
+        assert_eq!(config["maxSeconds"], json!(24));
+        assert_eq!(store.scenes_state().scenes[0]["minSeconds"], json!(1));
+        assert_eq!(store.scenes_state().scenes[0]["maxSeconds"], json!(3));
+
+        // At 60 BPM the same seconds are half as many bars.
+        store
+            .dispatch("beats/SET_BPM", json!({ "bpm": 60 }))
+            .expect("bpm");
+        let config = store
+            .dispatch("scenes/setTimingUnit", json!({ "unit": "bars" }))
+            .expect("setTimingUnit at 60 BPM");
+        assert_eq!(config["minSeconds"], json!(2));
+        assert_eq!(config["maxSeconds"], json!(6));
+        assert_eq!(store.scenes_state().scenes[0]["minSeconds"], json!(0.25));
+        assert_eq!(store.scenes_state().scenes[0]["maxSeconds"], json!(0.75));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

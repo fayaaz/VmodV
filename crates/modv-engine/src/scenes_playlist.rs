@@ -35,13 +35,14 @@ use serde_json::{Map, Value, json};
 
 use crate::preset::SCENES_PLAYLIST_TYPE;
 use crate::scene_rows::normalize_row_names;
-use crate::scene_timing::{normalize_performance_timing, normalize_scene_timing};
+use crate::scene_timing::{normalize_scene_timing_values, normalize_timing_config};
 
 /// The playlist document version (`scenes.js:264`).
 pub const PLAYLIST_VERSION: i64 = 1;
 
 /// Performance keys that travel in a playlist (`scenes.js:266-273`).
 pub const PLAYLIST_PERFORMANCE_KEYS: &[&str] = &[
+    "timingUnit",
     "minSeconds",
     "maxSeconds",
     "transitionSeconds",
@@ -201,11 +202,15 @@ pub fn normalize_performance_data(data: &Value) -> Value {
 /// keys are copied verbatim from the input when it declares them. Runtime keys
 /// (`enabled`, `currentSceneId`) are never exported.
 pub fn get_playlist_performance(performance: &Value) -> Value {
-    let timing = normalize_performance_timing(Some(performance));
+    let timing = normalize_timing_config(Some(performance));
 
     let mut data = Map::new();
-    data.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-    data.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+    data.insert(
+        "timingUnit".to_string(),
+        Value::String(timing.unit.as_str().to_string()),
+    );
+    data.insert("minSeconds".to_string(), json_number(timing.min));
+    data.insert("maxSeconds".to_string(), json_number(timing.max));
     data.insert(
         "transitionSeconds".to_string(),
         json_number(timing.transition_seconds),
@@ -261,9 +266,13 @@ pub fn merge_performance(current: &Value, imported: &Value) -> Value {
         }
     }
 
-    let timing = normalize_performance_timing(Some(&Value::Object(merged.clone())));
-    merged.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-    merged.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+    let timing = normalize_timing_config(Some(&Value::Object(merged.clone())));
+    merged.insert(
+        "timingUnit".to_string(),
+        Value::String(timing.unit.as_str().to_string()),
+    );
+    merged.insert("minSeconds".to_string(), json_number(timing.min));
+    merged.insert("maxSeconds".to_string(), json_number(timing.max));
     merged.insert(
         "transitionSeconds".to_string(),
         json_number(timing.transition_seconds),
@@ -419,12 +428,15 @@ pub fn import_playlist_with(
             continue;
         };
 
-        let timing = normalize_scene_timing(Some(&normalized), Some(&performance_for_timing));
+        let timing =
+            normalize_scene_timing_values(Some(&normalized), Some(&performance_for_timing));
         let object = normalized
             .as_object_mut()
             .expect("normalised Scene is an object");
-        object.insert("minSeconds".to_string(), json_number(timing.min_seconds));
-        object.insert("maxSeconds".to_string(), json_number(timing.max_seconds));
+        // Stored values stay in the project's active unit; an import into a
+        // bar-timed project must not bake seconds into the Scene override.
+        object.insert("minSeconds".to_string(), json_number(timing.min));
+        object.insert("maxSeconds".to_string(), json_number(timing.max));
         object.insert("timingOverride".to_string(), json!(timing.timing_override));
 
         imported_scenes.push(normalized);
@@ -538,6 +550,7 @@ mod tests {
         assert_eq!(
             exported_performance.keys().cloned().collect::<Vec<_>>(),
             vec![
+                "timingUnit",
                 "minSeconds",
                 "maxSeconds",
                 "transitionSeconds",
@@ -555,9 +568,41 @@ mod tests {
             &json!({"minSeconds": 0.2, "maxSeconds": std::f64::consts::PI, "transitionSeconds": 0.04}),
         );
 
+        assert_eq!(exported["performance"]["timingUnit"], json!("seconds"));
         assert_eq!(exported["performance"]["minSeconds"], json!(1));
         assert_eq!(exported["performance"]["maxSeconds"], json!(3.1));
         assert_eq!(exported["performance"]["transitionSeconds"], json!(0.1));
+    }
+
+    #[test]
+    fn export_keeps_bar_timing_values_and_unit() {
+        // The stored values stay in bars; only the runtime converts them to
+        // seconds. The unit travels with the playlist so an import keeps them.
+        let exported = export_playlist(
+            &[],
+            &json!({
+                "timingUnit": "bars",
+                "minSeconds": 4,
+                "maxSeconds": 12,
+                "transitionSeconds": 2,
+            }),
+        );
+
+        assert_eq!(exported["performance"]["timingUnit"], json!("bars"));
+        assert_eq!(exported["performance"]["minSeconds"], json!(4));
+        assert_eq!(exported["performance"]["maxSeconds"], json!(12));
+    }
+
+    #[test]
+    fn imported_performance_carries_the_timing_unit() {
+        let imported = get_imported_performance(Some(&json!({
+            "timingUnit": "bars",
+            "minSeconds": 4,
+            "maxSeconds": 12,
+        })))
+        .unwrap();
+        assert_eq!(imported["timingUnit"], json!("bars"));
+        assert_eq!(imported["minSeconds"], json!(4));
     }
 
     #[test]
@@ -567,7 +612,12 @@ mod tests {
 
         assert_eq!(
             exported_performance.keys().cloned().collect::<Vec<_>>(),
-            vec!["minSeconds", "maxSeconds", "transitionSeconds"]
+            vec![
+                "timingUnit",
+                "minSeconds",
+                "maxSeconds",
+                "transitionSeconds"
+            ]
         );
     }
 
@@ -803,6 +853,29 @@ mod tests {
         assert_eq!(current[0]["minSeconds"], json!(10));
         assert_eq!(current[0]["maxSeconds"], json!(26));
         assert_eq!(current[0]["timingOverride"], json!(true));
+    }
+
+    #[test]
+    fn import_keeps_bar_scene_timing_in_bars() {
+        let mut current = Vec::new();
+        let playlist = json!({
+            "scenes": [scene("a", "A")],
+            "performance": {
+                "timingUnit": "bars",
+                "minSeconds": 4,
+                "maxSeconds": 12,
+            },
+        });
+
+        let report = import_playlist(&mut current, &playlist, ImportMode::Merge).unwrap();
+
+        assert_eq!(report.performance.unwrap()["timingUnit"], json!("bars"));
+        assert_eq!(
+            current[0]["minSeconds"],
+            json!(10),
+            "the override stays in bars; it must not be converted to seconds"
+        );
+        assert_eq!(current[0]["maxSeconds"], json!(26));
     }
 
     #[test]

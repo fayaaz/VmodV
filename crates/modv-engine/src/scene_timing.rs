@@ -23,6 +23,28 @@
 //!   Rust port returns a typed [`PerformanceTiming`] and the playlist layer
 //!   (see [`crate::scenes_playlist`]) carries the remaining performance keys.
 //!
+//! ## Bar timing (`timingUnit`)
+//!
+//! The native engine adds `performance.timingUnit: "seconds" | "bars"`
+//! (missing means seconds). A bar is [`BEATS_PER_BAR`] beats and
+//! `bar seconds = 4 * 60 / bpm`; an invalid/absent tempo uses
+//! [`FALLBACK_BPM`] (120), the same `beats.bpm || 120` fallback the tween
+//! compiler uses.
+//!
+//! While a unit is active, `performance.minSeconds`/`maxSeconds` **and** each
+//! Scene override's `minSeconds`/`maxSeconds` hold numbers in that unit. The
+//! runtime converts them to seconds at the point of use
+//! ([`resolve_performance_timing_at`], [`resolve_scene_timing_at`],
+//! [`pick_cell_dwell_numeric`]); stored documents keep the user's unit so a
+//! Scene edit never silently converts the grid.
+//!
+//! **Electron compatibility:** the JS build does not read `timingUnit` and
+//! would interpret the same numbers as seconds. A native document edited in
+//! bars therefore looks wrong in an older Electron build (and switching back
+//! to seconds before handing the project over is the safe path). The keys
+//! themselves keep their historical names, so no document migration is
+//! needed; an older file simply has no `timingUnit` and reads as seconds.
+//!
 //! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use serde_json::Value;
@@ -51,6 +73,117 @@ pub const MIN_SCENE_SECONDS: f64 = 1.0;
 /// A crossfade never runs shorter than this (`scene-timing.js:8`).
 pub const MIN_TRANSITION_SECONDS: f64 = 0.1;
 
+/// Beats in a bar. Unger's bar-based Scene timing is always 4/4.
+pub const BEATS_PER_BAR: f64 = 4.0;
+
+/// Tempo used when the beat detector has no usable BPM. This is the same
+/// `store.state.beats.bpm || 120` fallback the tween compiler uses.
+pub const FALLBACK_BPM: f64 = 120.0;
+
+/// Unit the performance `minSeconds` / `maxSeconds` values are expressed in.
+///
+/// The keys keep their historical names (`minSeconds`/`maxSeconds`) so the
+/// Electron build can still read a document written by the native engine; see
+/// the module compatibility note. The unit itself is stored alongside them as
+/// `performance.timingUnit`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TimingUnit {
+    /// Plain seconds (`timingUnit` absent or `"seconds"`).
+    #[default]
+    Seconds,
+    /// Musical bars, 4 beats each (`timingUnit: "bars"`).
+    Bars,
+}
+
+impl TimingUnit {
+    /// Read the stored `timingUnit` value. Unknown values fall back to seconds,
+    /// which keeps documents written before the unit existed valid.
+    pub fn parse(value: Option<&Value>) -> Self {
+        match value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("bars") | Some("bar") => Self::Bars,
+            _ => Self::Seconds,
+        }
+    }
+
+    /// The string written to `timingUnit`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Seconds => "seconds",
+            Self::Bars => "bars",
+        }
+    }
+}
+
+/// A tempo usable by the bar conversion (`beats.bpm || 120`).
+pub fn effective_bpm(bpm: f64) -> f64 {
+    if bpm.is_finite() && bpm > 0.0 {
+        bpm
+    } else {
+        FALLBACK_BPM
+    }
+}
+
+/// Seconds per beat at `bpm` (`60 / bpm`).
+pub fn beat_seconds(bpm: f64) -> f64 {
+    60.0 / effective_bpm(bpm)
+}
+
+/// Seconds per 4/4 bar at `bpm`.
+pub fn bar_seconds(bpm: f64) -> f64 {
+    BEATS_PER_BAR * beat_seconds(bpm)
+}
+
+/// Convert a value in `unit` to seconds at `bpm`.
+pub fn unit_to_seconds(value: f64, unit: TimingUnit, bpm: f64) -> f64 {
+    match unit {
+        TimingUnit::Seconds => value,
+        TimingUnit::Bars => value * bar_seconds(bpm),
+    }
+}
+
+/// Convert seconds to `unit` at `bpm`.
+pub fn seconds_to_unit(seconds: f64, unit: TimingUnit, bpm: f64) -> f64 {
+    match unit {
+        TimingUnit::Seconds => seconds,
+        TimingUnit::Bars => seconds / bar_seconds(bpm),
+    }
+}
+
+/// Performance timing as stored: values in the active [`TimingUnit`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TimingConfig {
+    /// Unit both values below are expressed in.
+    pub unit: TimingUnit,
+    /// Shortest dwell in `unit` (`performance.minSeconds`).
+    pub min: f64,
+    /// Longest dwell in `unit` (`performance.maxSeconds`).
+    pub max: f64,
+    /// Crossfade duration, always seconds.
+    pub transition_seconds: f64,
+}
+
+/// The default config, in seconds (`DEFAULT_PERFORMANCE_TIMING`).
+pub const DEFAULT_TIMING_CONFIG: TimingConfig = TimingConfig {
+    unit: TimingUnit::Seconds,
+    min: DEFAULT_PERFORMANCE_TIMING.min_seconds,
+    max: DEFAULT_PERFORMANCE_TIMING.max_seconds,
+    transition_seconds: DEFAULT_PERFORMANCE_TIMING.transition_seconds,
+};
+
+/// Bars equivalent of the legacy defaults at the 120 BPM reference tempo:
+/// 4 bars = 8 s, 12 bars = 24 s.
+const DEFAULT_BAR_MIN: f64 = 4.0;
+const DEFAULT_BAR_MAX: f64 = 12.0;
+/// Half a bar is the bar-unit equivalent of the legacy `min + 1 s` gap at
+/// 120 BPM.
+const MIN_BAR_GAP: f64 = 0.5;
+const MIN_BAR_VALUE: f64 = 0.001;
+
 /// Resolved timing for one Scene cell (`normalizeSceneTiming`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneTiming {
@@ -78,6 +211,12 @@ pub fn to_finite_number(value: Option<&Value>) -> Option<f64> {
 /// `Math.round(value * 10) / 10` (`scene-timing.js:24-26`).
 fn round_tenth(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
+}
+
+/// Round a bar value to thousandths so quarter-bar edits survive the
+/// normalisation (rounding to tenths would turn `0.25` into `0.3`).
+fn round_milli(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
 }
 
 /// `normalizeCellBounds` (`scene-timing.js:28-40`): missing bounds fall back
@@ -174,33 +313,64 @@ pub fn normalize_transition_duration(value: Option<&Value>) -> f64 {
     }
 }
 
-/// `normalizePerformanceTiming` (`scene-timing.js:82-113`).
+/// `normalizePerformanceTiming` (`scene-timing.js:82-113`) over the active
+/// unit.
 ///
 /// `performance` is the store's performance object; `None`/non-object behaves
-/// like `{}`. Unknown keys are ignored (the playlist layer keeps them).
-pub fn normalize_performance_timing(performance: Option<&Value>) -> PerformanceTiming {
+/// like `{}`. Unknown keys are ignored (the playlist layer keeps them). The
+/// values returned by this function are **stored values** in the active
+/// [`TimingUnit`] — use [`resolve_performance_timing_at`] to get the seconds
+/// the runtime needs.
+pub fn normalize_timing_config(performance: Option<&Value>) -> TimingConfig {
     let source = performance.filter(|value| value.is_object());
+    let unit = TimingUnit::parse(source.and_then(|p| p.get("timingUnit")));
 
     let min = to_finite_number(source.and_then(|p| p.get("minSeconds")));
     let max = to_finite_number(source.and_then(|p| p.get("maxSeconds")));
     let transition = to_finite_number(source.and_then(|p| p.get("transitionSeconds")));
 
-    // scene-timing.js:88-91
-    let min_seconds = match min {
-        None => DEFAULT_PERFORMANCE_TIMING.min_seconds,
-        Some(value) => MIN_SCENE_SECONDS.max(round_tenth(value)),
-    };
+    let (min_value, max_value) = match unit {
+        TimingUnit::Seconds => {
+            // scene-timing.js:88-91
+            let min_seconds = match min {
+                None => DEFAULT_PERFORMANCE_TIMING.min_seconds,
+                Some(value) => MIN_SCENE_SECONDS.max(round_tenth(value)),
+            };
 
-    // scene-timing.js:93-96
-    let mut max_seconds = match max {
-        None => (min_seconds + 1.0).max(DEFAULT_PERFORMANCE_TIMING.max_seconds),
-        Some(value) => (MIN_SCENE_SECONDS + 1.0).max(round_tenth(value)),
-    };
+            // scene-timing.js:93-96
+            let mut max_seconds = match max {
+                None => (min_seconds + 1.0).max(DEFAULT_PERFORMANCE_TIMING.max_seconds),
+                Some(value) => (MIN_SCENE_SECONDS + 1.0).max(round_tenth(value)),
+            };
 
-    // scene-timing.js:98-100
-    if max_seconds <= min_seconds {
-        max_seconds = round_tenth(min_seconds + 1.0);
-    }
+            // scene-timing.js:98-100
+            if max_seconds <= min_seconds {
+                max_seconds = round_tenth(min_seconds + 1.0);
+            }
+
+            (min_seconds, max_seconds)
+        }
+        TimingUnit::Bars => {
+            // The bar-unit equivalents of the second rules at 120 BPM: a bar is
+            // 2 s there, so the 1 s floor is half a bar and `min + 1 s` is
+            // `min + 0.5 bar`.
+            let min_bars = match min {
+                None => DEFAULT_BAR_MIN,
+                Some(value) => MIN_BAR_VALUE.max(round_milli(value)),
+            };
+
+            let mut max_bars = match max {
+                None => (min_bars + MIN_BAR_GAP).max(DEFAULT_BAR_MAX),
+                Some(value) => (MIN_BAR_VALUE * 2.0).max(round_milli(value)),
+            };
+
+            if max_bars <= min_bars {
+                max_bars = round_milli(min_bars + MIN_BAR_GAP);
+            }
+
+            (min_bars, max_bars)
+        }
+    };
 
     // scene-timing.js:102-105
     let transition_seconds = match transition {
@@ -208,59 +378,144 @@ pub fn normalize_performance_timing(performance: Option<&Value>) -> PerformanceT
         Some(value) => MIN_TRANSITION_SECONDS.max(round_tenth(value)),
     };
 
-    PerformanceTiming {
-        min_seconds,
-        max_seconds,
+    TimingConfig {
+        unit,
+        min: min_value,
+        max: max_value,
         transition_seconds,
     }
 }
 
-/// `normalizeSceneTiming` (`scene-timing.js:115-141`).
+/// Resolve the stored timing to seconds at the live tempo.
+pub fn resolve_performance_timing_at(performance: Option<&Value>, bpm: f64) -> PerformanceTiming {
+    let config = normalize_timing_config(performance);
+
+    PerformanceTiming {
+        min_seconds: unit_to_seconds(config.min, config.unit, bpm),
+        max_seconds: unit_to_seconds(config.max, config.unit, bpm),
+        transition_seconds: config.transition_seconds,
+    }
+}
+
+/// `normalizePerformanceTiming` (`scene-timing.js:82-113`).
 ///
-/// A Scene only owns its timing when `timingOverride === true`; otherwise the
-/// (normalised) global performance timing applies. `maxSeconds` is always at
-/// least `minSeconds + 1`.
-pub fn normalize_scene_timing(scene: Option<&Value>, performance: Option<&Value>) -> SceneTiming {
-    let global = normalize_performance_timing(performance);
+/// Without a tempo this resolves bars at [`FALLBACK_BPM`]; callers that drive
+/// live dwell timing must use [`resolve_performance_timing_at`] with the
+/// store's current BPM.
+pub fn normalize_performance_timing(performance: Option<&Value>) -> PerformanceTiming {
+    resolve_performance_timing_at(performance, FALLBACK_BPM)
+}
+
+/// A Scene's effective timing as stored: values in the active [`TimingUnit`].
+///
+/// Unlike [`SceneTiming`] this keeps the minimum and maximum separate, so the
+/// native UI can edit an override without collapsing both fields to the
+/// maximum.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneTimingValues {
+    /// Unit both values below are expressed in (the global performance unit).
+    pub unit: TimingUnit,
+    /// Effective minimum dwell in `unit`.
+    pub min: f64,
+    /// Effective maximum dwell in `unit`.
+    pub max: f64,
+    /// Whether the Scene carries its own timing rather than the global one.
+    pub timing_override: bool,
+}
+
+/// `normalizeSceneTiming` (`scene-timing.js:115-141`) over the active unit.
+pub fn normalize_scene_timing_values(
+    scene: Option<&Value>,
+    performance: Option<&Value>,
+) -> SceneTimingValues {
+    let global = normalize_timing_config(performance);
     let source = scene.filter(|value| value.is_object());
     let timing_override = source
         .and_then(|scene| scene.get("timingOverride"))
         .and_then(Value::as_bool)
         == Some(true);
 
-    let min = if timing_override {
-        to_finite_number(source.and_then(|scene| scene.get("minSeconds")))
-    } else {
-        None
-    };
-    let max = if timing_override {
-        to_finite_number(source.and_then(|scene| scene.get("maxSeconds")))
-    } else {
-        None
-    };
-
-    // scene-timing.js:122-126
-    let min_seconds = match min {
-        None => global.min_seconds,
-        Some(value) => MIN_SCENE_SECONDS.max(round_tenth(value)),
-    };
-
-    // scene-timing.js:127-131
-    let mut max_seconds = match max {
-        None => global.max_seconds,
-        Some(value) => (MIN_SCENE_SECONDS + 1.0).max(round_tenth(value)),
-    };
-
-    // scene-timing.js:132-134
-    if max_seconds <= min_seconds {
-        max_seconds = round_tenth(min_seconds + 1.0);
+    if !timing_override {
+        return SceneTimingValues {
+            unit: global.unit,
+            min: global.min,
+            max: global.max,
+            timing_override: false,
+        };
     }
+
+    let min = to_finite_number(source.and_then(|scene| scene.get("minSeconds")));
+    let max = to_finite_number(source.and_then(|scene| scene.get("maxSeconds")));
+
+    let (min_value, max_value) = match global.unit {
+        TimingUnit::Seconds => {
+            // scene-timing.js:122-126
+            let min_seconds = match min {
+                None => global.min,
+                Some(value) => MIN_SCENE_SECONDS.max(round_tenth(value)),
+            };
+
+            // scene-timing.js:127-131
+            let mut max_seconds = match max {
+                None => global.max,
+                Some(value) => (MIN_SCENE_SECONDS + 1.0).max(round_tenth(value)),
+            };
+
+            // scene-timing.js:132-134
+            if max_seconds <= min_seconds {
+                max_seconds = round_tenth(min_seconds + 1.0);
+            }
+
+            (min_seconds, max_seconds)
+        }
+        TimingUnit::Bars => {
+            let min_bars = match min {
+                None => global.min,
+                Some(value) => MIN_BAR_VALUE.max(round_milli(value)),
+            };
+
+            let mut max_bars = match max {
+                None => global.max,
+                Some(value) => (MIN_BAR_VALUE * 2.0).max(round_milli(value)),
+            };
+
+            if max_bars <= min_bars {
+                max_bars = round_milli(min_bars + MIN_BAR_GAP);
+            }
+
+            (min_bars, max_bars)
+        }
+    };
+
+    SceneTimingValues {
+        unit: global.unit,
+        min: min_value,
+        max: max_value,
+        timing_override: true,
+    }
+}
+
+/// Resolve a Scene's stored timing to seconds at the live tempo.
+pub fn resolve_scene_timing_at(
+    scene: Option<&Value>,
+    performance: Option<&Value>,
+    bpm: f64,
+) -> SceneTiming {
+    let values = normalize_scene_timing_values(scene, performance);
 
     SceneTiming {
-        min_seconds,
-        max_seconds,
-        timing_override,
+        min_seconds: unit_to_seconds(values.min, values.unit, bpm),
+        max_seconds: unit_to_seconds(values.max, values.unit, bpm),
+        timing_override: values.timing_override,
     }
+}
+
+/// `normalizeSceneTiming` (`scene-timing.js:115-141`).
+///
+/// Bars resolve at [`FALLBACK_BPM`]; live callers should use
+/// [`resolve_scene_timing_at`].
+pub fn normalize_scene_timing(scene: Option<&Value>, performance: Option<&Value>) -> SceneTiming {
+    resolve_scene_timing_at(scene, performance, FALLBACK_BPM)
 }
 
 /// `resolveSceneTiming` (`scene-timing.js:143-145`) — an alias for
@@ -646,5 +901,164 @@ mod tests {
         assert_eq!(to_finite_number(Some(&json!(true))), None);
         assert_eq!(to_finite_number(Some(&Value::Null)), None);
         assert_eq!(to_finite_number(None), None);
+    }
+
+    // ————————————————— TimingUnit / bars —————————————————
+
+    #[test]
+    fn a_bar_is_four_beats_and_uses_the_engine_bpm_fallback() {
+        assert_eq!(BEATS_PER_BAR, 4.0);
+        assert_eq!(beat_seconds(120.0), 0.5);
+        assert_eq!(bar_seconds(120.0), 2.0);
+        assert_eq!(bar_seconds(60.0), 4.0);
+        // `beats.bpm || 120`: 0 and NaN fall back to the reference tempo.
+        assert_eq!(beat_seconds(0.0), 0.5);
+        assert_eq!(beat_seconds(f64::NAN), 0.5);
+        assert_eq!(bar_seconds(0.0), 2.0);
+        assert_eq!(bar_seconds(f64::NAN), 2.0);
+        // Negative/infinite tempos are just as unusable.
+        assert_eq!(bar_seconds(-120.0), 2.0);
+        assert_eq!(bar_seconds(f64::INFINITY), 2.0);
+    }
+
+    #[test]
+    fn timing_unit_converts_values_to_seconds_and_back() {
+        assert_eq!(unit_to_seconds(4.0, TimingUnit::Seconds, 120.0), 4.0);
+        assert_eq!(unit_to_seconds(4.0, TimingUnit::Bars, 120.0), 8.0);
+        assert_eq!(unit_to_seconds(4.0, TimingUnit::Bars, 60.0), 16.0);
+        assert_eq!(seconds_to_unit(8.0, TimingUnit::Bars, 120.0), 4.0);
+        assert_eq!(seconds_to_unit(16.0, TimingUnit::Bars, 60.0), 4.0);
+        assert_eq!(seconds_to_unit(8.0, TimingUnit::Seconds, 120.0), 8.0);
+        // A round trip at the reference tempo is exact.
+        let seconds = unit_to_seconds(1.25, TimingUnit::Bars, 120.0);
+        assert_eq!(seconds_to_unit(seconds, TimingUnit::Bars, 120.0), 1.25);
+    }
+
+    #[test]
+    fn timing_unit_parses_the_config_value_and_defaults_to_seconds() {
+        assert_eq!(TimingUnit::parse(Some(&json!("bars"))), TimingUnit::Bars);
+        assert_eq!(TimingUnit::parse(Some(&json!("Bars"))), TimingUnit::Bars);
+        assert_eq!(
+            TimingUnit::parse(Some(&json!("seconds"))),
+            TimingUnit::Seconds
+        );
+        assert_eq!(
+            TimingUnit::parse(Some(&json!("nonsense"))),
+            TimingUnit::Seconds
+        );
+        assert_eq!(TimingUnit::parse(Some(&Value::Null)), TimingUnit::Seconds);
+        assert_eq!(TimingUnit::parse(None), TimingUnit::Seconds);
+        assert_eq!(TimingUnit::Bars.as_str(), "bars");
+        assert_eq!(TimingUnit::Seconds.as_str(), "seconds");
+    }
+
+    #[test]
+    fn performance_timing_config_reads_bar_values_and_converts_at_use() {
+        let performance = json!({
+            "timingUnit": "bars",
+            "minSeconds": 4,
+            "maxSeconds": 12,
+            "transitionSeconds": 2,
+        });
+        let config = normalize_timing_config(Some(&performance));
+        assert_eq!(config.unit, TimingUnit::Bars);
+        assert_eq!(config.min, 4.0);
+        assert_eq!(config.max, 12.0);
+
+        let timing = resolve_performance_timing_at(Some(&performance), 120.0);
+        assert_eq!(timing.min_seconds, 8.0);
+        assert_eq!(timing.max_seconds, 24.0);
+        assert_eq!(timing.transition_seconds, 2.0);
+
+        let timing = resolve_performance_timing_at(Some(&performance), 60.0);
+        assert_eq!(timing.min_seconds, 16.0);
+        assert_eq!(timing.max_seconds, 48.0);
+
+        // An invalid tempo uses the 120 BPM fallback.
+        let timing = resolve_performance_timing_at(Some(&performance), f64::NAN);
+        assert_eq!(timing.min_seconds, 8.0);
+        assert_eq!(timing.max_seconds, 24.0);
+    }
+
+    #[test]
+    fn missing_timing_unit_keeps_the_legacy_seconds_config() {
+        let config = normalize_timing_config(Some(&json!({"minSeconds": 4, "maxSeconds": 10})));
+        assert_eq!(config.unit, TimingUnit::Seconds);
+        assert_eq!(config.min, 4.0);
+        assert_eq!(config.max, 10.0);
+        assert_eq!(
+            resolve_performance_timing_at(Some(&json!({"minSeconds": 4, "maxSeconds": 10})), 60.0)
+                .min_seconds,
+            4.0,
+            "seconds values do not depend on the tempo"
+        );
+    }
+
+    #[test]
+    fn bar_timing_normalisation_keeps_quarter_steps_and_orders_the_pair() {
+        let config = normalize_timing_config(Some(&json!({
+            "timingUnit": "bars",
+            "minSeconds": 0.25,
+            "maxSeconds": 0.25,
+        })));
+        assert_eq!(config.min, 0.25, "quarter-bar stays a quarter-bar");
+        assert_eq!(config.max, 0.75, "max is pushed above min");
+
+        let config = normalize_timing_config(Some(&json!({
+            "timingUnit": "bars",
+            "minSeconds": 8,
+            "maxSeconds": 2,
+        })));
+        assert_eq!(config.min, 8.0);
+        assert_eq!(config.max, 8.5);
+    }
+
+    #[test]
+    fn scene_timing_override_exposes_separate_bar_min_and_max() {
+        let performance = json!({
+            "timingUnit": "bars",
+            "minSeconds": 4,
+            "maxSeconds": 12,
+        });
+        let scene = json!({
+            "timingOverride": true,
+            "minSeconds": 1,
+            "maxSeconds": 3,
+        });
+
+        let values = normalize_scene_timing_values(Some(&scene), Some(&performance));
+        assert_eq!(values.unit, TimingUnit::Bars);
+        assert_eq!(values.min, 1.0);
+        assert_eq!(values.max, 3.0);
+        assert!(values.timing_override);
+
+        let timing = resolve_scene_timing_at(Some(&scene), Some(&performance), 120.0);
+        assert_eq!(timing.min_seconds, 2.0);
+        assert_eq!(timing.max_seconds, 6.0);
+
+        // The default `typing` wrapper resolves at the reference tempo.
+        assert_eq!(
+            resolve_scene_timing(Some(&scene), Some(&performance)),
+            timing
+        );
+    }
+
+    #[test]
+    fn scene_timing_without_override_inherits_bar_values() {
+        let performance = json!({
+            "timingUnit": "bars",
+            "minSeconds": 4,
+            "maxSeconds": 12,
+        });
+        let values =
+            normalize_scene_timing_values(Some(&json!({"minSeconds": 1})), Some(&performance));
+        assert_eq!(values.min, 4.0);
+        assert_eq!(values.max, 12.0);
+        assert!(!values.timing_override);
+
+        let timing = resolve_scene_timing_at(None, Some(&performance), 60.0);
+        assert_eq!(timing.min_seconds, 16.0);
+        assert_eq!(timing.max_seconds, 48.0);
+        assert!(!timing.timing_override);
     }
 }

@@ -417,20 +417,24 @@ impl WindowedApp {
     /// non-blockingly, so a stalled device never delays a frame — it surfaces
     /// as an error instead, which stops the feed once and hands audio ownership
     /// back to the renderer's pump (logged once).
-    fn pump_engine_audio(&mut self, dt: Duration) {
+    ///
+    /// Returns the frame's phrase-detector pulse for `scenes/tick` (a
+    /// one-frame value).
+    fn pump_engine_audio(&mut self, dt: Duration) -> bool {
         let Some(feed) = self.audio_feed.as_mut() else {
-            return;
+            return false;
         };
 
         let snapshot = feed.frame(dt.as_secs_f32());
         let kick = feed.analyser().kick();
+        let phrase_flipped = snapshot.phrase_drop;
         let error = feed.take_error();
 
         self.store
             .set_engine_audio(&snapshot, kick, self.start.elapsed());
 
         let Some(error) = error else {
-            return;
+            return phrase_flipped;
         };
 
         if !self.audio_error_logged {
@@ -441,6 +445,7 @@ impl WindowedApp {
         }
         self.stop_engine_audio();
         self.store.disable_engine_audio();
+        phrase_flipped
     }
 
     /// Stop and release the engine-owned capture, if any (idempotent).
@@ -668,7 +673,7 @@ impl WindowedApp {
         // socket poll on purpose — while the engine owns the audio, renderer
         // frames committed by the socket are rejected, so the analysis that
         // drives this frame is the engine's.
-        self.pump_engine_audio(dt_duration);
+        let phrase_flipped = self.pump_engine_audio(dt_duration);
 
         // 1. Apply control-socket mutations before rendering the frame.
         if let Some(supervisor) = &mut self.supervisor {
@@ -739,10 +744,13 @@ impl WindowedApp {
         // unless performance mode runs or a crossfade is active.
         if self.store.scenes_tick_due() {
             let delta = dt_duration.as_secs_f64() * 1000.0;
-            if let Err(error) = self
-                .store
-                .dispatch("scenes/tick", serde_json::json!({ "delta": delta }))
-            {
+            if let Err(error) = self.store.dispatch(
+                "scenes/tick",
+                serde_json::json!({
+                    "delta": delta,
+                    "phraseFlipped": phrase_flipped,
+                }),
+            ) {
                 eprintln!("engine: WARN scenes/tick failed: {error}");
             }
             if let Some(supervisor) = &mut self.supervisor {

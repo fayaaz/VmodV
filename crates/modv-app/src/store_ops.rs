@@ -697,6 +697,7 @@ impl Store {
             "scenes/setRowNames" => self.set_row_names(params),
             "scenes/setCellEnabled" => self.set_cell_enabled(params),
             "scenes/updatePerformance" => self.update_performance_action(params),
+            "scenes/setTimingUnit" => self.set_timing_unit(params),
             "scenes/setPerformanceEnabled" => self.set_performance_enabled(params),
             "scenes/applyScene" => self.apply_scene_action(params),
             "scenes/captureLiveStateToScene" => self.capture_live_state_to_scene(params),
@@ -716,7 +717,11 @@ impl Store {
             "scenes/stopPerformance" => self.stop_performance(),
             "scenes/tick" => {
                 let delta = params.get("delta").and_then(Value::as_f64).unwrap_or(0.0);
-                self.tick_scenes(delta)
+                let phrase_flipped = params
+                    .get("phraseFlipped")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.tick_scenes_with_phrase(delta, phrase_flipped)
             }
             "scenes/applySceneRow" => {
                 let Some(scene_id) = params.get("sceneId").and_then(Value::as_str) else {
