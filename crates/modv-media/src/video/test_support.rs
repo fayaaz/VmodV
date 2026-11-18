@@ -72,12 +72,18 @@ pub(crate) fn wait_for_frame(source: &mut VideoSource, timeout: Duration) -> Opt
 /// Docker engine image can run the file test too).
 /// `generated` is `false` when no encoder worked; the caller then skips.
 pub(crate) fn video_file_fixture() -> (PathBuf, bool) {
+    video_file_fixture_frames(30)
+}
+
+/// [`video_file_fixture`] with an explicit frame count, for tests that need the
+/// clip to last long enough to pause/seek before end-of-stream.
+pub(crate) fn video_file_fixture_frames(frames: u32) -> (PathBuf, bool) {
     /// (label, required elements, file extension, description builder).
     type Candidate = (
         &'static str,
         &'static [&'static str],
         &'static str,
-        fn(&str) -> String,
+        fn(&str, u32) -> String,
     );
 
     if let Some(path) = std::env::var_os("MODV_VIDEO_TEST_FILE").map(PathBuf::from) {
@@ -93,31 +99,46 @@ pub(crate) fn video_file_fixture() -> (PathBuf, bool) {
     let path = unique_temp_path("modv-video-fixture", "bin");
 
     let candidates: Vec<Candidate> = vec![
-        ("vp8/webm", &["vp8enc", "webmmux"], "webm", |location| {
-            format!(
-                "videotestsrc num-buffers=30 pattern=smpte ! video/x-raw,width=160,height=120,framerate=30/1 ! vp8enc deadline=1 ! webmmux ! filesink location={location}"
-            )
-        }),
+        (
+            "vp8/webm",
+            &["vp8enc", "webmmux"],
+            "webm",
+            |location, frames| {
+                format!(
+                    "videotestsrc num-buffers={frames} pattern=smpte ! video/x-raw,width=160,height=120,framerate=30/1 ! vp8enc deadline=1 ! webmmux ! filesink location={location}"
+                )
+            },
+        ),
         (
             "h264/matroska",
             &["x264enc", "matroskamux"],
             "mkv",
-            |location| {
+            |location, frames| {
                 format!(
-                    "videotestsrc num-buffers=30 pattern=smpte ! video/x-raw,width=160,height=120,framerate=30/1 ! x264enc speed-preset=ultrafast tune=zerolatency ! matroskamux ! filesink location={location}"
+                    "videotestsrc num-buffers={frames} pattern=smpte ! video/x-raw,width=160,height=120,framerate=30/1 ! x264enc speed-preset=ultrafast tune=zerolatency ! matroskamux ! filesink location={location}"
                 )
             },
         ),
-        ("theora/ogg", &["theoraenc", "oggmux"], "ogv", |location| {
-            format!(
-                "videotestsrc num-buffers=30 pattern=smpte ! video/x-raw,width=160,height=120,framerate=30/1 ! theoraenc ! oggmux ! filesink location={location}"
-            )
-        }),
-        ("raw/avi", &["avimux", "avidemux"], "avi", |location| {
-            format!(
-                "videotestsrc num-buffers=30 pattern=smpte ! video/x-raw,format=YUY2,width=160,height=120,framerate=30/1 ! avimux ! filesink location={location}"
-            )
-        }),
+        (
+            "theora/ogg",
+            &["theoraenc", "oggmux"],
+            "ogv",
+            |location, frames| {
+                format!(
+                    "videotestsrc num-buffers={frames} pattern=smpte ! video/x-raw,width=160,height=120,framerate=30/1 ! theoraenc ! oggmux ! filesink location={location}"
+                )
+            },
+        ),
+        (
+            "raw/avi",
+            &["avimux", "avidemux"],
+            "avi",
+            |location, frames| {
+                format!(
+                    "videotestsrc num-buffers={frames} pattern=smpte ! video/x-raw,format=YUY2,width=160,height=120,framerate=30/1 ! avimux ! filesink location={location}"
+                )
+            },
+        ),
     ];
 
     for (label, elements, extension, build) in candidates {
@@ -126,7 +147,7 @@ pub(crate) fn video_file_fixture() -> (PathBuf, bool) {
         }
 
         let path = path.with_extension(extension);
-        let description = build(&escape_launch_value(&path.to_string_lossy()));
+        let description = build(&escape_launch_value(&path.to_string_lossy()), frames);
 
         match encode_clip(&description) {
             Ok(()) => {
@@ -142,6 +163,39 @@ pub(crate) fn video_file_fixture() -> (PathBuf, bool) {
     }
 
     (path, false)
+}
+
+/// The elements the transport tests need for a decodable file source.
+const FILE_TRANSPORT_ELEMENTS: &[&str] = &[
+    "videotestsrc",
+    "videoconvert",
+    "videoscale",
+    "videorate",
+    "appsink",
+    "uridecodebin",
+    "filesink",
+];
+
+/// A two-second clip for the transport tests.
+///
+/// Two seconds leaves room to pause and seek before the clip ends. Returns
+/// `None` (with a printed reason) when the host cannot encode or decode a file.
+pub(crate) fn transport_video_fixture() -> Option<PathBuf> {
+    if let Some(reason) = missing_elements(FILE_TRANSPORT_ELEMENTS) {
+        println!("skipping the transport test: {reason}");
+
+        return None;
+    }
+
+    let (path, generated) = video_file_fixture_frames(60);
+
+    if !generated {
+        println!("skipping the transport test: no suitable encoder is installed");
+
+        return None;
+    }
+
+    Some(path)
 }
 
 fn encode_clip(description: &str) -> Result<(), String> {

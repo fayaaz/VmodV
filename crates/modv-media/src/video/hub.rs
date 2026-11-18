@@ -3,15 +3,21 @@
 //! The engine runs one source per selected camera, per screen share and per
 //! video-file module, and addresses them with the id the control plane gave
 //! them (the renderer's `deviceId`, a screen node id, a video module id). The
-//! hub is just that map plus a start/stop lifecycle: it owns no threads of its
+//! hub is that map plus a start/stop lifecycle and the playback transport
+//! (pause/seek/loop/position) the media panel drives; it owns no threads of its
 //! own — each [`VideoSource`] owns its pipeline, and GStreamer owns the
 //! streaming threads.
+//!
+//! Starting (or restarting) a source replaces its pipeline, so the transport of
+//! a restarted source begins again at zero: not paused, not ended, no cached
+//! duration.
 
 use std::collections::BTreeMap;
 
 use super::frame::VideoFrame;
 use super::pipeline::VideoSourceConfig;
 use super::source::{VideoError, VideoSource, VideoSourceStatus};
+use super::transport::VideoTransport;
 
 /// A collection of running video sources, keyed by caller id.
 ///
@@ -115,6 +121,81 @@ impl VideoHub {
             .is_some_and(|source| source.is_running())
     }
 
+    // --- transport --------------------------------------------------------
+
+    /// Playback state of `id`, or `None` when it is not running.
+    pub fn transport(&self, id: &str) -> Option<VideoTransport> {
+        self.sources.get(id).map(VideoSource::transport)
+    }
+
+    /// Transport snapshots of every source, sorted by id.
+    pub fn transports(&self) -> Vec<(String, VideoTransport)> {
+        self.sources
+            .iter()
+            .map(|(id, source)| (id.clone(), source.transport()))
+            .collect()
+    }
+
+    /// Pause `id`.
+    pub fn pause_source(&self, id: &str) -> Result<VideoTransport, VideoError> {
+        self.with_source(id)?.pause()
+    }
+
+    /// Resume `id` (a file parked at end-of-stream replays from zero).
+    pub fn resume_source(&self, id: &str) -> Result<VideoTransport, VideoError> {
+        self.with_source(id)?.resume()
+    }
+
+    /// Pause a playing source or resume a paused one.
+    pub fn toggle_paused(&self, id: &str) -> Result<VideoTransport, VideoError> {
+        self.with_source(id)?.toggle_paused()
+    }
+
+    /// Set the pause state of `id`.
+    pub fn set_paused(&self, id: &str, paused: bool) -> Result<VideoTransport, VideoError> {
+        self.with_source(id)?.set_paused(paused)
+    }
+
+    /// Seek a video file to `position` (clamped to the clip; see
+    /// [`VideoSource::seek`] for the paused/playing semantics).
+    pub fn seek_source(
+        &self,
+        id: &str,
+        position: std::time::Duration,
+    ) -> Result<VideoTransport, VideoError> {
+        self.with_source(id)?.seek(position)
+    }
+
+    /// Enable/disable file looping for `id`.
+    ///
+    /// Enabling looping on a file that already parked at end-of-stream replays
+    /// it from the beginning, so the UI's loop toggle brings a finished clip
+    /// back instead of leaving it on its last frame. Harmless for live sources.
+    pub fn set_looping(&self, id: &str, looping: bool) -> Result<VideoTransport, VideoError> {
+        let source = self.with_source(id)?;
+
+        source.set_looping(looping);
+
+        let transport = source.transport();
+
+        if looping && transport.eos && source.is_seekable() {
+            return source.seek(std::time::Duration::ZERO);
+        }
+
+        Ok(transport)
+    }
+
+    /// Alias for [`Self::set_looping`], matching the control-plane field name.
+    pub fn set_loop(&self, id: &str, looping: bool) -> Result<VideoTransport, VideoError> {
+        self.set_looping(id, looping)
+    }
+
+    fn with_source(&self, id: &str) -> Result<&VideoSource, VideoError> {
+        self.sources
+            .get(id)
+            .ok_or_else(|| VideoError::UnknownSource(id.to_string()))
+    }
+
     /// The registered ids, sorted.
     pub fn ids(&self) -> Vec<&str> {
         self.sources.keys().map(String::as_str).collect()
@@ -130,7 +211,7 @@ impl VideoHub {
         self.sources.is_empty()
     }
 
-    /// Access one source (e.g. to toggle file looping).
+    /// Access one source (e.g. to read its [`VideoSource::transport`]).
     pub fn source(&self, id: &str) -> Option<&VideoSource> {
         self.sources.get(id)
     }
@@ -166,6 +247,178 @@ mod tests {
         assert!(!hub.is_running("missing"));
         assert_eq!(hub.ids(), Vec::<&str>::new());
         assert_eq!(hub.statuses(), Vec::new());
+    }
+
+    #[test]
+    fn an_empty_hub_answers_transport_controls_gracefully() {
+        let hub = VideoHub::new();
+
+        assert!(hub.transport("missing").is_none());
+        assert_eq!(hub.transports(), Vec::new());
+
+        for result in [
+            hub.pause_source("missing"),
+            hub.resume_source("missing"),
+            hub.toggle_paused("missing"),
+            hub.set_paused("missing", true),
+            hub.seek_source("missing", std::time::Duration::from_millis(100)),
+            hub.set_looping("missing", true),
+        ] {
+            match result {
+                Err(VideoError::UnknownSource(id)) => assert_eq!(id, "missing"),
+                other => panic!("expected UnknownSource, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_hub_routes_transport_controls_to_its_sources() {
+        if let Some(reason) = test_support::missing_elements(&["videotestsrc", "appsink"]) {
+            println!("skipping the hub transport: {reason}");
+            return;
+        }
+
+        let mut hub = VideoHub::new();
+
+        hub.start_source(
+            "pattern",
+            VideoSourceConfig::test_pattern(TestPattern::Smpte).with_mode(160, 120, 30),
+        )
+        .expect("test pattern source");
+
+        let mut frame = VideoFrame::with_size(160, 120);
+        let deadline = std::time::Instant::now() + test_support::FRAME_TIMEOUT;
+        let mut started = false;
+
+        while !started && std::time::Instant::now() < deadline {
+            started = hub.latest_into("pattern", &mut frame);
+        }
+
+        assert!(started, "the pattern delivered no frame");
+
+        let transport = hub.transport("pattern").expect("a transport");
+        assert!(!transport.paused);
+        assert!(!transport.seekable);
+
+        let paused = hub.pause_source("pattern").expect("pause");
+        assert!(paused.paused);
+        assert!(hub.transport("pattern").expect("status").paused);
+
+        let toggled = hub.toggle_paused("pattern").expect("toggle");
+        assert!(!toggled.paused, "toggle resumed the paused source");
+
+        assert!(hub.set_paused("pattern", true).expect("set_paused").paused);
+        assert!(!hub.resume_source("pattern").expect("resume").paused);
+
+        let looping = hub.set_looping("pattern", false).expect("loop off");
+        assert!(!looping.looping);
+        assert!(!hub.transport("pattern").expect("status").looping);
+
+        let error = hub
+            .seek_source("pattern", std::time::Duration::from_millis(10))
+            .expect_err("a live source cannot seek");
+        assert!(matches!(error, VideoError::Unsupported(_)), "{error}");
+
+        let transports = hub.transports();
+        assert_eq!(transports.len(), 1);
+        assert_eq!(transports[0].0, "pattern");
+
+        assert!(hub.stop_source("pattern"));
+        assert!(hub.transport("pattern").is_none());
+    }
+
+    #[test]
+    fn restarting_a_source_clears_its_transport() {
+        if let Some(reason) = test_support::missing_elements(&["videotestsrc", "appsink"]) {
+            println!("skipping the transport restart: {reason}");
+            return;
+        }
+
+        let mut hub = VideoHub::new();
+
+        hub.start_source(
+            "pattern",
+            VideoSourceConfig::test_pattern(TestPattern::Smpte).with_mode(64, 48, 30),
+        )
+        .expect("first source");
+        hub.pause_source("pattern").expect("pause");
+        hub.set_looping("pattern", false).expect("loop off");
+
+        assert!(hub.transport("pattern").expect("status").paused);
+
+        hub.start_source(
+            "pattern",
+            VideoSourceConfig::test_pattern(TestPattern::Smpte).with_mode(64, 48, 30),
+        )
+        .expect("restarted source");
+
+        let fresh = hub.transport("pattern").expect("restarted transport");
+
+        assert!(!fresh.paused, "a restart starts unpaused: {fresh:?}");
+        assert!(!fresh.eos, "{fresh:?}");
+        assert_eq!(fresh.position_ms, 0);
+        assert!(fresh.looping, "a new source loops by default: {fresh:?}");
+
+        hub.stop_all();
+    }
+
+    #[test]
+    fn enabling_loop_after_end_of_stream_restarts_a_file() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut hub = VideoHub::new();
+
+        hub.start_source(
+            "file",
+            VideoSourceConfig::file(&path).with_mode(160, 120, 30),
+        )
+        .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+        hub.set_looping("file", false).expect("loop off");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+
+        while std::time::Instant::now() < deadline
+            && !hub.transport("file").is_some_and(|transport| transport.eos)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        let ended = hub.transport("file").expect("file transport");
+
+        assert!(ended.eos, "the file did not reach EOS: {ended:?}");
+        assert!(!ended.paused, "{ended:?}");
+
+        let restarted = hub.set_looping("file", true).expect("loop on");
+
+        assert!(restarted.looping);
+        assert!(
+            !restarted.eos,
+            "enabling loop restarts a parked file: {restarted:?}"
+        );
+
+        let frames = hub.status("file").expect("file status").frames;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut playing = false;
+
+        while std::time::Instant::now() < deadline {
+            if hub
+                .status("file")
+                .is_some_and(|status| status.frames > frames)
+            {
+                playing = true;
+
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        assert!(playing, "the restarted file delivered no frame");
+
+        hub.stop_source("file");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

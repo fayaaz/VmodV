@@ -26,7 +26,19 @@
 //!   the picker, so no node id has to come from Electron).
 //! * [`source`] — a running [`VideoSource`]: pipeline, appsink callbacks, the
 //!   latest-frame slot, bus polling, status and stop.
-//! * [`hub`] — [`VideoHub`], several sources keyed by a caller id.
+//! * [`transport`] — [`VideoTransport`], the playback snapshot (paused,
+//!   position, duration, loop, end-of-stream) and the seek clamp.
+//! * [`hub`] — [`VideoHub`], several sources keyed by a caller id, plus the
+//!   pause/seek/loop controls the media panel calls.
+//!
+//! # Transport
+//!
+//! Video files play through the same pipeline as cameras and test patterns, so
+//! `pause`/`resume` (a `PLAYING`/`PAUSED` state change) work for every source;
+//! `seek` and the position/duration fields are meaningful for file sources
+//! only. A non-looping file parks at end-of-stream (the legacy `<video>` stops
+//! at the end); looping (the default, like `<video loop>`) seeks back to zero
+//! seamlessly. See [`transport`] for the exact semantics.
 //!
 //! # Threading model
 //!
@@ -65,6 +77,7 @@ pub mod hub;
 pub mod pipeline;
 pub mod portal;
 pub mod source;
+pub mod transport;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -84,6 +97,7 @@ pub use portal::{
 pub use source::{
     VideoError, VideoSource, VideoSourceState, VideoSourceStatus, ensure_gst, gstreamer_version,
 };
+pub use transport::{VideoTransport, clamp_seek};
 
 #[cfg(test)]
 mod tests {

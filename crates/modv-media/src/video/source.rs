@@ -30,8 +30,9 @@
 //! before the *engine* starts missing frames. Missing them is safe: only the
 //! newest frame is ever read.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use gst::prelude::*;
 use gst_app::AppSinkCallbacks;
@@ -41,6 +42,7 @@ use super::pipeline::{
     SINK_NAME, VideoSourceConfig, VideoSourceKind, check_required_elements, pipeline_description,
     screen_support,
 };
+use super::transport::{VideoTransport, clamp_seek, duration_millis};
 
 /// How long [`VideoSource::start`] waits for the pipeline to preroll.
 ///
@@ -49,6 +51,12 @@ use super::pipeline::{
 pub const START_TIMEOUT_MS: u64 = 1_000;
 /// How long [`VideoSource::stop`] waits for the streaming threads to join.
 pub const STOP_TIMEOUT_MS: u64 = 2_000;
+
+/// Sentinel for "the demuxer has not reported a duration yet".
+///
+/// A real clip can never be 584 million years long, and [`super::transport`]
+/// saturates its millisecond conversion one below this value.
+const DURATION_UNKNOWN_MS: u64 = u64::MAX;
 
 /// Where a source is in its lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,9 +201,16 @@ pub struct VideoSource {
     sink: gst_app::AppSink,
     slot: Arc<FrameSlot>,
     error: Arc<Mutex<Option<String>>>,
-    ended: Arc<AtomicBool>,
+    /// Latched end-of-stream (a non-looping file parking on its last frame).
+    ended: AtomicBool,
+    /// The caller paused the source through [`Self::set_paused`].
+    paused: AtomicBool,
+    /// Files restart at end-of-stream instead of parking.
+    looping: AtomicBool,
+    /// Cached `query_duration` result, or [`DURATION_UNKNOWN_MS`] until the
+    /// demuxer reports one (a `DurationChanged` message invalidates it).
+    duration_ms: AtomicU64,
     config: VideoSourceConfig,
-    looping: bool,
     stopped: bool,
 }
 
@@ -284,9 +299,11 @@ impl VideoSource {
             sink,
             slot,
             error,
-            ended: Arc::new(AtomicBool::new(false)),
+            ended: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+            looping: AtomicBool::new(true),
+            duration_ms: AtomicU64::new(DURATION_UNKNOWN_MS),
             config,
-            looping: true,
             stopped: false,
         })
     }
@@ -303,18 +320,218 @@ impl VideoSource {
 
     /// Whether video files restart from the beginning at end-of-stream.
     pub fn is_looping(&self) -> bool {
-        self.looping
+        self.looping.load(Ordering::SeqCst)
     }
 
     /// Enable/disable looping for file sources (looping is on by default, like
     /// the legacy `<video loop>` element).
-    pub fn set_looping(&mut self, looping: bool) {
-        self.looping = looping;
+    ///
+    /// Harmless for live sources: the flag is only consulted when a file posts
+    /// end-of-stream. [`super::VideoHub::set_looping`] additionally replays a
+    /// file that has already parked at its end.
+    pub fn set_looping(&self, looping: bool) {
+        self.looping.store(looping, Ordering::SeqCst);
     }
 
     /// Whether [`Self::stop`] has been called.
     pub fn is_running(&self) -> bool {
         !self.stopped
+    }
+
+    /// Whether playback was paused through [`Self::pause`].
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Whether this source has a timeline to seek (a video file).
+    pub fn is_seekable(&self) -> bool {
+        matches!(self.config.kind, VideoSourceKind::File { .. })
+    }
+
+    /// The source's playback state: pause/loop flags, end-of-stream, and the
+    /// last position/duration the pipeline reported.
+    ///
+    /// Drains the bus first, so an end-of-stream that happened since the last
+    /// poll shows up here. Cheap enough to poll every frame (one position query
+    /// and, until it is known, one duration query that is then cached).
+    pub fn transport(&self) -> VideoTransport {
+        if !self.stopped {
+            self.poll_bus();
+        }
+
+        let seekable = self.is_seekable();
+
+        if self.stopped || self.error().is_some() {
+            return VideoTransport {
+                looping: self.is_looping(),
+                seekable,
+                ..VideoTransport::default()
+            };
+        }
+
+        let paused = self.is_paused();
+        let eos = self.ended.load(Ordering::SeqCst);
+
+        VideoTransport {
+            paused,
+            // A finished file's pipeline stays in PLAYING at EOS (nothing
+            // changes the state); it is parked, not playing.
+            playing: !paused && !eos && self.pipeline.current_state() == gst::State::Playing,
+            position_ms: self.position_ms().unwrap_or(0),
+            duration_ms: self.duration_ms(),
+            looping: self.is_looping(),
+            eos,
+            seekable,
+        }
+    }
+
+    /// Pause playback. Frames already queued in the sink may still arrive for a
+    /// few milliseconds; after that the position and the frame counter freeze.
+    pub fn pause(&self) -> Result<VideoTransport, VideoError> {
+        self.set_paused(true)
+    }
+
+    /// Resume playback (or replay a file parked at end-of-stream).
+    pub fn resume(&self) -> Result<VideoTransport, VideoError> {
+        self.set_paused(false)
+    }
+
+    /// Pause a playing source, or resume a paused one.
+    pub fn toggle_paused(&self) -> Result<VideoTransport, VideoError> {
+        self.set_paused(!self.is_paused())
+    }
+
+    /// Pause/resume the pipeline.
+    ///
+    /// Resuming a file that reached end-of-stream seeks back to zero first:
+    /// the pipeline is still `PLAYING` at EOS, so there would be nothing to
+    /// resume otherwise. A failed state change leaves the previous state and
+    /// pause flag untouched.
+    pub fn set_paused(&self, paused: bool) -> Result<VideoTransport, VideoError> {
+        self.ensure_controllable()?;
+
+        if !paused && self.ended.load(Ordering::SeqCst) {
+            self.restart_from_start()?;
+        }
+
+        let state = if paused {
+            gst::State::Paused
+        } else {
+            gst::State::Playing
+        };
+
+        self.apply_state(state)?;
+        self.paused.store(paused, Ordering::SeqCst);
+
+        Ok(self.transport())
+    }
+
+    /// Seek a video file to `position` (flushing and accurate).
+    ///
+    /// The target is clamped to the clip duration (when known). Seeking while
+    /// paused keeps the pipeline paused on the new frame; seeking while playing
+    /// (including out of end-of-stream) continues playback from there. The
+    /// returned snapshot's position may still be the pre-seek value for a poll
+    /// or two while the flush propagates.
+    pub fn seek(&self, position: Duration) -> Result<VideoTransport, VideoError> {
+        self.ensure_controllable()?;
+
+        if !self.is_seekable() {
+            return Err(VideoError::Unsupported(format!(
+                "a {} source has no timeline to seek",
+                self.kind_label()
+            )));
+        }
+
+        let duration = self.duration_ms().map(Duration::from_millis);
+        let target = clamp_seek(position, duration);
+        let clock = gst::ClockTime::try_from(target).map_err(|_| {
+            VideoError::Unsupported(format!("seek position {target:?} is out of range"))
+        })?;
+
+        self.pipeline
+            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, clock)
+            .map_err(|error| {
+                VideoError::State(format!(
+                    "could not seek to {} ms: {error}",
+                    duration_millis(target)
+                ))
+            })?;
+
+        self.ended.store(false, Ordering::SeqCst);
+
+        Ok(self.transport())
+    }
+
+    /// The last position the pipeline reported, in milliseconds (files only).
+    fn position_ms(&self) -> Option<u64> {
+        if self.stopped || !self.is_seekable() {
+            return None;
+        }
+
+        self.pipeline
+            .query_position::<gst::ClockTime>()
+            .map(|position| position.mseconds())
+    }
+
+    /// The clip duration, queried once and cached (files only).
+    ///
+    /// A demuxer may report `None` before it parsed the headers; the result is
+    /// only cached once it is known, and a `DurationChanged` bus message
+    /// invalidates it.
+    fn duration_ms(&self) -> Option<u64> {
+        if self.stopped || !self.is_seekable() {
+            return None;
+        }
+
+        let cached = self.duration_ms.load(Ordering::Relaxed);
+
+        if cached != DURATION_UNKNOWN_MS {
+            return Some(cached);
+        }
+
+        let duration = self.pipeline.query_duration::<gst::ClockTime>()?.mseconds();
+
+        self.duration_ms.store(duration, Ordering::Relaxed);
+
+        Some(duration)
+    }
+
+    /// Seek back to the first frame and clear the end-of-stream latch.
+    fn restart_from_start(&self) -> Result<(), VideoError> {
+        self.pipeline
+            .seek_simple(
+                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                gst::ClockTime::ZERO,
+            )
+            .map_err(|error| {
+                VideoError::State(format!("could not restart the video file: {error}"))
+            })?;
+
+        self.ended.store(false, Ordering::SeqCst);
+
+        Ok(())
+    }
+
+    /// Move the pipeline, mapping a refused state change to [`VideoError`].
+    fn apply_state(&self, state: gst::State) -> Result<(), VideoError> {
+        self.pipeline.set_state(state).map(|_| ()).map_err(|error| {
+            VideoError::State(format!("could not move the pipeline to {state:?}: {error}"))
+        })
+    }
+
+    /// Reject controls on a stopped or errored source without touching the
+    /// pipeline (a latched error already moved it to `NULL`).
+    fn ensure_controllable(&self) -> Result<(), VideoError> {
+        if self.stopped {
+            return Err(VideoError::Stopped("the source was stopped".to_string()));
+        }
+
+        if let Some(error) = self.error() {
+            return Err(VideoError::State(error));
+        }
+
+        Ok(())
     }
 
     /// Drain the newest frame into `frame`, reusing both buffers.
@@ -394,6 +611,13 @@ impl VideoSource {
 
         self.stopped = true;
 
+        // A stopped source has no playback state left to report; the hub
+        // removes it, so a restart builds a fresh pipeline (and transport).
+        self.paused.store(false, Ordering::SeqCst);
+        self.ended.store(false, Ordering::SeqCst);
+        self.duration_ms
+            .store(DURATION_UNKNOWN_MS, Ordering::Relaxed);
+
         let _ = self.pipeline.set_state(gst::State::Null);
         let _ = self
             .pipeline
@@ -403,9 +627,13 @@ impl VideoSource {
         self.slot.clear();
     }
 
-    /// Whether the sink reported end-of-stream (files).
+    /// Whether a non-looping file parked at end-of-stream.
+    ///
+    /// This is the latch [`Self::transport`] reports: it is set when the bus
+    /// posts EOS and cleared by a seek or by resuming. Looping files restart
+    /// instead of latching, so the end of a looped clip is not visible here.
     pub fn is_eos(&self) -> bool {
-        self.sink.is_eos()
+        self.ended.load(Ordering::SeqCst)
     }
 
     fn error(&self) -> Option<String> {
@@ -458,22 +686,21 @@ impl VideoSource {
 
                     return;
                 }
+                gst::MessageView::DurationChanged(..) => {
+                    // The demuxer refined (or first reported) the duration.
+                    self.duration_ms
+                        .store(DURATION_UNKNOWN_MS, Ordering::Relaxed);
+                }
                 _ => {}
             }
         }
     }
 
     fn on_eos(&self) {
-        if self.looping && matches!(self.config.kind, VideoSourceKind::File { .. }) {
-            let seeked = self
-                .pipeline
-                .seek_simple(
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-                    gst::ClockTime::ZERO,
-                )
-                .is_ok();
-
-            if seeked {
+        if self.is_looping() && matches!(self.config.kind, VideoSourceKind::File { .. }) {
+            // Looping restarts from zero without parking: the sink's EOS flag
+            // is cleared by the flushing seek, so the UI never sees "ended".
+            if self.restart_from_start().is_ok() {
                 return;
             }
 
@@ -1031,5 +1258,360 @@ mod tests {
                 Err(other) => panic!("unexpected error for {kind:?}: {other}"),
             }
         }
+    }
+
+    // --- transport ---------------------------------------------------------
+
+    fn start_pattern(width: u32, height: u32) -> VideoSource {
+        VideoSource::start(
+            VideoSourceConfig::test_pattern(TestPattern::Smpte).with_mode(width, height, 30),
+        )
+        .expect("test pattern source")
+    }
+
+    fn wait_until(
+        description: &str,
+        timeout: std::time::Duration,
+        mut predicate: impl FnMut() -> bool,
+    ) {
+        let deadline = std::time::Instant::now() + timeout;
+
+        while std::time::Instant::now() < deadline {
+            if predicate() {
+                return;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        panic!("timed out waiting for {description}");
+    }
+
+    #[test]
+    fn a_test_pattern_reports_a_live_transport_and_cannot_seek() {
+        if let Some(reason) = test_support::missing_elements(&["videotestsrc", "appsink"]) {
+            println!("skipping the live transport: {reason}");
+            return;
+        }
+
+        let mut source = start_pattern(160, 120);
+
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first frame");
+
+        let transport = source.transport();
+
+        assert!(!transport.paused);
+        assert!(transport.playing, "{transport:?}");
+        assert!(transport.looping, "looping is the default for every source");
+        assert!(!transport.eos);
+        assert!(!transport.seekable);
+        assert_eq!(transport.duration_ms, None);
+        assert_eq!(transport.position_ms, 0, "a live source has no clock");
+
+        let error = source
+            .seek(std::time::Duration::from_millis(100))
+            .expect_err("a live source cannot seek");
+
+        assert!(matches!(error, VideoError::Unsupported(_)), "{error}");
+
+        source.stop();
+    }
+
+    #[test]
+    fn pausing_a_live_source_stops_frames_until_it_is_resumed() {
+        if let Some(reason) = test_support::missing_elements(&["videotestsrc", "appsink"]) {
+            println!("skipping the pause: {reason}");
+            return;
+        }
+
+        let mut source = start_pattern(160, 120);
+
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first frame");
+
+        let paused = source.pause().expect("pause");
+
+        assert!(paused.paused);
+        assert!(!paused.playing);
+        assert!(source.is_paused());
+
+        // Let the buffers already queued in the sink drain before measuring.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let settled = source.status().frames;
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        assert_eq!(
+            source.status().frames,
+            settled,
+            "a paused pipeline must not publish frames"
+        );
+
+        let resumed = source.resume().expect("resume");
+
+        assert!(!resumed.paused);
+        assert!(!source.is_paused());
+
+        wait_until(
+            "frames to flow again",
+            std::time::Duration::from_secs(2),
+            || source.status().frames > settled,
+        );
+
+        source.stop();
+    }
+
+    #[test]
+    fn stopping_clears_the_transport_state() {
+        if let Some(reason) = test_support::missing_elements(&["videotestsrc", "appsink"]) {
+            println!("skipping the stopped transport: {reason}");
+            return;
+        }
+
+        let mut source = start_pattern(64, 48);
+
+        source.pause().expect("pause");
+
+        assert!(source.transport().paused);
+
+        source.stop();
+
+        let transport = source.transport();
+
+        assert!(!transport.paused, "{transport:?}");
+        assert!(!transport.playing, "{transport:?}");
+        assert!(!transport.eos, "{transport:?}");
+        assert_eq!(transport.position_ms, 0);
+        assert_eq!(transport.duration_ms, None);
+
+        assert!(matches!(source.pause(), Err(VideoError::Stopped(_))));
+        assert!(matches!(
+            source.seek(std::time::Duration::ZERO),
+            Err(VideoError::Stopped(_))
+        ));
+    }
+
+    #[test]
+    fn a_video_file_reports_its_duration_and_position() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+
+        wait_until("a duration", std::time::Duration::from_secs(3), || {
+            source.transport().duration_ms.is_some()
+        });
+
+        let transport = source.transport();
+        let duration = transport.duration_ms.expect("a file reports its duration");
+
+        assert!(duration >= 500, "a real clip: {duration} ms");
+        assert_eq!(
+            transport.duration(),
+            Some(std::time::Duration::from_millis(duration))
+        );
+        assert!(transport.seekable);
+        assert!(!transport.eos);
+
+        let early = transport.position_ms;
+
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        let later = source.transport();
+
+        assert!(
+            later.position_ms > early,
+            "the position advances during playback: {early} -> {}",
+            later.position_ms
+        );
+        assert!(
+            later.position_ms <= duration + 250,
+            "the position stays inside the clip: {} of {duration} ms",
+            later.position_ms
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn pausing_a_video_file_freezes_the_position() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        source.set_looping(false);
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+
+        let paused = source.pause().expect("pause");
+
+        assert!(paused.paused);
+        assert!(!paused.playing, "{paused:?}");
+
+        let paused_at = source.transport().position_ms;
+
+        std::thread::sleep(std::time::Duration::from_millis(400));
+
+        let parked = source.transport();
+
+        assert!(!parked.playing, "{parked:?}");
+        assert!(!parked.eos, "pausing is not end-of-stream: {parked:?}");
+        assert!(
+            parked.position_ms < paused_at + 150,
+            "the position must not advance while paused: {paused_at} -> {}",
+            parked.position_ms
+        );
+
+        // The engine's health loop restarts sources that need it; a paused
+        // file must look healthy or the engine would replay it from zero.
+        let status = source.status();
+
+        assert_eq!(status.state, VideoSourceState::Paused, "{status:?}");
+        assert!(status.is_running(), "{status:?}");
+        assert!(!status.needs_restart(), "{status:?}");
+
+        let seeked = source
+            .seek(std::time::Duration::from_millis(200))
+            .expect("seek while paused");
+
+        assert!(
+            seeked.paused,
+            "a seek does not resume a paused file: {seeked:?}"
+        );
+
+        let resumed = source.resume().expect("resume");
+
+        assert!(!resumed.paused);
+
+        let position = source.transport().position_ms;
+
+        wait_until(
+            "playback after resume",
+            std::time::Duration::from_secs(2),
+            || source.transport().position_ms > position + 50,
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn seeking_a_video_file_moves_its_position_and_clamps_at_the_end() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        source.set_looping(false);
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+        source.pause().expect("pause");
+
+        wait_until("a duration", std::time::Duration::from_secs(3), || {
+            source.transport().duration_ms.is_some()
+        });
+
+        let duration = source.transport().duration_ms.expect("a duration");
+        let target = 900.min(duration / 2);
+
+        let seeked = source
+            .seek(std::time::Duration::from_millis(target))
+            .expect("seek");
+
+        assert!(seeked.paused, "the pipeline stays paused: {seeked:?}");
+
+        wait_until(
+            "the seeked position",
+            std::time::Duration::from_secs(3),
+            || {
+                let position = source.transport().position_ms;
+
+                position.abs_diff(target) <= 150
+            },
+        );
+
+        // A target past the end saturates at the duration instead of seeking
+        // into a segment GStreamer would reject.
+        source
+            .seek(std::time::Duration::from_secs(3_600))
+            .expect("seek past the end");
+
+        wait_until(
+            "the clamped position",
+            std::time::Duration::from_secs(3),
+            || source.transport().position_ms + 150 >= duration,
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_seek_after_end_of_stream_plays_the_file_again() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        source.set_looping(false);
+
+        wait_until("end-of-stream", std::time::Duration::from_secs(8), || {
+            source.transport().eos
+        });
+
+        let ended = source.transport();
+
+        assert!(ended.eos, "{ended:?}");
+        assert!(
+            !ended.paused,
+            "the pipeline is still playing at EOS: {ended:?}"
+        );
+        assert!(!ended.playing, "a parked file is not playing: {ended:?}");
+
+        let duration = ended.duration_ms.expect("a duration");
+        let frames_at_end = source.status().frames;
+
+        assert!(
+            ended.position_ms + 300 >= duration,
+            "a parked file sits at its end: {} of {duration} ms",
+            ended.position_ms
+        );
+
+        let restarted = source.seek(std::time::Duration::ZERO).expect("replay");
+
+        assert!(!restarted.eos, "a seek clears the end-of-stream latch");
+
+        // A seek while playing (not paused) resumes playback on its own.
+        wait_until(
+            "frames after the replay",
+            std::time::Duration::from_secs(3),
+            || source.status().frames > frames_at_end,
+        );
+
+        let playing = source.transport();
+
+        assert!(!playing.eos, "{playing:?}");
+        assert!(
+            playing.position_ms < duration / 2,
+            "the replay starts near the beginning: {playing:?}"
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
     }
 }
