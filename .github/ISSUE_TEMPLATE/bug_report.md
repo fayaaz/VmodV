@@ -8,8 +8,8 @@ assignees: ''
 ---
 
 **Operating system and application version**
- - OS: [e.g. macOS]
- - Version [e.g. 3.0.8]
+ - OS: [e.g. Debian 13 / Ubuntu 24.04]
+ - Version [e.g. 2.0.0; install type: AppImage or .deb]
 
 **Describe the bug**
 A clear and concise description of what the bug is.

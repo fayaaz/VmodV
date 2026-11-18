@@ -1,10 +1,8 @@
 name: Native Rust CI
 
-# Rust-only lint/test/packaging for the native shell (docs/rust-full-rewrite.md
-# P9). This workflow verifies every change and uploads workflow artifacts;
-# nightly.yml publishes the same AppImage/.deb to the rolling nightly alongside
-# the Electron build, which stays the fallback until the native shell is signed
-# off.
+# Rust-only lint/test/packaging for the native shell. Every change is built,
+# tested and packaged without Node, Yarn or Electron; nightly.yml publishes the
+# same AppImage/.deb to the rolling nightly release.
 on:
   push:
     branches:
@@ -12,14 +10,14 @@ on:
       - rust-hybrid
     paths:
       - 'crates/**'
+      - 'resources/**'
       - 'packaging/native/**'
       - 'tools/native-*'
-      - 'resources/isf/**'
-      - 'resources/point10/textures/**'
-      - 'resources/icon.png'
-      - 'LICENSE'
-      - 'Makefile'
+      - 'tests/**'
       - 'Dockerfile'
+      - 'Makefile'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'LICENSE'
       - '.github/workflows/native.yml'
   pull_request:
     branches:
@@ -27,14 +25,14 @@ on:
       - rust-hybrid
     paths:
       - 'crates/**'
+      - 'resources/**'
       - 'packaging/native/**'
       - 'tools/native-*'
-      - 'resources/isf/**'
-      - 'resources/point10/textures/**'
-      - 'resources/icon.png'
-      - 'LICENSE'
-      - 'Makefile'
+      - 'tests/**'
       - 'Dockerfile'
+      - 'Makefile'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'LICENSE'
       - '.github/workflows/native.yml'
   workflow_dispatch:
 
@@ -47,7 +45,7 @@ concurrency:
 
 env:
   # `make` targets run disk-guard before building. Keep enough headroom for the
-  # Rust target directory and the ~2.2 GB toolchain image on a stock runner.
+  # Rust target directory and the toolchain image on a stock runner.
   MIN_FREE_GB: 8
 
 jobs:
@@ -83,7 +81,7 @@ jobs:
   test:
     name: Rust tests
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,19 +104,19 @@ jobs:
           cache-from: type=gha,scope=rust-toolchain
 
       # modv-app's GPU tests share one lavapipe device and race when run in
-      # parallel (`cargo test -p modv-app -- --test-threads=1` in the native
-      # progress notes). The rest of the workspace runs normally.
+      # parallel (`cargo test -p modv-app -- --test-threads=1`). The rest of
+      # the workspace runs normally.
       - name: Workspace tests (modv-app excluded)
         run: make engine-test ARGS="--workspace --exclude modv-app"
 
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
 
-      # Launches the real `modv` binary under the Xvfb installed in the rust
-      # image; lavapipe provides the Vulkan adapter. One worker only because a
-      # process owns a virtual display and the software GPU is shared.
-      - name: Native e2e process harness (serial)
-        run: make engine-test ARGS="-p modv-app --test e2e_harness -- --test-threads=1"
+      # Launches the real `modv` binary under Xvfb; lavapipe provides the
+      # Vulkan adapter. One worker only because a process owns a virtual
+      # display and the software GPU is shared.
+      - name: Native e2e harness and parity tests (serial)
+        run: make test-e2e-native
 
   package:
     name: Native AppImage and .deb
@@ -145,11 +143,8 @@ jobs:
           load: true
           cache-from: type=gha,scope=rust-toolchain
 
-      - name: Build native AppImage
-        run: make appimage-native
-
-      - name: Build native .deb
-        run: make native-deb
+      - name: Build native AppImage and .deb
+        run: make build
 
       - name: Inspect installers
         run: |
