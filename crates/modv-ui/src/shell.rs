@@ -2822,6 +2822,16 @@ fn library_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             {
                 state.queue(UiCommand::RescanLibrary);
             }
+            if ui
+                .button("Open folder")
+                .on_hover_text("Show the current Library folder in the file manager")
+                .clicked()
+            {
+                state.queue(UiCommand::OpenLibraryFolder {
+                    folder: state.library_kind.folder().to_string(),
+                    relative: state.library_folder.clone(),
+                });
+            }
         });
     });
     if let Some(error) = &library.error {

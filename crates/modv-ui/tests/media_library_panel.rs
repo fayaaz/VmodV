@@ -281,6 +281,40 @@ fn rescan_queues_the_library_refresh_command() {
 }
 
 #[test]
+fn open_folder_queues_the_current_library_folder() {
+    let mut harness = build(
+        EngineSnapshot {
+            library: library(),
+            ..Default::default()
+        },
+        library_state(),
+    );
+    harness.run();
+
+    harness.get_by_label("Open folder").click();
+    harness.run();
+    assert_eq!(
+        harness.state_mut().take_commands(),
+        vec![UiCommand::OpenLibraryFolder {
+            folder: "image".to_string(),
+            relative: String::new(),
+        }]
+    );
+
+    harness.get_by_label("artist/").click();
+    harness.run();
+    harness.get_by_label("Open folder").click();
+    harness.run();
+    assert_eq!(
+        harness.state_mut().take_commands(),
+        vec![UiCommand::OpenLibraryFolder {
+            folder: "image".to_string(),
+            relative: "artist".to_string(),
+        }]
+    );
+}
+
+#[test]
 fn use_from_library_arms_the_prop_and_a_click_assigns_it() {
     let mut state = library_state();
     state.side_panel_tab = SidePanelTab::Inspector;

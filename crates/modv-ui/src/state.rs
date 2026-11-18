@@ -104,6 +104,12 @@ pub enum UiCommand {
     SwitchProfile(String),
     /// Re-scan the Library tab's image/video/palette folders.
     RescanLibrary,
+    /// Open the Library's current folder (`<profile>/<kind>/<relative>`) in
+    /// the platform file manager.
+    OpenLibraryFolder {
+        folder: String,
+        relative: String,
+    },
     /// Open `<userData>/media` in the platform file manager.
     OpenMediaFolder,
     /// Open `<userData>/logs` in the platform file manager.

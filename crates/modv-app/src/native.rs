@@ -2223,6 +2223,9 @@ impl NativeApp {
                 UiCommand::CreateProfile(name) => self.create_project_profile(&name),
                 UiCommand::SwitchProfile(name) => self.switch_project_profile(&name),
                 UiCommand::RescanLibrary => self.library_refresh.request(),
+                UiCommand::OpenLibraryFolder { folder, relative } => {
+                    self.open_library_folder(&folder, &relative);
+                }
                 UiCommand::OpenMediaFolder => {
                     let media_root = self.media_root.clone();
                     self.open_folder(&media_root);
@@ -2451,6 +2454,33 @@ impl NativeApp {
         if let Err(error) = media_dialogs::open_external(path) {
             self.record_error(error);
         }
+    }
+
+    /// Open the Library's current folder in the file manager.
+    ///
+    /// Only the three library folders are addressable; a missing/traversed
+    /// subfolder falls back to the kind root, then the profile and media root,
+    /// so the button always does something sensible.
+    fn open_library_folder(&mut self, folder: &str, relative: &str) {
+        let folder = match folder {
+            "image" | "video" | "palette" => folder,
+            _ => {
+                let media_root = self.media_root.clone();
+                self.open_folder(&media_root);
+                return;
+            }
+        };
+        let kind_root =
+            media_profiles::profile_folder(&self.media_root, &self.active_profile, folder);
+        let path = resolve_library_folder(&kind_root, relative)
+            .filter(|path| path.is_dir())
+            .or_else(|| kind_root.is_dir().then_some(kind_root))
+            .or_else(|| {
+                let profile = media_profiles::profile_dir(&self.media_root, &self.active_profile);
+                profile.is_dir().then_some(profile)
+            })
+            .unwrap_or_else(|| self.media_root.clone());
+        self.open_folder(&path);
     }
 
     /// Switch native audio capture live.
@@ -4009,6 +4039,29 @@ fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<Pat
     media_profiles::user_isf_dirs(media_root, profile, extra)
 }
 
+/// Resolve a Library-relative folder under one kind root.
+///
+/// Returns `None` for anything that could escape the profile: absolute paths,
+/// `..` segments, NUL bytes, or an unknown library folder.
+fn resolve_library_folder(kind_root: &Path, relative: &str) -> Option<PathBuf> {
+    let relative = relative.trim().replace('\\', "/");
+    if relative.contains('\0') || relative.starts_with('/') || Path::new(&relative).is_absolute() {
+        return None;
+    }
+    let mut path = kind_root.to_path_buf();
+    for segment in relative.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        // Reject traversal, drive letters and other absolute components.
+        if segment == ".." || segment.contains(':') || Path::new(segment).is_absolute() {
+            return None;
+        }
+        path.push(segment);
+    }
+    Some(path)
+}
+
 /// Clamp a saved placement onto the primary monitor.
 ///
 /// The legacy `resolveWindowBounds` does this at show time; without it a window
@@ -5381,5 +5434,26 @@ module.exports = {
             ScreenShareKindView::Window.as_str(),
             "the panel and the shell use the same spelling"
         );
+    }
+
+    #[test]
+    fn library_folders_resolve_only_inside_the_kind_root() {
+        let root = Path::new("/tmp/profile/image");
+        assert_eq!(
+            resolve_library_folder(root, "artist/pack"),
+            Some(root.join("artist/pack"))
+        );
+        assert_eq!(resolve_library_folder(root, ""), Some(root.to_path_buf()));
+        assert_eq!(
+            resolve_library_folder(root, "./artist"),
+            Some(root.join("artist"))
+        );
+        for escaped in ["../secret", "artist/../../etc", "/etc", "C:/Windows", "a:b"] {
+            assert_eq!(
+                resolve_library_folder(root, escaped),
+                None,
+                "{escaped:?} must not escape the library root"
+            );
+        }
     }
 }
