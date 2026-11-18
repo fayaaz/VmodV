@@ -378,6 +378,10 @@ pub struct NativeApp {
     layout_dirty: bool,
     last_layout_save: Instant,
     layout_error_logged: bool,
+    /// The engine snapshot the shell restores from and saves back to.
+    state_path: PathBuf,
+    last_state_save: Instant,
+    state_save_error_logged: bool,
     media_hub: MediaHub,
     last_media_health: Instant,
     /// Video-file sources started from `video` texture props (one per unique
@@ -728,6 +732,7 @@ impl NativeApp {
         let egui_ctx = egui::Context::default();
         modv_ui::theme::apply(&egui_ctx);
         let target_fps = store.target_fps();
+        let state_path = crate::cli::native_state_path(cli.state.as_deref(), &user_data);
 
         Self {
             bench_deadline: cli.bench_deadline(),
@@ -771,6 +776,9 @@ impl NativeApp {
             layout_dirty: false,
             last_layout_save: start,
             layout_error_logged: false,
+            state_path,
+            last_state_save: start,
+            state_save_error_logged: false,
             media_hub,
             last_media_health: start,
             video_sources: VideoSources::new(),
@@ -1324,6 +1332,10 @@ impl NativeApp {
             && now.saturating_duration_since(self.last_layout_save) >= Duration::from_secs(1)
         {
             self.save_layout();
+        }
+        // Crash resilience: a snapshot every 30 s, plus the exit save below.
+        if now.saturating_duration_since(self.last_state_save) >= Duration::from_secs(30) {
+            self.save_state_snapshot(false);
         }
 
         let reached_frames = self
@@ -3377,12 +3389,32 @@ impl NativeApp {
     }
 
     fn save_snapshot(&mut self) {
-        let Some(path) = &self.cli.state else {
-            return;
-        };
-        match self.store.save_snapshot(path, self.frames) {
-            Ok(()) => eprintln!("ui: INFO state snapshot flushed to {}", path.display()),
-            Err(error) => self.record_error(format!("state snapshot failed: {error}")),
+        self.save_state_snapshot(true);
+    }
+
+    /// Write the engine snapshot to the resolved state path.
+    ///
+    /// `announce` logs the successful write (manual save/quit); the periodic
+    /// safety save stays quiet. Failures are reported once per shell.
+    fn save_state_snapshot(&mut self, announce: bool) {
+        let path = self.state_path.clone();
+        match self.store.save_snapshot(&path, self.frames) {
+            Ok(()) => {
+                self.last_state_save = Instant::now();
+                self.state_save_error_logged = false;
+                if announce {
+                    eprintln!("ui: INFO state snapshot saved to {}", path.display());
+                }
+            }
+            Err(error) => {
+                if !self.state_save_error_logged {
+                    self.state_save_error_logged = true;
+                    self.record_error(format!(
+                        "could not save state snapshot {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
         }
     }
 
@@ -5455,5 +5487,31 @@ module.exports = {
                 "{escaped:?} must not escape the library root"
             );
         }
+    }
+
+    #[test]
+    fn the_default_state_path_round_trips_live_groups() {
+        let dir = temp_dir("modv-native-state");
+        let path = crate::cli::native_state_path(None, &dir);
+        let mut store = Store::with_state_path(Some(&path));
+        store
+            .dispatch(
+                "groups/createGroup",
+                serde_json::json!({ "name": "Persisted", "id": "persisted-group" }),
+            )
+            .expect("create group");
+        store.save_snapshot(&path, 0).expect("save snapshot");
+
+        let mut reloaded = Store::with_state_path(Some(&path));
+        assert!(reloaded.restore_from_file(&path).expect("restore"));
+        assert!(
+            reloaded
+                .state()
+                .groups
+                .iter()
+                .any(|group| group.name == "Persisted"),
+            "the default userData state path must restore the live groups"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
