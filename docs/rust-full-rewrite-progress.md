@@ -2,10 +2,11 @@
 
 Tracks the native single-process implementation of
 [rust-full-rewrite.md](./rust-full-rewrite.md) on the `rust-hybrid` branch.
-The Electron app and the JS engine/UI stay in the tree and remain the default;
-the native path is opt-in with `MODV_UI=native` / `make native`.
+The Electron app and the JS engine/UI stay in the tree. The native shell is now
+the default development path (`make dev`); Electron remains the fallback
+(`make dev-electron` or `MODV_UI=electron make dev`) until sign-off.
 
-Last updated: 2026-11-17.
+Last updated: 2026-11-18.
 
 ## Current status
 
@@ -19,7 +20,7 @@ Last updated: 2026-11-17.
 | P5 — docking | **Done (custom layout)** | Resizable Groups/Inspector/dock/centre sections; every right-panel tab detaches to the strip, a dock column or an in-app floating window; panel sizes, dock width, tab placements and window bounds persist to `<userData>/native-layout.json` (atomic, debounced, clamped). This is the hand-rolled `LayoutState`/`LayoutSettings` model, not `egui_tiles`. |
 | P6 — media manager | **Partial** | `MediaHub` is owned by the native shell: camera panel (ordered/remembered/restored inputs + resolution/FPS), test pattern and source status, with engine `media/start-file`/`start-screen` plumbing. User ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Native file/screen pickers, media-manager file dialogs, project profiles and the full media-tree watch remain. |
 | P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits the four device flags. The opt-in Boa plugin host (D5) remains; the Plugins panel is deliberately disabled until it lands. |
-| P8/P9 — parity/packaging | **Started (P8); native AppImage + .deb + CI** | `docs/native-parity-map.md` refreshed. `make appimage-native` and `make native-deb` build the native installers in Docker (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. Electron remains the default release. Flatpak, the 2.0.0 version bump, switching the nightly release to Rust and deleting Electron remain. |
+| P8/P9 — parity/packaging | **Started (P8); native 2.0 prep** | `docs/native-parity-map.md` refreshed. `make appimage-native` and `make native-deb` build the native installers in Docker (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. The native shell is now `make dev`; Electron stays the fallback (`make dev-electron`). `NATIVE_VERSION` defaults to 2.0.0 and `nightly.yml` publishes native AppImage/deb next to the Electron installers. Flatpak and deleting Electron remain. |
 
 ## What exists today
 
@@ -55,9 +56,10 @@ Last updated: 2026-11-17.
 - `ui_layout.rs` persists the native panel/tab/window document to
   `<userData>/native-layout.json`; `media_settings.rs` remembers the ordered
   camera selection and per-camera modes in `<userData>/native-media.json`.
-- `make native` / `make native-debug` run the native shell with the host
-  Wayland/X11 session; `MODV_UI=native make dev` selects it from the usual dev
-  command. Electron remains the default (`make dev`).
+- `make dev` / `make dev-native` run the native shell with the host
+  Wayland/X11 session; `make dev-electron` (or `MODV_UI=electron make dev`)
+  runs the Electron fallback. `make native` and `make native-debug` stay as the
+  direct native entry points.
 
 ## Verification
 
@@ -104,8 +106,10 @@ Last updated: 2026-11-17.
 3. P7: opt-in Boa plugin host (D5) and enabling the Plugins panel.
 4. P8: native e2e/perf/soak harness, multi-output windows, and manual
    GPU/NDI/camera checks (no NDI hardware verification is recorded yet).
-5. P9: Flatpak, the 2.0.0 version bump, switching the nightly release to Rust
-   and deleting Electron only after sign-off.
+5. P9: Flatpak, retiring the Electron nightly once the native release is
+   signed off, and deleting Electron only after sign-off. Native 2.0.0
+   packaging and the default `make dev` are prepared now
+   (`docs/native-2.0-release.md`).
 6. P1 residuals: structured daily logger, splash and native file dialogs.
 
 ## Review findings folded in
@@ -186,14 +190,17 @@ Last updated: 2026-11-17.
   registry supports more, and the window-state map is ready for more keys.
 - **P9** has a native AppImage (`make appimage-native`), Debian package
   (`make native-deb`, checked by `make native-deb-check`) and a Rust-only CI
-  workflow (`.github/workflows/native.yml`). Flatpak, the 2.0.0 native version
-  bump, switching `nightly.yml` to Rust and the Electron/Node deletion are
+  workflow (`.github/workflows/native.yml`). Native installers default to
+  `NATIVE_VERSION=2.0.0`, `make dev` selects the native shell, and
+  `nightly.yml` publishes native AppImage/deb alongside the Electron installers.
+  Flatpak, retiring the Electron nightly and the Electron/Node deletion are
   still pending.
 
 ## Constraints honoured
 
 - No Electron/Chromium/Node deletion in this run.
-- Legacy JS UI and engine remain selectable; `MODV_UI=native` is opt-in.
+- Legacy JS UI and engine remain selectable with `MODV_UI=electron` /
+  `make dev-electron`; the native shell is the default dev path.
 - Preset/Scene/playlist formats and the media directory are unchanged.
 - `modv-ui` is `#![forbid(unsafe_code)]`; the shell keeps the engine's
   single-device/single-queue rule.
