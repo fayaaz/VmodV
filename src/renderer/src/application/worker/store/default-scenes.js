@@ -47,8 +47,12 @@
 // Spiral Particles), and the four Background heroes gain a bass-driven alpha
 // swell (min 0.45 -> max 1) so the scenes breathe on the beat. Installs on
 // v15 refresh in place via the existing in-place refresh list.
+// Version 17 moves the deliberately background-free Point10 Scenes (Rolling
+// Fire, Ball of Fire, DVD Room, Smoke Room) into the Foreground row of every
+// default Scene that placed them in Background, keeping the emptied source row
+// in place; the changed Scenes are refreshed for installs on v16.
 export const LEGACY_DEFAULTS_VERSION = 1;
-export const DEFAULTS_VERSION = 16;
+export const DEFAULTS_VERSION = 17;
 
 // The Cube Floor module was removed in version 7. Existing installs may still
 // hold default Scenes that reference it, so the migration below rebuilds those
@@ -122,7 +126,9 @@ const RENAMED_DEFAULT_SCENES = [
 // rebuilt in place (same id/name) so the refinement reaches existing libraries,
 // while older installs keep their historical versions. Version 11 re-runs this
 // refresh for libraries that saved version 10 before those edits landed.
-// Version 12 re-runs it again for the Bands removal.
+// Version 12 re-runs it again for the Bands removal. Version 17 refreshes the
+// Scenes whose transparent Point10 hero moved from Background to Foreground
+// (only Smoke Room was not already a member).
 export const REFRESHED_DEFAULT_SCENES = [
   "Mycelium Bloom",
   "Chromatic Waveform",
@@ -175,6 +181,9 @@ export const REFRESHED_DEFAULT_SCENES = [
   "Rave.exe",
   "Soft Bands",
   "Quiet Bloom",
+  // Version 17: the transparent Point10 heroes moved to the Foreground row
+  // (the rest of the affected Scenes are already members above).
+  "Smoke Room",
 ];
 
 const sceneKey = (name) =>
@@ -551,6 +560,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Smoke Room",
@@ -561,15 +578,6 @@ const DEFAULT_SCENES = [
               smoothing: 0.15,
             },
           },
-        ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [
           {
             name: "Point10 Chromatic Line",
             props: {
@@ -1004,6 +1012,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Smoke Room",
@@ -1015,14 +1031,6 @@ const DEFAULT_SCENES = [
             },
           },
         ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [],
       },
       {
         name: "Effects",
@@ -1055,6 +1063,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Ball Of Fire",
@@ -1065,15 +1081,6 @@ const DEFAULT_SCENES = [
               smoothing: 0.1,
             },
           },
-        ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [
           {
             name: "Concentrics",
             props: {
@@ -1225,6 +1232,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Rolling Fire",
@@ -1236,14 +1251,6 @@ const DEFAULT_SCENES = [
             },
           },
         ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [],
       },
       {
         name: "Effects",
@@ -1772,6 +1779,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Rolling Fire",
@@ -1782,15 +1797,6 @@ const DEFAULT_SCENES = [
               smoothing: 0.08,
             },
           },
-        ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [
           {
             name: "Concentrics",
             props: {
@@ -2471,6 +2477,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 DVD Room",
@@ -2485,15 +2499,6 @@ const DEFAULT_SCENES = [
               midGain: 1.1,
             },
           },
-        ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [
           {
             name: "Point10 Chromatic Line",
             props: {
@@ -3021,6 +3026,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Ball Of Fire",
@@ -3032,14 +3045,6 @@ const DEFAULT_SCENES = [
             },
           },
         ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [],
       },
       {
         name: "Effects",
@@ -3396,6 +3401,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Smoke Room",
@@ -3408,14 +3421,6 @@ const DEFAULT_SCENES = [
             },
           },
         ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [],
       },
       {
         name: "Effects",
@@ -3449,6 +3454,14 @@ const DEFAULT_SCENES = [
         clearing: true,
         alpha: 1,
         compositeOperation: "normal",
+        modules: [],
+      },
+      {
+        name: "Foreground",
+        inherit: true,
+        clearing: true,
+        alpha: 1,
+        compositeOperation: "screen",
         modules: [
           {
             name: "Point10 Rolling Fire",
@@ -3459,15 +3472,6 @@ const DEFAULT_SCENES = [
               bassGain: 1.4,
             },
           },
-        ],
-      },
-      {
-        name: "Foreground",
-        inherit: true,
-        clearing: true,
-        alpha: 1,
-        compositeOperation: "screen",
-        modules: [
           {
             name: "Point10 Chromatic Line",
             props: {

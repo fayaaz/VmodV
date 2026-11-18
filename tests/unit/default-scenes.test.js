@@ -81,11 +81,30 @@ const getModuleNames = (scene) =>
 const getModulesInGroup = (scene, name) =>
   (getGroup(scene, name)?.modules || []).map((module) => module.name);
 
+// These Point10 scenes are deliberately background-free/transparent (they
+// composite over the layer below), so a Background or Effects row placement
+// hides them. Version 17 moves every occurrence to the Foreground row.
+const TRANSPARENT_POINT10_MODULES = [
+  "Point10 Rolling Fire",
+  "Point10 Ball Of Fire",
+  "Point10 DVD Room",
+  "Point10 Smoke Room",
+];
+
+const allTransparentPlacements = () =>
+  DEFAULT_SCENES.flatMap((scene) =>
+    scene.groups.flatMap((group) =>
+      (group.modules || [])
+        .filter((module) => TRANSPARENT_POINT10_MODULES.includes(module.name))
+        .map((module) => ({ scene, group, module })),
+    ),
+  );
+
 describe("default scenes", () => {
-  it("bumps the defaults version to 16", () => {
-    // Version 16 removes the Geometric Tunnel hero module and retunes the
-    // five default Scenes that carried it.
-    expect(DEFAULTS_VERSION).toBe(16);
+  it("bumps the defaults version to 17", () => {
+    // Version 17 moves the transparent Point10 scenes into the Foreground row
+    // in every default Scene that placed them anywhere else.
+    expect(DEFAULTS_VERSION).toBe(17);
   });
 
   it("does not use CMYK Halftone in any default Scene", () => {
@@ -503,7 +522,9 @@ describe("default scenes", () => {
       expect.arrayContaining([
         "Mycelium Bloom:Foreground",
         "Waveform Drive:Background",
-        "Terminal Bloom:Foreground",
+        // Version 17 moved Terminal Bloom's transparent Point10 hero into
+        // the Foreground row, leaving the Background row empty.
+        "Terminal Bloom:Background",
       ]),
     );
   });
@@ -1178,10 +1199,12 @@ describe("version 9 sparse default scenes", () => {
       (scene) => scene.name === "Rolling Fire Bloom",
     );
 
-    expect(getModulesInGroup(rollingFireBloom, "Foreground")).toEqual([]);
-    expect(getModulesInGroup(rollingFireBloom, "Background")).toEqual([
+    // Version 17 moved the transparent Rolling Fire hero to the Foreground
+    // row, so the Bands removal left the Background row empty instead.
+    expect(getModulesInGroup(rollingFireBloom, "Foreground")).toEqual([
       "Point10 Rolling Fire",
     ]);
+    expect(getModulesInGroup(rollingFireBloom, "Background")).toEqual([]);
     expect(getModulesInGroup(rollingFireBloom, "Effects")).toEqual(["Bloom"]);
 
     const aroundWaterGarden = DEFAULT_SCENES.find(
@@ -1421,7 +1444,11 @@ describe("version 12 default scene refresh", () => {
       (group) => group.name === "Foreground",
     );
 
-    expect(rollingForeground.modules).toEqual([]);
+    // The Bands module is gone; the transparent Point10 hero that moved into
+    // the Foreground row in version 17 is the only module left there.
+    expect(rollingForeground.modules.map((module) => module.name)).toEqual([
+      "Point10 Rolling Fire",
+    ]);
   });
 
   it("lists the Scenes whose definitions changed for version 12", () => {
@@ -1714,6 +1741,106 @@ describe("version 15 default scenes", () => {
   });
 });
 
+describe("transparent Point10 scenes", () => {
+  it.each(TRANSPARENT_POINT10_MODULES)(
+    "%s only ever appears in the Foreground row",
+    (name) => {
+      const placements = allTransparentPlacements().filter(
+        (placement) => placement.module.name === name,
+      );
+
+      expect(placements.length).toBeGreaterThan(0);
+
+      for (const { scene, group } of placements) {
+        expect(
+          group.name.toLowerCase(),
+          `${scene.name} places ${name} in ${group.name}`,
+        ).toBe("foreground");
+      }
+    },
+  );
+
+  it("draws every transparent Point10 scene first in its Foreground row", () => {
+    for (const { scene, group, module } of allTransparentPlacements()) {
+      expect(
+        group.modules[0].name,
+        `${scene.name} should draw ${module.name} before ${group.modules[0].name}`,
+      ).toBe(module.name);
+    }
+  });
+
+  it("keeps their props untouched after the move", () => {
+    // The move is a placement change only: the definitions keep the
+    // per-scene responsiveness levers they were tuned with.
+    const smokeRoom = DEFAULT_SCENES.find(
+      (scene) => scene.name === "Smoke Room",
+    );
+    const moved = getGroup(smokeRoom, "Foreground").modules.find(
+      (module) => module.name === "Point10 Smoke Room",
+    );
+
+    expect(moved.props).toEqual({
+      gain: 1.15,
+      bassGain: 1.35,
+      midGain: 1.1,
+      smoothing: 0.15,
+    });
+    expect(getModulesInGroup(smokeRoom, "Background")).toEqual([]);
+    expect(getModulesInGroup(smokeRoom, "Foreground")).toEqual([
+      "Point10 Smoke Room",
+      "Point10 Chromatic Line",
+    ]);
+  });
+
+  it("refreshes every Scene that moved a transparent Point10 scene", () => {
+    const movedScenes = [
+      "Smoke Room",
+      "Mirror Chamber",
+      "Solar Flare",
+      "Rolling Fire Bloom",
+      "Hex Bloom",
+      "DVD Afterglow",
+      "Terminal Bloom",
+      "Circuit Ritual",
+      "Etched Aurora",
+    ];
+
+    for (const name of movedScenes) {
+      expect(REFRESHED_DEFAULT_SCENES).toContain(name);
+    }
+
+    const seeded = movedScenes.map((name) => ({
+      id: `${name}-id`,
+      name,
+      modules: {},
+    }));
+    const result = getDefaultScenesToReplace({
+      defaultsVersion: DEFAULTS_VERSION - 1,
+      scenes: seeded,
+      removedModuleNames: [],
+      seededNames: movedScenes,
+    });
+
+    expect(result.replacements.map((scene) => scene.name).sort()).toEqual(
+      [...movedScenes].sort(),
+    );
+
+    for (const replacement of result.replacements) {
+      expect(replacement.id).toBe(`${replacement.name}-id`);
+
+      for (const group of replacement.definition.groups) {
+        for (const module of group.modules) {
+          if (!TRANSPARENT_POINT10_MODULES.includes(module.name)) continue;
+          expect(
+            group.name.toLowerCase(),
+            `${replacement.name} places ${module.name} in ${group.name}`,
+          ).toBe("foreground");
+        }
+      }
+    }
+  });
+});
+
 describe("version 16 default scenes", () => {
   const REMOVED_HERO = ["Point10", "Geometric", "Tunnel"].join(" ");
   const retuned = [
@@ -1743,7 +1870,7 @@ describe("version 16 default scenes", () => {
   it("removes the Geometric Tunnel hero from every seeded Scene", () => {
     const names = new Set(DEFAULT_SCENES.flatMap(getModuleNames));
 
-    expect(DEFAULTS_VERSION).toBe(16);
+    expect(DEFAULTS_VERSION).toBe(17);
     expect(names.has(REMOVED_HERO)).toBe(false);
   });
 
@@ -1794,7 +1921,7 @@ describe("version 16 default scenes", () => {
     expect(link.module).toBe("Point10 Spiral Particles");
   });
 
-  it("refreshes the five retuned Scenes in place for installs on version 15", () => {
+  it("refreshes the five retuned Scenes in place for installs on the previous version", () => {
     const seeded = retuned.map(({ name }) => ({
       id: `${name}-id`,
       name,

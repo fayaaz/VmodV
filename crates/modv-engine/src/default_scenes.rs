@@ -62,7 +62,13 @@ use serde_json::{Map, Value};
 /// gain a bass-driven alpha swell, and the two renamed Scenes the old refresh
 /// list did not cover (`Golden Spiral Tunnel`, `Reactor Glow`) are members now,
 /// like `Geometric Tunnel`, `Crosshatch Cipher` and `Digital Crystal Tunnel`.
-pub const DEFAULTS_VERSION: i64 = 16;
+///
+/// Version 17 moves the deliberately background-free Point10 Scenes (`Point10
+/// Rolling Fire`, `Point10 Ball Of Fire`, `Point10 DVD Room`, `Point10 Smoke
+/// Room`) into the `Foreground` row of every default Scene that placed them in
+/// `Background`, keeping the emptied source row in place. The changed Scenes
+/// are refreshed in place for version-16 installs.
+pub const DEFAULTS_VERSION: i64 = 17;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
@@ -91,6 +97,9 @@ pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
 /// Version 13 edited `Halftone Harbor` (CMYK Halftone removed) and `MBOX Light
 /// Tunnel` (fixed `dhue`); both are already members, so the list itself did
 /// not change with the bump.
+///
+/// Version 17 only adds `Smoke Room`: the other Scenes whose transparent
+/// Point10 hero moved to the Foreground row are already members.
 pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Mycelium Bloom",
     "Chromatic Waveform",
@@ -143,6 +152,9 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Rave.exe",
     "Soft Bands",
     "Quiet Bloom",
+    // Version 17: the transparent Point10 heroes moved to the Foreground row
+    // (the rest of the affected Scenes are already members above).
+    "Smoke Room",
 ];
 
 /// One default Scene definition.
@@ -799,9 +811,9 @@ mod tests {
     // ————————————————— data integrity —————————————————
 
     #[test]
-    fn bumps_the_defaults_version_to_15() {
+    fn bumps_the_defaults_version_to_17() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 16);
+        assert_eq!(DEFAULTS_VERSION, 17);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
     }
 
@@ -817,6 +829,124 @@ mod tests {
 
         assert_eq!(keys.iter().collect::<HashSet<_>>().len(), keys.len());
         assert!(keys.iter().all(|key| !key.is_empty()));
+    }
+
+    /// The Point10 hero scenes that render without a background: composited in
+    /// a Background (or Effects) row they hide the layer below, so they must
+    /// only ever live in a Foreground row.
+    const TRANSPARENT_POINT10_MODULES: &[&str] = &[
+        "Point10 Rolling Fire",
+        "Point10 Ball Of Fire",
+        "Point10 DVD Room",
+        "Point10 Smoke Room",
+    ];
+
+    #[test]
+    fn keeps_the_transparent_point10_scenes_in_the_foreground_row() {
+        // Version 17 moves every occurrence into the Foreground row.
+        let mut placements = 0;
+
+        for scene in default_scenes() {
+            for group in &scene.groups {
+                for module in &group.modules {
+                    if !TRANSPARENT_POINT10_MODULES.contains(&module.name.as_str()) {
+                        continue;
+                    }
+
+                    placements += 1;
+                    assert!(
+                        group.name.eq_ignore_ascii_case("Foreground"),
+                        "{} places {} in {}",
+                        scene.name,
+                        module.name,
+                        group.name
+                    );
+                }
+            }
+        }
+
+        assert!(
+            placements >= 12,
+            "expected the transparent Point10 scenes in the defaults, found {placements}"
+        );
+    }
+
+    #[test]
+    fn draws_the_transparent_point10_scenes_first_in_their_foreground_row() {
+        // A transparent hero is the base of the Foreground row: the overlays
+        // that follow (Chromatic Line, Concentrics, ...) draw on top of it.
+        for scene in default_scenes() {
+            let Some(foreground) = scene
+                .groups
+                .iter()
+                .find(|group| group.name.eq_ignore_ascii_case("Foreground"))
+            else {
+                continue;
+            };
+
+            for module in &foreground.modules {
+                if !TRANSPARENT_POINT10_MODULES.contains(&module.name.as_str()) {
+                    continue;
+                }
+
+                assert_eq!(
+                    foreground.modules.first().map(|first| first.name.as_str()),
+                    Some(module.name.as_str()),
+                    "{} should draw {} before the other Foreground modules",
+                    scene.name,
+                    module.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refreshes_the_scenes_that_moved_a_transparent_point10_scene() {
+        // default-scenes.test.js (version 17): installs on version 16 rebuild
+        // these definitions in place, so the row placement reaches them.
+        let moved = [
+            "Smoke Room",
+            "Mirror Chamber",
+            "Solar Flare",
+            "Rolling Fire Bloom",
+            "Hex Bloom",
+            "DVD Afterglow",
+            "Terminal Bloom",
+            "Circuit Ritual",
+            "Etched Aurora",
+        ];
+
+        for name in moved {
+            assert!(REFRESHED_DEFAULT_SCENES.contains(&name), "{name}");
+        }
+
+        let scenes: Vec<Value> = moved.iter().map(|name| seeded(name)).collect();
+        let seeded_names: Vec<String> = moved.iter().map(|name| name.to_string()).collect();
+        let plan =
+            get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
+
+        for name in moved {
+            let replacement = plan
+                .replacements
+                .iter()
+                .find(|replacement| replacement.name == name)
+                .unwrap_or_else(|| panic!("missing refresh {name}"));
+            assert_eq!(replacement.id, json!(format!("{name}-id")));
+
+            for group in &replacement.definition.groups {
+                for module in &group.modules {
+                    if !TRANSPARENT_POINT10_MODULES.contains(&module.name.as_str()) {
+                        continue;
+                    }
+                    assert!(
+                        group.name.eq_ignore_ascii_case("Foreground"),
+                        "{name} still places {} in {}",
+                        module.name,
+                        group.name
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1325,7 +1455,9 @@ mod tests {
         for expected in [
             "Mycelium Bloom:Foreground",
             "Waveform Drive:Background",
-            "Terminal Bloom:Foreground",
+            // Version 17 moved Terminal Bloom's transparent Point10 hero into
+            // the Foreground row, leaving the Background row empty.
+            "Terminal Bloom:Background",
         ] {
             assert!(empty.contains(&expected.to_string()), "missing {expected}");
         }
@@ -1411,11 +1543,13 @@ mod tests {
         assert!(foreground_only >= 1);
 
         let rolling = scene_by_name("Rolling Fire Bloom");
-        assert!(rolling.modules_in_group("Foreground").is_empty());
+        // Version 17 moved the transparent Rolling Fire hero to the Foreground
+        // row, so the Bands removal left the Background row empty instead.
         assert_eq!(
-            rolling.modules_in_group("Background"),
+            rolling.modules_in_group("Foreground"),
             vec!["Point10 Rolling Fire"]
         );
+        assert!(rolling.modules_in_group("Background").is_empty());
         assert_eq!(rolling.modules_in_group("Effects"), vec!["Bloom"]);
 
         let water_garden = scene_by_name("Around Water Garden");
@@ -2137,6 +2271,11 @@ mod tests {
             .iter()
             .find(|replacement| replacement.name == "Rolling Fire Bloom")
             .unwrap();
-        assert!(rolling.definition.modules_in_group("Foreground").is_empty());
+        // The Bands module is gone; the transparent Point10 hero that moved
+        // into the Foreground row in version 17 is the only module left there.
+        assert_eq!(
+            rolling.definition.modules_in_group("Foreground"),
+            vec!["Point10 Rolling Fire"]
+        );
     }
 }
