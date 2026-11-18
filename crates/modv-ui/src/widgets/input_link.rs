@@ -11,7 +11,9 @@
 
 use crate::layout::WINDOW_INPUT_LINK;
 use crate::model::{EngineSnapshot, InputLinkView};
-use crate::state::{AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiState};
+use crate::state::{
+    AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiState, focused_input_title,
+};
 use crate::theme;
 use crate::widgets::TweenControl;
 
@@ -35,7 +37,8 @@ pub fn link_row(
             ui.label(egui::RichText::new(summary).size(11.0).color(theme::MUTED))
                 .on_hover_text(format!("input {input_id}"));
             if ui.small_button("Edit").clicked() {
-                state.open_link_editor(LinkEditor::for_input(input_id, prop_name, snapshot));
+                let title = focused_input_title(input_id, prop_name, snapshot);
+                state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
             }
             if ui.small_button("x").on_hover_text("Remove link").clicked() {
                 // Releasing the smoothing id keeps the evaluator registry from
@@ -53,7 +56,8 @@ pub fn link_row(
             .on_hover_text("Bind this input to audio, state, MIDI or OSC")
             .clicked()
         {
-            state.open_link_editor(LinkEditor::for_input(input_id, prop_name, snapshot));
+            let title = focused_input_title(input_id, prop_name, snapshot);
+            state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
         }
 
         // The legacy E badge marks an input with an expression assignment,

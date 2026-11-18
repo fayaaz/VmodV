@@ -9,19 +9,33 @@
 //! applies the queued action the same way so the grid re-render is asserted
 //! too.
 //!
-//! Not covered here because the native grid has no equivalent yet:
-//! - the cell editor dialog (`Edit` -> add module -> close) from
-//!   `editing a grid cell saves added modules back into the Scene`; the native
-//!   path is to add to the live Group and capture the row (covered below).
-//! - dragging a module from the editor's module panel into the Group.
-//! - the native grid paints a hover preview only while the cell is hovered;
-//!   the legacy grid keeps the last preview visible as a still.
+//! ## Cell-editor waiver
+//!
+//! Two JS intents are deliberately waived because native has no in-cell module
+//! editor or module drag into that editor:
+//!
+//! - `editing a grid cell saves added modules back into the Scene` — the JS
+//!   dialog opens `Edit`, adds modules, and saves them back into the Scene.
+//!   Native provides the same end state without the dialog: double-click an
+//!   empty cell to queue `scenes/createSceneCellGroup` (which stamps the row's
+//!   Group into the Scene), edit the live Group (Gallery/drag into the Groups
+//!   pane), then `Capture live row into this cell`
+//!   (`scenes/captureSceneRowToScene`) from the cell context menu, and
+//!   `Clear cell` (`scenes/clearSceneCell`, now confirmed) to empty it. Those
+//!   actions are asserted below and their store halves live in
+//!   `modv-app`'s `scene_ops` tests.
+//! - `the cell editor can drag a module from its panel into the Group` — there
+//!   is no editor module panel to drag from. Native's equivalent drag exists
+//!   already: a Gallery tile dropped on a Group block queues
+//!   `ui/addModuleToGroup` (`tests/gallery_drag_drop.rs`), and a Library asset
+//!   can be dragged onto its texture prop.
 
 use std::sync::{Arc, Mutex};
 
 use egui::{Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use modv_ui::panels::CellRef;
 use modv_ui::{
     EngineSnapshot, PerformanceView, PreviewRequest, PreviewTexture, SceneCellView, SceneView,
     UiAction, UiState, scene_preview_key,
@@ -100,10 +114,11 @@ fn apply(snapshot: &Arc<Mutex<EngineSnapshot>>, action: &UiAction) {
     let mut snapshot = snapshot.lock().unwrap();
     match action.action.as_str() {
         "scenes/addEmptyScene" => {
+            // `+ Column` sends `{}` and the engine mints `Scene N`.
             let name = action.payload["name"]
                 .as_str()
-                .unwrap_or("New Scene")
-                .to_string();
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Scene {}", snapshot.scenes.len() + 1));
             let id = format!("scene-new-{}", snapshot.scenes.len());
             snapshot.scenes.push(scene(&id, &name, Vec::new()));
         }
@@ -184,6 +199,8 @@ fn double_click(harness: &mut Harness<'static, UiState>, pos: egui::Pos2) {
 // and leaves a still".
 fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
     let (mut harness, snapshot) = build();
+    let first_cell = CellRef::new("scene-a", 0);
+    let second_cell = CellRef::new("scene-a", 1);
 
     let first = harness.get_by_label("Alpha row 1").rect();
     harness.hover_at(first.center());
@@ -201,10 +218,17 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
         },
         "the request names the saved Scene row, not the live composition"
     );
+    assert!(
+        harness
+            .state()
+            .scene_grid
+            .paints_preview(&first_cell, false),
+        "the first cell keeps painting its cached preview after the pointer moves"
+    );
 
-    // Hovering another cell asks for that row's preview. The previous row's
-    // texture stays in the snapshot cache (a still), which is what the legacy
-    // grid keeps painted after the pointer leaves.
+    // Hovering another cell asks for that row's preview. Both cells keep
+    // painting: the legacy grid leaves a still per rendered cell, not just
+    // the most recently hovered one.
     let second = harness.get_by_label("Alpha row 2").rect();
     harness.hover_at(second.center());
     harness.run();
@@ -216,10 +240,15 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
             row_index: 1,
         })
     );
+    assert!(
+        harness
+            .state()
+            .scene_grid
+            .paints_preview(&first_cell, false),
+        "the first cell's still survives hovering the second cell"
+    );
 
-    // Leaving the grid stops new requests but does not evict the cached cell
-    // preview. (The grid currently paints a preview only while its cell is
-    // hovered; the retained still is reported as a parity gap.)
+    // Leaving the grid stops new requests but keeps both previews painted.
     harness.remove_cursor();
     harness.run();
     let requests = std::mem::take(&mut harness.state_mut().scene_grid.preview_requests);
@@ -227,9 +256,22 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
         requests.is_empty(),
         "no preview is requested when the pointer leaves the grid: {requests:?}"
     );
+    assert!(
+        harness
+            .state()
+            .scene_grid
+            .paints_preview(&first_cell, false),
+        "the first row keeps its still"
+    );
+    assert!(
+        harness
+            .state()
+            .scene_grid
+            .paints_preview(&second_cell, false),
+        "the second row keeps its still"
+    );
 
-    // The engine keeps the rendered cell texture after the hover ends; the
-    // grid reads it from the same snapshot map on a later hover.
+    // The still paints from the snapshot's cached texture.
     snapshot.lock().unwrap().scene_previews.insert(
         scene_preview_key("scene-a", 0),
         PreviewTexture {
@@ -247,6 +289,20 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
             .contains_key(&scene_preview_key("scene-a", 0)),
         "the first row's preview texture remains available as a still"
     );
+
+    // Clearing the cell drops its still; the Scene no longer has a preview to
+    // show.
+    snapshot.lock().unwrap().scenes[0].cells[0]
+        .module_names
+        .clear();
+    harness.run();
+    assert!(
+        !harness
+            .state()
+            .scene_grid
+            .paints_preview(&first_cell, false),
+        "an emptied cell stops painting the stale still"
+    );
 }
 
 #[test]
@@ -260,15 +316,25 @@ fn the_grid_adds_a_new_empty_scene_column() {
 
     let adds = find(&actions, "scenes/addEmptyScene");
     assert_eq!(adds.len(), 1, "one add-Scene action: {actions:?}");
-    assert_eq!(adds[0].payload, serde_json::json!({ "name": "New Scene" }));
+    assert_eq!(
+        adds[0].payload,
+        serde_json::json!({}),
+        "the engine mints the `Scene N` name; the UI does not supply one"
+    );
 
     let scenes = snapshot.lock().unwrap();
     assert_eq!(scenes.scenes.len(), 2);
     let added = &scenes.scenes[1];
+    assert!(
+        added.name.starts_with("Scene "),
+        "the new column uses the engine's `Scene N` default: {}",
+        added.name
+    );
     assert!(added.cells.is_empty(), "a new column has no cells");
+    let name = added.name.clone();
     drop(scenes);
     assert!(
-        harness.get_all_by_label("New Scene").count() >= 1,
+        harness.get_all_by_label(&name).count() >= 1,
         "the new column header appears in the grid"
     );
 }
@@ -276,14 +342,48 @@ fn the_grid_adds_a_new_empty_scene_column() {
 #[test]
 // `performanceGrid.spec.js`: "clearing a grid cell removes its modules after
 // confirmation".
-fn clearing_a_cell_removes_its_modules() {
+fn clearing_a_cell_asks_for_confirmation_first() {
     let (mut harness, snapshot) = build();
 
-    // The legacy grid asks for confirmation before clearing. The native grid
-    // has no confirmation dialog: the menu item queues the clearing action
-    // directly (recorded as a parity gap).
     let cell = harness.get_by_label("Alpha row 1").rect();
     secondary_click(&mut harness, cell.center());
+    harness.get_by_label("Clear cell").click();
+    harness.run();
+
+    // The menu item only opens the confirmation; nothing is cleared yet.
+    let actions = harness.state_mut().take_actions();
+    assert!(
+        find(&actions, "scenes/clearSceneCell").is_empty(),
+        "the menu item does not clear the cell directly: {actions:?}"
+    );
+    assert!(
+        harness.state().scene_grid.clear_cell_edit.is_some(),
+        "the confirmation dialog is open"
+    );
+    assert_eq!(
+        snapshot.lock().unwrap().scenes[0].cells[0].module_names,
+        ["Ball", "Bands"],
+        "Cancel is available before anything is written"
+    );
+
+    // Cancel closes the dialog and leaves the saved cell alone.
+    harness.get_by_label("Cancel").click();
+    let actions = run_and_apply(&mut harness, &snapshot);
+    assert!(
+        find(&actions, "scenes/clearSceneCell").is_empty(),
+        "Cancel does nothing: {actions:?}"
+    );
+    assert!(harness.state().scene_grid.clear_cell_edit.is_none());
+    assert_eq!(
+        harness.get_by_label("Alpha row 1").accesskit_node().label(),
+        Some("Alpha row 1".to_string()),
+        "the cell keeps its modules"
+    );
+
+    // Confirming queues the same payload the old direct item sent.
+    secondary_click(&mut harness, cell.center());
+    harness.get_by_label("Clear cell").click();
+    harness.run();
     harness.get_by_label("Clear cell").click();
     let actions = run_and_apply(&mut harness, &snapshot);
 
@@ -310,9 +410,11 @@ fn clearing_a_cell_removes_its_modules() {
 // `performanceGrid.spec.js`: "editing a grid cell saves added modules back
 // into the Scene" (native live-capture path).
 fn capturing_the_live_row_saves_the_added_modules_into_the_cell() {
-    // The native grid has no in-cell editor dialog. Its equivalent "edit this
-    // cell" path is: add a module to the live Group (Gallery), then capture
-    // that live row back into the saved cell. The store half is covered by
+    // Waived cell-editor intent: "editing a grid cell saves added modules
+    // back into the Scene". Native has no in-cell editor dialog; its
+    // equivalent "edit this cell" path is: add a module to the live Group
+    // (Gallery), then capture that live row back into the saved cell. The
+    // store half is covered by
     // scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows.
     let (mut harness, _snapshot) = build();
 

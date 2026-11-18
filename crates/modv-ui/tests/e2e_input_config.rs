@@ -3,8 +3,9 @@
 //! Legacy `InputConfig.vue` edits only the focused input: clicking a module
 //! prop focuses that input and the panel title becomes `<module>: <prop>`.
 //! The native shell has no separate Input Config tab; each prop's link row
-//! opens the same focused-input editor (`LinkEditor`). These tests drive that
-//! path and assert the editor targets the clicked prop's input id.
+//! opens the same focused-input editor (`LinkEditor`) and its window repeats
+//! the legacy `<module>: <prop>` title. These tests drive that path and assert
+//! the editor targets the clicked prop's input id and shows the full title.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -125,11 +126,10 @@ fn focusing_a_prop_opens_the_input_config_for_that_input() {
         editor.input_id, "in-amount",
         "the editor targets the clicked prop's input, not the module's first input"
     );
-    // Native title shape: the shell passes the prop name (legacy InputConfig
-    // shows `<module>: <prop>`; the module prefix is not in `GroupView`/the
-    // link row today — recorded as a parity gap).
-    assert_eq!(editor.title, "Amount");
-    harness.get_by_label("Input link: Amount");
+    // Legacy `InputConfig.vue` titles the panel `<module>: <prop>`, so the
+    // native window is `Input link: Ball: Amount`.
+    assert_eq!(editor.title, "Ball: Amount");
+    harness.get_by_label("Input link: Ball: Amount");
 }
 
 #[test]
@@ -151,6 +151,6 @@ fn the_focused_input_editor_follows_a_different_prop() {
         .as_ref()
         .expect("clicking the second prop opens the focused-input editor");
     assert_eq!(editor.input_id, "in-speed");
-    assert_eq!(editor.title, "Speed");
-    harness.get_by_label("Input link: Speed");
+    assert_eq!(editor.title, "Ball: Speed");
+    harness.get_by_label("Input link: Ball: Speed");
 }

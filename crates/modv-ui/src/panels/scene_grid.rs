@@ -22,7 +22,7 @@ use crate::theme;
 use crate::widgets::range_control::chip;
 
 /// A cell address inside the Scenes grid.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CellRef {
     pub scene_id: String,
     pub row: usize,
@@ -46,6 +46,12 @@ pub struct SceneGridState {
     pub preview_requests: Vec<PreviewRequest>,
     last_preview_request: Option<std::time::Instant>,
     hover_scene: Option<(String, usize)>,
+    /// Cells whose cached preview keeps painting after the pointer leaves
+    /// (the legacy grid "leaves a still"). Inserted on hover and pruned when
+    /// the saved cell disappears or is emptied.
+    still_cells: std::collections::BTreeSet<CellRef>,
+    /// The in-flight `Clear cell` confirmation, if any.
+    pub clear_cell_edit: Option<ClearCellEdit>,
     /// Inline Scene-name editor: `(scene_id, draft)`.
     pub renaming: Option<(String, String)>,
     /// One-shot focus request for the inline editor.
@@ -68,6 +74,16 @@ pub struct SceneGridState {
     pub row_renaming: Option<(usize, String)>,
     /// One-shot focus request for the inline row editor.
     pub row_rename_focus: bool,
+}
+
+/// A pending `Clear cell` confirmation: the cell to clear plus the label the
+/// dialog shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClearCellEdit {
+    pub scene_id: String,
+    pub row: usize,
+    pub scene_name: String,
+    pub module_names: Vec<String>,
 }
 
 /// The small Scene-timing dialog's draft values.
@@ -216,6 +232,32 @@ impl SceneGridState {
                 row_index: row,
             });
         }
+    }
+
+    /// Whether `cell` paints a cached preview this frame: the hovered cell is
+    /// live, and every cell hovered before keeps its last rendered frame as a
+    /// still (the legacy grid's `scenes__gridPreviewCanvas--visible`).
+    pub fn paints_preview(&self, cell: &CellRef, hovered: bool) -> bool {
+        hovered || self.still_cells.contains(cell)
+    }
+
+    /// Remember `cell` as a still so its cached preview keeps painting once
+    /// the pointer moves on.
+    pub fn keep_preview(&mut self, cell: &CellRef) {
+        self.still_cells.insert(cell.clone());
+    }
+
+    /// Drop stills whose Scene or saved cell disappeared or became empty, so
+    /// a removed/cleared cell cannot keep painting a stale frame.
+    pub fn prune_preview_stills(&mut self, snapshot: &EngineSnapshot) {
+        self.still_cells.retain(|cell| {
+            snapshot
+                .scenes
+                .iter()
+                .find(|scene| scene.id == cell.scene_id)
+                .and_then(|scene| scene.cell(cell.row))
+                .is_some_and(|saved| !saved.is_empty())
+        });
     }
 
     /// Finish a copy drag over `target`. Returns the engine action, or `None`
@@ -394,14 +436,14 @@ pub fn draw_scene_grid(
             ui.label(egui::RichText::new("No Scenes yet").size(16.0));
             ui.label(egui::RichText::new("Add a Scene or load the defaults.").color(theme::MUTED));
             if ui.button("Add empty Scene").clicked() {
-                actions.push(UiAction::new(
-                    "scenes/addEmptyScene",
-                    serde_json::json!({ "name": "New Scene" }),
-                ));
+                actions.push(UiAction::new("scenes/addEmptyScene", serde_json::json!({})));
             }
         });
         return;
     }
+
+    // A still only lives while its saved cell exists and holds a Group.
+    grid.prune_preview_stills(snapshot);
 
     let row_count = grid_row_count(snapshot);
     performance_bar(ui, snapshot, grid, row_count, actions);
@@ -1093,10 +1135,9 @@ fn performance_bar(
             grid.row_names_edit = Some(grid_row_names(snapshot, row_count));
         }
         if ui.button("+ Column").clicked() {
-            actions.push(UiAction::new(
-                "scenes/addEmptyScene",
-                serde_json::json!({ "name": "New Scene" }),
-            ));
+            // The engine mints the `Scene N` default; the legacy `+ Column`
+            // sends no name either (`scenes/addEmptyScene` with no args).
+            actions.push(UiAction::new("scenes/addEmptyScene", serde_json::json!({})));
             grid.scroll_to_last_scene = true;
         }
         if ui.button("+ Row").clicked() {
@@ -1293,6 +1334,61 @@ fn scene_dialogs(
             grid.row_names_edit = Some(names);
         }
     }
+
+    if let Some(edit) = grid.clear_cell_edit.take() {
+        let mut open = true;
+        let mut confirm = false;
+        let mut cancel = false;
+        let row_name = snapshot
+            .scene_rows
+            .get(edit.row)
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("Row {}", edit.row + 1));
+        let window = layout.apply_window(
+            egui::Window::new(format!(
+                "Clear cell: {} row {}",
+                edit.scene_name,
+                edit.row + 1
+            ))
+            .id(egui::Id::unique("modv-window:scene_clear_cell"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .min_width(320.0)
+            .default_size([400.0, 150.0]),
+            "scene_clear_cell",
+        );
+        let response = window.show(ui.ctx(), |ui| {
+            ui.label(format!(
+                "Clear the {row_name} cell of {}? This removes its saved modules from the Scene.",
+                edit.scene_name
+            ));
+            ui.label(
+                egui::RichText::new(edit.module_names.join(", "))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme::MUTED),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Clear cell").clicked() {
+                    confirm = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        if let Some(response) = response {
+            layout.record_window_rect("scene_clear_cell", response.response.rect);
+        }
+        if confirm {
+            actions.push(clear_cell_action(&edit.scene_id, edit.row));
+        } else if !cancel && open {
+            grid.clear_cell_edit = Some(edit);
+        }
+    }
 }
 
 /// How one Scene cell is highlighted against the live state.
@@ -1421,6 +1517,9 @@ fn draw_scene_cell(
     let hovered = response.hovered();
     if hovered {
         grid.hovered = Some(target.clone());
+        if !cell.is_empty() {
+            grid.keep_preview(&target);
+        }
     }
 
     let highlight = scene_cell_highlight(
@@ -1464,8 +1563,10 @@ fn draw_scene_cell(
     );
 
     // Hover preview: the engine's isolated Scene-cell render, falling back to
-    // the live composited frame until the first preview arrives.
-    if should_request_preview(cell, hovered) {
+    // the live composited frame until the first preview arrives. Once a cell
+    // has been hovered its cached preview keeps painting as a still, matching
+    // `performanceGrid`'s "leaves a still".
+    if !cell.is_empty() && grid.paints_preview(&target, hovered) {
         let key = scene_preview_key(&scene.id, row);
         let texture = snapshot
             .scene_previews
@@ -1478,6 +1579,8 @@ fn draw_scene_cell(
             painter.image(texture_id, inner, uv, Color32::from_white_alpha(210));
             painter.rect_filled(inner, CornerRadius::same(0), Color32::from_black_alpha(70));
         }
+    }
+    if should_request_preview(cell, hovered) {
         grid.request_preview(&scene.id, row, std::time::Duration::from_millis(150));
     }
 
@@ -1715,7 +1818,14 @@ fn scene_cell_menu(
         .add_enabled(!cell.is_empty(), egui::Button::new("Clear cell"))
         .clicked()
     {
-        actions.push(clear_cell_action(&scene.id, row));
+        // The legacy grid confirms a clear before writing it; keep the saved
+        // cell untouched until the dialog is accepted.
+        grid.clear_cell_edit = Some(ClearCellEdit {
+            scene_id: scene.id.clone(),
+            row,
+            scene_name: scene.name.clone(),
+            module_names: cell.module_names.clone(),
+        });
         ui.close();
     }
     if ui
