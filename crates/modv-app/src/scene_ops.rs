@@ -86,6 +86,10 @@
 //!   `rowNames`/`order`/`allowedTransitions` on every restart. The engine
 //!   persists and hydrates the whole config so the named grid survives, while
 //!   the runtime keys (`enabled`, `currentSceneId`) still reset on boot.
+//! - **Whole-Scene applies restore the Scene's MIDI state and focused
+//!   input.** `restoreSceneMidi` and the focused-input tail of
+//!   `restoreSceneInputs` run only for a whole-Scene apply; a row/scoped apply
+//!   leaves both alone (`scenes.js` `scoped` early-return).
 //!
 //! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
@@ -859,7 +863,9 @@ impl Store {
         }
 
         self.restore_scene_inputs(&scene, &input_map);
+        self.restore_scene_focused_input(&scene, &input_map);
         self.restore_scene_expressions(&scene, &input_map, None);
+        self.restore_scene_midi(&scene);
         self.applied_scene_id = Some(scene_id.clone());
         self.set_current_scene(&scene_id);
 
@@ -2752,7 +2758,8 @@ impl Store {
     }
 
     /// `restoreSceneInputs` (`scenes.js:432-539`) without the focused-input
-    /// restore (it is UI state, not part of the engine's layer stack).
+    /// tail (see [`Self::restore_scene_focused_input`], which only a
+    /// whole-Scene apply runs).
     fn restore_scene_inputs(&mut self, scene: &Value, input_map: &HashMap<String, String>) {
         let links = scene
             .get("inputs")
@@ -2817,6 +2824,48 @@ impl Store {
         // on rows that stay (`scenes.js` never rebuilds them, R-8). Only ids
         // that left the authoritative list are dropped.
         self.prune_tweens();
+    }
+
+    /// The focused-input tail of `restoreSceneInputs` (`scenes.js:503-537`).
+    ///
+    /// The saved id is remapped through the same old→new input map the links
+    /// and tweens use; when the Scene no longer creates that input the focus
+    /// is cleared (`inputs/clearFocusedInput`). A document without an `inputs`
+    /// object (the legacy `layers` shape) leaves the focus alone, and a
+    /// row/scoped apply never calls this — the JS `scoped` early-return.
+    fn restore_scene_focused_input(&mut self, scene: &Value, input_map: &HashMap<String, String>) {
+        let Some(inputs) = scene.get("inputs").filter(|inputs| inputs.is_object()) else {
+            return;
+        };
+        let focused = inputs.get("focusedInput");
+        let title = focused
+            .and_then(|focused| focused.get("title"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let new_id = focused
+            .and_then(|focused| focused.get("id"))
+            .and_then(Value::as_str)
+            .and_then(|old_id| input_map.get(old_id));
+
+        match new_id {
+            Some(new_id) => self.set_focused_input_values(json!(new_id), title),
+            None => self.clear_focused_input_values(),
+        }
+    }
+
+    /// `restoreSceneMidi` (`scenes.js:593-599`): a Scene's `midi` block is a
+    /// full MIDI state loaded through `midi/loadPresetData` (`SET_STATE`).
+    /// A missing or non-object block is ignored, exactly like the JS guard.
+    fn restore_scene_midi(&mut self, scene: &Value) {
+        let Some(midi) = scene.get("midi").filter(|midi| midi.is_object()) else {
+            return;
+        };
+        if let Err(error) = self.midi_set_state(midi) {
+            self.warn_once(
+                "scene-apply-midi".to_string(),
+                &format!("engine: WARN scenes/applyScene: could not restore MIDI: {error}"),
+            );
+        }
     }
 
     /// Restore a Scene document's expression assignments (`scenes.js`

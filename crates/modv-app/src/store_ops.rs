@@ -2998,17 +2998,27 @@ impl Store {
     fn set_focused_input(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
         let id = params.get("id").cloned().unwrap_or(Value::Null);
         let title = params.get("title").cloned().unwrap_or(Value::Null);
-        self.state.focused_input = json!({ "id": id, "title": title });
-        self.deltas.push(
-            "inputs/SET_FOCUSED_INPUT",
-            json!({ "id": id, "title": title }),
-        );
+        self.set_focused_input_values(id, title);
         Ok(Value::Null)
+    }
+
+    /// The value form of `inputs/SET_FOCUSED_INPUT`, shared with the Scene
+    /// restore path (`restoreSceneInputs`, `scenes.js:503-537`).
+    pub(crate) fn set_focused_input_values(&mut self, id: Value, title: Value) {
+        let value = json!({ "id": id, "title": title });
+        self.state.focused_input = value.clone();
+        self.deltas.push("inputs/SET_FOCUSED_INPUT", value);
     }
 
     /// `inputs/clearFocusedInput` (`inputs.js:102-104`).
     fn clear_focused_input(&mut self) -> Result<Value, StoreError> {
-        self.set_focused_input(&Map::new())
+        self.clear_focused_input_values();
+        Ok(Value::Null)
+    }
+
+    /// The value form of `inputs/clearFocusedInput` (`{id: null, title: null}`).
+    pub(crate) fn clear_focused_input_values(&mut self) {
+        self.set_focused_input_values(Value::Null, Value::Null);
     }
 
     // ————————————————— FPS / tweens (WS-12) —————————————————

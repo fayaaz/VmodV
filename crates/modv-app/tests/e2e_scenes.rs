@@ -794,6 +794,16 @@ fn a_saved_scene_serialises_the_whole_store_like_a_preset() {
         .expect("the input link is restored on the fresh id");
     assert_eq!(link.source.as_deref(), Some("meyda"));
     assert_eq!(link.args, Some(vec![json!("bass")]));
+    assert_eq!(
+        store.state().midi["devices"]["e2e-whole-store-E2E Controller-modV"]["id"],
+        json!("e2e-whole-store"),
+        "the saved MIDI device is restored by the whole-Scene apply"
+    );
+    assert_eq!(
+        store.state().focused_input,
+        json!({ "id": restored_input_id, "title": "Intensity" }),
+        "the saved focused input is remapped onto the rebuilt input id"
+    );
     let assignment = store
         .state()
         .expressions
@@ -900,6 +910,236 @@ fn a_legacy_scene_with_an_object_tweens_map_still_applies() {
     assert_eq!(
         link.location.as_deref(),
         Some(format!("tweens.tweens['{live_input_id}'].value[0]").as_str())
+    );
+}
+
+/// `restoreSceneMidi` + `restoreSceneInputs`: applying a whole Scene restores
+/// its saved MIDI devices/channel data and remaps the saved focused input onto
+/// the rebuilt input id, emitting the deltas the mirror needs.
+#[test]
+fn apply_scene_restores_the_saved_midi_state_and_focused_input() {
+    let scene = json!({
+        "id": "midi-focus-scene",
+        "name": "MIDI Focus Scene",
+        "enabled": true,
+        "groups": [{
+            "id": "doc-group",
+            "name": "Foreground",
+            "hidden": false,
+            "modules": ["doc-ball"],
+            "enabled": 1,
+            "alpha": 1,
+            "inherit": false,
+            "inheritFrom": -1,
+            "pipeline": false,
+            "clearing": true,
+            "compositeOperation": "normal",
+        }],
+        "modules": {
+            "doc-ball": {
+                "$id": "doc-ball",
+                "$moduleName": "Ball",
+                "meta": { "name": "Ball", "enabled": true },
+                "props": { "intensity": 0.5 },
+                "data": {},
+                "$props": {
+                    "intensity": { "id": "doc-intensity", "type": "float", "min": 0, "max": 1 }
+                },
+            },
+        },
+        "inputs": {
+            "focusedInput": { "id": "doc-intensity", "title": "Ball.intensity" },
+            "inputs": {},
+            "inputLinks": {},
+        },
+        "midi": {
+            "devices": {
+                "doc-ctrl-Launchpad-Novation": {
+                    "id": "doc-ctrl-Launchpad-Novation",
+                    "name": "Launchpad",
+                    "manufacturer": "Novation",
+                    "channelData": { "1": { "144": 64 } },
+                    "listenForInput": true,
+                    "listenForClock": true,
+                    "ccLatch": false,
+                    "noteOnLatch": false,
+                },
+            },
+            "learning": false,
+        },
+    });
+
+    let mut store = Store::new();
+    no_transition(&mut store);
+    // Live MIDI/focus that the apply must replace, not merge with.
+    store
+        .dispatch(
+            "midi/ADD_DEVICE",
+            json!({ "id": "live-ctrl", "name": "Live", "manufacturer": "Acme" }),
+        )
+        .expect("midi/ADD_DEVICE");
+    store
+        .dispatch(
+            "inputs/setFocusedInput",
+            json!({ "id": "live-input", "title": "Live" }),
+        )
+        .expect("setFocusedInput");
+    store.drain_deltas();
+
+    load_scene(&mut store, scene, true);
+
+    let restored_device = &store.state().midi["devices"]["doc-ctrl-Launchpad-Novation"];
+    assert_eq!(
+        restored_device["channelData"]["1"]["144"],
+        json!(64),
+        "the Scene's MIDI device channel data is restored: {}",
+        store.state().midi
+    );
+    assert_eq!(restored_device["listenForClock"], json!(true));
+    assert!(
+        store.state().midi["devices"]
+            .get("live-ctrl-Live-Acme")
+            .is_none(),
+        "the saved MIDI state is a full state, not a merge: {}",
+        store.state().midi
+    );
+
+    let module = store
+        .state()
+        .modules
+        .values()
+        .find(|module| module.module_name == "Ball")
+        .expect("live Ball module");
+    let live_input_id = module.dollar_props["intensity"]["id"]
+        .as_str()
+        .expect("live intensity input id")
+        .to_string();
+    assert_ne!(live_input_id, "doc-intensity", "a fresh input id is minted");
+    assert_eq!(
+        store.state().focused_input,
+        json!({ "id": live_input_id, "title": "Ball.intensity" }),
+        "the focused input is remapped through the rebuilt ids and keeps its title"
+    );
+
+    let deltas = store.drain_deltas();
+    let midi_delta = deltas
+        .iter()
+        .find(|delta| delta.r#type == "midi/SET_STATE")
+        .expect("the mirror receives the MIDI restore");
+    assert_eq!(
+        midi_delta.payload["devices"]["doc-ctrl-Launchpad-Novation"]["channelData"]["1"]["144"],
+        json!(64)
+    );
+    let focus_delta = deltas
+        .iter()
+        .find(|delta| delta.r#type == "inputs/SET_FOCUSED_INPUT")
+        .expect("the mirror receives the focused input");
+    assert_eq!(focus_delta.payload["id"], json!(live_input_id));
+    assert_eq!(focus_delta.payload["title"], json!("Ball.intensity"));
+}
+
+/// `restoreSceneInputs` clears the focused input when the saved id is not
+/// part of the rebuilt Scene.
+#[test]
+fn apply_scene_clears_the_focused_input_when_the_saved_id_is_missing() {
+    let mut store = Store::new();
+    no_transition(&mut store);
+    store
+        .dispatch(
+            "inputs/setFocusedInput",
+            json!({ "id": "live-input", "title": "Live" }),
+        )
+        .expect("setFocusedInput");
+    store.drain_deltas();
+
+    let mut scene = scene_document("focus-scene", "Focus Scene", &[("Background", "Ball")]);
+    scene["inputs"] = json!({
+        "focusedInput": { "id": "not-in-this-scene", "title": "Gone" },
+        "inputs": {},
+        "inputLinks": {},
+    });
+    load_scene(&mut store, scene, true);
+
+    assert_eq!(
+        store.state().focused_input,
+        json!({ "id": null, "title": null }),
+        "a focused input that is not part of the Scene is cleared"
+    );
+    let focus_delta = store
+        .drain_deltas()
+        .into_iter()
+        .find(|delta| delta.r#type == "inputs/SET_FOCUSED_INPUT")
+        .expect("the mirror receives the cleared focus");
+    assert_eq!(focus_delta.payload, json!({ "id": null, "title": null }));
+}
+
+/// The JS `restoreSceneInputs` scoped early-return: a row apply never restores
+/// the Scene's MIDI state or focused input.
+#[test]
+fn a_scoped_row_apply_leaves_midi_and_the_focused_input_untouched() {
+    let mut store = Store::new();
+    no_transition(&mut store);
+
+    let mut scene = scene_document(
+        "scoped-midi-scene",
+        "Scoped MIDI Scene",
+        &[("Background", "Ball"), ("Effects", "Bands")],
+    );
+    scene["inputs"] = json!({
+        "focusedInput": { "id": "doc-intensity", "title": "Ball.intensity" },
+        "inputs": {},
+        "inputLinks": {},
+    });
+    scene["midi"] = json!({
+        "devices": {
+            "doc-ctrl-Launchpad-Novation": {
+                "id": "doc-ctrl-Launchpad-Novation",
+                "name": "Launchpad",
+                "manufacturer": "Novation",
+                "channelData": { "1": { "144": 64 } },
+            },
+        },
+        "learning": false,
+    });
+    load_scene(&mut store, scene, false);
+
+    store
+        .dispatch(
+            "midi/ADD_DEVICE",
+            json!({ "id": "live-ctrl", "name": "Live", "manufacturer": "Acme" }),
+        )
+        .expect("midi/ADD_DEVICE");
+    store
+        .dispatch(
+            "inputs/setFocusedInput",
+            json!({ "id": "live-input", "title": "Live" }),
+        )
+        .expect("setFocusedInput");
+    let midi_before = store.state().midi.clone();
+    store.drain_deltas();
+
+    apply_scene_row(&mut store, "scoped-midi-scene", 0);
+
+    assert_eq!(
+        store.state().midi,
+        midi_before,
+        "a row apply leaves the MIDI state alone"
+    );
+    assert_eq!(
+        store.state().focused_input,
+        json!({ "id": "live-input", "title": "Live" }),
+        "a row apply leaves the focused input alone"
+    );
+    let deltas = store.drain_deltas();
+    assert!(
+        !deltas.iter().any(|delta| delta.r#type == "midi/SET_STATE"),
+        "no MIDI restore delta on a scoped apply: {deltas:?}"
+    );
+    assert!(
+        !deltas
+            .iter()
+            .any(|delta| delta.r#type == "inputs/SET_FOCUSED_INPUT"),
+        "no focus delta on a scoped apply: {deltas:?}"
     );
 }
 
