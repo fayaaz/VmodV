@@ -585,10 +585,13 @@ enum DisplayKind {
 
 impl TestDisplay {
     fn ensure(temp_dir: &Path) -> Self {
-        if std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty()) {
+        // Prefer Wayland when the session offers it; X11/XWayland is the
+        // fallback. The headless path below stays on Xvfb because the CI
+        // image has no Wayland compositor.
+        if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty()) {
             return Self::external(DisplayKind::External);
         }
-        if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty()) {
+        if std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty()) {
             return Self::external(DisplayKind::External);
         }
 
@@ -722,7 +725,24 @@ impl TestDisplay {
 
     fn apply(&self, command: &mut Command) {
         match self.kind {
-            DisplayKind::External => {}
+            DisplayKind::External => {
+                // The harness launches the shell with its private temp
+                // XDG_RUNTIME_DIR (sway/Xvfb need a private socket dir).
+                // For the host's Wayland compositor the socket lives in the
+                // host's runtime directory, so an external Wayland display
+                // must see that one — otherwise the shell can never find
+                // the compositor. (X11 works either way: X clients look in
+                // /tmp/.X11-unix, not XDG_RUNTIME_DIR.)
+                if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
+                    && let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR")
+                {
+                    command.env("XDG_RUNTIME_DIR", xdg);
+                    command.env("XDG_SESSION_TYPE", "wayland");
+                    // Both can be set on a Wayland desktop (XWayland). Drop
+                    // DISPLAY so winit cannot silently pick the X11 backend.
+                    command.env_remove("DISPLAY");
+                }
+            }
             _ => {
                 command.env_remove("DISPLAY");
                 command.env_remove("WAYLAND_DISPLAY");

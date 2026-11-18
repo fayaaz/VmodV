@@ -205,14 +205,16 @@ keeps it and prints the path, so the log and screenshots survive CI failures.
 
 Order:
 
-1. `DISPLAY` (X11) — used as-is.
-2. `WAYLAND_DISPLAY` — used as-is.
+1. `WAYLAND_DISPLAY` — used as-is (the preferred backend; `DISPLAY` is
+   removed so winit cannot silently choose XWayland when both are set).
+2. `DISPLAY` (X11) — used as-is; this is the fallback on X11 sessions.
 3. `Xvfb :N -screen 0 1920x1080x24 -nolisten tcp -ac`, with a free `:N`
    checked against `/tmp/.X11-unix/X<N>` and `/tmp/.X<N>-lock`. The harness
-   waits for the X socket before spawning `modv`.
+   waits for the X socket before spawning `modv`; this is the CI/no-display
+   fallback.
 4. `sway` with `WLR_BACKENDS=headless`, `WLR_LIBINPUT_NO_DEVICES=1` and a
    private `XDG_RUNTIME_DIR`; the harness discovers the `wayland-*` socket and
-   sets `WAYLAND_DISPLAY`.
+   sets `WAYLAND_DISPLAY` when Xvfb cannot start.
 
 Each `NativeHarness` owns its display and kills it in `Drop`. Tests must run
 serially (`--test-threads=1`): the software Vulkan adapter is shared and

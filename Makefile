@@ -67,14 +67,9 @@ endif
 
 GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) $(GUI_MOUNTS) $(GUI_AUDIO)
 
-# The process harness spawns its own Xvfb when the container has no display.
-# Use the X11 forwarding path for it so an existing Wayland session does not
-# change which Vulkan surface the tests exercise.
-X11_GUI_ENV := -e DISPLAY="$(DISPLAY)" -e XDG_SESSION_TYPE=x11
-X11_GUI_MOUNTS := -v /tmp/.X11-unix:/tmp/.X11-unix \
-	$(if $(wildcard $(XAUTHORITY)),-e XAUTHORITY=/tmp/.Xauthority -v "$(XAUTHORITY):/tmp/.Xauthority:ro")
-X11_GUI_AUDIO := $(if $(wildcard $(PULSE_SOCKET)),-e PULSE_SERVER=unix:/tmp/pulse-native -v "$(PULSE_SOCKET):/tmp/pulse-native")
-GUI_RUN_ARGS_X11 := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(X11_GUI_ENV) $(X11_GUI_MOUNTS) $(X11_GUI_AUDIO)
+# The process harness prefers the host Wayland compositor and falls back to
+# X11/XWayland when there is no Wayland socket. Force the fallback with
+# `DISPLAY_BACKEND=x11`. With no display at all (CI), the harness starts Xvfb.
 
 # Building the binary and both installers needs several GB of BuildKit cache.
 # Fail before a build starts when the filesystem is nearly full instead of
@@ -227,7 +222,7 @@ format: docker-cargo-volume
 # Real-binary e2e: the process harness plus the Scene/defaults/manifest parity
 # tests. One worker at a time because a process owns a virtual display and the
 # software GPU is shared.
-test-e2e-native: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS_X11)
+test-e2e-native: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
 test-e2e-native: docker-cargo-volume
 	$(call run-cargo,test -p modv-app \
 		--test e2e_harness \
