@@ -18,6 +18,9 @@
 #   make docker-package   build both installers via Dockerfile `artifacts`
 
 NATIVE_VERSION ?= 2.0.0
+# Dev-only asset tooling: the wordcodec is a small Node script run in a
+# throwaway container (no Node is needed for the app build/tests).
+NODE_IMAGE ?= node:24-slim
 DOCKER_BUILD_ARGS ?=
 DIST_DIR ?= dist
 
@@ -79,7 +82,7 @@ GUI_RUN_ARGS_X11 := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(X11_G
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-native native-deb native-deb-check clean dev native native-debug lint format test-e2e test-e2e-native engine engine-test engine-lint engine-run shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean
+.PHONY: build appimage appimage-native native-deb native-deb-check clean dev native native-debug lint format test-e2e test-e2e-native engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -207,6 +210,13 @@ engine-test: docker-cargo-volume
 engine-lint: docker-cargo-volume
 	$(call run-cargo,clippy --all-targets -- -D warnings)
 	$(call run-cargo,fmt --check)
+
+# Re-encode resources/isf/rave.exe.fs from tools/rave-words.txt.
+# Uses a throwaway Node container; the app build/tests stay Node-free.
+rave-reencode:
+	$(DOCKER) run --rm --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \
+		-v "$(CURDIR)":/app -w /app "$(NODE_IMAGE)" \
+		node tools/rave-reencode.mjs $(ARGS)
 
 # Rust has no separate JS formatter any more; keep the historical alias.
 lint: engine-lint
