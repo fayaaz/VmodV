@@ -631,6 +631,11 @@ impl Store {
             "midi/ADD_DEVICE" => self.midi_add_device(params),
             "midi/UPDATE_DEVICE" => self.midi_update_device(params),
             "midi/WRITE_DATA" => self.midi_write_data(params),
+            // `midi/SET_STATE` takes the state object itself, not a params
+            // view, so a non-object payload is refused instead of silently
+            // becoming an empty map. `loadPresetData` is the JS alias the
+            // Scene/preset restore path dispatches.
+            "midi/SET_STATE" | "midi/loadPresetData" => self.midi_set_state(&payload),
             "osc/createServer" => self.osc_create_server(params),
             "osc/removeServer" => self.osc_remove_server(params),
             // ————————————————— NDI (WS-11) —————————————————
@@ -1249,6 +1254,34 @@ impl Store {
 
         self.deltas
             .push(action, json!({ "id": id, "key": key, "value": value }));
+        Ok(Value::Null)
+    }
+
+    /// `midi/SET_STATE` (`midi.js:60-69`) and its `midi/loadPresetData` alias.
+    ///
+    /// The JS mutation loops over `Object.keys(newState)` and assigns every
+    /// top-level key, so a payload without `learning` keeps the live value and
+    /// an unknown key survives. The engine keeps `state.midi` as raw JSON and
+    /// emits the same mutation so the mirror/UI sees the restored devices.
+    pub(crate) fn midi_set_state(&mut self, payload: &Value) -> Result<Value, StoreError> {
+        let action = "midi/SET_STATE";
+        let Some(state) = payload.as_object() else {
+            return Err(invalid(action, "expected a MIDI state object"));
+        };
+
+        if !self.state.midi.is_object() {
+            self.state.midi = json!({ "devices": {} });
+        }
+        let root = self
+            .state
+            .midi
+            .as_object_mut()
+            .expect("midi state is an object");
+        for (key, value) in state {
+            root.insert(key.clone(), value.clone());
+        }
+
+        self.deltas.push(action, payload.clone());
         Ok(Value::Null)
     }
 
@@ -8582,6 +8615,134 @@ mod tests {
             .find(|delta| delta.r#type == "midi/WRITE_DATA")
             .expect("write delta");
         assert_eq!(write.payload["id"], json!(key));
+    }
+
+    #[test]
+    fn midi_set_state_merges_top_level_keys_and_keeps_unknown_keys() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        // `midi/loadPresetData` is the Scene/preset restore path; the JS
+        // action commits `SET_STATE`, which assigns every top-level key.
+        store
+            .dispatch(
+                "midi/loadPresetData",
+                json!({
+                    "devices": {
+                        "ctrl-1-Launchpad-Novation": {
+                            "id": "ctrl-1-Launchpad-Novation",
+                            "name": "Launchpad",
+                            "manufacturer": "Novation",
+                            "channelData": { "1": { "144": 64 } },
+                            "listenForInput": true,
+                            "listenForClock": true,
+                        },
+                    },
+                    "learning": true,
+                    "meter": { "peak": 0.5 },
+                }),
+            )
+            .expect("midi/loadPresetData dispatches");
+        assert_eq!(store.state().midi["learning"], json!(true));
+        assert_eq!(store.state().midi["meter"], json!({ "peak": 0.5 }));
+        assert_eq!(
+            store.state().midi["devices"]["ctrl-1-Launchpad-Novation"]["channelData"]["1"]["144"],
+            json!(64)
+        );
+
+        // A second state without those keys merges over the live object, so
+        // an unknown top-level key (`meter`) survives (`SET_STATE` loops over
+        // `Object.keys(newState)` instead of replacing the state).
+        store
+            .dispatch(
+                "midi/SET_STATE",
+                json!({
+                    "devices": {
+                        "ctrl-2-Keystep-Arturia": {
+                            "id": "ctrl-2-Keystep-Arturia",
+                            "name": "Keystep",
+                            "manufacturer": "Arturia",
+                        },
+                    },
+                }),
+            )
+            .expect("midi/SET_STATE dispatches");
+        assert_eq!(
+            store.state().midi["meter"]["peak"],
+            json!(0.5),
+            "keys absent from the payload survive the merge"
+        );
+        assert_eq!(
+            store.state().midi["learning"],
+            json!(true),
+            "a top-level key the payload omits keeps its live value"
+        );
+        assert!(
+            store.state().midi["devices"]
+                .get("ctrl-2-Keystep-Arturia")
+                .is_some(),
+            "the provided devices key replaces the device map"
+        );
+        assert!(
+            store.state().midi["devices"]
+                .get("ctrl-1-Launchpad-Novation")
+                .is_none(),
+            "SET_STATE replaces the provided top-level key wholesale"
+        );
+
+        let deltas = store.drain_deltas();
+        assert_eq!(
+            deltas
+                .iter()
+                .filter(|delta| delta.r#type == "midi/SET_STATE")
+                .count(),
+            2,
+            "both entry points emit the mirror's SET_STATE mutation: {deltas:?}"
+        );
+        assert_eq!(deltas[0].payload["learning"], json!(true));
+        assert!(
+            deltas[1].payload["devices"]["ctrl-2-Keystep-Arturia"].is_object(),
+            "the last delta carries the devices so the mirror sees them"
+        );
+    }
+
+    #[test]
+    fn midi_set_state_rejects_non_object_payloads() {
+        let mut store = Store::new();
+        store
+            .dispatch(
+                "midi/ADD_DEVICE",
+                json!({ "id": "keep", "name": "Pad", "manufacturer": "Acme" }),
+            )
+            .expect("add device");
+        let before = store.state().midi.clone();
+        store.drain_deltas();
+
+        for payload in [Value::Null, json!("devices"), json!(["devices"]), json!(7)] {
+            let error = store
+                .dispatch("midi/SET_STATE", payload.clone())
+                .expect_err("a non-object MIDI state is refused");
+            assert!(
+                matches!(error, StoreError::InvalidPayload { .. }),
+                "unexpected error for {payload}: {error:?}"
+            );
+            let error = store
+                .dispatch("midi/loadPresetData", payload.clone())
+                .expect_err("the alias validates too");
+            assert!(
+                matches!(error, StoreError::InvalidPayload { .. }),
+                "unexpected alias error for {payload}: {error:?}"
+            );
+        }
+        assert_eq!(
+            store.state().midi,
+            before,
+            "the live MIDI state is untouched"
+        );
+        assert!(
+            store.drain_deltas().is_empty(),
+            "a refused payload emits no delta"
+        );
     }
 
     #[test]
