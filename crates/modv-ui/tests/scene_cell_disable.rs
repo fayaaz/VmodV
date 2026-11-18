@@ -3,7 +3,9 @@
 //! The small dot in a cell's top-left corner disables that cell in performance
 //! mode without applying the Scene. In real data the toggle never reached
 //! `performance.disabledCells`, so these tests press the dot itself and assert
-//! the exact `scenes/setCellEnabled` payload with no `scenes/applyScene`.
+//! the exact `scenes/setCellEnabled` payload with no `scenes/applyScene` or
+//! `scenes/applySceneRow`. The cell body itself applies only its own row
+//! (`scenes/applySceneRow`), never the whole column.
 //!
 //! The disabled decoration is asserted through the pure draw-state helper and
 //! the `scene_grid_row_monitor` golden (row 1 is disabled).
@@ -21,6 +23,10 @@ const CELL_WIDTH: f32 = 154.0;
 const CELL_HEIGHT: f32 = 76.0;
 
 fn snapshot(disabled: bool) -> EngineSnapshot {
+    snapshot_with(disabled, vec!["Bands".to_string()])
+}
+
+fn snapshot_with(disabled: bool, module_names: Vec<String>) -> EngineSnapshot {
     EngineSnapshot {
         scenes: vec![SceneView {
             id: "scene-1".to_string(),
@@ -29,7 +35,7 @@ fn snapshot(disabled: bool) -> EngineSnapshot {
             timing: None,
             cells: vec![SceneCellView {
                 row: 0,
-                module_names: vec!["Bands".to_string()],
+                module_names,
                 disabled,
             }],
         }],
@@ -44,13 +50,25 @@ fn snapshot(disabled: bool) -> EngineSnapshot {
 }
 
 fn harness(disabled: Arc<AtomicBool>) -> Harness<'static, UiState> {
+    harness_with(disabled, false)
+}
+
+fn harness_empty(disabled: Arc<AtomicBool>) -> Harness<'static, UiState> {
+    harness_with(disabled, true)
+}
+
+fn harness_with(disabled: Arc<AtomicBool>, empty: bool) -> Harness<'static, UiState> {
     let state = UiState::new();
     let harness = Harness::builder()
         .with_size([560.0, 440.0])
         .with_accessibility_check(false)
         .build_ui_state(
             move |ui, state| {
-                let snapshot = snapshot(disabled.load(Ordering::Relaxed));
+                let snapshot = if empty {
+                    snapshot_with(disabled.load(Ordering::Relaxed), Vec::new())
+                } else {
+                    snapshot(disabled.load(Ordering::Relaxed))
+                };
                 modv_ui::panels::draw_scene_grid(
                     ui,
                     &snapshot,
@@ -115,9 +133,54 @@ fn relevant(actions: &[UiAction]) -> Vec<&UiAction> {
     actions
         .iter()
         .filter(|action| {
-            action.action == "scenes/setCellEnabled" || action.action == "scenes/applyScene"
+            action.action == "scenes/setCellEnabled"
+                || action.action == "scenes/applyScene"
+                || action.action == "scenes/applySceneRow"
         })
         .collect()
+}
+
+#[test]
+fn clicking_a_cell_applies_only_that_row() {
+    let disabled = Arc::new(AtomicBool::new(false));
+    let mut harness = harness(disabled);
+    harness.run();
+
+    let cell = first_cell(&harness);
+    primary_click(&mut harness, cell.center());
+
+    let actions = relevant(&harness.state().actions);
+    assert!(
+        actions.iter().any(|action| {
+            action.action == "scenes/applySceneRow"
+                && action.payload == serde_json::json!({"sceneId": "scene-1", "rowIndex": 0})
+        }),
+        "a cell click must apply that row: {actions:?}"
+    );
+    assert!(
+        !actions
+            .iter()
+            .any(|action| action.action == "scenes/applyScene"),
+        "a cell click must not apply the whole column: {actions:?}"
+    );
+}
+
+#[test]
+fn clicking_an_empty_cell_applies_nothing() {
+    let disabled = Arc::new(AtomicBool::new(false));
+    let mut harness = harness_empty(disabled);
+    harness.run();
+
+    let cell = first_cell(&harness);
+    primary_click(&mut harness, cell.center());
+
+    let actions = relevant(&harness.state().actions);
+    assert!(
+        !actions.iter().any(|action| {
+            action.action == "scenes/applyScene" || action.action == "scenes/applySceneRow"
+        }),
+        "an empty cell has no row to apply: {actions:?}"
+    );
 }
 
 #[test]

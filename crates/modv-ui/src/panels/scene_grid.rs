@@ -1629,7 +1629,9 @@ fn draw_scene_cell(
             .interact_pointer_pos()
             .is_some_and(|position| dot_hit.contains(position));
     if response.clicked() && !cell_dot_clicked && !cell.is_empty() && !press_on_dot {
-        actions.push(apply_scene_action(&scene.id));
+        // A cell click swaps only that row's layer, matching the Scene grid's
+        // per-row model. Applying the whole column is the header's job.
+        actions.push(apply_scene_row_action(&scene.id, row));
     }
     if response.double_clicked() && !cell_dot_clicked && cell.is_empty() && !press_on_dot {
         actions.push(UiAction::new(
@@ -1678,7 +1680,14 @@ fn scene_cell_menu(
     grid: &mut SceneGridState,
     actions: &mut Vec<UiAction>,
 ) {
-    if ui.button("Apply Scene").clicked() {
+    if ui
+        .add_enabled(!cell.is_empty(), egui::Button::new("Apply this row"))
+        .clicked()
+    {
+        actions.push(apply_scene_row_action(&scene.id, row));
+        ui.close();
+    }
+    if ui.button("Apply whole Scene").clicked() {
         actions.push(apply_scene_action(&scene.id));
         ui.close();
     }
@@ -1843,11 +1852,19 @@ fn scene_column_menu(
     }
 }
 
-/// Build an `applyScene` action (used by tests and menu helpers).
+/// Build an `applyScene` action (used by the column header and menu helpers).
 pub(crate) fn apply_scene_action(scene_id: &str) -> UiAction {
     UiAction::new(
         "scenes/applyScene",
         serde_json::json!({ "sceneId": scene_id }),
+    )
+}
+
+/// Build an `applySceneRow` action: swap only this row's layer.
+pub(crate) fn apply_scene_row_action(scene_id: &str, row: usize) -> UiAction {
+    UiAction::new(
+        "scenes/applySceneRow",
+        serde_json::json!({ "sceneId": scene_id, "rowIndex": row }),
     )
 }
 
