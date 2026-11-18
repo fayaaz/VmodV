@@ -1307,6 +1307,38 @@ pub struct MidiSnapshot {
     pub available: bool,
     pub error: Option<String>,
     pub devices: Vec<MidiDeviceView>,
+    /// The input a one-shot MIDI Learn is waiting for (`midi/learn`).
+    pub learning: Option<MidiLearnArmView>,
+    /// The most recently resolved Learn, kept for the editor and MIDI panel.
+    pub last_learn: Option<MidiLearnResultView>,
+}
+
+/// An armed one-shot MIDI Learn (`midi/learn`), shown as “Waiting for MIDI…”.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MidiLearnArmView {
+    /// The input the learned message will be bound to.
+    pub input_id: String,
+    /// Monotonic arm id. A result answers exactly one arm; a stale arm can
+    /// never resolve a later Learn.
+    pub id: u64,
+}
+
+/// One resolved MIDI Learn event (the fields Electron's `MIDI.vue` reads from
+/// the MIDI message before it dispatches `inputs/createInputLink`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MidiLearnResultView {
+    /// The arm this result answered.
+    pub id: u64,
+    /// The input the arm targeted.
+    pub input_id: String,
+    /// The engine device key `${id}-${name}-${manufacturer}`.
+    pub device: String,
+    /// MIDI channel (0-based, indexed verbatim in the legacy location).
+    pub channel: i64,
+    /// The status byte actually written to `channelData` (144 for a latched
+    /// CC, 176 for a plain CC). A clock tick never resolves a Learn, so this
+    /// is never 248.
+    pub type_: i64,
 }
 
 /// One MIDI input and its engine flags.
@@ -1835,6 +1867,25 @@ pub struct InputLinkView {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub matcher: Option<Value>,
+}
+
+impl InputLinkView {
+    /// The smoothing id carried in `args[1]` (`AudioFeatures.vue` stores
+    /// `[feature, id, value]`). Used by both remove paths to release the
+    /// evaluator registry entry instead of leaking it.
+    pub fn smoothing_id(&self) -> Option<String> {
+        self.args
+            .as_ref()
+            .and_then(Value::as_array)
+            .filter(|args| args.len() > 2)
+            .and_then(|args| args.get(1))
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| value.as_u64().map(|number| number.to_string()))
+            })
+    }
 }
 
 /// One expression assignment (`expressions.js`: `{ id, inputId, expression }`).

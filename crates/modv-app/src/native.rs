@@ -1969,6 +1969,23 @@ impl NativeApp {
                 self.add_module_to_group(&action);
                 continue;
             }
+            // One-shot MIDI Learn targets one input and lives on the MIDI
+            // client (the pump resolves it), so it never reaches the store.
+            if action.action == "midi/learn" {
+                match action.payload.get("inputId").and_then(Value::as_str) {
+                    Some(input_id) => {
+                        self.midi_client.arm_learn(input_id);
+                    }
+                    None => {
+                        eprintln!("ui: WARN midi/learn without an inputId was ignored");
+                    }
+                }
+                continue;
+            }
+            if action.action == "midi/cancelLearn" {
+                self.midi_client.cancel_learn();
+                continue;
+            }
             let action_name = action.action.as_str();
             refresh_ndi |= action_name.starts_with("ndi/");
             refresh_osc |= action_name.starts_with("osc/");
@@ -3114,6 +3131,8 @@ impl NativeApp {
         let midi = MidiSnapshot {
             available: self.midi_client.available(),
             error: self.midi_client.error().map(str::to_string),
+            learning: self.midi_client.learning(),
+            last_learn: self.midi_client.last_learn(),
             devices: {
                 let state_devices = state.midi.get("devices").and_then(Value::as_object);
                 self.midi_client

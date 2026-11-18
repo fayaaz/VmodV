@@ -8534,6 +8534,91 @@ mod tests {
         assert_eq!(write.payload["id"], json!(key));
     }
 
+    #[test]
+    fn a_learned_midi_link_replaces_an_audio_link_with_the_legacy_payload() {
+        let mut store = Store::new();
+        store
+            .dispatch(
+                "inputs/addInput",
+                json!({"id": "input-midi", "type": "action", "location": "modules/updateProp"}),
+            )
+            .expect("addInput");
+        store
+            .dispatch(
+                "inputs/createInputLink",
+                json!({
+                    "inputId": "input-midi",
+                    "type": "getter",
+                    "source": "meyda",
+                    "location": "meyda/getFeature",
+                    "args": ["bass", "sm-1", 0.4],
+                    "min": 0,
+                    "max": 1,
+                }),
+            )
+            .expect("audio link");
+        store
+            .dispatch(
+                "midi/ADD_DEVICE",
+                json!({ "id": "dev-1", "name": "Pad", "manufacturer": "Acme" }),
+            )
+            .expect("add device");
+        let key = "dev-1-Pad-Acme";
+        let location = format!("midi.devices['{key}'].channelData['1']['144']");
+
+        // The payload `MIDI.vue` builds from the learned message. A mutation
+        // replaces the audio link record; the editor releases the old smoothing
+        // id separately (input_link.rs).
+        assert_eq!(
+            store
+                .dispatch(
+                    "inputs/createInputLink",
+                    json!({
+                        "inputId": "input-midi",
+                        "type": "mutation",
+                        "source": "midi",
+                        "location": location,
+                        "match": {
+                            "type": "midi/WRITE_DATA",
+                            "payload": { "id": key, "channel": 1, "type": 144 },
+                        },
+                        "min": 0,
+                        "max": 1,
+                    }),
+                )
+                .expect("createInputLink"),
+            json!(true)
+        );
+
+        let link = &store.state().input_links["input-midi"];
+        assert!(link.is_mutation());
+        assert_eq!(link.source.as_deref(), Some("midi"));
+        assert_eq!(link.location.as_deref(), Some(location.as_str()));
+        assert_eq!(link.args, None, "a learned MIDI link carries no args");
+        assert_eq!(link.min, Some(0.0));
+        assert_eq!(link.max, Some(1.0));
+        assert_eq!(
+            link.matcher,
+            Some(json!({
+                "type": "midi/WRITE_DATA",
+                "payload": { "id": key, "channel": 1, "type": 144 },
+            }))
+        );
+
+        // The learned location is where the MIDI pump stores the value, so the
+        // mutation link reads the same number the event wrote.
+        store
+            .dispatch(
+                "midi/WRITE_DATA",
+                json!({ "id": key, "channel": 1, "type": 144, "data": 1 }),
+            )
+            .expect("write data");
+        assert_eq!(
+            store.state().midi["devices"][key]["channelData"]["1"]["144"],
+            json!(1)
+        );
+    }
+
     // ————————————————— NDI (WS-11) —————————————————
 
     #[test]

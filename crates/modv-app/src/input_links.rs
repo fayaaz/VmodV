@@ -1282,6 +1282,38 @@ mod tests {
     }
 
     #[test]
+    fn a_learned_midi_location_with_a_full_device_key_resolves() {
+        // `MIDI.vue` interpolates the raw `${id}-${name}-${manufacturer}` key
+        // into the quoted location, so the path walker must keep the whole key
+        // (spaces and dashes included) and the learned matcher payload intact.
+        let device = "dev-1-My Pad-Acme";
+        let (mut state, _) = state_with_link(
+            "mutation-learned-midi",
+            "m1",
+            "amount",
+            None,
+            json!({
+                "type": "mutation",
+                "location": format!(
+                    "midi.devices['{device}'].channelData['3']['144']"
+                ),
+                "match": {
+                    "type": "midi/WRITE_DATA",
+                    "payload": { "id": device, "channel": 3, "type": 144 }
+                }
+            }),
+        );
+        state.midi = json!({
+            "devices": {
+                device: { "channelData": { "3": { "144": 1 } } }
+            }
+        });
+        let writes = evaluate(&state);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].value, 1.0);
+    }
+
+    #[test]
     fn disabled_module_is_skipped() {
         let (mut state, _) = state_with_link(
             "disabled",
