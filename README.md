@@ -18,6 +18,10 @@ visualisation environment. This tree is the native Rust application — one
 egui UI in-process.
 </p>
 
+<p align="center">
+  <img src="docs/images/native-ui.png" alt="The VmodV native UI: Groups panel, live output preview, module Gallery, Scenes grid and Inspector" width="900" />
+</p>
+
 > **License note:** VmodV's own code is MIT-licensed. It also bundles
 > third-party modules and assets that are **not** MIT — several Shadertoy
 > modules and the Point10/Plane9 scene ports are CC BY-NC-SA (no commercial
@@ -38,6 +42,46 @@ egui UI in-process.
   GStreamer are host runtime dependencies (the `.deb` declares them).
 - The final Electron implementation is archived, not lost: see
   [docs/legacy-electron.md](docs/legacy-electron.md).
+
+## Install (Linux)
+
+Grab the latest build from the
+[Releases page](https://github.com/fayaaz/modV/releases). Stable releases
+(tags `vX.Y.Z`) are cut automatically from `main` by SemVer rules
+(`feat:` → minor, `fix:` → patch, breaking → major) — see
+[docs/releasing.md](docs/releasing.md). Linux is the only supported
+platform.
+
+**AppImage** (any distribution, no install):
+
+```bash
+# download the latest VmodV-*.AppImage from the Releases page, then:
+chmod +x VmodV-*.AppImage
+./VmodV-*.AppImage
+```
+
+If FUSE is missing, either install `libfuse2`/`fuse` (package name varies by
+distro) or run `./VmodV-*.AppImage --appimage-extract-and-run`.
+
+**Debian/Ubuntu** (`.deb`, declares its runtime dependencies):
+
+```bash
+# download the latest VmodV-*-amd64.deb from the Releases page, then:
+sudo apt install ./VmodV-*-amd64.deb
+modv
+```
+
+Either way you need a Vulkan driver on the host (any modern GPU driver, or
+`mesa-vulkan-drivers` for the lavapipe software fallback), PipeWire or
+PulseAudio for audio capture, ALSA, and GStreamer with the base/good/bad
+plugin sets for video. The `.deb` pulls these in automatically; AppImage
+users must have them installed. Running from a Wayland session is preferred;
+X11/XWayland works as a fallback.
+
+User data (presets, Scenes, media profiles, logs) lives in
+`~/.config/VmodV` — set `MODV_USER_DATA` to override. The packaged launcher
+tees stderr into `~/.config/VmodV/logs/vmodv-YYYY-MM-DD.log`; "Open logs" in
+the UI opens that folder.
 
 ## Prerequisites
 
