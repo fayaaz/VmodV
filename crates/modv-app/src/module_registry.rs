@@ -85,6 +85,11 @@
 //!   `resources/isf` (`electron-builder.yml`).
 //! * A file that cannot be read or parsed is skipped with a one-line warning;
 //!   the summary line reports the registered/failed counts.
+//! * The built-in corpus is scanned flat. User ISF folders supplied through
+//!   [`ModuleRegistry::build_with_extra`] are scanned **recursively** (sorted
+//!   paths, hidden/temporary entries skipped, depth/entry caps per root); the
+//!   module name stays the file stem. Duplicate stems keep the corpus first,
+//!   then the first sorted path, and the ignored copies are logged once.
 //! * ISF float props carry `MIN`/`MAX` but never `strict` in the JS renderer
 //!   (`renderers/isf/index.js:210-257`), so writes are **not** clamped. The
 //!   range is metadata for the UI controls only, exactly as in JS.
@@ -93,7 +98,6 @@
 //!   canvas for every image input (the JS default at
 //!   `renderers/isf/index.js:84-91`). There is no texture registry yet.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -706,10 +710,11 @@ impl ModuleRegistry {
 
     /// Build the registry with the corpus plus user ISF directories.
     ///
-    /// The corpus wins on a name collision; user files are appended in the
-    /// supplied order and duplicate names are dropped. This is the native
-    /// app's third-party ISF path (the pending watch/reload wrapper will call
-    /// it again when a `.fs` file changes).
+    /// The corpus wins on a name collision; user folders are scanned
+    /// recursively (subfolders allowed), sorted by path, and duplicate stems
+    /// across folders keep the first sorted path. Every ignored duplicate is
+    /// reported once at startup. This is the native app's third-party ISF path
+    /// (the media watcher calls it again when a `.fs` file changes).
     pub fn build_with_extra(isf_dir: Option<&Path>, extra_dirs: &[PathBuf]) -> Self {
         let shader = all_shader_modules();
         // `all_modules()` builds one default instance per module (all cheap,
@@ -730,12 +735,20 @@ impl ModuleRegistry {
                 props: scene.props(),
             })
             .collect();
-        let mut isf = scan_isf_corpus(isf_dir);
-        for dir in extra_dirs {
-            isf.extend(scan_isf_corpus(Some(dir.as_path())));
+        let (isf, duplicates) = collect_isf_definitions(isf_dir, extra_dirs);
+        for duplicate in &duplicates {
+            let ignored: Vec<String> = duplicate
+                .ignored
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect();
+            eprintln!(
+                "engine: WARN duplicate ISF module name `{}`: keeping {}; ignoring {}",
+                duplicate.name,
+                duplicate.kept.display(),
+                ignored.join(", ")
+            );
         }
-        let mut seen = HashSet::new();
-        isf.retain(|definition| seen.insert(definition.name.clone()));
         Self {
             shader,
             two_d,
@@ -1305,39 +1318,223 @@ fn default_isf_prop_value(prop: &IsfProp) -> Value {
     }
 }
 
-/// Scan an ISF corpus directory and return one [`IsfDefinition`] per parsable
-/// `*.fs`, in file-name order.
-///
-/// A missing directory is reported once and yields an empty list, so the
-/// engine still starts (with the shader/2D/Point10 modules only) when the
-/// corpus was not shipped. Individual read/parse failures are warned about and
-/// skipped. The `*.vs` sidecar is optional and matched by file stem.
-fn scan_isf_corpus(dir: Option<&Path>) -> Vec<IsfDefinition> {
-    let Some(dir) = dir else {
-        return Vec::new();
-    };
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) => {
-            eprintln!(
-                "engine: WARN ISF corpus directory {} is not readable: {error}; \
-                 no ISF modules registered",
-                dir.display()
-            );
-            return Vec::new();
-        }
+/// How many folders below a user ISF root are scanned (the root is depth 0).
+const USER_ISF_MAX_DEPTH: usize = 8;
+
+/// Upper bound on directory entries visited under one user ISF root.
+const USER_ISF_MAX_ENTRIES: usize = 4096;
+
+/// Limits for one ISF directory walk.
+#[derive(Clone, Copy, Debug)]
+struct IsfScanLimits {
+    recursive: bool,
+    max_depth: usize,
+    max_entries: usize,
+}
+
+impl IsfScanLimits {
+    /// The built-in corpus is flat and deterministic at its current size.
+    const CORPUS: Self = Self {
+        recursive: false,
+        max_depth: 0,
+        max_entries: usize::MAX,
     };
 
-    let mut files: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
+    /// User folders may be organised in subfolders, with a bound on runaway
+    /// trees.
+    const USER: Self = Self {
+        recursive: true,
+        max_depth: USER_ISF_MAX_DEPTH,
+        max_entries: USER_ISF_MAX_ENTRIES,
+    };
+}
+
+/// A module name claimed by more than one user ISF file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DuplicateIsfName {
+    name: String,
+    kept: PathBuf,
+    ignored: Vec<PathBuf>,
+}
+
+/// One parsed shader together with the file it came from (used to report which
+/// path won a duplicate-name collision).
+#[derive(Clone, Debug)]
+struct ScannedIsf {
+    path: PathBuf,
+    definition: IsfDefinition,
+}
+
+/// One sorted, bounded walk of an ISF directory.
+struct IsfScan {
+    limits: IsfScanLimits,
+    files: Vec<PathBuf>,
+    visited: usize,
+    depth_limited: bool,
+    entry_limited: bool,
+}
+
+impl IsfScan {
+    fn collect(root: &Path, limits: IsfScanLimits) -> Self {
+        let mut scan = Self {
+            limits,
+            files: Vec::new(),
+            visited: 0,
+            depth_limited: false,
+            entry_limited: false,
+        };
+        scan.walk(root, 0);
+        // Sort by full path so registration order is stable even when the
+        // platform returns directory entries in hash order.
+        scan.files.sort();
+        if scan.depth_limited {
+            eprintln!(
+                "engine: WARN ISF scan depth limit ({}) reached under {}; deeper folders were skipped",
+                limits.max_depth,
+                root.display()
+            );
+        }
+        if scan.entry_limited {
+            eprintln!(
+                "engine: WARN ISF scan entry limit ({}) reached under {}; remaining files were skipped",
+                limits.max_entries,
+                root.display()
+            );
+        }
+        scan
+    }
+
+    fn walk(&mut self, dir: &Path, depth: usize) {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                eprintln!(
+                    "engine: WARN ISF directory {} is not readable: {error}{}",
+                    dir.display(),
+                    if depth == 0 {
+                        "; no ISF modules registered from it"
+                    } else {
+                        "; skipping that folder"
+                    }
+                );
+                return;
+            }
+        };
+
+        // Sorting each directory makes the entry cap deterministic as well as
+        // the final file order.
+        let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+        entries.sort_by_key(|entry| entry.file_name());
+
+        for entry in entries {
+            if self.visited >= self.limits.max_entries {
+                self.entry_limited = true;
+                return;
+            }
+            self.visited += 1;
+
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if crate::media_watch::is_ignored_media_name(name) {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if file_type.is_dir() {
+                if !self.limits.recursive {
+                    continue;
+                }
+                if depth < self.limits.max_depth {
+                    self.walk(&path, depth + 1);
+                } else {
+                    self.depth_limited = true;
+                }
+                continue;
+            }
+            // Symlinks are deliberately not followed: a link cycle must not
+            // turn a user ISF folder into an unbounded walk.
+            if !file_type.is_file() {
+                continue;
+            }
+            if path
+                .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("fs"))
-        })
-        .collect();
-    files.sort();
+            {
+                self.files.push(path);
+            }
+        }
+    }
+}
+
+/// The `*.fs` files under `dir`, sorted by path and bounded by `limits`.
+fn scan_isf_paths(dir: &Path, limits: IsfScanLimits) -> Vec<PathBuf> {
+    IsfScan::collect(dir, limits).files
+}
+
+/// Scan the corpus and every extra user directory, then resolve duplicate
+/// module names deterministically.
+///
+/// The built-in corpus is scanned first and flat, so it keeps winning against
+/// a user shader with the same stem (existing Scene references never change
+/// meaning). Extra directories are sorted before scanning; within a directory
+/// the walk is sorted too, so the **first sorted path** wins a duplicate. The
+/// ignored copies are collected so the caller can report them once.
+fn collect_isf_definitions(
+    isf_dir: Option<&Path>,
+    extra_dirs: &[PathBuf],
+) -> (Vec<IsfDefinition>, Vec<DuplicateIsfName>) {
+    let mut scanned = Vec::new();
+    if let Some(dir) = isf_dir {
+        scanned.extend(scan_isf_directory(dir, IsfScanLimits::CORPUS));
+    }
+    let mut extras: Vec<&Path> = extra_dirs.iter().map(PathBuf::as_path).collect();
+    extras.sort();
+    extras.dedup();
+    for dir in extras {
+        scanned.extend(scan_isf_directory(dir, IsfScanLimits::USER));
+    }
+
+    let mut kept: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+    let mut seen_paths = std::collections::HashSet::new();
+    let mut duplicate_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut definitions = Vec::new();
+    let mut duplicates: Vec<DuplicateIsfName> = Vec::new();
+    for entry in scanned {
+        // An extra root nested inside another watched root reaches the same
+        // file twice; that is not a name collision.
+        if !seen_paths.insert(entry.path.clone()) {
+            continue;
+        }
+        let name = entry.definition.name.clone();
+        if let Some(first) = kept.get(&name) {
+            if let Some(&index) = duplicate_index.get(&name) {
+                duplicates[index].ignored.push(entry.path);
+            } else {
+                let index = duplicates.len();
+                duplicates.push(DuplicateIsfName {
+                    name: name.clone(),
+                    kept: first.clone(),
+                    ignored: vec![entry.path],
+                });
+                duplicate_index.insert(name, index);
+            }
+            continue;
+        }
+        kept.insert(name, entry.path.clone());
+        definitions.push(entry.definition);
+    }
+    (definitions, duplicates)
+}
+
+/// Parse the `*.fs` files found by [`scan_isf_paths`] into definitions.
+fn scan_isf_directory(dir: &Path, limits: IsfScanLimits) -> Vec<ScannedIsf> {
+    let files = scan_isf_paths(dir, limits);
 
     let mut definitions = Vec::with_capacity(files.len());
     let mut failed = 0usize;
@@ -1350,6 +1547,7 @@ fn scan_isf_corpus(dir: Option<&Path>) -> Vec<IsfDefinition> {
             failed += 1;
             continue;
         };
+        let name = stem.to_string();
         let fragment = match fs::read_to_string(&path) {
             Ok(source) => source,
             Err(error) => {
@@ -1382,11 +1580,14 @@ fn scan_isf_corpus(dir: Option<&Path>) -> Vec<IsfDefinition> {
             Ok(document) => {
                 let meta = meta_from_document(&document);
                 let props = synthesise_props(&document).into_iter().collect();
-                definitions.push(IsfDefinition {
-                    name: stem.to_string(),
-                    meta,
-                    props,
-                    document,
+                definitions.push(ScannedIsf {
+                    path,
+                    definition: IsfDefinition {
+                        name,
+                        meta,
+                        props,
+                        document,
+                    },
                 });
             }
             Err(error) => {
@@ -1939,6 +2140,228 @@ mod tests {
         assert!(bloom.prop("blurAmount").is_some());
         assert!(bloom.meta.preview_with_output);
         assert!(bloom.document.passes.len() > 1, "Bloom is multi-pass");
+    }
+
+    fn registry_temp_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp registry dir");
+        dir
+    }
+
+    fn write_shader(path: &Path, name: &str, description: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("shader parent");
+        }
+        std::fs::write(
+            path,
+            format!(
+                r#"/*{{
+  "NAME": "{name}",
+  "DESCRIPTION": "{description}",
+  "CREDIT": "modV",
+  "ISFVSN": "2",
+  "CATEGORIES": ["Effects"],
+  "INPUTS": []
+}}*/
+void main() {{ gl_FragColor = vec4(1.0); }}
+"#
+            ),
+        )
+        .expect("write test shader");
+    }
+
+    #[test]
+    fn extra_isf_directories_are_scanned_recursively() {
+        let dir = registry_temp_dir("modv-isf-nested");
+        write_shader(
+            &dir.join("artist/pack/Deep Shader.fs"),
+            "Deep Shader",
+            "nested in two folders",
+        );
+        write_shader(
+            &dir.join("artist/Top Shader.fs"),
+            "Top Shader",
+            "directly in a subfolder",
+        );
+        std::fs::write(
+            dir.join("artist/pack/Deep Shader.vs"),
+            "void main() { gl_Position = vec4(0.0); }\n",
+        )
+        .expect("nested vertex sidecar");
+
+        let registry = ModuleRegistry::build_with_extra(None, std::slice::from_ref(&dir));
+
+        assert_eq!(registry.kind("Deep Shader"), Some(ModuleKind::Isf));
+        assert_eq!(registry.kind("Top Shader"), Some(ModuleKind::Isf));
+        let deep = registry
+            .isf_definition("Deep Shader")
+            .expect("nested shader registered");
+        assert!(
+            deep.document.vertex_source.is_some(),
+            "a nested .fs picks up its sibling .vs"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn extra_isf_scan_ignores_hidden_and_temporary_entries() {
+        let dir = registry_temp_dir("modv-isf-ignored");
+        write_shader(
+            &dir.join("artist/Visible Shader.fs"),
+            "Visible Shader",
+            "kept",
+        );
+        write_shader(
+            &dir.join("artist/.hidden/Hidden Folder Shader.fs"),
+            "Hidden Folder Shader",
+            "hidden directory",
+        );
+        write_shader(
+            &dir.join("artist/.Hidden Shader.fs"),
+            ".Hidden Shader",
+            "hidden file",
+        );
+        std::fs::write(dir.join("artist/Backup Shader.fs~"), "backup").expect("editor backup");
+        std::fs::write(dir.join("artist/Swap Shader.fs.tmp"), "swap").expect("editor swap");
+        std::fs::write(dir.join("artist/Swap Shader.fs.part"), "part").expect("partial write");
+
+        let registry = ModuleRegistry::build_with_extra(None, std::slice::from_ref(&dir));
+        let names: Vec<&str> = registry
+            .isf_definitions()
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect();
+
+        assert_eq!(names, vec!["Visible Shader"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn duplicate_user_isf_stems_keep_the_first_sorted_directory() {
+        let root = registry_temp_dir("modv-isf-duplicate");
+        let first = root.join("a-pack");
+        let second = root.join("b-pack");
+        write_shader(
+            &first.join("Shared Shader.fs"),
+            "Shared Shader",
+            "from a-pack",
+        );
+        write_shader(
+            &second.join("Shared Shader.fs"),
+            "Shared Shader",
+            "from b-pack",
+        );
+
+        // The extra directories are supplied in reverse order on purpose: the
+        // scan sorts them so the result does not depend on caller order.
+        let registry = ModuleRegistry::build_with_extra(None, &[second, first]);
+
+        let definition = registry
+            .isf_definition("Shared Shader")
+            .expect("duplicate name still registers once");
+        assert_eq!(definition.meta.description.as_deref(), Some("from a-pack"));
+        assert_eq!(
+            registry
+                .isf_definitions()
+                .iter()
+                .filter(|definition| definition.name == "Shared Shader")
+                .count(),
+            1
+        );
+
+        let (definitions, duplicates) =
+            collect_isf_definitions(None, &[root.join("b-pack"), root.join("a-pack")]);
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(duplicates.len(), 1, "the duplicate is reported");
+        assert_eq!(duplicates[0].name, "Shared Shader");
+        assert_eq!(duplicates[0].kept, root.join("a-pack/Shared Shader.fs"));
+        assert_eq!(
+            duplicates[0].ignored,
+            vec![root.join("b-pack/Shared Shader.fs")]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overlapping_user_isf_roots_are_not_reported_as_duplicates() {
+        let root = registry_temp_dir("modv-isf-overlap");
+        write_shader(
+            &root.join("pack/Only Shader.fs"),
+            "Only Shader",
+            "one file, two roots",
+        );
+
+        let (definitions, duplicates) =
+            collect_isf_definitions(None, &[root.clone(), root.join("pack")]);
+
+        assert_eq!(definitions.len(), 1);
+        assert!(
+            duplicates.is_empty(),
+            "a file reached through two roots is not a duplicate"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn user_isf_scan_enforces_depth_and_entry_caps() {
+        let dir = registry_temp_dir("modv-isf-caps");
+
+        // Default depth cap: a folder at depth `USER_ISF_MAX_DEPTH` is
+        // scanned (the root is depth 0), one below it is not.
+        let mut deep = dir.join("a");
+        for _ in 1..USER_ISF_MAX_DEPTH {
+            deep.push("d");
+        }
+        write_shader(&deep.join("At Limit.fs"), "At Limit", "at the depth cap");
+        deep.push("one-more");
+        write_shader(&deep.join("Too Deep.fs"), "Too Deep", "below the depth cap");
+
+        let found = scan_isf_paths(&dir, IsfScanLimits::USER);
+        let names: Vec<String> = found
+            .iter()
+            .filter_map(|path| path.file_stem().and_then(|stem| stem.to_str()))
+            .map(str::to_string)
+            .collect();
+        assert!(names.iter().any(|name| name == "At Limit"));
+        assert!(
+            !names.iter().any(|name| name == "Too Deep"),
+            "folders below the depth cap are not scanned"
+        );
+
+        // Entry cap: entries are visited in sorted order, so the first files
+        // win and the scan stops before reading the rest of the tree.
+        let entries = registry_temp_dir("modv-isf-entries");
+        for index in 0..5 {
+            write_shader(
+                &entries.join(format!("Shader {index}.fs")),
+                &format!("Shader {index}"),
+                "entry cap",
+            );
+        }
+        let limits = IsfScanLimits {
+            recursive: true,
+            max_depth: USER_ISF_MAX_DEPTH,
+            max_entries: 2,
+        };
+        let capped = scan_isf_paths(&entries, limits);
+        let capped_names: Vec<String> = capped
+            .iter()
+            .filter_map(|path| path.file_stem().and_then(|stem| stem.to_str()))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(capped_names, vec!["Shader 0", "Shader 1"]);
+
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(entries);
     }
 
     #[test]

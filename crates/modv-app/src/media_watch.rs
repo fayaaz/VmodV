@@ -8,12 +8,14 @@
 //!
 //! `notify` reports every write; editors often produce several events per
 //! save. A burst is only taken after 500 ms of quiet, exactly like the old
-//! `isf_watch` debounce. Only files the read handlers understand are recorded,
-//! and temporary/hidden names are ignored, so the app's own writes and editor
-//! swap files do not wake the engine.
+//! `isf_watch` debounce. The media folders and extra ISF roots are watched
+//! **recursively**, so shader packs organised in subfolders behave like flat
+//! ones. Only files the read handlers understand are recorded, and
+//! temporary/hidden names are ignored at every level, so the app's own writes
+//! and editor swap files do not wake the engine.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -109,8 +111,9 @@ pub struct MediaWatcher {
 }
 
 impl MediaWatcher {
-    /// Watch each existing target's directory non-recursively. `None` when the
-    /// platform watcher or every directory watch failed.
+    /// Watch each existing target's directory recursively. `None` when the
+    /// platform watcher or every directory watch failed. A missing media
+    /// subfolder is simply not watched; the remaining folders still work.
     pub fn new(targets: &[WatchTarget]) -> Option<Self> {
         let mut seen = BTreeSet::new();
         let targets: Vec<WatchTarget> = targets
@@ -138,7 +141,7 @@ impl MediaWatcher {
 
         let mut watched = 0;
         for target in &targets {
-            match watcher.watch(&target.dir, RecursiveMode::NonRecursive) {
+            match watcher.watch(&target.dir, RecursiveMode::Recursive) {
                 Ok(()) => watched += 1,
                 Err(error) => eprintln!(
                     "ui: WARN could not watch media folder {}: {error}",
@@ -157,7 +160,7 @@ impl MediaWatcher {
     }
 
     /// Watch the active profile's `isf`, `image`, `video` and `palette`
-    /// folders, plus the extra user ISF folders.
+    /// folders, plus the extra user ISF folders, recursively.
     pub fn for_profile(media_root: &Path, profile: &str, extra_isf: &[PathBuf]) -> Option<Self> {
         let mut targets = Vec::new();
         for folder in [
@@ -196,17 +199,40 @@ impl MediaWatcher {
 }
 
 /// The read-handler folder `path` belongs to, if the handler understands it.
+///
+/// The watched roots are recursive, so a nested path belongs to the **longest**
+/// matching root (an extra ISF folder nested inside a profile folder stays
+/// attributed to the extra root). Temporary, hidden and backup names are
+/// ignored in every path component.
 fn classify(targets: &[WatchTarget], path: &Path) -> Option<MediaFolder> {
     let name = path.file_name()?.to_str()?;
-    if name.starts_with('.') || name.ends_with('~') || name.ends_with(".tmp") {
+    if is_ignored_media_name(name) {
         return None;
     }
-    let folder = targets
+    let target = targets
         .iter()
-        .filter(|target| path.parent() == Some(target.dir.as_path()))
-        .map(|target| target.folder)
-        .next()?;
-    supported(folder, name).then_some(folder)
+        .filter(|target| path.starts_with(&target.dir))
+        .max_by_key(|target| target.dir.components().count())?;
+    if has_ignored_component(&target.dir, path) {
+        return None;
+    }
+    supported(target.folder, name).then_some(target.folder)
+}
+
+/// A media file or folder name the read handlers must not react to.
+pub(crate) fn is_ignored_media_name(name: &str) -> bool {
+    name.starts_with('.') || name.ends_with('~') || name.ends_with(".tmp")
+}
+
+/// Whether any component below the watched root is hidden/temporary.
+fn has_ignored_component(dir: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(dir) else {
+        return true;
+    };
+    relative.components().any(|component| match component {
+        Component::Normal(name) => name.to_str().is_none_or(is_ignored_media_name),
+        _ => false,
+    })
 }
 
 /// The extensions Electron's read handlers list for `folder`.
@@ -276,11 +302,47 @@ mod tests {
         assert_eq!(classify(&targets, &image.join("notes.txt")), None);
         assert_eq!(classify(&targets, &isf.join(".Blur.fs.swp")), None);
         assert_eq!(classify(&targets, &isf.join("Blur.fs~")), None);
-        assert_eq!(classify(&targets, &isf.join("compiled/Blur.fs")), None);
+        assert_eq!(
+            classify(&targets, &isf.join("compiled/Blur.fs")),
+            Some(MediaFolder::Isf),
+            "the watch is recursive"
+        );
+        assert_eq!(
+            classify(&targets, &isf.join(".cache/Blur.fs")),
+            None,
+            "a hidden subfolder is ignored"
+        );
+        assert_eq!(
+            classify(&targets, &image.join("nested/still.png")),
+            Some(MediaFolder::Image),
+            "nested image folders keep their profile classification"
+        );
+        assert_eq!(classify(&targets, &image.join("nested/notes.txt")), None);
         assert_eq!(
             classify(&targets, Path::new("/media/live/preset/song.json")),
             None,
             "preset/scene folders are not watched"
+        );
+    }
+
+    #[test]
+    fn the_most_specific_watched_folder_classifies_a_nested_path() {
+        let isf = Path::new("/media/live/isf");
+        let extra = isf.join("third-party");
+        let targets = vec![
+            WatchTarget {
+                dir: isf.to_path_buf(),
+                folder: MediaFolder::Isf,
+            },
+            WatchTarget {
+                dir: extra.clone(),
+                folder: MediaFolder::Isf,
+            },
+        ];
+
+        assert_eq!(
+            classify(&targets, &extra.join("artist/pack/Blur.fs")),
+            Some(MediaFolder::Isf)
         );
     }
 
@@ -354,6 +416,93 @@ mod tests {
                 break;
             }
             assert!(Instant::now() < deadline, "no burst within 5 seconds");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_real_watcher_reports_nested_isf_changes_and_missing_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "modv-media-watch-nested-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        // No `image`/`video`/`palette` folder: a partial media tree still
+        // watches the folders that exist.
+        std::fs::create_dir_all(root.join("live/isf/artist/pack")).expect("nested isf");
+        std::fs::write(root.join("live/isf/artist/pack/Delete Me.fs"), "// shader")
+            .expect("pre-existing nested shader");
+        let mut watcher =
+            MediaWatcher::for_profile(&root, "live", &[]).expect("a watchable media tree");
+
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::write(
+            root.join("live/isf/artist/pack/Nested Save.fs"),
+            "// shader",
+        )
+        .expect("nested save");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(burst) = watcher.pump_at(Instant::now()) {
+                assert!(burst.has(MediaFolder::Isf), "{burst:?}");
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no nested save burst in 5 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        std::fs::remove_file(root.join("live/isf/artist/pack/Delete Me.fs"))
+            .expect("delete nested shader");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(burst) = watcher.pump_at(Instant::now()) {
+                assert!(burst.has(MediaFolder::Isf), "{burst:?}");
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no nested delete burst in 5 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_real_watcher_reports_nested_extra_isf_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "modv-media-watch-extra-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let extra = root.join("third-party");
+        std::fs::create_dir_all(root.join("live/isf")).expect("profile isf");
+        std::fs::create_dir_all(extra.join("artist/pack")).expect("nested extra isf");
+        let mut watcher = MediaWatcher::for_profile(&root, "live", std::slice::from_ref(&extra))
+            .expect("extra ISF folder is watchable");
+
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::write(extra.join("artist/pack/Extra.fs"), "// shader").expect("extra save");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(burst) = watcher.pump_at(Instant::now()) {
+                assert!(burst.has(MediaFolder::Isf), "{burst:?}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "no extra ISF burst in 5 seconds");
             std::thread::sleep(Duration::from_millis(50));
         }
 
