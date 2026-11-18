@@ -94,6 +94,16 @@ fn build() -> (Harness<'static, UiState>, Arc<Mutex<EngineSnapshot>>) {
         .build_ui_state(
             move |ui, state| {
                 let snapshot = draw_snapshot.lock().unwrap();
+                // The performance bar lives in the shell header; render it
+                // above the grid so its actions stay part of this harness.
+                ui.horizontal_wrapped(|ui| {
+                    modv_ui::panels::draw_performance_bar(
+                        ui,
+                        &snapshot,
+                        &mut state.scene_grid,
+                        &mut state.actions,
+                    );
+                });
                 modv_ui::panels::draw_scene_grid(
                     ui,
                     &snapshot,

@@ -58,6 +58,14 @@ fn build(
         .with_accessibility_check(false)
         .build_ui_state(
             move |ui, state| {
+                ui.horizontal_wrapped(|ui| {
+                    modv_ui::panels::draw_performance_bar(
+                        ui,
+                        &snapshot,
+                        &mut state.scene_grid,
+                        &mut state.actions,
+                    );
+                });
                 modv_ui::panels::draw_scene_grid(
                     ui,
                     &snapshot,

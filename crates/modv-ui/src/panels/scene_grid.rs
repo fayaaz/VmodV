@@ -19,7 +19,6 @@ use crate::model::{
 use crate::panels::row_monitor::{RowMonitorDisplay, row_monitor_display};
 use crate::state::UiAction;
 use crate::theme;
-use crate::widgets::range_control::chip;
 
 /// A cell address inside the Scenes grid.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -350,7 +349,7 @@ fn draw_row_monitor(ui: &mut egui::Ui, snapshot: &EngineSnapshot, row: usize, ce
 }
 
 /// The grid height: the tallest Scene, the named rows and the live row labels.
-fn grid_row_count(snapshot: &EngineSnapshot) -> usize {
+pub(crate) fn grid_row_count(snapshot: &EngineSnapshot) -> usize {
     snapshot
         .scenes
         .iter()
@@ -449,9 +448,6 @@ pub fn draw_scene_grid(
     grid.prune_preview_stills(snapshot);
 
     let row_count = grid_row_count(snapshot);
-    performance_bar(ui, snapshot, grid, row_count, actions);
-    ui.separator();
-
     let row_names = grid_row_names(snapshot, row_count);
     // One scroll offset for both axes. The Scene columns live inside the
     // scroll area; the layer gutter is painted on top of its left edge with the
@@ -990,7 +986,20 @@ fn row_label_menu(
     }
 }
 
-/// Performance-mode controls above the Scene grid.
+/// Draw the performance controls. The shell places them in its top header;
+/// tests that render the grid in isolation call this first so the bar's
+/// actions stay reachable.
+pub fn draw_performance_bar(
+    ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
+    grid: &mut SceneGridState,
+    actions: &mut Vec<UiAction>,
+) {
+    performance_bar(ui, snapshot, grid, grid_row_count(snapshot), actions);
+}
+
+/// Performance-mode controls. The caller supplies the wrapping layout so the
+/// bar can share a header row.
 fn performance_bar(
     ui: &mut egui::Ui,
     snapshot: &EngineSnapshot,
@@ -998,167 +1007,159 @@ fn performance_bar(
     row_count: usize,
     actions: &mut Vec<UiAction>,
 ) {
-    ui.horizontal_wrapped(|ui| {
-        let label = if snapshot.performance.enabled {
-            "Stop performance"
-        } else {
-            "Start performance"
-        };
-        if ui.button(label).clicked() {
-            actions.push(UiAction::new(
-                "scenes/setPerformanceEnabled",
-                serde_json::json!({ "enabled": !snapshot.performance.enabled }),
-            ));
-        }
-        ui.separator();
-        // `sceneOrder` (`Scenes.vue`): the engine reads it on every pick, so
-        // the select stays enabled while performance mode runs and a live
-        // change applies to the next Scene.
-        ui.label(
-            egui::RichText::new("Scene order")
-                .size(12.0)
-                .color(theme::MUTED),
-        );
-        let order = snapshot.performance.scene_order();
-        let mut selected = order;
-        egui::ComboBox::from_id_salt("performance-scene-order")
-            .selected_text(performance_order_label(order))
-            .width(90.0)
-            .show_ui(ui, |ui| {
-                for (value, label) in PERFORMANCE_ORDERS {
-                    if ui.selectable_label(order == value, label).clicked() {
-                        selected = value;
-                    }
+    let label = if snapshot.performance.enabled {
+        "Stop performance"
+    } else {
+        "Start performance"
+    };
+    if ui.button(label).clicked() {
+        actions.push(UiAction::new(
+            "scenes/setPerformanceEnabled",
+            serde_json::json!({ "enabled": !snapshot.performance.enabled }),
+        ));
+    }
+    ui.separator();
+    // `sceneOrder` (`Scenes.vue`): the engine reads it on every pick, so
+    // the select stays enabled while performance mode runs and a live
+    // change applies to the next Scene.
+    ui.label(
+        egui::RichText::new("Scene order")
+            .size(12.0)
+            .color(theme::MUTED),
+    );
+    let order = snapshot.performance.scene_order();
+    let mut selected = order;
+    egui::ComboBox::from_id_salt("performance-scene-order")
+        .selected_text(performance_order_label(order))
+        .width(90.0)
+        .show_ui(ui, |ui| {
+            for (value, label) in PERFORMANCE_ORDERS {
+                if ui.selectable_label(order == value, label).clicked() {
+                    selected = value;
                 }
-            });
-        if selected != order {
-            actions.push(UiAction::new(
-                "scenes/updatePerformance",
-                serde_json::json!({ "order": selected }),
-            ));
-        }
-        ui.separator();
-        // `timingUnit` is native-only: switching it converts the global pair
-        // and every Scene override with the current BPM, so the same
-        // durations stay in place.
-        let unit = snapshot.performance.timing_unit;
-        ui.label(egui::RichText::new("Timing").size(12.0).color(theme::MUTED));
-        let mut selected_unit = unit;
-        egui::ComboBox::from_id_salt("performance-timing-unit")
-            .selected_text(unit.label())
-            .width(80.0)
-            .show_ui(ui, |ui| {
-                for candidate in [TimingUnit::Seconds, TimingUnit::Bars] {
-                    if ui
-                        .selectable_label(unit == candidate, candidate.label())
-                        .clicked()
-                    {
-                        selected_unit = candidate;
-                    }
-                }
-            });
-        let unit_changed = selected_unit != unit;
-        if unit_changed {
-            actions.push(UiAction::new(
-                "scenes/setTimingUnit",
-                serde_json::json!({ "unit": selected_unit.as_str() }),
-            ));
-        }
-
-        let (min_floor, _, speed) = timing_input_limits(unit);
-        ui.label(egui::RichText::new("min").size(12.0).color(theme::MUTED));
-        let mut min = snapshot.performance.min_value;
-        let min_changed = ui
-            .add(
-                egui::DragValue::new(&mut min)
-                    .range(min_floor..=3600.0)
-                    .speed(speed)
-                    .suffix(unit.suffix()),
-            )
-            .changed();
-        ui.label(egui::RichText::new("max").size(12.0).color(theme::MUTED));
-        let mut max = snapshot.performance.max_value;
-        let max_changed = ui
-            .add(
-                egui::DragValue::new(&mut max)
-                    .range(min_floor * 2.0..=7200.0)
-                    .speed(speed)
-                    .suffix(unit.suffix()),
-            )
-            .changed();
-        ui.label(egui::RichText::new("fade").size(12.0).color(theme::MUTED));
-        let mut fade = snapshot.performance.transition_seconds;
-        let fade_changed = ui
-            .add(
-                egui::DragValue::new(&mut fade)
-                    .range(0.1..=30.0)
-                    .speed(0.05)
-                    .suffix(" s"),
-            )
-            .changed();
-        if min_changed || max_changed || fade_changed {
-            let (min, max) = clamp_timing_pair(
-                unit,
-                if min_changed {
-                    min
-                } else {
-                    snapshot.performance.min_value
-                },
-                if max_changed {
-                    max
-                } else {
-                    snapshot.performance.max_value
-                },
-            );
-            actions.push(UiAction::new(
-                "scenes/updatePerformance",
-                serde_json::json!({
-                    "config": {
-                        "minSeconds": min,
-                        "maxSeconds": max,
-                        "transitionSeconds": fade,
-                    }
-                }),
-            ));
-        }
-        if !unit_changed {
-            ui.label(
-                egui::RichText::new(timing_hint(
-                    snapshot.performance.min_value,
-                    snapshot.performance.max_value,
-                    unit,
-                    snapshot.audio.bpm,
-                ))
-                .size(11.0)
-                .color(theme::MUTED),
-            );
-        }
-        ui.separator();
-        if ui.button("Row names").clicked() {
-            grid.row_names_edit = Some(grid_row_names(snapshot, row_count));
-        }
-        if ui.button("+ Column").clicked() {
-            // The engine mints the `Scene N` default; the legacy `+ Column`
-            // sends no name either (`scenes/addEmptyScene` with no args).
-            actions.push(UiAction::new("scenes/addEmptyScene", serde_json::json!({})));
-            grid.scroll_to_last_scene = true;
-        }
-        if ui.button("+ Row").clicked() {
-            let names = grid_row_names(snapshot, row_count);
-            actions.push(add_row_action(&names));
-            grid.begin_row_rename(names.len(), String::new());
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new(format!("{} Scenes", snapshot.scenes.len()))
-                    .size(12.0)
-                    .color(theme::MUTED),
-            );
-            if snapshot.performance.enabled {
-                chip(ui, "PERFORMANCE", theme::OK);
             }
         });
-    });
+    if selected != order {
+        actions.push(UiAction::new(
+            "scenes/updatePerformance",
+            serde_json::json!({ "order": selected }),
+        ));
+    }
+    ui.separator();
+    // `timingUnit` is native-only: switching it converts the global pair
+    // and every Scene override with the current BPM, so the same
+    // durations stay in place.
+    let unit = snapshot.performance.timing_unit;
+    ui.label(egui::RichText::new("Timing").size(12.0).color(theme::MUTED));
+    let mut selected_unit = unit;
+    egui::ComboBox::from_id_salt("performance-timing-unit")
+        .selected_text(unit.label())
+        .width(80.0)
+        .show_ui(ui, |ui| {
+            for candidate in [TimingUnit::Seconds, TimingUnit::Bars] {
+                if ui
+                    .selectable_label(unit == candidate, candidate.label())
+                    .clicked()
+                {
+                    selected_unit = candidate;
+                }
+            }
+        });
+    let unit_changed = selected_unit != unit;
+    if unit_changed {
+        actions.push(UiAction::new(
+            "scenes/setTimingUnit",
+            serde_json::json!({ "unit": selected_unit.as_str() }),
+        ));
+    }
+
+    let (min_floor, _, speed) = timing_input_limits(unit);
+    ui.label(egui::RichText::new("min").size(12.0).color(theme::MUTED));
+    // Start from the displayed floor rather than the raw stored value:
+    // a `DragValue` whose value is outside its range clamps on the first
+    // frame and reports `changed`, which would queue an update every
+    // frame for a fresh (zeroed) performance config.
+    let mut min = snapshot.performance.min_value.max(min_floor);
+    let min_changed = ui
+        .add(
+            egui::DragValue::new(&mut min)
+                .range(min_floor..=3600.0)
+                .speed(speed)
+                .suffix(unit.suffix()),
+        )
+        .changed();
+    ui.label(egui::RichText::new("max").size(12.0).color(theme::MUTED));
+    let mut max = snapshot.performance.max_value.max(min_floor * 2.0);
+    let max_changed = ui
+        .add(
+            egui::DragValue::new(&mut max)
+                .range(min_floor * 2.0..=7200.0)
+                .speed(speed)
+                .suffix(unit.suffix()),
+        )
+        .changed();
+    ui.label(egui::RichText::new("fade").size(12.0).color(theme::MUTED));
+    let mut fade = snapshot.performance.transition_seconds.max(0.1);
+    let fade_changed = ui
+        .add(
+            egui::DragValue::new(&mut fade)
+                .range(0.1..=30.0)
+                .speed(0.05)
+                .suffix(" s"),
+        )
+        .changed();
+    if min_changed || max_changed || fade_changed {
+        let (min, max) = clamp_timing_pair(
+            unit,
+            if min_changed {
+                min
+            } else {
+                snapshot.performance.min_value
+            },
+            if max_changed {
+                max
+            } else {
+                snapshot.performance.max_value
+            },
+        );
+        actions.push(UiAction::new(
+            "scenes/updatePerformance",
+            serde_json::json!({
+                "config": {
+                    "minSeconds": min,
+                    "maxSeconds": max,
+                    "transitionSeconds": fade,
+                }
+            }),
+        ));
+    }
+    if !unit_changed {
+        ui.label(
+            egui::RichText::new(timing_hint(
+                snapshot.performance.min_value,
+                snapshot.performance.max_value,
+                unit,
+                snapshot.audio.bpm,
+            ))
+            .size(11.0)
+            .color(theme::MUTED),
+        );
+    }
+    ui.separator();
+    if ui.button("Row names").clicked() {
+        grid.row_names_edit = Some(grid_row_names(snapshot, row_count));
+    }
+    if ui.button("+ Column").clicked() {
+        // The engine mints the `Scene N` default; the legacy `+ Column`
+        // sends no name either (`scenes/addEmptyScene` with no args).
+        actions.push(UiAction::new("scenes/addEmptyScene", serde_json::json!({})));
+        grid.scroll_to_last_scene = true;
+    }
+    if ui.button("+ Row").clicked() {
+        let names = grid_row_names(snapshot, row_count);
+        actions.push(add_row_action(&names));
+        grid.begin_row_rename(names.len(), String::new());
+    }
 }
 
 /// Modal editors for Scene timing override and performance row names.

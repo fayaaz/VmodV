@@ -107,7 +107,10 @@ fn dragging_a_strip_tab_onto_the_central_area_floats_it_at_the_release() {
 
     let tab = center(&harness, "AUDIO");
     start_drag(&mut harness, tab);
-    let target = center(&harness, "GALLERY");
+    // A point inside the central preview: low enough that the 460px floating
+    // window fits below it in the 800px harness (dropping on the Gallery
+    // header would be clamped by the screen edge).
+    let target = egui::pos2(640.0, 200.0);
     release_at(&mut harness, target);
 
     assert_eq!(

@@ -42,6 +42,14 @@ fn build(order: &str, enabled: bool) -> Harness<'static, UiState> {
         .with_accessibility_check(false)
         .build_ui_state(
             move |ui, state| {
+                ui.horizontal_wrapped(|ui| {
+                    modv_ui::panels::draw_performance_bar(
+                        ui,
+                        &snapshot,
+                        &mut state.scene_grid,
+                        &mut state.actions,
+                    );
+                });
                 modv_ui::panels::draw_scene_grid(
                     ui,
                     &snapshot,
@@ -98,4 +106,36 @@ fn choosing_random_while_performance_runs_dispatches_the_order() {
             )
         });
     assert_eq!(action.payload, serde_json::json!({ "order": "random" }));
+}
+
+#[test]
+fn an_untouched_bar_queues_no_timing_updates() {
+    // A fresh `PerformanceView` stores zeros; the bar must clamp those for
+    // display without `DragValue` reporting a change on every frame.
+    let snapshot = EngineSnapshot::default();
+    let state = UiState::new();
+    let mut harness = Harness::builder()
+        .with_size([820.0, 320.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                ui.horizontal_wrapped(|ui| {
+                    modv_ui::panels::draw_performance_bar(
+                        ui,
+                        &snapshot,
+                        &mut state.scene_grid,
+                        &mut state.actions,
+                    );
+                });
+            },
+            state,
+        );
+    harness.run();
+    harness.run();
+    harness.run();
+    assert!(
+        harness.state().actions.is_empty(),
+        "an untouched bar must not queue updates: {:?}",
+        harness.state().actions
+    );
 }
