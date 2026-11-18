@@ -63,16 +63,17 @@ fn module(id: &str, name: &str, group_id: &str) -> ModuleView {
 fn snapshot() -> EngineSnapshot {
     EngineSnapshot {
         groups: vec![
-            group("group-a", "Background", &["bands-1", "ball-1"]),
+            group("group-a", "Background", &["bands-1", "ball-1", "tunnel-1"]),
             group("group-b", "Group B", &["plasma-1"]),
             group("group-c", "Empty", &[]),
         ],
         modules: vec![
             module("bands-1", "Bands", "group-a"),
             module("ball-1", "Ball", "group-a"),
+            module("tunnel-1", "Tunnel", "group-a"),
             module("plasma-1", "Plasma", "group-b"),
         ],
-        registered: vec![meta("Bands"), meta("Ball"), meta("Plasma")],
+        registered: vec![meta("Bands"), meta("Ball"), meta("Tunnel"), meta("Plasma")],
         ..Default::default()
     }
 }
@@ -185,7 +186,7 @@ fn dragging_a_module_below_a_sibling_moves_it_down_within_the_group() {
         .iter()
         .map(|module| module.id.clone())
         .collect();
-    assert_eq!(order, ["ball-1", "bands-1"]);
+    assert_eq!(order, ["ball-1", "bands-1", "tunnel-1"]);
     let bands = module_row(&harness, "Bands  (bands-1)");
     let ball = module_row(&harness, "Ball  (ball-1)");
     assert!(
@@ -223,7 +224,7 @@ fn dragging_a_module_above_a_row_in_another_group_inserts_at_that_index() {
         "bands-1",
         "the dropped module precedes the row it was dropped above"
     );
-    assert_eq!(snapshot.modules_in_group("group-a").len(), 1);
+    assert_eq!(snapshot.modules_in_group("group-a").len(), 2);
 }
 
 #[test]
@@ -252,6 +253,39 @@ fn dragging_onto_an_empty_group_appends() {
         snapshot.lock().unwrap().modules_in_group("group-c")[0].id,
         "bands-1"
     );
+}
+
+#[test]
+fn dropping_in_the_gap_between_two_rows_inserts_there() {
+    // The few pixels between two rows are not inside either row's rect, but
+    // they still mean "insert here": moving Bands into the gap between Ball
+    // and Tunnel lands it at index 1, not at the end of the Group.
+    let (mut harness, snapshot) = build();
+    let bands = module_row(&harness, "Bands  (bands-1)");
+    let ball = module_row(&harness, "Ball  (ball-1)");
+    let tunnel = module_row(&harness, "Tunnel  (tunnel-1)");
+    let target = egui::pos2(ball.center().x, (ball.bottom() + tunnel.top()) / 2.0);
+
+    drag(&mut harness, bands.center(), target);
+
+    let actions = harness.state_mut().take_actions();
+    assert_eq!(actions.len(), 1, "one action queued: {actions:?}");
+    assert_eq!(
+        actions[0].payload["toGroupId"],
+        serde_json::json!("group-a")
+    );
+    assert_eq!(actions[0].payload["toIndex"], serde_json::json!(1));
+
+    apply_move(&snapshot, &actions[0]);
+    harness.run();
+    let order: Vec<String> = snapshot
+        .lock()
+        .unwrap()
+        .modules_in_group("group-a")
+        .iter()
+        .map(|module| module.id.clone())
+        .collect();
+    assert_eq!(order, ["ball-1", "bands-1", "tunnel-1"]);
 }
 
 #[test]

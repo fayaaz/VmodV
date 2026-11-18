@@ -1202,9 +1202,11 @@ fn module_rows_drop_target(
     group_id: &str,
     state: &mut UiState,
 ) {
-    if rows.is_empty()
-        || !egui::DragAndDrop::has_payload_of_type::<ModuleDrag>(ui.ctx())
-        || !rows.iter().any(|row| ui.rect_contains_pointer(*row))
+    let Some(span) = module_rows_span(rows) else {
+        return;
+    };
+    if !egui::DragAndDrop::has_payload_of_type::<ModuleDrag>(ui.ctx())
+        || !ui.rect_contains_pointer(span)
     {
         return;
     }
@@ -1262,7 +1264,7 @@ fn module_group_drop_target(
     let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) else {
         return;
     };
-    if rows.iter().any(|row| row.contains(pointer)) {
+    if module_rows_span(rows).is_some_and(|span| span.contains(pointer)) {
         return;
     }
 
@@ -1296,6 +1298,13 @@ fn paint_module_insertion_line(ui: &egui::Ui, x: egui::Rangef, y: f32) {
     let painter = ui.painter();
     painter.hline(x, y, Stroke::new(2.0, theme::ACCENT));
     painter.circle_filled(egui::pos2(x.min + 2.0, y), 2.5, theme::ACCENT);
+}
+
+/// The rect covering every row and the small gaps between them, so a pointer
+/// between two rows still resolves to an insertion gap instead of the Group's
+/// append target. `None` when the Group has no rows.
+fn module_rows_span(rows: &[egui::Rect]) -> Option<egui::Rect> {
+    rows.iter().copied().reduce(|span, row| span.union(row))
 }
 
 fn inspector_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
