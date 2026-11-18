@@ -29,6 +29,7 @@ use modv_ui::model::{
     ExpressionView, NdiOutputView, NdiReceiverView, NdiSenderView, NdiSnapshot, NdiSourceView,
     OscServerView, OscSnapshot, osc_addresses,
 };
+use modv_ui::model::{ScreenCaptureView, ScreenShareKindView, ScreenSourceView};
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraModeView, CameraView, EngineHealth,
     EngineSnapshot, FileDialogAction, GroupView, InputLinkView, MediaAction, MediaSnapshot,
@@ -58,13 +59,17 @@ use crate::pacing::FramePacer;
 use crate::plugin_runtime::{self, NativeStateReader, PluginRuntime};
 use crate::report::AdapterSummary;
 use crate::scene_transition::SceneTransitionInfo;
+use crate::screen_share::{
+    SCREEN_SOURCE_ID, ScreenAnswer, ScreenRequest, ScreenShare, ScreenShareError, ScreenShareKind,
+    ScreenStream, spawn_portal_request,
+};
 use crate::store_ops::Store;
 use crate::ui_layout::{LAYOUT_SETTINGS_FILENAME, LayoutSettings};
 use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
 use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group, ModuleInstance, js_truthy};
 use modv_engine::tweens::TweenDescriptor;
-use modv_media::video::{TestPattern, VideoSourceConfig};
+use modv_media::video::{PortalError, PortalStream, ScreenSupport, TestPattern, VideoSourceConfig};
 
 /// The native shell's run loop.
 pub fn run(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Result<(), String> {
@@ -87,6 +92,12 @@ const OUTPUT_HEIGHT: u32 = 540;
 /// show sender/receiver/address changes at a human cadence; hidden tabs do not
 /// poll at all.
 const PANEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Portal answers kept around after their request was cancelled, so a late
+/// answer is recognised as stale instead of starting a source. The one pending
+/// request is always the newest; older channels are abandoned dialogs the user
+/// has not answered yet.
+const MAX_SCREEN_ANSWERS: usize = 8;
 
 /// One compositor-owned output window.
 struct OutputWindow {
@@ -304,6 +315,16 @@ fn plugin_snapshot(runtime: &PluginRuntime) -> PluginView {
     }
 }
 
+/// A portal request's worker-thread receiver.
+///
+/// The request id travels with the receiver: the state machine only applies an
+/// answer while that id is still pending, so a cancelled request's late answer
+/// is dropped (and its portal session closed) instead of starting a source.
+struct PendingScreenAnswer {
+    request_id: u64,
+    rx: std::sync::mpsc::Receiver<Result<PortalStream, PortalError>>,
+}
+
 /// The native application state.
 pub struct NativeApp {
     cli: Cli,
@@ -365,6 +386,15 @@ pub struct NativeApp {
     media_restore_pending: Vec<String>,
     /// Set after a failed settings write so a broken disk logs once.
     media_settings_error_logged: bool,
+    /// The XDG-portal screen capture: one pending request and one live
+    /// [`PortalStream`] (the session that keeps its PipeWire node alive).
+    screen_share: ScreenShare<PortalStream>,
+    /// Portal requests whose worker thread is still waiting for the dialog.
+    /// Kept after a cancel so a late answer can be recognised as stale.
+    screen_answers: Vec<PendingScreenAnswer>,
+    /// Whether the host can capture a PipeWire screen node (`pipewiresrc` +
+    /// a PipeWire socket), refreshed with the camera scan.
+    screen_support: ScreenSupport,
     audio_feed: Option<AudioFeed>,
     audio_error_logged: bool,
     /// The running feed's negotiated rate, the only rate the UI renders.
@@ -436,7 +466,10 @@ impl NativeApp {
 
     fn new(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Self {
         let start = Instant::now();
-        let media_hub = MediaHub::new();
+        let mut media_hub = MediaHub::new();
+        // One host query at startup so the Media panel can explain a missing
+        // pipewiresrc/PipeWire before the user asks for a screen.
+        let screen_support = media_hub.screen_support();
 
         let isf_dir = resolve_isf_dir(&cli);
         let user_data = user_data_dir();
@@ -707,6 +740,9 @@ impl NativeApp {
             media_settings_path,
             media_restore_pending,
             media_settings_error_logged: false,
+            screen_share: ScreenShare::new(),
+            screen_answers: Vec::new(),
+            screen_support,
             audio_feed,
             audio_error_logged: false,
             audio_capture_rate,
@@ -1139,6 +1175,7 @@ impl NativeApp {
 
         self.tick_engine(dt);
         self.drain_media_actions();
+        self.poll_screen_answers();
         if now.saturating_duration_since(self.last_media_health) >= Duration::from_secs(1) {
             self.media_hub.poll_health();
             self.last_media_health = now;
@@ -1149,6 +1186,9 @@ impl NativeApp {
         }
         if now.saturating_duration_since(self.last_camera_scan) >= Duration::from_secs(1) {
             self.media_cameras = self.media_hub.list_cameras();
+            // PipeWire/`pipewiresrc` can appear (or disappear) while the shell
+            // runs, so the screen buttons follow the host's current support.
+            self.screen_support = self.media_hub.screen_support();
             self.restore_pending_cameras();
             self.last_camera_scan = now;
         }
@@ -1467,8 +1507,186 @@ impl NativeApp {
                         }
                     }
                     self.media_hub.stop(&source_id);
+                    if source_id == SCREEN_SOURCE_ID {
+                        // The portal session outlives the pipeline; closing it
+                        // releases the PipeWire node and the desktop's sharing
+                        // indicator. A stop can also land on a pending dialog
+                        // (the UI has no Stop for one, but a scripted stop
+                        // should still cancel it).
+                        if let Some(handle) = self.screen_share.stop() {
+                            close_screen_stream(handle);
+                        } else if let Some(request_id) = self.screen_share.cancel() {
+                            eprintln!(
+                                "ui: INFO screen share request {request_id} cancelled by a stop"
+                            );
+                        }
+                    }
+                }
+                MediaAction::ShareScreen { window } => {
+                    self.share_screen(ScreenShareKind::for_window(window));
+                }
+                MediaAction::CancelScreenShare => {
+                    if let Some(request_id) = self.screen_share.cancel() {
+                        eprintln!(
+                            "ui: INFO screen share request {request_id} cancelled; the portal \
+                             session closes when the dialog is answered"
+                        );
+                    }
                 }
             }
+        }
+    }
+
+    /// Queue the portal's own picker for a monitor or window.
+    ///
+    /// The blocking `request_screencast` call runs on a worker thread; its
+    /// answer is drained by [`Self::poll_screen_answers`]. One request and one
+    /// live capture at a time, so a second Share is refused while the dialog is
+    /// open or [`SCREEN_SOURCE_ID`] runs.
+    fn share_screen(&mut self, kind: ScreenShareKind) {
+        if self.screen_share.is_busy() {
+            eprintln!(
+                "ui: WARN screen share ({kind}) ignored: a screen request or capture is already \
+                 active"
+            );
+            return;
+        }
+        // The portal can hand out a node, but without `pipewiresrc` (or a
+        // PipeWire socket) nothing could capture it; say why instead of
+        // opening a dialog that cannot work.
+        if let Some(reason) = self.screen_support.reason.clone() {
+            eprintln!("ui: WARN screen share ({kind}) unavailable: {reason}");
+            self.screen_share
+                .refuse(ScreenShareError::Unsupported(reason));
+            return;
+        }
+
+        let Some(request) = self.screen_share.request(kind) else {
+            return;
+        };
+        match spawn_portal_request(kind) {
+            Ok(rx) => {
+                eprintln!(
+                    "ui: INFO screen share ({kind}) requested as request {}; waiting for the \
+                     portal dialog",
+                    request.id
+                );
+                self.screen_answers.push(PendingScreenAnswer {
+                    request_id: request.id,
+                    rx,
+                });
+                if self.screen_answers.len() > MAX_SCREEN_ANSWERS {
+                    // The oldest channel belongs to a cancelled dialog (the
+                    // pending request was just pushed). Dropping it makes that
+                    // thread close its session as soon as it is answered.
+                    let dropped = self.screen_answers.remove(0);
+                    eprintln!(
+                        "ui: WARN stopped waiting for abandoned screen share request {}",
+                        dropped.request_id
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!("ui: WARN screen share ({kind}) could not start: {error}");
+                self.screen_share.cancel();
+                self.screen_share.refuse(error);
+            }
+        }
+    }
+
+    /// Apply finished portal requests (non-blocking; one per frame at most is
+    /// enough because at most one request is outstanding).
+    fn poll_screen_answers(&mut self) {
+        let mut index = 0;
+        while index < self.screen_answers.len() {
+            let answer = match self.screen_answers[index].rx.try_recv() {
+                Ok(answer) => Some(answer),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(Err(PortalError::Runtime(
+                        "the screen share thread stopped without an answer".to_string(),
+                    )))
+                }
+            };
+            let Some(result) = answer else {
+                index += 1;
+                continue;
+            };
+
+            let pending = self.screen_answers.remove(index);
+            match self.screen_share.complete(pending.request_id, result) {
+                ScreenAnswer::Stale => {
+                    // Cancelled (or already answered): `complete` dropped the
+                    // handle, which closes its portal session in the
+                    // background.
+                    eprintln!(
+                        "ui: INFO discarded a screen share answer for stale request {}",
+                        pending.request_id
+                    );
+                }
+                ScreenAnswer::Failed { request, error } => {
+                    eprintln!("ui: WARN screen share ({}) failed: {error}", request.kind);
+                    if error != ScreenShareError::Cancelled {
+                        self.record_error(format!("screen capture failed: {error}"));
+                    }
+                }
+                ScreenAnswer::Start {
+                    request,
+                    config,
+                    handle,
+                } => self.start_screen_stream(request, config, handle),
+            }
+        }
+    }
+
+    /// Start the picked node and keep its portal session alive for the capture.
+    fn start_screen_stream(
+        &mut self,
+        request: ScreenRequest,
+        config: VideoSourceConfig,
+        handle: PortalStream,
+    ) {
+        let node_id = handle.node_id();
+        match self.media_hub.start(SCREEN_SOURCE_ID, config) {
+            Ok(index) => {
+                eprintln!(
+                    "ui: INFO screen share ({}) started as {SCREEN_SOURCE_ID:?} (PipeWire node \
+                     {node_id}, Webcam index {index})",
+                    request.kind
+                );
+                // The `PortalStream` owns the D-Bus session, and the session
+                // owns the PipeWire node: it must outlive the capture.
+                self.screen_share.started(request.kind, node_id, handle);
+            }
+            Err(error) => {
+                eprintln!(
+                    "ui: WARN screen share ({}) could not start PipeWire node {node_id}: {error}",
+                    request.kind
+                );
+                self.screen_share
+                    .start_failed(ScreenShareError::StartFailed(error.to_string()));
+                close_screen_stream(handle);
+            }
+        }
+    }
+
+    /// The Media panel's screen capture read model.
+    fn screen_view(&self) -> ScreenCaptureView {
+        ScreenCaptureView {
+            unavailable: self.screen_support.reason.clone(),
+            pending: self
+                .screen_share
+                .pending()
+                .map(|request| request.kind.into()),
+            running: self
+                .screen_share
+                .running()
+                .map(|(source_id, kind, node_id)| ScreenSourceView {
+                    source_id: source_id.to_string(),
+                    node_id,
+                    kind: kind.into(),
+                }),
+            error: self.screen_share.error().map(ToString::to_string),
         }
     }
 
@@ -2506,6 +2724,7 @@ impl NativeApp {
         let media = MediaSnapshot {
             available: self.media_hub.is_available(),
             error: self.media_hub.init_error().map(str::to_string),
+            screen: self.screen_view(),
             cameras: self
                 .media_cameras
                 .iter()
@@ -2853,6 +3072,12 @@ impl NativeApp {
         self.store.flush_link_deltas();
         self.store.shutdown_ndi();
         self.media_hub.stop_all();
+        // Release the portal session (its PipeWire node dies with the D-Bus
+        // connection) and stop waiting for a dialog nobody can answer.
+        self.screen_answers.clear();
+        if let Some(handle) = self.screen_share.stop() {
+            close_screen_stream(handle);
+        }
         self.midi_client.stop();
         self.plugin_runtime.shutdown();
         if let Some(mut feed) = self.audio_feed.take() {
@@ -2860,6 +3085,34 @@ impl NativeApp {
         }
         self.audio_capture_rate.stopped();
         self.close_output();
+    }
+}
+
+/// Close a portal session off the UI/render thread.
+///
+/// `PortalStream::close` waits (bounded by the portal's close timeout) for the
+/// node to vanish, which must never hitch a frame; a plain `drop` closes the
+/// session in the background without waiting. The short-lived thread only owns
+/// the handle.
+fn close_screen_stream<H: ScreenStream>(handle: H) {
+    let spawned = std::thread::Builder::new()
+        .name("modv-portal-close".to_string())
+        .spawn(move || Box::new(handle).close());
+
+    if let Err(error) = spawned {
+        // The failed spawn dropped the closure, and with it the handle:
+        // `PortalStream`'s `Drop` still tears the session down in the
+        // background.
+        eprintln!("ui: WARN could not close the portal session on a worker thread: {error}");
+    }
+}
+
+impl From<ScreenShareKind> for ScreenShareKindView {
+    fn from(kind: ScreenShareKind) -> Self {
+        match kind {
+            ScreenShareKind::Monitor => Self::Monitor,
+            ScreenShareKind::Window => Self::Window,
+        }
     }
 }
 
@@ -4737,5 +4990,25 @@ module.exports = {
         assert_eq!(view.duration, 500.0);
         assert_eq!(view.easing, "linear");
         assert_eq!(view.cycle_seconds, 0.0);
+    }
+
+    #[test]
+    fn screen_share_kinds_map_to_the_media_panel_view() {
+        assert_eq!(
+            ScreenShareKindView::from(ScreenShareKind::Monitor),
+            ScreenShareKindView::Monitor
+        );
+        assert_eq!(
+            ScreenShareKindView::from(ScreenShareKind::Window),
+            ScreenShareKindView::Window
+        );
+        assert_eq!(ScreenShareKindView::Monitor.label(), "monitor");
+        assert_eq!(ScreenShareKindView::Window.label(), "window");
+        assert_eq!(ScreenShareKindView::Monitor.as_str(), "monitor");
+        assert_eq!(
+            ScreenShareKind::for_window(true).as_str(),
+            ScreenShareKindView::Window.as_str(),
+            "the panel and the shell use the same spelling"
+        );
     }
 }

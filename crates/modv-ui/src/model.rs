@@ -712,6 +712,72 @@ pub struct MediaSnapshot {
     pub error: Option<String>,
     pub cameras: Vec<CameraView>,
     pub sources: Vec<MediaSourceView>,
+    /// The XDG-desktop-portal screen capture (`MediaAction::ShareScreen`).
+    pub screen: ScreenCaptureView,
+}
+
+/// The native shell's portal screen capture.
+///
+/// The shell owns the portal session (the PipeWire node dies with it), so the
+/// panel only renders this read model and queues [`MediaAction`]s. At most one
+/// request and one live capture exist (the source id is stable), which is what
+/// the two Share buttons and the running hint reflect.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScreenCaptureView {
+    /// Why the host cannot capture screens (no `pipewiresrc`/PipeWire socket).
+    pub unavailable: Option<String>,
+    /// The picker whose portal dialog is waiting for the user.
+    pub pending: Option<ScreenShareKindView>,
+    /// The live portal capture.
+    pub running: Option<ScreenSourceView>,
+    /// The last request's failure or cancellation, shown until the next one.
+    pub error: Option<String>,
+}
+
+impl ScreenCaptureView {
+    /// Whether the Share buttons can start a request.
+    ///
+    /// A request needs a supported host and the one screen slot free: the
+    /// portal dialog can only be answered once, and the Webcam module indexes
+    /// the single `screen:portal` source like another camera.
+    pub fn can_request(&self) -> bool {
+        self.unavailable.is_none() && self.pending.is_none() && self.running.is_none()
+    }
+}
+
+/// Which portal picker a request opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenShareKindView {
+    /// `Share monitor…` (`SourceSelection::Monitor`).
+    Monitor,
+    /// `Share window…` (`SourceSelection::Window`).
+    Window,
+}
+
+impl ScreenShareKindView {
+    /// The logging/`sourceType` spelling (`monitor`/`window`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Monitor => "monitor",
+            Self::Window => "window",
+        }
+    }
+
+    /// The noun the panel's pending/running lines use.
+    pub fn label(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// The live portal screen source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenSourceView {
+    /// The MediaHub source id (`screen:portal`).
+    pub source_id: String,
+    /// The PipeWire node id the portal handed out.
+    pub node_id: u32,
+    /// The monitor/window picker that produced it.
+    pub kind: ScreenShareKindView,
 }
 
 /// One enumerable camera.
@@ -1252,6 +1318,19 @@ pub enum MediaAction {
     Stop {
         source_id: String,
     },
+    /// Ask the desktop portal for a screen and start it as `screen:portal`.
+    ///
+    /// `window` picks the portal's window picker; `false` asks for a monitor.
+    /// The portal's own dialog chooses which one, so there is nothing to
+    /// enumerate here. The shell runs the blocking request on a worker thread,
+    /// keeps the portal session alive for the whole capture and reports the
+    /// outcome through [`MediaSnapshot::screen`].
+    ShareScreen {
+        window: bool,
+    },
+    /// Stop waiting for the open portal dialog; a late answer is discarded
+    /// (and closes the session it opened).
+    CancelScreenShare,
 }
 
 impl MediaSnapshot {
@@ -1294,7 +1373,11 @@ impl MediaSnapshot {
         let mut running: Vec<(&CameraView, usize)> = self
             .cameras
             .iter()
-            .filter_map(|camera| indexes.get(camera.id.as_str()).map(|index| (camera, *index)))
+            .filter_map(|camera| {
+                indexes
+                    .get(camera.id.as_str())
+                    .map(|index| (camera, *index))
+            })
             .collect();
         running.sort_by(|(a, a_index), (b, b_index)| {
             a_index.cmp(b_index).then_with(|| a.name.cmp(&b.name))

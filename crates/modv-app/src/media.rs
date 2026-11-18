@@ -199,8 +199,9 @@ pub struct MediaHub {
     /// GStreamer initialisation outcome (`Err` = capture unavailable).
     init: Result<(), String>,
     last_health: Instant,
-    /// `screen_support()` is logged once, when the first screen start is asked
-    /// for, so a host without PipeWire says why.
+    /// `screen_support()` is logged once (the native shell asks at startup so
+    /// the Media panel can explain a missing backend; the supervisor asks on
+    /// the first screen start), so a host without PipeWire says why.
     screen_logged: bool,
 }
 
@@ -1182,6 +1183,40 @@ mod tests {
 
     fn camera_kind(id: &str) -> VideoSourceKind {
         VideoSourceKind::Camera { id: id.to_string() }
+    }
+
+    #[test]
+    fn a_portal_screen_source_takes_a_webcam_index_like_a_camera() {
+        // The native shell starts its portal capture under this id; the Webcam
+        // module's 1-based `camera` prop and `reconcileCameraIndex` resolve it
+        // through the same camera-only list as a real camera.
+        let media = fake_hub(&[
+            ("camera:a", camera_kind("a")),
+            (
+                crate::screen_share::SCREEN_SOURCE_ID,
+                VideoSourceKind::Screen { node_id: 42 },
+            ),
+            (
+                "test-pattern:smpte",
+                VideoSourceKind::TestPattern {
+                    pattern: TestPattern::Smpte,
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            media.camera_ids(),
+            vec![
+                "camera:a".to_string(),
+                crate::screen_share::SCREEN_SOURCE_ID.to_string(),
+                "test-pattern:smpte".to_string(),
+            ]
+        );
+
+        let statuses = media.statuses();
+        assert_eq!(statuses[1].source_id, crate::screen_share::SCREEN_SOURCE_ID);
+        assert_eq!(statuses[1].index, 2, "the screen follows the camera");
+        assert_eq!(statuses[1].kind, "screen");
     }
 
     #[test]

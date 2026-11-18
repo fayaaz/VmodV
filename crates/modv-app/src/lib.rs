@@ -30,6 +30,7 @@ pub mod report;
 pub mod scene_ops;
 pub mod scene_preview;
 pub mod scene_transition;
+pub mod screen_share;
 pub mod store_ops;
 pub mod supervisor;
 pub mod texture_sources;

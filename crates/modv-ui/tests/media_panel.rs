@@ -90,6 +90,7 @@ fn demo_snapshot() -> EngineSnapshot {
                 source("camera:/dev/video0", "camera", 1, 1920, 1080),
                 source("camera:/dev/video2", "camera", 2, 640, 480),
             ],
+            screen: Default::default(),
         },
         ..Default::default()
     }
