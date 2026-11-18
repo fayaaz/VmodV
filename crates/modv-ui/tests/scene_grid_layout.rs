@@ -49,7 +49,7 @@ fn empty(row: usize) -> SceneCellView {
     }
 }
 
-fn scene(id: &str, name: &str, timing: Option<f64>, cells: Vec<SceneCellView>) -> SceneView {
+fn scene(id: &str, name: &str, timing: Option<(f64, f64)>, cells: Vec<SceneCellView>) -> SceneView {
     SceneView {
         id: id.to_string(),
         name: name.to_string(),
@@ -65,7 +65,7 @@ fn snapshot() -> EngineSnapshot {
             scene(
                 "scene-alpha",
                 "Alpha",
-                Some(8.0),
+                Some((4.0, 8.0)),
                 vec![
                     populated(0, &["Bands"], false),
                     empty(1),
@@ -109,8 +109,8 @@ fn snapshot() -> EngineSnapshot {
         performance: PerformanceView {
             enabled: true,
             current_scene_id: Some("scene-alpha".to_string()),
-            min_seconds: 8.0,
-            max_seconds: 24.0,
+            min_value: 8.0,
+            max_value: 24.0,
             transition_seconds: 2.0,
             ..Default::default()
         },

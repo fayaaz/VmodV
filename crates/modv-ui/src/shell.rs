@@ -373,7 +373,7 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                             egui::Button::new(
                                 egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
                                     .monospace()
-                                .color(theme::MUTED),
+                                    .color(theme::MUTED),
                             )
                             .frame(false),
                         )
@@ -462,8 +462,8 @@ fn status_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
                 ui.label(
                     egui::RichText::new(format!("BPM {:.0}", state.status.bpm))
                         .monospace()
-                    .size(12.0)
-                    .color(theme::MUTED),
+                        .size(12.0)
+                        .color(theme::MUTED),
                 )
                 .on_hover_text(bpm_hover(snapshot.audio.sample_rate));
                 ui.separator();

@@ -6,7 +6,8 @@
 use egui_kittest::Harness;
 use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, EngineHealth, EngineSnapshot, GroupView,
-    ModuleMetaView, ModuleView, PerformanceView, PropView, SceneCellView, SceneView, UiState,
+    ModuleMetaView, ModuleView, PerformanceView, PropView, SceneCellView, SceneView, TimingUnit,
+    UiState,
 };
 
 fn meta(name: &str, module_type: &str, category: &str) -> ModuleMetaView {
@@ -118,7 +119,7 @@ fn demo_snapshot() -> EngineSnapshot {
         id: "scene-1".to_string(),
         name: "Lone Chrome".to_string(),
         enabled: true,
-        timing: Some(8.0),
+        timing: Some((4.0, 8.0)),
         cells: vec![
             SceneCellView {
                 row: 0,
@@ -141,8 +142,9 @@ fn demo_snapshot() -> EngineSnapshot {
             enabled: false,
             current_scene_id: Some("scene-1".to_string()),
             row_names: vec!["Foreground".to_string(), "Effects".to_string()],
-            min_seconds: 8.0,
-            max_seconds: 24.0,
+            timing_unit: TimingUnit::Seconds,
+            min_value: 8.0,
+            max_value: 24.0,
             transition_seconds: 2.0,
             allowed_transitions: vec!["Fade".to_string()],
             order: "in-order".to_string(),

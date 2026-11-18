@@ -50,7 +50,7 @@ fn shell_scene_grid_renders_scene_columns_and_cells() {
         id: "scene-a".to_string(),
         name: "Lone Chrome".to_string(),
         enabled: true,
-        timing: Some(8.0),
+        timing: Some((4.0, 8.0)),
         cells: vec![modv_ui::SceneCellView {
             row: 0,
             module_names: vec!["Bands".to_string()],

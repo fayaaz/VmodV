@@ -828,7 +828,7 @@ impl NativeApp {
     }
 
     fn tick_engine(&mut self, dt: Duration) {
-        self.pump_audio(dt);
+        let phrase_flipped = self.pump_audio(dt);
         self.store.drain_osc();
         // Complete any NDI discovery run / receiver status change on the UI
         // thread; the finder and receivers run on their own threads, so this
@@ -842,10 +842,13 @@ impl NativeApp {
         self.midi_client.pump(&mut self.store);
         if self.store.scenes_tick_due() {
             let delta = dt.as_secs_f64() * 1000.0;
-            if let Err(error) = self
-                .store
-                .dispatch("scenes/tick", serde_json::json!({ "delta": delta }))
-            {
+            if let Err(error) = self.store.dispatch(
+                "scenes/tick",
+                serde_json::json!({
+                    "delta": delta,
+                    "phraseFlipped": phrase_flipped,
+                }),
+            ) {
                 self.record_error(format!("scenes/tick failed: {error}"));
             }
         }
@@ -860,17 +863,21 @@ impl NativeApp {
     /// loopback) and falls back to the default input. A capture failure logs
     /// once, stops the feed and leaves the engine silent instead of killing
     /// the frame loop.
-    fn pump_audio(&mut self, dt: Duration) {
+    ///
+    /// Returns the frame's phrase-detector pulse so `scenes/tick` can use it
+    /// for bar-window Scene changes (one frame only).
+    fn pump_audio(&mut self, dt: Duration) -> bool {
         let Some(feed) = self.audio_feed.as_mut() else {
-            return;
+            return false;
         };
         let snapshot = feed.frame(dt.as_secs_f32());
         let kick = feed.analyser().kick();
+        let phrase_flipped = snapshot.phrase_drop;
         let error = feed.take_error();
         self.store
             .set_engine_audio(&snapshot, kick, self.start.elapsed());
         let Some(error) = error else {
-            return;
+            return phrase_flipped;
         };
         if !self.audio_error_logged {
             self.audio_error_logged = true;
@@ -879,6 +886,7 @@ impl NativeApp {
         self.audio_feed = None;
         self.audio_capture_rate.stopped();
         self.store.disable_engine_audio();
+        phrase_flipped
     }
 
     fn frame_info(&self, scene_transition: Option<SceneTransitionInfo>) -> FrameInfo {
@@ -2166,17 +2174,20 @@ impl NativeApp {
             &scenes_state.scenes,
             &row_names,
         );
-        let scenes = scenes_state
-            .scenes
-            .iter()
-            .enumerate()
-            .map(|(index, scene)| scene_view(scene, index, &row_names, &disabled_cells))
-            .collect::<Vec<_>>();
         let performance = performance_view(
             &scenes_state.performance,
             self.store.performance_runtime().enabled,
             &row_names,
         );
+        let timing_fallback = (performance.min_value, performance.max_value);
+        let scenes = scenes_state
+            .scenes
+            .iter()
+            .enumerate()
+            .map(|(index, scene)| {
+                scene_view(scene, index, &row_names, &disabled_cells, timing_fallback)
+            })
+            .collect::<Vec<_>>();
         let applied_scene_id = performance.current_scene_id.clone();
         let audio = audio_view(
             self.store.bpm(),
@@ -2915,6 +2926,7 @@ fn scene_view(
     index: usize,
     row_names: &[String],
     disabled_cells: &std::collections::BTreeMap<String, Vec<usize>>,
+    timing_fallback: (f64, f64),
 ) -> SceneView {
     let id = scene
         .get("id")
@@ -2927,12 +2939,23 @@ fn scene_view(
         .map(str::to_string)
         .unwrap_or_else(|| format!("Scene {}", index + 1));
     let enabled = scene.get("enabled").map(js_truthy).unwrap_or(true);
+    // An override carries its own minimum *and* maximum (in the active timing
+    // unit); the old view exposed only `maxSeconds`, so the Scenes dialog
+    // opened with the minimum replaced by the maximum.
     let timing = if scene
         .get("timingOverride")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        scene.get("maxSeconds").and_then(Value::as_f64)
+        let min = scene
+            .get("minSeconds")
+            .and_then(Value::as_f64)
+            .unwrap_or(timing_fallback.0);
+        let max = scene
+            .get("maxSeconds")
+            .and_then(Value::as_f64)
+            .unwrap_or(timing_fallback.1);
+        Some((min, max))
     } else {
         None
     };
@@ -2997,6 +3020,13 @@ fn scene_view(
 fn performance_view(config: &Value, enabled: bool, row_names: &[String]) -> PerformanceView {
     let number =
         |key: &str, fallback: f64| config.get(key).and_then(Value::as_f64).unwrap_or(fallback);
+    let timing_unit = modv_ui::TimingUnit::parse(
+        config
+            .get("timingUnit")
+            .and_then(Value::as_str)
+            .unwrap_or("seconds"),
+    );
+    let (default_min, default_max) = modv_ui::default_timing_values(timing_unit);
     PerformanceView {
         enabled,
         current_scene_id: config
@@ -3004,8 +3034,9 @@ fn performance_view(config: &Value, enabled: bool, row_names: &[String]) -> Perf
             .and_then(Value::as_str)
             .map(str::to_string),
         row_names: row_names.to_vec(),
-        min_seconds: number("minSeconds", 8.0),
-        max_seconds: number("maxSeconds", 24.0),
+        timing_unit,
+        min_value: number("minSeconds", default_min),
+        max_value: number("maxSeconds", default_max),
         transition_seconds: number("transitionSeconds", 2.0),
         allowed_transitions: config
             .get("allowedTransitions")
@@ -3488,6 +3519,7 @@ mod tests {
             "name": "Test Scene",
             "enabled": 1,
             "timingOverride": true,
+            "minSeconds": 4,
             "maxSeconds": 12,
             "groups": [
                 {"modules": ["m1", "m2"]},
@@ -3499,11 +3531,21 @@ mod tests {
                 "m2": {"$moduleName": "Bars"}
             }
         });
-        let view = scene_view(&scene, 0, &[], &std::collections::BTreeMap::new());
+        let view = scene_view(
+            &scene,
+            0,
+            &[],
+            &std::collections::BTreeMap::new(),
+            (8.0, 24.0),
+        );
         assert_eq!(view.id, "s1");
         assert_eq!(view.name, "Test Scene");
         assert!(view.enabled);
-        assert_eq!(view.timing, Some(12.0));
+        assert_eq!(
+            view.timing,
+            Some((4.0, 12.0)),
+            "the override exposes its own minimum, not the maximum twice"
+        );
         assert_eq!(view.cells.len(), 3);
         assert_eq!(view.cells[0].module_names, vec!["Bands", "Bars"]);
         // serde_json cannot represent a "hole" here; the null group has no
@@ -3544,7 +3586,7 @@ mod tests {
 
         let mut disabled = std::collections::BTreeMap::new();
         disabled.insert("s1".to_string(), vec![3]);
-        let view = scene_view(&scene, 0, &row_names, &disabled);
+        let view = scene_view(&scene, 0, &row_names, &disabled, (8.0, 24.0));
 
         assert_eq!(view.cells.len(), 5, "one cell per named row");
         assert!(
@@ -3579,10 +3621,32 @@ mod tests {
         assert!(view.enabled);
         assert_eq!(view.current_scene_id.as_deref(), Some("s1"));
         assert_eq!(view.row_names, vec!["Background"]);
-        assert_eq!(view.min_seconds, 4.0);
-        assert_eq!(view.max_seconds, 10.0);
+        assert_eq!(view.timing_unit, modv_ui::TimingUnit::Seconds);
+        assert_eq!(view.min_value, 4.0);
+        assert_eq!(view.max_value, 10.0);
         assert_eq!(view.transition_seconds, 1.5);
         assert_eq!(view.allowed_transitions, vec!["Fade", "Wipe"]);
+    }
+
+    #[test]
+    fn performance_view_reads_bar_timing_without_converting_the_edit_values() {
+        let config = serde_json::json!({
+            "timingUnit": "bars",
+            "minSeconds": 4,
+            "maxSeconds": 12,
+        });
+        let view = performance_view(&config, false, &[]);
+        assert_eq!(view.timing_unit, modv_ui::TimingUnit::Bars);
+        assert_eq!(view.min_value, 4.0);
+        assert_eq!(view.max_value, 12.0);
+
+        // Defaults follow the unit instead of carrying the seconds pair over.
+        let defaults = performance_view(&serde_json::json!({"timingUnit": "bars"}), false, &[]);
+        assert_eq!(
+            (defaults.min_value, defaults.max_value),
+            (4.0, 12.0),
+            "bar defaults are 4/12 bars (8/24 s at 120 BPM)"
+        );
     }
 
     #[test]

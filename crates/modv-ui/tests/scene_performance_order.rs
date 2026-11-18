@@ -14,7 +14,7 @@ fn snapshot(order: &str, enabled: bool) -> EngineSnapshot {
             id: "scene-a".to_string(),
             name: "Lone Chrome".to_string(),
             enabled: true,
-            timing: Some(8.0),
+            timing: Some((4.0, 8.0)),
             cells: vec![SceneCellView {
                 row: 0,
                 module_names: vec!["Bands".to_string()],
@@ -25,8 +25,8 @@ fn snapshot(order: &str, enabled: bool) -> EngineSnapshot {
         performance: PerformanceView {
             enabled,
             order: order.to_string(),
-            min_seconds: 8.0,
-            max_seconds: 24.0,
+            min_value: 8.0,
+            max_value: 24.0,
             transition_seconds: 2.0,
             ..Default::default()
         },

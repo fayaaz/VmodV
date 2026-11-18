@@ -27,7 +27,7 @@ fn snapshot() -> EngineSnapshot {
         id: "scene-1".to_string(),
         name: "Lone Chrome".to_string(),
         enabled: true,
-        timing: Some(8.0),
+        timing: Some((4.0, 8.0)),
         cells: vec![
             SceneCellView {
                 row: 0,

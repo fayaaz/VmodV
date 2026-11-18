@@ -12,8 +12,8 @@ use serde_json::Value;
 
 use crate::layout::{LayoutState, WINDOW_PERFORMANCE_ROW_NAMES, WINDOW_SCENE_TIMING};
 use crate::model::{
-    EngineSnapshot, PERFORMANCE_ORDERS, PreviewRequest, SceneCellView, SceneView,
-    performance_order_label, scene_preview_key,
+    EngineSnapshot, PERFORMANCE_ORDERS, PreviewRequest, SceneCellView, SceneView, TimingUnit,
+    performance_order_label, scene_preview_key, timing_hint,
 };
 use crate::panels::row_monitor::{RowMonitorDisplay, row_monitor_display};
 use crate::state::UiAction;
@@ -74,8 +74,39 @@ pub struct SceneGridState {
 pub struct TimingEdit {
     pub scene_id: String,
     pub name: String,
-    pub min_seconds: f64,
-    pub max_seconds: f64,
+    /// Unit of `min_value` / `max_value` (the global performance unit).
+    pub timing_unit: TimingUnit,
+    /// Override minimum, in `timing_unit`.
+    pub min_value: f64,
+    /// Override maximum, in `timing_unit`.
+    pub max_value: f64,
+}
+
+/// The minimum a timing input accepts and the smallest gap between min/max,
+/// per unit. Seconds keep the historical 1 s / 1 s pair; bars use a quarter
+/// bar / half bar pair, which is the same shape at 120 BPM.
+fn timing_input_limits(unit: TimingUnit) -> (f64, f64, f64) {
+    match unit {
+        TimingUnit::Seconds => (1.0, 1.0, 0.5),
+        TimingUnit::Bars => (0.25, 0.5, 0.25),
+    }
+}
+
+/// Clamp a min/max pair for `unit`, keeping max above min.
+fn clamp_timing_pair(unit: TimingUnit, min: f64, max: f64) -> (f64, f64) {
+    let (min_floor, gap, _) = timing_input_limits(unit);
+    let min = min.max(min_floor);
+    (min, max.max(min + gap))
+}
+
+/// The Scene-cell timing badge: a quarter-bar step must not read `8s` when
+/// the project is in bars.
+fn timing_badge(timing: (f64, f64), unit: TimingUnit) -> String {
+    let (_, max) = timing;
+    match unit {
+        TimingUnit::Seconds => format!("{max:.0}s"),
+        TimingUnit::Bars => format!("{max:.2}b"),
+    }
 }
 
 impl SceneGridState {
@@ -157,11 +188,15 @@ impl SceneGridState {
 
     /// Begin editing a Scene's timing override.
     pub fn begin_timing(&mut self, scene: &SceneView, performance: &crate::PerformanceView) {
+        let (min_value, max_value) = scene
+            .timing
+            .unwrap_or((performance.min_value, performance.max_value));
         self.timing_edit = Some(TimingEdit {
             scene_id: scene.id.clone(),
             name: scene.name.clone(),
-            min_seconds: scene.timing.unwrap_or(performance.min_seconds),
-            max_seconds: scene.timing.unwrap_or(performance.max_seconds),
+            timing_unit: performance.timing_unit,
+            min_value,
+            max_value,
         });
     }
 
@@ -397,7 +432,7 @@ pub fn draw_scene_grid(
         grid.cancel_copy();
     }
 
-    scene_dialogs(ui, grid, actions, layout);
+    scene_dialogs(ui, snapshot, grid, actions, layout);
 }
 
 /// Draw one Scene column: its header plus one cell per grid row.
@@ -899,24 +934,52 @@ fn performance_bar(
             ));
         }
         ui.separator();
+        // `timingUnit` is native-only: switching it converts the global pair
+        // and every Scene override with the current BPM, so the same
+        // durations stay in place.
+        let unit = snapshot.performance.timing_unit;
+        ui.label(egui::RichText::new("Timing").size(12.0).color(theme::MUTED));
+        let mut selected_unit = unit;
+        egui::ComboBox::from_id_salt("performance-timing-unit")
+            .selected_text(unit.label())
+            .width(80.0)
+            .show_ui(ui, |ui| {
+                for candidate in [TimingUnit::Seconds, TimingUnit::Bars] {
+                    if ui
+                        .selectable_label(unit == candidate, candidate.label())
+                        .clicked()
+                    {
+                        selected_unit = candidate;
+                    }
+                }
+            });
+        let unit_changed = selected_unit != unit;
+        if unit_changed {
+            actions.push(UiAction::new(
+                "scenes/setTimingUnit",
+                serde_json::json!({ "unit": selected_unit.as_str() }),
+            ));
+        }
+
+        let (min_floor, _, speed) = timing_input_limits(unit);
         ui.label(egui::RichText::new("min").size(12.0).color(theme::MUTED));
-        let mut min = snapshot.performance.min_seconds;
+        let mut min = snapshot.performance.min_value;
         let min_changed = ui
             .add(
                 egui::DragValue::new(&mut min)
-                    .range(1.0..=3600.0)
-                    .speed(0.5)
-                    .suffix(" s"),
+                    .range(min_floor..=3600.0)
+                    .speed(speed)
+                    .suffix(unit.suffix()),
             )
             .changed();
         ui.label(egui::RichText::new("max").size(12.0).color(theme::MUTED));
-        let mut max = snapshot.performance.max_seconds;
+        let mut max = snapshot.performance.max_value;
         let max_changed = ui
             .add(
                 egui::DragValue::new(&mut max)
-                    .range(2.0..=7200.0)
-                    .speed(0.5)
-                    .suffix(" s"),
+                    .range(min_floor * 2.0..=7200.0)
+                    .speed(speed)
+                    .suffix(unit.suffix()),
             )
             .changed();
         ui.label(egui::RichText::new("fade").size(12.0).color(theme::MUTED));
@@ -930,21 +993,41 @@ fn performance_bar(
             )
             .changed();
         if min_changed || max_changed || fade_changed {
-            let min = if min_changed || max_changed {
-                min.max(1.0).min(max - 1.0)
-            } else {
-                snapshot.performance.min_seconds
-            };
+            let (min, max) = clamp_timing_pair(
+                unit,
+                if min_changed {
+                    min
+                } else {
+                    snapshot.performance.min_value
+                },
+                if max_changed {
+                    max
+                } else {
+                    snapshot.performance.max_value
+                },
+            );
             actions.push(UiAction::new(
                 "scenes/updatePerformance",
                 serde_json::json!({
                     "config": {
                         "minSeconds": min,
-                        "maxSeconds": max.max(min + 1.0),
+                        "maxSeconds": max,
                         "transitionSeconds": fade,
                     }
                 }),
             ));
+        }
+        if !unit_changed {
+            ui.label(
+                egui::RichText::new(timing_hint(
+                    snapshot.performance.min_value,
+                    snapshot.performance.max_value,
+                    unit,
+                    snapshot.audio.bpm,
+                ))
+                .size(11.0)
+                .color(theme::MUTED),
+            );
         }
         ui.separator();
         if ui.button("Row names").clicked() {
@@ -978,6 +1061,7 @@ fn performance_bar(
 /// Modal editors for Scene timing override and performance row names.
 fn scene_dialogs(
     ui: &mut egui::Ui,
+    snapshot: &EngineSnapshot,
     grid: &mut SceneGridState,
     actions: &mut Vec<UiAction>,
     layout: &mut LayoutState,
@@ -986,6 +1070,7 @@ fn scene_dialogs(
         let mut open = true;
         let mut save = false;
         let mut cancel = false;
+        let mut reset = false;
         let window = layout.apply_window(
             egui::Window::new(format!("Scene timing: {}", edit.name))
                 .id(egui::Id::unique("modv-window:scene_timing"))
@@ -997,28 +1082,39 @@ fn scene_dialogs(
                 .default_size([420.0, 240.0]),
             WINDOW_SCENE_TIMING,
         );
+        let unit = edit.timing_unit;
+        let (min_floor, _, speed) = timing_input_limits(unit);
+        let bpm = snapshot.audio.bpm;
         let response = window.show(ui.ctx(), |ui| {
             ui.label(
-                egui::RichText::new("Per-Scene override; reset returns to the global timing.")
-                    .size(12.0)
-                    .color(theme::MUTED),
+                egui::RichText::new(format!(
+                    "Per-Scene override in {}; reset returns to the global timing.",
+                    unit.label().to_ascii_lowercase()
+                ))
+                .size(12.0)
+                .color(theme::MUTED),
             );
             ui.horizontal(|ui| {
-                ui.label("Min");
+                ui.label(format!("Min ({})", unit.label()));
                 ui.add(
-                    egui::DragValue::new(&mut edit.min_seconds)
-                        .range(1.0..=3600.0)
-                        .speed(0.5)
-                        .suffix(" s"),
+                    egui::DragValue::new(&mut edit.min_value)
+                        .range(min_floor..=3600.0)
+                        .speed(speed)
+                        .suffix(unit.suffix()),
                 );
                 ui.label("Max");
                 ui.add(
-                    egui::DragValue::new(&mut edit.max_seconds)
-                        .range(2.0..=7200.0)
-                        .speed(0.5)
-                        .suffix(" s"),
+                    egui::DragValue::new(&mut edit.max_value)
+                        .range(min_floor * 2.0..=7200.0)
+                        .speed(speed)
+                        .suffix(unit.suffix()),
                 );
             });
+            ui.label(
+                egui::RichText::new(timing_hint(edit.min_value, edit.max_value, unit, bpm))
+                    .size(11.0)
+                    .color(theme::MUTED),
+            );
             ui.horizontal(|ui| {
                 if ui.button("Save override").clicked() {
                     save = true;
@@ -1026,18 +1122,27 @@ fn scene_dialogs(
                 if ui.button("Cancel").clicked() {
                     cancel = true;
                 }
+                if ui.button("Reset override").clicked() {
+                    reset = true;
+                }
             });
         });
         if let Some(response) = response {
             layout.record_window_rect(WINDOW_SCENE_TIMING, response.response.rect);
         }
-        if save {
+        if reset {
+            actions.push(UiAction::new(
+                "scenes/resetSceneTiming",
+                serde_json::json!({ "sceneId": edit.scene_id }),
+            ));
+        } else if save {
+            let (min, max) = clamp_timing_pair(unit, edit.min_value, edit.max_value);
             actions.push(UiAction::new(
                 "scenes/updateSceneTiming",
                 serde_json::json!({
                     "sceneId": edit.scene_id,
-                    "minSeconds": edit.min_seconds,
-                    "maxSeconds": edit.max_seconds.max(edit.min_seconds + 1.0),
+                    "minSeconds": min,
+                    "maxSeconds": max,
                 }),
             ));
         } else if !cancel && open {
@@ -1333,9 +1438,10 @@ fn draw_scene_cell(
         }
     }
 
-    // Timing badge (top-right) uses the per-Scene override when present.
+    // Timing badge (top-right) uses the per-Scene override when present, in
+    // the project's active timing unit.
     if let Some(timing) = scene.timing {
-        let label = format!("{timing:.0}s");
+        let label = timing_badge(timing, snapshot.performance.timing_unit);
         let chip_rect = egui::Rect::from_min_size(
             rect.right_top() + egui::vec2(-54.0, 4.0),
             egui::vec2(48.0, 14.0),

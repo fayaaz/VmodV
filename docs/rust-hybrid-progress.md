@@ -537,3 +537,21 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   engine now renders `screen` correctly, which every default Scene's
   Foreground group (and HOTSHOWERRAVE) already used — it used to degrade to
   `normal` with a warning.
+- **Scene timing can be edited in bars, and phrase flips drive transitions.**
+  `performance.timingUnit` (`"seconds"` default, `"bars"`) changes what the
+  stored `minSeconds`/`maxSeconds` mean; the global pair and every Scene
+  `timingOverride` convert through seconds at the live BPM via
+  `scenes/setTimingUnit`, so switching units keeps the durations. A bar is 4
+  beats and an invalid BPM falls back to 120. `scenes/tick` now accepts the
+  analyser's one-frame `phrase_drop` pulse and applies the legacy
+  `shouldAdvanceRow` rule: the per-cell deadline forces the change, while a
+  phrase flip changes Scene only when `random() < switchChance(dwell, min,
+  max)` (0 before the minimum, 1 at/after the maximum). The native Scenes
+  bar/dialog show the active unit with a resolved-seconds hint; `SceneView`
+  exposes an override's minimum and maximum separately (it used to pass the
+  maximum for both). JS compatibility: Electron ignores `timingUnit` and
+  would read bar numbers as seconds, so switch back to seconds before opening
+  the project in an older build. Unit coverage: conversion boundaries at
+  120/60/0/NaN BPM, `setTimingUnit` persistence, phrase/no-phrase tick
+  behaviour and the kittest selector/dialog round trip; the screenshot suite
+  was re-baselined.

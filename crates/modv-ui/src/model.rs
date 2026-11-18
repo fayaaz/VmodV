@@ -1139,8 +1139,9 @@ pub struct SceneView {
     pub id: String,
     pub name: String,
     pub enabled: bool,
-    /// Per-Scene timing override in seconds, when set.
-    pub timing: Option<f64>,
+    /// Per-Scene timing override as `(min, max)` in the performance timing
+    /// unit (`performance.timing_unit`), when the Scene sets one.
+    pub timing: Option<(f64, f64)>,
     /// Cells by performance row. A `null` Scene row is represented by an
     /// empty cell (`module_names` empty).
     pub cells: Vec<SceneCellView>,
@@ -1238,14 +1239,127 @@ pub fn performance_order_label(order: &str) -> &'static str {
     }
 }
 
+/// Unit the performance `min_value` / `max_value` and every Scene override
+/// are expressed in (`performance.timingUnit`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TimingUnit {
+    /// Plain seconds (the legacy behaviour and the default).
+    #[default]
+    Seconds,
+    /// Musical bars, 4 beats each.
+    Bars,
+}
+
+impl TimingUnit {
+    /// Parse the persisted `timingUnit` token; unknown values are seconds.
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "bars" | "bar" => Self::Bars,
+            _ => Self::Seconds,
+        }
+    }
+
+    /// The token written to `timingUnit` by `scenes/setTimingUnit`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Seconds => "seconds",
+            Self::Bars => "bars",
+        }
+    }
+
+    /// The selector label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Seconds => "Seconds",
+            Self::Bars => "Bars",
+        }
+    }
+
+    /// The input suffix (`egui::DragValue`).
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Seconds => " s",
+            Self::Bars => " bar",
+        }
+    }
+
+    pub fn is_bars(self) -> bool {
+        self == Self::Bars
+    }
+}
+
+/// Beats in a bar (the engine's `BEATS_PER_BAR`; kept local so this crate
+/// stays engine-agnostic).
+pub const BEATS_PER_BAR: f64 = 4.0;
+
+/// Tempo used when the engine has no usable BPM (`beats.bpm || 120`).
+pub const FALLBACK_BPM: f64 = 120.0;
+
+/// A tempo usable by the bar conversion.
+pub fn effective_bpm(bpm: f64) -> f64 {
+    if bpm.is_finite() && bpm > 0.0 {
+        bpm
+    } else {
+        FALLBACK_BPM
+    }
+}
+
+/// Seconds per 4/4 bar at `bpm`.
+pub fn bar_seconds(bpm: f64) -> f64 {
+    BEATS_PER_BAR * 60.0 / effective_bpm(bpm)
+}
+
+/// Convert a value in `unit` to seconds.
+pub fn timing_value_seconds(value: f64, unit: TimingUnit, bpm: f64) -> f64 {
+    match unit {
+        TimingUnit::Seconds => value,
+        TimingUnit::Bars => value * bar_seconds(bpm),
+    }
+}
+
+/// Convert seconds to `unit`.
+pub fn timing_seconds_value(seconds: f64, unit: TimingUnit, bpm: f64) -> f64 {
+    match unit {
+        TimingUnit::Seconds => seconds,
+        TimingUnit::Bars => seconds / bar_seconds(bpm),
+    }
+}
+
+/// The engine's default global timing in `unit` (8 s / 24 s at 120 BPM).
+pub fn default_timing_values(unit: TimingUnit) -> (f64, f64) {
+    match unit {
+        TimingUnit::Seconds => (8.0, 24.0),
+        TimingUnit::Bars => (4.0, 12.0),
+    }
+}
+
+/// A live duration hint for a min/max pair, e.g.
+/// `"4.00–12.00 bars ≈ 8.0–24.0 s at 120 BPM"` or `"8.0–24.0 s"`.
+pub fn timing_hint(min: f64, max: f64, unit: TimingUnit, bpm: f64) -> String {
+    match unit {
+        TimingUnit::Seconds => format!("{min:.1}–{max:.1} s"),
+        TimingUnit::Bars => {
+            let bpm = effective_bpm(bpm);
+            let min_seconds = timing_value_seconds(min, unit, bpm);
+            let max_seconds = timing_value_seconds(max, unit, bpm);
+            format!("{min:.2}–{max:.2} bars ≈ {min_seconds:.1}–{max_seconds:.1} s at {bpm:.0} BPM")
+        }
+    }
+}
+
 /// Performance-mode configuration plus the runtime Scene id.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PerformanceView {
     pub enabled: bool,
     pub current_scene_id: Option<String>,
     pub row_names: Vec<String>,
-    pub min_seconds: f64,
-    pub max_seconds: f64,
+    /// Unit of `min_value` / `max_value` and every Scene override.
+    pub timing_unit: TimingUnit,
+    /// Shortest dwell, in `timing_unit`.
+    pub min_value: f64,
+    /// Longest dwell, in `timing_unit`.
+    pub max_value: f64,
+    /// Crossfade duration, always seconds.
     pub transition_seconds: f64,
     pub allowed_transitions: Vec<String>,
     /// Scene order used for the next-Scene pick (`"in-order"` / `"random"`).
@@ -1258,8 +1372,9 @@ impl Default for PerformanceView {
             enabled: false,
             current_scene_id: None,
             row_names: Vec::new(),
-            min_seconds: 0.0,
-            max_seconds: 0.0,
+            timing_unit: TimingUnit::Seconds,
+            min_value: 0.0,
+            max_value: 0.0,
             transition_seconds: 0.0,
             allowed_transitions: Vec::new(),
             order: PERFORMANCE_ORDER_IN_ORDER.to_string(),
@@ -1771,5 +1886,39 @@ mod tests {
             "an unrated mode keeps the preferred rate"
         );
         assert_eq!(mode_for_resolution(&modes, 800, 600, 30), None);
+    }
+
+    #[test]
+    fn bar_timing_uses_four_beats_and_the_120_bpm_fallback() {
+        assert_eq!(bar_seconds(120.0), 2.0);
+        assert_eq!(bar_seconds(60.0), 4.0);
+        assert_eq!(bar_seconds(0.0), 2.0);
+        assert_eq!(bar_seconds(f64::NAN), 2.0);
+        assert_eq!(effective_bpm(f64::INFINITY), 120.0);
+
+        assert_eq!(timing_value_seconds(4.0, TimingUnit::Bars, 120.0), 8.0);
+        assert_eq!(timing_value_seconds(4.0, TimingUnit::Bars, 60.0), 16.0);
+        assert_eq!(timing_seconds_value(8.0, TimingUnit::Bars, 120.0), 4.0);
+        assert_eq!(timing_value_seconds(4.0, TimingUnit::Seconds, 60.0), 4.0);
+    }
+
+    #[test]
+    fn timing_hints_name_the_unit_and_resolve_bar_durations() {
+        assert_eq!(
+            timing_hint(8.0, 24.0, TimingUnit::Seconds, 120.0),
+            "8.0–24.0 s"
+        );
+        assert_eq!(
+            timing_hint(4.0, 12.0, TimingUnit::Bars, 120.0),
+            "4.00–12.00 bars ≈ 8.0–24.0 s at 120 BPM"
+        );
+        assert_eq!(
+            timing_hint(4.0, 12.0, TimingUnit::Bars, 0.0),
+            "4.00–12.00 bars ≈ 8.0–24.0 s at 120 BPM",
+            "an invalid tempo falls back to 120"
+        );
+        assert_eq!(TimingUnit::parse("BAR"), TimingUnit::Bars);
+        assert_eq!(TimingUnit::parse("nonsense"), TimingUnit::Seconds);
+        assert_eq!(TimingUnit::Bars.suffix(), " bar");
     }
 }

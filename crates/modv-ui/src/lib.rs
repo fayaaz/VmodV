@@ -40,9 +40,11 @@ pub use model::{
     ModuleMetaView, ModuleView, PERFORMANCE_ORDER_IN_ORDER, PERFORMANCE_ORDER_RANDOM,
     PERFORMANCE_ORDERS, PerformanceView, PreviewRequest, PreviewTexture, ProjectView,
     PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView, TextureSourceView,
-    TweenView, bpm_with_rate, default_camera_mode, fps_options, gallery_preview_key,
-    mode_for_resolution, normalize_performance_order, performance_order_label, sample_rate_label,
-    scene_preview_key, un_premultiply_rgba, unique_resolutions,
+    TimingUnit, TweenView, bar_seconds, bpm_with_rate, default_camera_mode, default_timing_values,
+    effective_bpm, fps_options, gallery_preview_key, mode_for_resolution,
+    normalize_performance_order, performance_order_label, sample_rate_label, scene_preview_key,
+    timing_hint, timing_seconds_value, timing_value_seconds, un_premultiply_rgba,
+    unique_resolutions,
 };
 pub use state::{
     AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, SidePanelTab, TweenCurveEditor,
