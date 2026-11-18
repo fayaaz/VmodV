@@ -4131,15 +4131,6 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                         .size(20.0)
                         .color(theme::FOREGROUND),
                 );
-                // The subtitle is decoration; drop it rather than let it
-                // collide with the right-hand buttons in a narrow centre.
-                if ui.available_width() > 640.0 {
-                    ui.label(
-                        egui::RichText::new("egui + wgpu + in-process engine")
-                            .size(13.0)
-                            .color(theme::MUTED),
-                    );
-                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Open output").clicked() {
                         state.queue(UiCommand::OpenOutputWindow);
