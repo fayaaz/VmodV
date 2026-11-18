@@ -84,8 +84,10 @@
 //! - **Hydration keeps the full performance config.** The JS hydrate commits
 //!   only the normalised timing keys (`scenes.js:2839-2858`), which drops
 //!   `rowNames`/`order`/`allowedTransitions` on every restart. The engine
-//!   persists and hydrates the whole config so the named grid survives, while
-//!   the runtime keys (`enabled`, `currentSceneId`) still reset on boot.
+//!   persists and hydrates the whole config so the named grid survives.
+//!   `enabled` hydrates too — a legacy `autopilot` left running resumes
+//!   performance mode like the JS state — while `currentSceneId` is runtime
+//!   state and the live value wins over the stored one.
 //! - **Whole-Scene applies restore the Scene's MIDI state and focused
 //!   input.** `restoreSceneMidi` and the focused-input tail of
 //!   `restoreSceneInputs` run only for a whole-Scene apply; a row/scoped apply
@@ -375,7 +377,22 @@ impl Store {
         };
 
         self.scenes.scenes = parsed.scenes;
+        let live_current_scene = self
+            .scenes
+            .performance
+            .get("currentSceneId")
+            .cloned()
+            .unwrap_or(Value::Null);
         self.scenes.performance = parsed.performance;
+        if let Some(object) = self.scenes.performance.as_object_mut() {
+            // Runtime state: the JS hydrate takes `currentSceneId` from the
+            // live module state, never from the stored document.
+            object.insert("currentSceneId".to_string(), live_current_scene);
+        }
+        // `enabled` is state, not runtime-only, in the JS store: the tick
+        // reads `state.performance.enabled`, so a legacy autopilot that was
+        // left on resumes after hydration. Keep the engine runtime in step.
+        self.performance.enabled = self.performance_enabled();
         self.scenes.defaults_version = parsed.defaults_version;
         self.scenes.defaults_seeded = parsed.defaults_seeded;
         self.scenes.seeded_default_scenes = parsed.seeded_default_scenes;
@@ -429,7 +446,19 @@ impl Store {
             self.deltas.push("scenes/ADD_SCENE", scene);
         }
 
+        // The JS `loadScenesFromDisk` only merges Scenes; performance state is
+        // untouched. Keep the live runtime keys over the parsed file so a
+        // reload cannot silently start/stop performance mode.
+        let live_performance = self.scenes.performance.clone();
         self.scenes.performance = parsed.performance;
+        if let Some(object) = self.scenes.performance.as_object_mut() {
+            for key in ["enabled", "currentSceneId"] {
+                object.insert(
+                    key.to_string(),
+                    live_performance.get(key).cloned().unwrap_or(Value::Null),
+                );
+            }
+        }
         self.scenes.defaults_version = parsed.defaults_version;
         self.scenes.defaults_seeded = parsed.defaults_seeded;
         self.scenes.seeded_default_scenes = parsed.seeded_default_scenes;
@@ -2174,10 +2203,12 @@ impl Store {
         }))
     }
 
-    /// `scenes/updatePerformance` (`scenes.js:3360-3368`).
+    /// `scenes/updatePerformance` (`scenes.js:3332-3340`).
     ///
     /// Normalises the incoming timing/transition data and merges it over the
-    /// current config (runtime keys `enabled`/`currentSceneId` survive).
+    /// current config. `enabled` follows the merged config (the JS tick reads
+    /// `state.performance.enabled`), while `currentSceneId` survives unless
+    /// the payload provides one.
     pub fn update_performance_action(
         &mut self,
         params: &Map<String, Value>,
@@ -2202,6 +2233,7 @@ impl Store {
         // resolves); a changed mapping invalidates cached Scene previews.
         let row_names_changed = merged.get("rowNames") != self.scenes.performance.get("rowNames");
         self.scenes.performance = merged;
+        self.performance.enabled = self.performance_enabled();
         if row_names_changed {
             self.touch_scene_list();
         }
@@ -3866,13 +3898,11 @@ fn parse_stored_scenes(stored: &Value) -> Option<ParsedStoredScenes> {
     if let Some(stored) = stored_performance {
         performance = merge_performance(&performance, stored);
     }
-    if let Some(object) = performance.as_object_mut() {
-        // Runtime state does not survive a restart: the JS hydrate commits the
-        // timing keys over the default config, so `enabled` starts false and
-        // no Scene is current (the stored `enabled` flag is ignored).
-        object.insert("enabled".to_string(), json!(false));
-        object.insert("currentSceneId".to_string(), Value::Null);
-    }
+    // `hydrateScenes` `UPDATE_PERFORMANCE`s the stored config over the
+    // defaults, so a legacy `autopilot.enabled` resumes performance mode
+    // exactly like the Electron spec. The stored `currentSceneId` is runtime
+    // state: [`Store::hydrate_scenes`] keeps the live value instead of the
+    // stored one, mirroring `currentSceneId: state.performance.currentSceneId`.
 
     let mut scenes = Vec::new();
     if let Some(entries) = object.get("scenes").and_then(Value::as_array) {

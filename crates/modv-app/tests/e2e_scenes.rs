@@ -1282,11 +1282,50 @@ fn legacy_autopilot_settings_hydrate_into_performance() {
     assert_eq!(performance["transitionSeconds"], json!(4));
     assert_eq!(performance["allowedTransitions"], json!(["Fade"]));
     assert_eq!(performance["order"], json!("random"));
-    // Runtime state never survives a restart: the native hydrate resets the
-    // mode and the current Scene even when the legacy autopilot had enabled.
-    assert_eq!(performance["enabled"], json!(false));
+    // `hydrateScenes` commits the stored config over the defaults, so a legacy
+    // `autopilot.enabled: true` really resumes performance mode, exactly like
+    // the Electron spec (`sceneSnapshotsAndPerformance.spec.js`). The stored
+    // `currentSceneId` is runtime state: the live value wins (none at boot).
+    assert_eq!(performance["enabled"], json!(true));
     assert_eq!(performance["currentSceneId"], json!(null));
+    assert!(
+        store.performance_runtime().enabled,
+        "the runtime follows the hydrated flag"
+    );
     assert!(performance.get("autopilot").is_none());
+
+    // A hydrate mid-session keeps the live current Scene instead of the
+    // stored one (`currentSceneId: state.performance.currentSceneId`).
+    store
+        .dispatch(
+            "scenes/updatePerformance",
+            json!({ "config": { "currentSceneId": "live-scene" } }),
+        )
+        .expect("updatePerformance dispatches");
+    std::fs::write(
+        &scenes_path,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "defaultsSeeded": true,
+            "scenes": [],
+            "autopilot": {
+                "enabled": true,
+                "currentSceneId": "stored-scene",
+                "minSeconds": 11,
+                "maxSeconds": 33,
+            },
+        }))
+        .expect("autopilot document encodes"),
+    )
+    .expect("scenes.json rewrite");
+    store
+        .dispatch("scenes/hydrateScenes", json!({}))
+        .expect("second hydrate dispatches");
+    assert_eq!(
+        store.scenes_state().performance["currentSceneId"],
+        json!("live-scene"),
+        "the live current Scene survives hydration"
+    );
 
     store
         .dispatch(
@@ -1301,6 +1340,10 @@ fn legacy_autopilot_settings_hydrate_into_performance() {
             }),
         )
         .expect("updatePerformance dispatches");
+    assert!(
+        !store.performance_runtime().enabled,
+        "updatePerformance carries `enabled` to the runtime like the JS state"
+    );
     store
         .dispatch("scenes/persistScenes", json!({}))
         .expect("persistScenes dispatches");
