@@ -2984,7 +2984,7 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
         );
     }
     let running = media.running_cameras();
-    for camera in &media.cameras {
+    for camera in media.ordered_cameras() {
         media_camera_row(ui, camera, &running, state);
     }
     ui.separator();

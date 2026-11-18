@@ -1275,6 +1275,50 @@ impl MediaSnapshot {
         cameras.sort_by_key(|source| source.index);
         cameras
     }
+
+    /// Cameras in display order: running cameras first, ordered by the Webcam
+    /// module's 1-based index, then the unselected ones by name (the legacy
+    /// `orderEngineCameraInputs`: checked cameras lead in engine order).
+    pub fn ordered_cameras(&self) -> Vec<&CameraView> {
+        let indexes: std::collections::HashMap<&str, usize> = self
+            .sources
+            .iter()
+            .filter_map(|source| {
+                source
+                    .source_id
+                    .strip_prefix("camera:")
+                    .map(|id| (id, source.index))
+            })
+            .collect();
+
+        let mut running: Vec<(&CameraView, usize)> = self
+            .cameras
+            .iter()
+            .filter_map(|camera| indexes.get(camera.id.as_str()).map(|index| (camera, *index)))
+            .collect();
+        running.sort_by(|(a, a_index), (b, b_index)| {
+            a_index.cmp(b_index).then_with(|| a.name.cmp(&b.name))
+        });
+
+        let mut rest: Vec<&CameraView> = self
+            .cameras
+            .iter()
+            .filter(|camera| !indexes.contains_key(camera.id.as_str()))
+            .collect();
+        rest.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        running
+            .into_iter()
+            .map(|(camera, _)| camera)
+            .chain(rest)
+            .collect()
+    }
 }
 
 /// One engine Input Link (audio getter, state path, MIDI or OSC).
@@ -2500,5 +2544,93 @@ mod tests {
         assert_eq!(view.summary(), "1 of 1 plugin loaded");
         view.capture = Some([160, 90]);
         assert_eq!(view.capture_label(), Some("capture 160×90".to_string()));
+    }
+
+    fn camera(id: &str, name: &str) -> CameraView {
+        CameraView {
+            id: id.to_string(),
+            name: name.to_string(),
+            max_width: 1280,
+            max_height: 720,
+            max_fps: 30,
+            modes: Vec::new(),
+            selected: CameraModeView::default(),
+        }
+    }
+
+    fn camera_source(id: &str, index: usize) -> MediaSourceView {
+        MediaSourceView {
+            source_id: format!("camera:{id}"),
+            kind: "camera".to_string(),
+            index,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ordered_cameras_puts_running_cameras_first_in_webcam_index_order() {
+        let media = MediaSnapshot {
+            cameras: vec![
+                camera("a", "Alpha"),
+                camera("b", "Bravo"),
+                camera("c", "Charlie"),
+            ],
+            sources: vec![camera_source("b", 2), camera_source("c", 1)],
+            ..Default::default()
+        };
+
+        let names: Vec<&str> = media
+            .ordered_cameras()
+            .into_iter()
+            .map(|camera| camera.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Charlie", "Bravo", "Alpha"]);
+    }
+
+    #[test]
+    fn ordered_cameras_sorts_unselected_cameras_by_name() {
+        let media = MediaSnapshot {
+            cameras: vec![
+                camera("z", "Zulu"),
+                camera("a", "alpha"),
+                camera("b", "Bravo"),
+            ],
+            ..Default::default()
+        };
+
+        let names: Vec<&str> = media
+            .ordered_cameras()
+            .into_iter()
+            .map(|camera| camera.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["alpha", "Bravo", "Zulu"]);
+    }
+
+    #[test]
+    fn ordered_cameras_ignores_non_camera_sources_and_missing_indexes() {
+        let media = MediaSnapshot {
+            cameras: vec![camera("a", "Alpha"), camera("b", "Bravo")],
+            sources: vec![
+                MediaSourceView {
+                    source_id: "screen:portal".to_string(),
+                    kind: "screen".to_string(),
+                    index: 1,
+                    ..Default::default()
+                },
+                camera_source("b", 0),
+            ],
+            ..Default::default()
+        };
+
+        let names: Vec<&str> = media
+            .ordered_cameras()
+            .into_iter()
+            .map(|camera| camera.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["Bravo", "Alpha"],
+            "a camera source with index 0 still leads; screens never enter the camera list"
+        );
     }
 }

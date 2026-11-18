@@ -127,6 +127,22 @@ fn the_media_panel_numbers_running_cameras_by_webcam_index() {
 }
 
 #[test]
+fn the_media_panel_orders_cameras_by_webcam_index_then_name() {
+    let mut harness = build(demo_snapshot());
+    harness.run();
+
+    let alpha = harness.get_by_label("Webcam Alpha").rect().top();
+    let gamma = harness.get_by_label("Webcam Gamma").rect().top();
+    let beta = harness.get_by_label("Webcam Beta").rect().top();
+
+    assert!(
+        alpha < gamma && gamma < beta,
+        "running cameras must lead in Webcam-index order (Alpha #1, Gamma #2), \
+         then unselected cameras by name (Beta): {alpha} {gamma} {beta}"
+    );
+}
+
+#[test]
 fn checking_a_camera_queues_a_start_with_the_suggested_mode() {
     let mut harness = build(demo_snapshot());
     harness.run();
