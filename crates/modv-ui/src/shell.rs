@@ -18,7 +18,7 @@ use crate::layout::{
 use crate::library_drag::MediaLibraryDrag;
 use crate::model::{
     COMPOSITE_OPERATIONS, EngineSnapshot, InheritTarget, LibraryKind, MediaAction, MediaAssetView,
-    MediaSourceView, ModuleMetaView, PropView, ScreenCaptureView, VideoTransportAction,
+    MediaSourceView, ModuleMetaView, ModuleView, PropView, ScreenCaptureView, VideoTransportAction,
     VideoTransportView, asset_meta_label, format_duration, gallery_preview_key,
     group_enabled_indicator, letterbox_rect, next_group_enabled, sample_rate_label,
 };
@@ -1117,24 +1117,17 @@ fn group_module_list(
                     }),
                 );
             }
-            // The name is both the click-to-select target and the drag source:
-            // its whole row re-orders within the Group or moves to another one.
-            paint_module_drag_grip(ui);
+            // The name is click-to-select only; the two-bar grip beside it is
+            // the row's drag handle for re-ordering within the Group or moving
+            // it to another one.
+            module_drag_grip(ui, &group.id, module, module_index);
             let label = format!("{}  ({})", module.module_name, short_id(&module.id));
-            let response = ui.add(
-                egui::Button::selectable(selected_module, egui::RichText::new(label).size(12.0))
-                    .sense(Sense::click_and_drag()),
-            );
+            let response = ui.add(egui::Button::selectable(
+                selected_module,
+                egui::RichText::new(label).size(12.0),
+            ));
             if response.clicked() {
                 state.selected_module = Some(module.id.clone());
-            }
-            if response.drag_started() {
-                response.dnd_set_drag_payload(ModuleDrag::new(&module.id, &group.id, module_index));
-            }
-            if response.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            } else if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -1177,18 +1170,37 @@ fn group_module_list(
     row_rects
 }
 
-/// The three-line grip that hints a module row is draggable. The lines are
-/// painted rather than labelled so they never enter the accessibility tree.
-fn paint_module_drag_grip(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(7.0, 12.0), Sense::hover());
+/// The two-bar grip that is a module row's only drag handle.
+///
+/// The bars are painted, not text, so the widget declares its own accessible
+/// `Drag <module> (<id>)` label: the name button next to it stays a plain
+/// click-to-select target, and this grip is what re-orders the Module within
+/// its Group or moves it to another one. The cursor shows `Grab` on hover and
+/// `Grabbing` while the row is dragged.
+fn module_drag_grip(ui: &mut egui::Ui, group_id: &str, module: &ModuleView, module_index: usize) {
+    let (rect, response) = ui.allocate_exact_size(vec2(10.0, 14.0), Sense::click_and_drag());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            format!("Drag {} ({})", module.module_name, short_id(&module.id)),
+        )
+    });
+    if response.drag_started() {
+        response.dnd_set_drag_payload(ModuleDrag::new(&module.id, group_id, module_index));
+    }
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
     let painter = ui.painter();
-    let stroke = Stroke::new(1.0, theme::MUTED.gamma_multiply(0.75));
-    for offset in [-3.0f32, 0.0, 3.0] {
+    let stroke = Stroke::new(1.5, theme::MUTED.gamma_multiply(0.75));
+    let left = rect.left() + 1.0;
+    let right = rect.right() - 1.0;
+    for offset in [-2.0f32, 2.0] {
         let y = rect.center().y + offset;
-        painter.line_segment(
-            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-            stroke,
-        );
+        painter.line_segment([egui::pos2(left, y), egui::pos2(right, y)], stroke);
     }
 }
 

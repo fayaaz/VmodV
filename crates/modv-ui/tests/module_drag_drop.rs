@@ -1,10 +1,11 @@
 //! Module drag and drop in the native Groups pane.
 //!
-//! Modules are re-ordered and moved between Groups by dragging their row: the
-//! upper half of a row inserts above it, the lower half below it, and a Group's
-//! empty space appends after its last row. Every drop queues one
-//! `groups/MOVE_MODULE`; releasing over empty space queues nothing. The old
-//! per-row `^`/`v` buttons are gone, so these tests also pin their absence.
+//! Modules are re-ordered and moved between Groups by dragging their two-bar
+//! grip: the upper half of a row inserts above it, the lower half below it, and
+//! a Group's empty space appends after its last row. Every drop queues one
+//! `groups/MOVE_MODULE`; releasing over empty space queues nothing. The module
+//! name is click-to-select only, so dragging it starts no drag. The old per-row
+//! `^`/`v` buttons are gone, so these tests also pin their absence.
 
 use std::sync::{Arc, Mutex};
 
@@ -131,16 +132,21 @@ fn apply_move(snapshot: &Arc<Mutex<EngineSnapshot>>, action: &UiAction) {
     let _ = from_group_id;
 }
 
-/// Drag from `from` to `to`, releasing with a raw pointer event. `drop_at`
-/// also emits `PointerGone`, which can clear the interact position before the
-/// release is handled (the same caveat the tween editor test documents).
-fn drag(harness: &mut Harness<'static, UiState>, from: egui::Pos2, to: egui::Pos2) {
+/// Press on `from` and move the pointer to `to`, leaving the button down, so a
+/// test can inspect the drag while it is still in flight.
+fn drag_hold(harness: &mut Harness<'static, UiState>, from: egui::Pos2, to: egui::Pos2) {
     harness.hover_at(from);
     harness.run();
     harness.drag_at(from);
     harness.run();
     harness.hover_at(to);
     harness.run();
+}
+
+/// Release the pointer at `to` with a raw event. `drop_at` also emits
+/// `PointerGone`, which can clear the interact position before the release is
+/// handled (the same caveat the tween editor test documents).
+fn release_at(harness: &mut Harness<'static, UiState>, to: egui::Pos2) {
     harness.event(egui::Event::PointerButton {
         pos: to,
         button: PointerButton::Primary,
@@ -150,18 +156,30 @@ fn drag(harness: &mut Harness<'static, UiState>, from: egui::Pos2, to: egui::Pos
     harness.run();
 }
 
+/// Drag from `from` to `to` and release there.
+fn drag(harness: &mut Harness<'static, UiState>, from: egui::Pos2, to: egui::Pos2) {
+    drag_hold(harness, from, to);
+    release_at(harness, to);
+}
+
 fn module_row(harness: &Harness<'static, UiState>, label: &str) -> egui::Rect {
     harness.get_by_label(label).rect()
+}
+
+/// The centre of a module row's two-bar drag grip, addressed by its accessible
+/// label.
+fn module_grip(harness: &Harness<'static, UiState>, label: &str) -> egui::Pos2 {
+    harness.get_by_label(label).rect().center()
 }
 
 #[test]
 fn dragging_a_module_below_a_sibling_moves_it_down_within_the_group() {
     let (mut harness, snapshot) = build();
-    let bands = module_row(&harness, "Bands  (bands-1)");
+    let bands = module_grip(&harness, "Drag Bands (bands-1)");
     let ball = module_row(&harness, "Ball  (ball-1)");
     let target = egui::pos2(ball.center().x, ball.bottom() - 1.0);
 
-    drag(&mut harness, bands.center(), target);
+    drag(&mut harness, bands, target);
 
     let actions = harness.state_mut().take_actions();
     assert_eq!(actions.len(), 1, "one action queued: {actions:?}");
@@ -198,11 +216,11 @@ fn dragging_a_module_below_a_sibling_moves_it_down_within_the_group() {
 #[test]
 fn dragging_a_module_above_a_row_in_another_group_inserts_at_that_index() {
     let (mut harness, snapshot) = build();
-    let bands = module_row(&harness, "Bands  (bands-1)");
+    let bands = module_grip(&harness, "Drag Bands (bands-1)");
     let plasma = module_row(&harness, "Plasma  (plasma-1)");
     let target = egui::pos2(plasma.center().x, plasma.top() + 1.0);
 
-    drag(&mut harness, bands.center(), target);
+    drag(&mut harness, bands, target);
 
     let actions = harness.state_mut().take_actions();
     assert_eq!(actions.len(), 1, "one action queued: {actions:?}");
@@ -230,10 +248,10 @@ fn dragging_a_module_above_a_row_in_another_group_inserts_at_that_index() {
 #[test]
 fn dragging_onto_an_empty_group_appends() {
     let (mut harness, snapshot) = build();
-    let bands = module_row(&harness, "Bands  (bands-1)");
+    let bands = module_grip(&harness, "Drag Bands (bands-1)");
     let empty = harness.get_by_label("Empty").rect();
 
-    drag(&mut harness, bands.center(), empty.center());
+    drag(&mut harness, bands, empty.center());
 
     let actions = harness.state_mut().take_actions();
     assert_eq!(actions.len(), 1, "one action queued: {actions:?}");
@@ -261,12 +279,12 @@ fn dropping_in_the_gap_between_two_rows_inserts_there() {
     // they still mean "insert here": moving Bands into the gap between Ball
     // and Tunnel lands it at index 1, not at the end of the Group.
     let (mut harness, snapshot) = build();
-    let bands = module_row(&harness, "Bands  (bands-1)");
+    let bands = module_grip(&harness, "Drag Bands (bands-1)");
     let ball = module_row(&harness, "Ball  (ball-1)");
     let tunnel = module_row(&harness, "Tunnel  (tunnel-1)");
     let target = egui::pos2(ball.center().x, (ball.bottom() + tunnel.top()) / 2.0);
 
-    drag(&mut harness, bands.center(), target);
+    drag(&mut harness, bands, target);
 
     let actions = harness.state_mut().take_actions();
     assert_eq!(actions.len(), 1, "one action queued: {actions:?}");
@@ -291,10 +309,10 @@ fn dropping_in_the_gap_between_two_rows_inserts_there() {
 #[test]
 fn releasing_a_module_drag_over_empty_space_queues_nothing() {
     let (mut harness, _snapshot) = build();
-    let bands = module_row(&harness, "Bands  (bands-1)");
+    let bands = module_grip(&harness, "Drag Bands (bands-1)");
     let empty_space = harness.get_by_label("GALLERY").rect().center();
 
-    drag(&mut harness, bands.center(), empty_space);
+    drag(&mut harness, bands, empty_space);
 
     assert!(
         harness.state().actions.is_empty(),
@@ -354,11 +372,37 @@ fn clicking_a_module_row_still_selects_the_module() {
     assert_eq!(
         harness.state().selected_module.as_deref(),
         Some("bands-1"),
-        "making the row draggable keeps click-to-select"
+        "the module name is click-to-select"
     );
     assert!(
         harness.state().actions.is_empty(),
         "a click queues nothing: {:?}",
+        harness.state().actions
+    );
+}
+
+#[test]
+fn dragging_the_module_name_starts_no_drag() {
+    // The two-bar grip is the only drag source. The name is a plain
+    // click-to-select button, so pressing it and moving the pointer must not
+    // carry a `ModuleDrag` (and therefore queues nothing on release).
+    let (mut harness, _snapshot) = build();
+    let name = module_row(&harness, "Bands  (bands-1)");
+    let ball = module_row(&harness, "Ball  (ball-1)");
+    let target = egui::pos2(ball.center().x, ball.bottom() - 1.0);
+
+    drag_hold(&mut harness, name.center(), target);
+
+    assert!(
+        egui::DragAndDrop::payload::<modv_ui::module_drag::ModuleDrag>(&harness.ctx).is_none(),
+        "dragging the module name carries no ModuleDrag payload"
+    );
+
+    release_at(&mut harness, target);
+
+    assert!(
+        harness.state().actions.is_empty(),
+        "dragging the module name queues nothing: {:?}",
         harness.state().actions
     );
 }
