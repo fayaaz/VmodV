@@ -11,7 +11,7 @@
 set -euo pipefail
 
 ROOT="${ROOT:-/app}"
-VERSION="${APP_VERSION:-${NATIVE_VERSION:-0.1.0}}"
+VERSION="${APP_VERSION:-${NATIVE_VERSION:-2.0.0}}"
 DIST="${DIST_DIR:-$ROOT/dist}"
 case "$DIST" in
     /*) ;;

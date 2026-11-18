@@ -62,8 +62,11 @@ GUI_RUN_ARGS_X11 := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(X11_G
 .DEFAULT_GOAL := build
 RUST_IMAGE ?= modv-rust:local
 CARGO_VOLUME ?= modv-cargo
-# Native installer version (the crates are 0.1.0); packaging metadata only.
-NATIVE_VERSION ?= 0.1.0
+# Native installer version (the crates keep their own 0.1.0 metadata); packaging
+# metadata only. 2.0 is the Linux-only native release prepared here; CI appends
+# `-nightly.<date>` when it publishes the rolling nightly. APP_VERSION still
+# controls the Electron installers.
+NATIVE_VERSION ?= 2.0.0
 
 # Building the engine and the installers needs several GB of BuildKit cache.
 # Fail before a build starts when the filesystem is nearly full instead of
