@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -53,6 +54,7 @@ use crate::media_settings::{CameraMode, MediaSettings, plan_restore, resolve_mod
 use crate::media_watch::{MediaFolder, MediaWatcher};
 use crate::midi::MidiClient;
 use crate::pacing::FramePacer;
+use crate::plugin_runtime::{self, NativeStateReader, PluginRuntime};
 use crate::report::AdapterSummary;
 use crate::scene_transition::SceneTransitionInfo;
 use crate::store_ops::Store;
@@ -328,6 +330,11 @@ pub struct NativeApp {
     audio_switch_error: Option<String>,
     audio_settings_path: PathBuf,
     midi_client: MidiClient,
+    /// The opt-in sandboxed Boa plugin runtime (settings, discovery, hooks).
+    plugin_runtime: PluginRuntime,
+    /// Set after the first failed plugin capture read-back so a broken GPU
+    /// path logs once instead of every capture interval.
+    plugin_capture_error_logged: bool,
     /// Set after a failed NDI frame read-back so a broken GPU path logs once.
     ndi_error_logged: bool,
     /// NDI panel view, refreshed at 1 Hz while the tab is visible.
@@ -361,6 +368,16 @@ pub struct NativeApp {
 }
 
 impl NativeApp {
+    /// The opt-in JavaScript plugin runtime (the future Plugins panel model).
+    pub fn plugins(&self) -> &PluginRuntime {
+        &self.plugin_runtime
+    }
+
+    /// Mutable access for the Plugins panel's enable/consent/reload actions.
+    pub fn plugins_mut(&mut self) -> &mut PluginRuntime {
+        &mut self.plugin_runtime
+    }
+
     fn new(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Self {
         let start = Instant::now();
         let media_hub = MediaHub::new();
@@ -553,6 +570,33 @@ impl NativeApp {
             eprintln!("ui: WARN MIDI unavailable: {error}");
         }
 
+        // Opt-in JavaScript plugins: discovery reads the active profile's
+        // `plugin/` folder and `<userData>/plugins`, but the host only loads a
+        // context when both the saved master switch and consent are on.
+        let mut plugin_runtime = PluginRuntime::load(
+            user_data.join(plugin_runtime::PLUGIN_SETTINGS_FILENAME),
+            vec![
+                media_profiles::profile_folder(&media_root, &active_profile, "plugin"),
+                user_data.join("plugins"),
+            ],
+        );
+        plugin_runtime.set_frame_inputs(
+            plugin_runtime::features_from_store(&store),
+            Rc::new(NativeStateReader::from_store(&store)),
+        );
+        plugin_runtime.start();
+        let discovered_plugins = plugin_runtime.plugins().len();
+        if plugin_runtime.enabled() {
+            eprintln!(
+                "ui: INFO JavaScript plugins enabled ({} of {discovered_plugins} loaded)",
+                plugin_runtime.loaded_count()
+            );
+        } else if discovered_plugins > 0 {
+            eprintln!(
+                "ui: INFO {discovered_plugins} JavaScript plugin(s) discovered; plugins are disabled"
+            );
+        }
+
         let egui_ctx = egui::Context::default();
         modv_ui::theme::apply(&egui_ctx);
         let target_fps = store.target_fps();
@@ -615,6 +659,8 @@ impl NativeApp {
             audio_switch_error: None,
             audio_settings_path,
             midi_client,
+            plugin_runtime,
+            plugin_capture_error_logged: false,
             ndi_error_logged: false,
             ndi_view,
             last_ndi_poll: start,
@@ -889,6 +935,52 @@ impl NativeApp {
         phrase_flipped
     }
 
+    /// Build this frame's plugin IO and run `preProcessFrame` hooks.
+    ///
+    /// The state/feature snapshot is only built while plugins are enabled; a
+    /// disabled runtime (or one without consent) does no work and allocates no
+    /// Boa context.
+    fn plugin_pre_frame(&mut self) {
+        if !self.plugin_runtime.enabled() {
+            return;
+        }
+        self.plugin_runtime.set_frame_inputs(
+            plugin_runtime::features_from_store(&self.store),
+            Rc::new(NativeStateReader::from_store(&self.store)),
+        );
+        self.plugin_runtime.pre_frame();
+    }
+
+    /// Read a throttled capture (only when a plugin asked for one) and run
+    /// `postProcessFrame` hooks after the frame is presented.
+    fn plugin_post_frame(&mut self, now: Instant) {
+        if !self.plugin_runtime.enabled() {
+            return;
+        }
+        let mut read_error = None;
+        {
+            let runtime = &mut self.plugin_runtime;
+            let compositor = &mut self.compositor;
+            runtime.capture_frame(now, |width, height| {
+                let compositor = compositor.as_mut()?;
+                match compositor.read_frame_at(width, height) {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        read_error = Some(error.to_string());
+                        None
+                    }
+                }
+            });
+        }
+        if let Some(error) = read_error
+            && !self.plugin_capture_error_logged
+        {
+            self.plugin_capture_error_logged = true;
+            eprintln!("ui: WARN plugin capture read-back failed: {error}");
+        }
+        self.plugin_runtime.post_frame();
+    }
+
     fn frame_info(&self, scene_transition: Option<SceneTransitionInfo>) -> FrameInfo {
         let runtime = self.store.performance_runtime();
         FrameInfo {
@@ -1023,6 +1115,9 @@ impl NativeApp {
         self.ui_state.sync_status(&snapshot);
         self.run_ui(&snapshot);
         self.drain_ui_actions();
+        // Plugin `preProcessFrame` sees this frame's audio plus the state after
+        // the UI actions, and runs before the composition is rendered.
+        self.plugin_pre_frame();
         self.capture_pending_transition();
         if let Some(compositor) = &mut self.compositor {
             compositor.sync_media(&mut self.media_hub);
@@ -1040,6 +1135,9 @@ impl NativeApp {
             self.update_preview_texture();
         }
         self.present();
+        // `postProcessFrame` runs after present; it only pays for a capture
+        // read-back when a running plugin requested one (≤20 Hz).
+        self.plugin_post_frame(now);
         // The NDI sender reads the presented framebuffer back only when the
         // configured rate is due and the output is enabled.
         self.submit_ndi_frame();
@@ -1705,6 +1803,12 @@ impl NativeApp {
         }
         self.refresh_profiles();
         self.rebuild_user_isf_dirs();
+        // The active profile also owns a `plugin/` folder; point discovery at
+        // the new profile (a rescan keeps loaded scripts whose paths survive).
+        self.plugin_runtime.set_roots(vec![
+            media_profiles::profile_folder(&self.media_root, &self.active_profile, "plugin"),
+            self.user_data.join("plugins"),
+        ]);
         self.rescan_modules();
         eprintln!(
             "ui: INFO switched project profile to {name:?} ({} user ISF folder(s))",
@@ -2628,6 +2732,7 @@ impl NativeApp {
         self.store.shutdown_ndi();
         self.media_hub.stop_all();
         self.midi_client.stop();
+        self.plugin_runtime.shutdown();
         if let Some(mut feed) = self.audio_feed.take() {
             feed.stop();
         }

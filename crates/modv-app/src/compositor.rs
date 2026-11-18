@@ -3402,24 +3402,53 @@ impl Compositor {
         &mut self,
         ring: &mut PreviewRing,
     ) -> Result<Option<PreviewFrame>, CompositorError> {
-        let (width, height) = self.size;
-        if width == 0 || height == 0 || self.main.is_none() {
+        let Some(preview) = self.read_frame_at(PREVIEW_WIDTH, PREVIEW_HEIGHT)? else {
+            return Ok(None);
+        };
+        ring.write_frame(&preview)
+            .map(Some)
+            .map_err(|error| CompositorError::Preview(error.to_string()))
+    }
+
+    /// Read the main texture back and box-downsample it to `width` × `height`.
+    ///
+    /// This is the shared body of [`Self::read_preview`] (the VMP1 preview at
+    /// 640 × 360) and the plugin capture path, which reads only the size a
+    /// running plugin declared so a plugin never receives a full-resolution
+    /// frame. The read-back itself is synchronised and must be throttled by the
+    /// caller; `read_preview` pays it once per published preview, the plugin
+    /// runtime at most 20 Hz and only when a plugin asks.
+    ///
+    /// The result is tightly packed RGBA8 with alpha flattened to opaque
+    /// (matching the presented window); `None` when nothing has rendered yet.
+    pub fn read_frame_at(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, CompositorError> {
+        let (source_width, source_height) = self.size;
+        if width == 0
+            || height == 0
+            || source_width == 0
+            || source_height == 0
+            || self.main.is_none()
+        {
             return Ok(None);
         }
 
         let pixels = self.read_main_rgba8()?;
-        if pixels.len() != (width as usize * height as usize * 4) {
+        if pixels.len() != (source_width as usize * source_height as usize * 4) {
             return Ok(None);
         }
 
-        let mut preview = vec![0u8; (PREVIEW_WIDTH as usize) * (PREVIEW_HEIGHT as usize) * 4];
-        for y in 0..PREVIEW_HEIGHT {
-            let source_y = (y as u64 * height as u64 / PREVIEW_HEIGHT as u64) as usize;
-            for x in 0..PREVIEW_WIDTH {
-                let source_x = (x as u64 * width as u64 / PREVIEW_WIDTH as u64) as usize;
-                let source = ((source_y * width as usize) + source_x) * 4;
-                let target = ((y as usize * PREVIEW_WIDTH as usize) + x as usize) * 4;
-                preview[target..target + 4].copy_from_slice(&pixels[source..source + 4]);
+        let mut frame = vec![0u8; (width as usize) * (height as usize) * 4];
+        for y in 0..height {
+            let source_y = (u64::from(y) * u64::from(source_height) / u64::from(height)) as usize;
+            for x in 0..width {
+                let source_x = (u64::from(x) * u64::from(source_width) / u64::from(width)) as usize;
+                let source = ((source_y * source_width as usize) + source_x) * 4;
+                let target = ((y as usize * width as usize) + x as usize) * 4;
+                frame[target..target + 4].copy_from_slice(&pixels[source..source + 4]);
             }
         }
 
@@ -3429,12 +3458,10 @@ impl Compositor {
         // whatever sat behind its canvas (the app background) showed through
         // a transparent foreground instead of the engine's black output, and
         // the premultiplied values read back as straight `ImageData`.
-        for alpha in preview.iter_mut().skip(3).step_by(4) {
+        for alpha in frame.iter_mut().skip(3).step_by(4) {
             *alpha = 255;
         }
-        ring.write_frame(&preview)
-            .map(Some)
-            .map_err(|error| CompositorError::Preview(error.to_string()))
+        Ok(Some(frame))
     }
 
     /// Render one Gallery thumbnail from an **isolated** module instance.
@@ -4351,6 +4378,43 @@ mod tests {
             .expect("frame renders");
         let pixels = compositor.read_main_rgba8().expect("main reads back");
         assert_pixels_close(&pixels, [0, 0, 0, 0], 1, "disabled module is skipped");
+    }
+
+    #[test]
+    fn read_frame_at_returns_the_requested_small_frame() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+        compositor
+            .render_frame(&invert_state(1.0), &frame_info())
+            .expect("frame renders");
+
+        let frame = compositor
+            .read_frame_at(8, 4)
+            .expect("sized read-back succeeds")
+            .expect("a frame is returned");
+        assert_eq!(
+            frame.len(),
+            8 * 4 * 4,
+            "only the requested size is returned"
+        );
+        assert!(
+            frame.as_chunks::<4>().0.iter().all(|pixel| pixel[0] >= 250
+                && pixel[1] >= 250
+                && pixel[2] >= 250
+                && pixel[3] == 255),
+            "downsampled pixels stay white and alpha is flattened opaque"
+        );
+
+        assert!(
+            compositor
+                .read_frame_at(0, 4)
+                .expect("empty read")
+                .is_none(),
+            "a zero edge is not a capture request"
+        );
     }
 
     #[test]
