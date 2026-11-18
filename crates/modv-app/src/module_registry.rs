@@ -26,7 +26,7 @@
 //! the scene schemas live in `modv-renderers` while the resolved prop values
 //! live in the engine store. The vendored scenes do expose an inherent
 //! `apply_props(getter)` (the `sceneProps.js` binder), so
-//! [`Point10SceneKind`] wraps the four concrete batch-1 scenes, delegates the
+//! [`Point10SceneKind`] wraps the concrete Point10 scenes, delegates the
 //! trait, and adds [`Point10SceneKind::apply_props`]. The compositor needs
 //! that wrapper to push prop changes into a live scene; the trait-object form
 //! the plan asks for is [`ModuleRegistry::create_point10`].
@@ -59,16 +59,21 @@
 //! [`TwoDModule`] instance (the port of the JS `data` object), so the store's
 //! `data` starts empty — see the M3 report and the compositor's module docs.
 //!
-//! ## Known name mismatch
+//! ## Registry parity
 //!
-//! Two ported 2D modules register under a normalised name (`X Drips`,
-//! `Texture 2D`) while the JS Gallery calls them `X-Drips` and `Texture2d`.
-//! Presets written by the JS app therefore miss those two modules until the
-//! names are reconciled in `modv-renderers` (out of scope for M3).
+//! The built-in registry is the exact legacy Gallery set: 15 hand-written 2D
+//! modules, 27 Point10 scenes and 36 shader modules, plus the 354 `.fs`
+//! shaders of the ISF corpus (432 total). Names match the JS registrations
+//! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
+//! unchanged. `module_registry_matches_the_legacy_manifest` compares this
+//! registry against the committed snapshot generated from the legacy worker's
+//! `import.meta.glob` list (`tests/fixtures/module-parity.json`), and
+//! `every_default_scene_module_resolves_in_the_registry` checks the seeded
+//! default Scenes against it.
 //!
 //! ## ISF corpus (WS-4)
 //!
-//! The 351 `.fs` shaders under `src/renderer/src/application/renderers/isf/modules/isf`
+//! The 354 `.fs` shaders under `src/renderer/src/application/renderers/isf/modules/isf`
 //! are not compiled into the binary: [`ModuleRegistry::build`] scans a
 //! directory at startup and registers one [`IsfDefinition`] per parsable
 //! shader (name = file stem, matching the JS `getIsfModuleName`). The scan is
@@ -94,9 +99,9 @@
 //!   (`renderers/isf/index.js:210-257`), so writes are **not** clamped. The
 //!   range is metadata for the UI controls only, exactly as in JS.
 //! * A `texture` prop is a declared image input, not a shader uniform: it is
-//!   registered so the UI can show it, and the compositor binds the group
-//!   canvas for every image input (the JS default at
-//!   `renderers/isf/index.js:84-91`). There is no texture registry yet.
+//!   registered so the UI can show it. The compositor resolves assigned image
+//!   props through `texture_sources` and keeps the group canvas for unassigned
+//!   inputs (the JS default at `renderers/isf/index.js:84-91`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -223,7 +228,7 @@ impl IsfDefinition {
     }
 }
 
-/// The app-side wrapper around the concrete batch-1 Point10 scenes.
+/// The app-side wrapper around the concrete Point10 scenes.
 ///
 /// [`modv_renderers::point10::Point10Scene`] is the render contract and has no
 /// prop binder, while every ported scene exposes an inherent
@@ -1619,7 +1624,7 @@ mod tests {
         assert_eq!(registry.kind("Bands"), Some(ModuleKind::Shader));
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Not A Module"), None);
-        assert!(registry.shader_modules().len() >= 36);
+        assert_eq!(registry.shader_modules().len(), 36);
         assert_eq!(registry.two_d_definitions().len(), 15);
     }
 
@@ -1734,7 +1739,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert!(map.len() >= 36 + 15 + 26);
+        assert_eq!(map.len(), 36 + 15 + 27, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2399,19 +2404,98 @@ void main() { gl_FragColor = vec4(1.0); }
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The committed registry snapshot generated from the legacy worker's
+    /// `import.meta.glob` registrations. See `tests/unit/module-parity.test.js`
+    /// for the generator/regenerator and the JS-side half of this guard.
+    fn legacy_module_manifest() -> Value {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/module-parity.json");
+        let text = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "could not read the legacy module manifest {}: {error}",
+                path.display()
+            )
+        });
+        serde_json::from_str(&text).unwrap_or_else(|error| {
+            panic!(
+                "could not parse the legacy module manifest {}: {error}",
+                path.display()
+            )
+        })
+    }
+
+    fn manifest_names(manifest: &Value, group: &str) -> Vec<String> {
+        manifest[group]
+            .as_array()
+            .unwrap_or_else(|| panic!("manifest group {group:?} is not an array"))
+            .iter()
+            .map(|name| {
+                name.as_str()
+                    .unwrap_or_else(|| panic!("manifest group {group:?} has a non-string"))
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// Assert set equality (and no duplicate registrations) and print the
+    /// symmetric difference on failure instead of two 354-entry lists.
+    fn assert_same_module_names(group: &str, actual: Vec<String>, expected: Vec<String>) {
+        use std::collections::BTreeSet;
+
+        let actual_set: BTreeSet<String> = actual.iter().cloned().collect();
+        let expected_set: BTreeSet<String> = expected.into_iter().collect();
+        let missing: Vec<&String> = expected_set.difference(&actual_set).collect();
+        let stale: Vec<&String> = actual_set.difference(&expected_set).collect();
+
+        assert!(
+            missing.is_empty() && stale.is_empty(),
+            "{group} registry drifted from tests/fixtures/module-parity.json\n\
+             missing from the Rust registry: {missing:?}\n\
+             registered in Rust but not legacy: {stale:?}"
+        );
+        assert_eq!(
+            actual_set.len(),
+            actual.len(),
+            "{group} registry registers a name more than once"
+        );
+    }
+
+    /// Exact bucket counts from the legacy manifest. Kept under the original
+    /// guard name because `docs/rust-hybrid-review.md` and the e2e parity spec
+    /// reference it; the name-set check lives in
+    /// [`module_registry_matches_the_legacy_manifest`].
     #[test]
     fn registered_module_count_matches_the_parity_baseline() {
         let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../src/renderer/src/application/renderers/isf/modules/isf");
-        if !corpus.is_dir() {
-            eprintln!("skipping registry parity guard: ISF corpus not present");
-            return;
-        }
+        assert!(
+            corpus.is_dir(),
+            "ISF corpus missing at {}; the parity guard needs the source tree",
+            corpus.display()
+        );
+        let manifest = legacy_module_manifest();
         let registry = ModuleRegistry::build(Some(&corpus));
-        assert_eq!(registry.shader_modules().len(), 36, "shader modules");
-        assert_eq!(registry.two_d_definitions().len(), 15, "2D modules");
-        assert_eq!(registry.point10_definitions().len(), 27, "Point10 scenes");
-        assert_eq!(registry.isf_definitions().len(), 354, "ISF corpus");
+
+        assert_eq!(
+            registry.two_d_definitions().len(),
+            manifest["counts"]["twoD"].as_u64().unwrap_or(0) as usize,
+            "2D modules"
+        );
+        assert_eq!(
+            registry.point10_definitions().len(),
+            manifest["counts"]["point10"].as_u64().unwrap_or(0) as usize,
+            "Point10 scenes"
+        );
+        assert_eq!(
+            registry.shader_modules().len(),
+            manifest["counts"]["shader"].as_u64().unwrap_or(0) as usize,
+            "shader modules"
+        );
+        assert_eq!(
+            registry.isf_definitions().len(),
+            manifest["counts"]["isf"].as_u64().unwrap_or(0) as usize,
+            "ISF corpus"
+        );
         assert_eq!(
             registry
                 .registered_modules()
@@ -2419,6 +2503,103 @@ void main() { gl_FragColor = vec4(1.0); }
                 .map_or(0, serde_json::Map::len),
             432,
             "registered module total (module-parity guard)"
+        );
+    }
+
+    #[test]
+    fn module_registry_matches_the_legacy_manifest() {
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        assert!(
+            corpus.is_dir(),
+            "ISF corpus missing at {}; the parity guard needs the source tree",
+            corpus.display()
+        );
+        let manifest = legacy_module_manifest();
+        let registry = ModuleRegistry::build(Some(&corpus));
+
+        let two_d: Vec<String> = registry
+            .two_d_definitions()
+            .iter()
+            .map(|definition| definition.meta.name.to_string())
+            .collect();
+        let point10: Vec<String> = registry
+            .point10_definitions()
+            .iter()
+            .map(|definition| definition.meta.name.to_string())
+            .collect();
+        let shader: Vec<String> = registry
+            .shader_modules()
+            .iter()
+            .map(|module| module.name.to_string())
+            .collect();
+        let isf: Vec<String> = registry
+            .isf_definitions()
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect();
+
+        assert_same_module_names("2D", two_d, manifest_names(&manifest, "twoD"));
+        assert_same_module_names("Point10", point10, manifest_names(&manifest, "point10"));
+        assert_same_module_names("shader", shader, manifest_names(&manifest, "shader"));
+        assert_same_module_names("ISF", isf, manifest_names(&manifest, "isf"));
+
+        assert_eq!(
+            registry
+                .registered_modules()
+                .as_object()
+                .map_or(0, serde_json::Map::len),
+            432,
+            "registered module total (module-parity guard)"
+        );
+        assert_eq!(
+            manifest["counts"]["total"].as_u64(),
+            Some(432),
+            "manifest total"
+        );
+    }
+
+    #[test]
+    fn every_default_scene_module_resolves_in_the_registry() {
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/renderer/src/application/renderers/isf/modules/isf");
+        let manifest = legacy_module_manifest();
+        let registry = ModuleRegistry::build(Some(&corpus));
+
+        // The legacy manifest is the authority: a default Scene naming a
+        // module legacy cannot register would render differently in engine
+        // mode even if the Rust registry happens to know it.
+        let legacy: std::collections::HashSet<String> = ["twoD", "point10", "shader", "isf"]
+            .iter()
+            .flat_map(|group| manifest_names(&manifest, group))
+            .collect();
+
+        let mut unresolved = Vec::new();
+        let mut not_in_legacy = Vec::new();
+        let mut names = std::collections::BTreeSet::new();
+        for scene in modv_engine::default_scenes::default_scenes() {
+            for name in scene.module_names() {
+                names.insert(name.to_string());
+                if registry.kind(name).is_none() {
+                    unresolved.push(format!("{}: {name}", scene.name));
+                }
+                if !legacy.contains(name) {
+                    not_in_legacy.push(format!("{}: {name}", scene.name));
+                }
+            }
+        }
+
+        assert!(
+            unresolved.is_empty(),
+            "default Scenes reference unregistered modules: {unresolved:?}"
+        );
+        assert!(
+            not_in_legacy.is_empty(),
+            "default Scenes reference modules absent from the legacy registry: {not_in_legacy:?}"
+        );
+        assert!(
+            !names.is_empty(),
+            "default-Scene resolution guard found no modules to check"
         );
     }
 }
