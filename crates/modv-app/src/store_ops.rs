@@ -593,6 +593,7 @@ impl Store {
             "groups/UPDATE_GROUP_BY_KEY" => self.update_group_by_key(params),
             "groups/REMOVE_GROUP" => self.remove_group_mutation(params),
             "groups/REPLACE_GROUP_MODULES" => self.replace_group_modules(params),
+            "groups/MOVE_MODULE" | "groups/moveModule" => self.move_module(params),
             "groups/disableGalleryItemModules" => self.disable_gallery_item_modules(params),
             "groups/duplicateModule" => self.duplicate_module(params),
             "groups/focusGalleryItem" => self.focus_gallery_item(params),
@@ -1865,6 +1866,102 @@ impl Store {
 
         self.deltas
             .push(action, json!({ "groupId": group_id, "modules": modules }));
+        Ok(Value::Null)
+    }
+
+    /// `groups/MOVE_MODULE`: move a Module to `toIndex` in another Group (or
+    /// within its own), keeping every other Module's order.
+    ///
+    /// The native Groups pane owns this action; `toIndex` is the final index in
+    /// the destination Group *after* the Module is removed from its source, so
+    /// the same-group math is unambiguous. Both Groups receive the existing
+    /// `groups/REPLACE_GROUP_MODULES` mirror delta (source first, then target)
+    /// and a Module already at the destination position emits nothing.
+    fn move_module(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let action = "groups/MOVE_MODULE";
+        let module_id = required_str(params, action, "moduleId")?.to_string();
+        let from_group_id = required_str(params, action, "fromGroupId")?.to_string();
+        let to_group_id = required_str(params, action, "toGroupId")?.to_string();
+        let Some(to_index) = params.get("toIndex").and_then(Value::as_u64) else {
+            return Err(invalid(action, "missing \"toIndex\" index"));
+        };
+        let to_index = to_index as usize;
+
+        for group_id in [&from_group_id, &to_group_id] {
+            if self.state.find_group(group_id).is_none() {
+                self.warn_once(
+                    format!("missing-group:{group_id}"),
+                    &format!("engine: WARN {action}: no such group {group_id}"),
+                );
+                return Ok(Value::Null);
+            }
+        }
+
+        let source_modules = self
+            .state
+            .find_group(&from_group_id)
+            .map(|group| group.modules.clone())
+            .unwrap_or_default();
+        if !source_modules.iter().any(|id| id == &module_id) {
+            self.warn_once(
+                format!("missing-module:{module_id}"),
+                &format!("engine: WARN {action}: {module_id} is not in group {from_group_id}"),
+            );
+            return Ok(Value::Null);
+        }
+
+        if from_group_id == to_group_id {
+            let mut modules: Vec<String> = source_modules
+                .iter()
+                .filter(|id| *id != &module_id)
+                .cloned()
+                .collect();
+            let index = to_index.min(modules.len());
+            modules.insert(index, module_id.clone());
+            if modules == source_modules {
+                return Ok(Value::Null);
+            }
+            if let Some(group) = self.state.find_group_mut(&to_group_id) {
+                group.modules = modules.clone();
+            }
+            self.deltas.push(
+                "groups/REPLACE_GROUP_MODULES",
+                json!({ "groupId": to_group_id, "modules": modules }),
+            );
+            return Ok(Value::Null);
+        }
+
+        let mut target_modules = self
+            .state
+            .find_group(&to_group_id)
+            .map(|group| group.modules.clone())
+            .unwrap_or_default();
+        // A mirror-restored Group can hold the id already; moving it must not
+        // leave a second copy behind.
+        target_modules.retain(|id| id != &module_id);
+        let index = to_index.min(target_modules.len());
+        target_modules.insert(index, module_id.clone());
+
+        let source_modules: Vec<String> = source_modules
+            .iter()
+            .filter(|id| *id != &module_id)
+            .cloned()
+            .collect();
+        if let Some(group) = self.state.find_group_mut(&from_group_id) {
+            group.modules = source_modules.clone();
+        }
+        if let Some(group) = self.state.find_group_mut(&to_group_id) {
+            group.modules = target_modules.clone();
+        }
+
+        self.deltas.push(
+            "groups/REPLACE_GROUP_MODULES",
+            json!({ "groupId": from_group_id, "modules": source_modules }),
+        );
+        self.deltas.push(
+            "groups/REPLACE_GROUP_MODULES",
+            json!({ "groupId": to_group_id, "modules": target_modules }),
+        );
         Ok(Value::Null)
     }
 
@@ -5308,6 +5405,271 @@ mod tests {
             store.state().find_group(&id).expect("group").modules,
             vec!["b".to_string(), "a".to_string()]
         );
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas[0].r#type, "groups/REPLACE_GROUP_MODULES");
+    }
+
+    /// A store with one Group whose module list is `modules`.
+    fn store_with_modules(name: &str, modules: &[&str]) -> (Store, String) {
+        let (mut store, id) = store_with_group(name);
+        store
+            .dispatch(
+                "groups/REPLACE_GROUP_MODULES",
+                json!({ "groupId": id, "modules": modules }),
+            )
+            .expect("REPLACE_GROUP_MODULES dispatches");
+        store.drain_deltas();
+        (store, id)
+    }
+
+    /// Two Groups with their own module lists.
+    fn two_groups_with_modules(first: &[&str], second: &[&str]) -> (Store, String, String) {
+        let (mut store, first_id) = store_with_modules("Background", first);
+        let created = store
+            .dispatch("groups/createGroup", json!({ "name": "Effects" }))
+            .expect("createGroup dispatches");
+        let second_id = created["id"].as_str().expect("id").to_string();
+        store
+            .dispatch(
+                "groups/REPLACE_GROUP_MODULES",
+                json!({ "groupId": second_id, "modules": second }),
+            )
+            .expect("REPLACE_GROUP_MODULES dispatches");
+        store.drain_deltas();
+        (store, first_id, second_id)
+    }
+
+    fn group_modules(store: &Store, group_id: &str) -> Vec<String> {
+        store
+            .state()
+            .find_group(group_id)
+            .expect("group")
+            .modules
+            .clone()
+    }
+
+    #[test]
+    fn move_module_down_within_a_group() {
+        let (mut store, group_id) = store_with_modules("Effects", &["a", "b", "c"]);
+
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "a",
+                    "fromGroupId": group_id,
+                    "toGroupId": group_id,
+                    "toIndex": 2,
+                }),
+            )
+            .expect("MOVE_MODULE dispatches");
+
+        assert_eq!(group_modules(&store, &group_id), ["b", "c", "a"]);
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas.len(), 1, "one mirror delta: {deltas:?}");
+        assert_eq!(deltas[0].r#type, "groups/REPLACE_GROUP_MODULES");
+        assert_eq!(
+            deltas[0].payload,
+            json!({ "groupId": group_id, "modules": ["b", "c", "a"] })
+        );
+    }
+
+    #[test]
+    fn move_module_up_within_a_group() {
+        let (mut store, group_id) = store_with_modules("Effects", &["a", "b", "c"]);
+
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "c",
+                    "fromGroupId": group_id,
+                    "toGroupId": group_id,
+                    "toIndex": 0,
+                }),
+            )
+            .expect("MOVE_MODULE dispatches");
+
+        assert_eq!(group_modules(&store, &group_id), ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn move_module_to_its_own_position_is_a_noop() {
+        let (mut store, group_id) = store_with_modules("Effects", &["a", "b", "c"]);
+
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "b",
+                    "fromGroupId": group_id,
+                    "toGroupId": group_id,
+                    "toIndex": 1,
+                }),
+            )
+            .expect("MOVE_MODULE dispatches");
+
+        assert_eq!(group_modules(&store, &group_id), ["a", "b", "c"]);
+        assert!(
+            store.drain_deltas().is_empty(),
+            "an already-in-place module emits no delta"
+        );
+    }
+
+    #[test]
+    fn move_module_between_groups_inserts_at_the_index() {
+        let (mut store, background, effects) = two_groups_with_modules(&["a", "b"], &["c", "d"]);
+
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "b",
+                    "fromGroupId": background,
+                    "toGroupId": effects,
+                    "toIndex": 1,
+                }),
+            )
+            .expect("MOVE_MODULE dispatches");
+
+        assert_eq!(group_modules(&store, &background), ["a"]);
+        assert_eq!(group_modules(&store, &effects), ["c", "b", "d"]);
+        let deltas = store.drain_deltas();
+        assert_eq!(deltas.len(), 2, "source then target: {deltas:?}");
+        assert_eq!(
+            deltas[0],
+            Mutation {
+                r#type: "groups/REPLACE_GROUP_MODULES".to_string(),
+                payload: json!({ "groupId": background, "modules": ["a"] }),
+            }
+        );
+        assert_eq!(
+            deltas[1],
+            Mutation {
+                r#type: "groups/REPLACE_GROUP_MODULES".to_string(),
+                payload: json!({ "groupId": effects, "modules": ["c", "b", "d"] }),
+            }
+        );
+    }
+
+    #[test]
+    fn move_module_between_groups_appends_and_clamps() {
+        let (mut store, background, effects) = two_groups_with_modules(&["a", "b"], &["c"]);
+
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "a",
+                    "fromGroupId": background,
+                    "toGroupId": effects,
+                    "toIndex": 99,
+                }),
+            )
+            .expect("MOVE_MODULE dispatches");
+
+        assert_eq!(group_modules(&store, &background), ["b"]);
+        assert_eq!(
+            group_modules(&store, &effects),
+            ["c", "a"],
+            "an out-of-range index appends"
+        );
+    }
+
+    #[test]
+    fn move_module_unknown_group_or_module_is_a_noop() {
+        let (mut store, group_id) = store_with_modules("Effects", &["a"]);
+
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "a",
+                    "fromGroupId": group_id,
+                    "toGroupId": "missing-group",
+                    "toIndex": 0,
+                }),
+            )
+            .expect("an unknown target Group is tolerated");
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "missing-module",
+                    "fromGroupId": group_id,
+                    "toGroupId": group_id,
+                    "toIndex": 0,
+                }),
+            )
+            .expect("an unknown Module is tolerated");
+
+        assert_eq!(group_modules(&store, &group_id), ["a"]);
+        assert!(
+            store.drain_deltas().is_empty(),
+            "neither no-op emits a delta"
+        );
+    }
+
+    #[test]
+    fn move_module_cleans_up_duplicate_ids() {
+        // A mirror-restored Group can contain the same id twice; moving the
+        // module must not leave a second copy behind in either Group.
+        let (mut store, background, effects) =
+            two_groups_with_modules(&["a", "a", "b"], &["c", "a"]);
+
+        store
+            .dispatch(
+                "groups/MOVE_MODULE",
+                json!({
+                    "moduleId": "a",
+                    "fromGroupId": background,
+                    "toGroupId": effects,
+                    "toIndex": 0,
+                }),
+            )
+            .expect("MOVE_MODULE dispatches");
+
+        assert_eq!(group_modules(&store, &background), ["b"]);
+        assert_eq!(group_modules(&store, &effects), ["a", "c"]);
+    }
+
+    #[test]
+    fn move_module_validates_its_payload() {
+        let (mut store, group_id) = store_with_modules("Effects", &["a"]);
+
+        for payload in [
+            json!({ "fromGroupId": group_id, "toGroupId": group_id, "toIndex": 0 }),
+            json!({ "moduleId": "a", "toGroupId": group_id, "toIndex": 0 }),
+            json!({ "moduleId": "a", "fromGroupId": group_id, "toIndex": 0 }),
+            json!({ "moduleId": "a", "fromGroupId": group_id, "toGroupId": group_id }),
+        ] {
+            let error = store
+                .dispatch("groups/MOVE_MODULE", payload)
+                .expect_err("an incomplete payload is refused");
+            assert!(
+                matches!(error, StoreError::InvalidPayload { .. }),
+                "unexpected error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn move_module_alias_uses_the_same_handler() {
+        let (mut store, group_id) = store_with_modules("Effects", &["a", "b"]);
+
+        store
+            .dispatch(
+                "groups/moveModule",
+                json!({
+                    "moduleId": "a",
+                    "fromGroupId": group_id,
+                    "toGroupId": group_id,
+                    "toIndex": 1,
+                }),
+            )
+            .expect("moveModule dispatches");
+
+        assert_eq!(group_modules(&store, &group_id), ["b", "a"]);
         let deltas = store.drain_deltas();
         assert_eq!(deltas[0].r#type, "groups/REPLACE_GROUP_MODULES");
     }
