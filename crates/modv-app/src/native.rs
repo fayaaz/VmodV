@@ -334,6 +334,8 @@ pub struct NativeApp {
     /// `<userData>` and the shared media tree it owns.
     user_data: PathBuf,
     media_root: PathBuf,
+    /// The media root the compositor was last pointed at (image resolution).
+    applied_media_root: Option<PathBuf>,
     /// The persisted active profile and extra user ISF folders.
     project_settings: ProjectSettings,
     project_settings_path: PathBuf,
@@ -484,7 +486,7 @@ impl NativeApp {
         let user_data = user_data_dir();
         let media_root = user_data.join("media");
         let project_settings_path = user_data.join(PROJECT_SETTINGS_FILENAME);
-        let project_settings = match ProjectSettings::read_from(&project_settings_path) {
+        let mut project_settings = match ProjectSettings::read_from(&project_settings_path) {
             Ok(settings) => settings.unwrap_or_default(),
             Err(error) => {
                 eprintln!("ui: WARN ignoring the saved project choice: {error}");
@@ -520,6 +522,20 @@ impl NativeApp {
             &user_data,
             isf_dir.as_deref(),
             &user_isf_dirs,
+        );
+        // The native shell has no renderer to forward the media manager's
+        // path, so it dispatches `media/setMediaDirectoryPath` itself; the
+        // compositor resolves texture props and library images under it.
+        dispatch_media_root(&mut store, &media_root);
+        // Loose Scene documents saved by earlier installs (and by Electron's
+        // Scene editor) become part of the authoritative list once per
+        // profile; `<userData>/scenes.json` still wins on every id/name.
+        crate::media_import::import_profile_documents_once(
+            &mut store,
+            &media_root,
+            &active_profile,
+            &mut project_settings,
+            &project_settings_path,
         );
         eprintln!(
             "ui: INFO native shell ready ({} groups, {} modules, {} scenes, {} registered)",
@@ -716,6 +732,7 @@ impl NativeApp {
             adapter,
             store,
             media_root,
+            applied_media_root: None,
             project_settings,
             project_settings_path,
             active_profile,
@@ -892,6 +909,8 @@ impl NativeApp {
         self.egui_state = Some(egui_state);
         self.egui_renderer = Some(egui_renderer);
         self.compositor = Some(compositor);
+        // Image props resolve under `<userData>/media` from the first frame.
+        self.sync_media_root();
 
         self.ui_state.p0.range_control_ok = true;
         self.ui_state.p0.scene_cell_ok = true;
@@ -1243,6 +1262,7 @@ impl NativeApp {
         // the UI actions, and runs before the composition is rendered.
         self.plugin_pre_frame();
         self.capture_pending_transition();
+        self.sync_media_root();
         if let Some(compositor) = &mut self.compositor {
             compositor.sync_media(&mut self.media_hub);
             // Upload newer frames for every enabled NDI receiver to its
@@ -2209,6 +2229,22 @@ impl NativeApp {
             MediaWatcher::for_profile(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
     }
 
+    /// Keep the compositor's image resolution on the shell's media root.
+    ///
+    /// The store holds the root (`media/setMediaDirectoryPath`); the compositor
+    /// owns the actual `ImageTextures`, so it follows the store once at startup
+    /// and whenever the root changes (a future media-directory picker).
+    fn sync_media_root(&mut self) {
+        let root = self.store.media_root().map(Path::to_path_buf);
+        if root == self.applied_media_root {
+            return;
+        }
+        if let (Some(compositor), Some(root)) = (self.compositor.as_mut(), root.as_deref()) {
+            compositor.set_media_root(root);
+        }
+        self.applied_media_root = root;
+    }
+
     /// Create `<userData>/media/<name>` with the Electron folder set and switch
     /// to it. A bad name reopens the modal with an inline error.
     fn create_project_profile(&mut self, name: &str) {
@@ -2250,6 +2286,17 @@ impl NativeApp {
         if let Err(error) = self.persist_project_settings() {
             self.record_error(format!("could not save the project choice: {error}"));
         }
+        // Every profile imports its loose Scene documents once; a profile first
+        // selected after launch imports now. The media root itself is shared,
+        // so re-dispatching it is a no-op unless the tree moved.
+        dispatch_media_root(&mut self.store, &self.media_root);
+        crate::media_import::import_profile_documents_once(
+            &mut self.store,
+            &self.media_root,
+            &self.active_profile,
+            &mut self.project_settings,
+            &self.project_settings_path,
+        );
         self.refresh_profiles();
         self.rebuild_user_isf_dirs();
         // The Library index belongs to the active profile: drop the old scan
@@ -3773,6 +3820,25 @@ fn build_native_store(
     store
 }
 
+/// Point the store's media root at the shell's `<userData>/media` tree.
+///
+/// Electron's renderer forwards the media manager path as
+/// `media/setMediaDirectoryPath`; the native shell has no renderer, so it must
+/// dispatch the action itself, or [`crate::texture_sources::ImageTextures`]
+/// falls back to `$MODV_MEDIA_DIR` and Electron's default userData (the wrong
+/// tree under `MODV_USER_DATA`).
+fn dispatch_media_root(store: &mut Store, media_root: &Path) {
+    if let Err(error) = store.dispatch(
+        "media/setMediaDirectoryPath",
+        serde_json::json!({ "path": media_root.to_string_lossy() }),
+    ) {
+        eprintln!(
+            "ui: WARN could not point image resolution at {}: {error}",
+            media_root.display()
+        );
+    }
+}
+
 /// User ISF folders under `<userData>/media`.
 ///
 /// The legacy media manager keeps third-party shaders in
@@ -4600,6 +4666,38 @@ module.exports = {
             resolve_isf_dir_from(Some(explicit)),
             Some(PathBuf::from(explicit))
         );
+    }
+
+    #[test]
+    fn native_media_root_resolves_library_images_under_the_shell_tree() {
+        // Regression: the native shell never dispatched
+        // `media/setMediaDirectoryPath`, so `ImageTextures` fell back to
+        // `$MODV_MEDIA_DIR`/Electron's default `<userData>/media` and a
+        // `MODV_USER_DATA` profile's images failed to resolve.
+        let root = temp_dir("modv-native-media-root");
+        let user_data = root.join("user-data");
+        let media_root = user_data.join("media");
+        std::fs::create_dir_all(media_root.join("default/image")).expect("image folder");
+        let image = media_root.join("default/image/poster.png");
+        std::fs::write(&image, b"not decoded, only resolved").expect("image");
+
+        let mut store = Store::new();
+        dispatch_media_root(&mut store, &media_root);
+
+        assert_eq!(store.media_root(), Some(media_root.as_path()));
+        let mut images = crate::texture_sources::ImageTextures::new();
+        images.set_media_root(store.media_root().expect("dispatched root"));
+        assert_eq!(
+            images.resolve_path("default/image/poster.png"),
+            Some(image),
+            "library-relative image paths resolve under <userData>/media"
+        );
+        assert!(
+            images.resolve_path("default/image/missing.png").is_none(),
+            "the shell root is not widened into a fallback search"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn temp_dir(prefix: &str) -> PathBuf {

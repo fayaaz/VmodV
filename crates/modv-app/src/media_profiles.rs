@@ -11,6 +11,7 @@
 //! beside `native-audio.json` and `native-media.json`. Everything here is
 //! filesystem-simple and unit-testable on a headless host.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The persisted project choice inside the shared userData directory.
@@ -41,9 +42,29 @@ pub struct ProjectSettings {
     /// Extra user ISF folders chosen through the File menu.
     #[serde(default)]
     pub isf_dirs: Vec<PathBuf>,
+    /// Profiles whose loose `scene/`/`preset/` documents were imported once.
+    ///
+    /// Keyed by profile name and only ever set to `true`; the map lives here so
+    /// `native-project.json` remembers the one-time import across restarts and
+    /// profile switches. See [`crate::media_import`].
+    #[serde(default)]
+    pub imported_documents: BTreeMap<String, bool>,
 }
 
 impl ProjectSettings {
+    /// Whether `profile`'s loose media documents were already imported.
+    pub fn documents_imported(&self, profile: &str) -> bool {
+        self.imported_documents
+            .get(profile)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Remember that `profile`'s one-time document import ran.
+    pub fn mark_documents_imported(&mut self, profile: &str) {
+        self.imported_documents.insert(profile.to_string(), true);
+    }
+
     /// The active profile, falling back to `default`.
     pub fn active_profile(&self) -> &str {
         if self.profile.is_empty() {
@@ -350,9 +371,24 @@ mod tests {
         let settings = ProjectSettings {
             profile: "live".to_string(),
             isf_dirs: vec![root.join("extra-isf")],
+            ..Default::default()
         };
         settings.write_to(&path).expect("write");
-        assert_eq!(ProjectSettings::read_from(&path), Ok(Some(settings)));
+        let mut round_tripped = ProjectSettings::read_from(&path)
+            .expect("read")
+            .expect("settings");
+
+        assert_eq!(round_tripped, settings);
+        round_tripped.mark_documents_imported("live");
+        assert!(round_tripped.documents_imported("live"));
+        assert!(!round_tripped.documents_imported("default"));
+        round_tripped.write_to(&path).expect("write import flag");
+        let saved = ProjectSettings::read_from(&path)
+            .expect("read")
+            .expect("settings");
+        assert!(saved.documents_imported("live"), "the flag persists");
+        assert!(!saved.documents_imported("default"));
+
         assert!(
             !root.join("native-project.json.tmp").exists(),
             "the temporary file is renamed into place"
@@ -371,6 +407,7 @@ mod tests {
             ProjectSettings {
                 profile: String::new(),
                 isf_dirs: Vec::new(),
+                imported_documents: BTreeMap::new(),
             }
             .active_profile(),
             DEFAULT_PROFILE
