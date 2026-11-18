@@ -1,9 +1,10 @@
 name: Native Rust CI
 
 # Rust-only lint/test/packaging for the native shell (docs/rust-full-rewrite.md
-# P9). The Electron nightly release in nightly.yml stays the default release
-# until the native shell is signed off; this workflow only publishes workflow
-# artifacts.
+# P9). This workflow verifies every change and uploads workflow artifacts;
+# nightly.yml publishes the same AppImage/.deb to the rolling nightly alongside
+# the Electron build, which stays the fallback until the native shell is signed
+# off.
 on:
   push:
     branches:
