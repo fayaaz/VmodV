@@ -43,12 +43,7 @@ fn build(order: &str, enabled: bool) -> Harness<'static, UiState> {
         .build_ui_state(
             move |ui, state| {
                 ui.horizontal_wrapped(|ui| {
-                    modv_ui::panels::draw_performance_bar(
-                        ui,
-                        &snapshot,
-                        &mut state.scene_grid,
-                        &mut state.actions,
-                    );
+                    modv_ui::panels::draw_performance_bar(ui, &snapshot, &mut state.actions);
                 });
                 modv_ui::panels::draw_scene_grid(
                     ui,
@@ -120,12 +115,7 @@ fn an_untouched_bar_queues_no_timing_updates() {
         .build_ui_state(
             move |ui, state| {
                 ui.horizontal_wrapped(|ui| {
-                    modv_ui::panels::draw_performance_bar(
-                        ui,
-                        &snapshot,
-                        &mut state.scene_grid,
-                        &mut state.actions,
-                    );
+                    modv_ui::panels::draw_performance_bar(ui, &snapshot, &mut state.actions);
                 });
             },
             state,

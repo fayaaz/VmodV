@@ -9,4 +9,6 @@ pub mod scene_grid;
 pub use row_monitor::{
     RowMonitorDisplay, row_monitor_display, row_monitor_refresh_row, row_monitor_stride,
 };
-pub use scene_grid::{CellRef, SceneGridState, draw_performance_bar, draw_scene_grid};
+pub use scene_grid::{
+    CellRef, SceneGridState, draw_performance_bar, draw_scene_grid, draw_timing_controls,
+};

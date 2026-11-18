@@ -59,12 +59,10 @@ fn build(
         .build_ui_state(
             move |ui, state| {
                 ui.horizontal_wrapped(|ui| {
-                    modv_ui::panels::draw_performance_bar(
-                        ui,
-                        &snapshot,
-                        &mut state.scene_grid,
-                        &mut state.actions,
-                    );
+                    modv_ui::panels::draw_performance_bar(ui, &snapshot, &mut state.actions);
+                });
+                ui.horizontal_wrapped(|ui| {
+                    modv_ui::panels::draw_timing_controls(ui, &snapshot, &mut state.actions);
                 });
                 modv_ui::panels::draw_scene_grid(
                     ui,
@@ -109,7 +107,7 @@ fn bar_inputs_show_the_active_unit_and_the_resolved_duration() {
     harness.run();
 
     harness.get_by_value("Bars");
-    let hint = "4.00–12.00 bars ≈ 8.0–24.0 s at 120 BPM";
+    let hint = "4.00–12.00 bars ≈ 8.0–24.0 s";
     assert!(
         harness.get_all_by_value(hint).count() >= 1,
         "the bar hint resolves the live tempo: expected {hint:?}"
@@ -127,7 +125,7 @@ fn scene_timing_dialog_round_trips_the_override_min_and_max() {
     );
     harness.run();
 
-    let hint = "1.50–3.50 bars ≈ 3.0–7.0 s at 120 BPM";
+    let hint = "1.50–3.50 bars ≈ 3.0–7.0 s";
     assert!(
         harness.get_all_by_value(hint).count() >= 1,
         "the dialog shows the override's own minimum and maximum"

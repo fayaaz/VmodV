@@ -40,7 +40,7 @@ fn shell_draws_with_an_empty_engine_snapshot() {
     harness.run();
     harness.get_by_label("GROUPS");
     harness.get_by_label("INSPECTOR");
-    harness.get_by_label("SCENES");
+    harness.get_by_label("No Scenes yet");
 }
 
 #[test]

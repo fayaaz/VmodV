@@ -4125,9 +4125,11 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                // One header row carries the Scenes summary and the
-                // performance controls; `Open output` is pinned to the right
-                // and wraps the rest into the remaining width.
+                // Row 1 of the performance controls, with `Open output`
+                // pinned to the right. The timing values and the Scenes
+                // summary take their own rows below so nothing collides in a
+                // narrow centre panel.
+                crate::panels::scene_grid::draw_performance_bar(ui, snapshot, &mut state.actions);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Open output").clicked() {
                         state.queue(UiCommand::OpenOutputWindow);
@@ -4135,45 +4137,10 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                     if snapshot.performance.enabled {
                         chip(ui, "PERFORMANCE", theme::OK);
                     }
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new("SCENES")
-                                    .strong()
-                                    .size(16.0)
-                                    .color(theme::FOREGROUND),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("{} saved", snapshot.scenes.len()))
-                                    .size(12.0)
-                                    .color(theme::MUTED),
-                            );
-                            if !snapshot.scene_rows.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "rows: {}",
-                                        snapshot
-                                            .scene_rows
-                                            .iter()
-                                            .take(5)
-                                            .cloned()
-                                            .collect::<Vec<_>>()
-                                            .join(" | ")
-                                    ))
-                                    .size(12.0)
-                                    .color(theme::MUTED),
-                                );
-                            }
-                            ui.separator();
-                            crate::panels::scene_grid::draw_performance_bar(
-                                ui,
-                                snapshot,
-                                &mut state.scene_grid,
-                                &mut state.actions,
-                            );
-                        });
-                    });
                 });
+            });
+            ui.horizontal_wrapped(|ui| {
+                crate::panels::scene_grid::draw_timing_controls(ui, snapshot, &mut state.actions);
             });
             ui.add_space(4.0);
             ui.separator();

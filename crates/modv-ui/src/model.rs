@@ -2397,7 +2397,8 @@ pub fn default_timing_values(unit: TimingUnit) -> (f64, f64) {
 }
 
 /// A live duration hint for a min/max pair, e.g.
-/// `"4.00–12.00 bars ≈ 8.0–24.0 s at 120 BPM"` or `"8.0–24.0 s"`.
+/// `"4.00–12.00 bars ≈ 8.0–24.0 s"` or `"8.0–24.0 s"` (the BPM itself is
+/// already shown in the status bar).
 pub fn timing_hint(min: f64, max: f64, unit: TimingUnit, bpm: f64) -> String {
     match unit {
         TimingUnit::Seconds => format!("{min:.1}–{max:.1} s"),
@@ -2405,7 +2406,7 @@ pub fn timing_hint(min: f64, max: f64, unit: TimingUnit, bpm: f64) -> String {
             let bpm = effective_bpm(bpm);
             let min_seconds = timing_value_seconds(min, unit, bpm);
             let max_seconds = timing_value_seconds(max, unit, bpm);
-            format!("{min:.2}–{max:.2} bars ≈ {min_seconds:.1}–{max_seconds:.1} s at {bpm:.0} BPM")
+            format!("{min:.2}–{max:.2} bars ≈ {min_seconds:.1}–{max_seconds:.1} s")
         }
     }
 }
@@ -3017,11 +3018,11 @@ mod tests {
         );
         assert_eq!(
             timing_hint(4.0, 12.0, TimingUnit::Bars, 120.0),
-            "4.00–12.00 bars ≈ 8.0–24.0 s at 120 BPM"
+            "4.00–12.00 bars ≈ 8.0–24.0 s"
         );
         assert_eq!(
             timing_hint(4.0, 12.0, TimingUnit::Bars, 0.0),
-            "4.00–12.00 bars ≈ 8.0–24.0 s at 120 BPM",
+            "4.00–12.00 bars ≈ 8.0–24.0 s",
             "an invalid tempo falls back to 120"
         );
         assert_eq!(TimingUnit::parse("BAR"), TimingUnit::Bars);

@@ -94,16 +94,6 @@ fn build() -> (Harness<'static, UiState>, Arc<Mutex<EngineSnapshot>>) {
         .build_ui_state(
             move |ui, state| {
                 let snapshot = draw_snapshot.lock().unwrap();
-                // The performance bar lives in the shell header; render it
-                // above the grid so its actions stay part of this harness.
-                ui.horizontal_wrapped(|ui| {
-                    modv_ui::panels::draw_performance_bar(
-                        ui,
-                        &snapshot,
-                        &mut state.scene_grid,
-                        &mut state.actions,
-                    );
-                });
                 modv_ui::panels::draw_scene_grid(
                     ui,
                     &snapshot,
@@ -339,6 +329,14 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
 fn the_grid_adds_a_new_empty_scene_column() {
     let (mut harness, snapshot) = build();
     assert_eq!(snapshot.lock().unwrap().scenes.len(), 1);
+
+    // The row/column controls sit directly above the Scene cells.
+    let controls_bottom = harness.get_by_label("+ Column").rect().bottom();
+    let header_top = harness.get_by_label("Alpha").rect().top();
+    assert!(
+        controls_bottom <= header_top,
+        "the grid controls sit above the cells: {controls_bottom} <= {header_top}"
+    );
 
     harness.get_by_label("+ Column").click();
     let actions = run_and_apply(&mut harness, &snapshot);
