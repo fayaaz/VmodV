@@ -598,6 +598,7 @@ describe("media status normalisation", () => {
 
   it("labels known and unknown states", () => {
     expect(mediaSourceStateLabel("running")).toBe("Live");
+    expect(mediaSourceStateLabel("paused")).toBe("Paused");
     expect(mediaSourceStateLabel("ERROR")).toBe("Error");
     expect(mediaSourceStateLabel("stopped")).toBe("Stopped");
     expect(mediaSourceStateLabel("bogus")).toBe("Unknown");

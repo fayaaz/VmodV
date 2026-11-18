@@ -48,6 +48,7 @@ export const ENGINE_MEDIA_RESTART_INTERVAL_MS = 5000;
 export const MEDIA_SOURCE_STATE_LABELS = Object.freeze({
   starting: "Starting",
   running: "Live",
+  paused: "Paused",
   stopped: "Stopped",
   error: "Error",
   failed: "Error",
