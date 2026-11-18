@@ -23,6 +23,17 @@
 //!   seeks back to zero and keeps playing; with looping disabled it parks on its
 //!   last frame and [`VideoTransport::eos`] becomes `true` until a seek (or a
 //!   resume) restarts it.
+//! * **Playback rate** is applied with a flushing, accurate seek *at the current
+//!   position* carrying GStreamer's seek rate (there is no separate "set rate"
+//!   call). The pipeline state is untouched, so changing the rate while paused
+//!   keeps the file paused (and changes nothing until it is resumed), and a
+//!   file parked at end-of-stream stores the rate without replaying itself.
+//!   Only positive rates in [`MIN_PLAYBACK_RATE`]..=[`MAX_PLAYBACK_RATE`] are
+//!   accepted: GStreamer can play backwards with a negative rate, but the
+//!   legacy `VideoControl.vue` offered 0.1–10 and the engine rejects anything
+//!   outside that (and non-finite values) instead of silently reversing.
+//!   The pipeline has no audio sink, so the rate only changes how fast frames
+//!   are pulled from the clock.
 //! * **Restart** (a new pipeline in [`super::VideoHub::start_source`])
 //!   replaces the source, so the transport starts again at zero with no pause
 //!   and no end-of-stream.
@@ -30,7 +41,10 @@
 //! All methods are called from the engine thread. GStreamer elements are
 //! `Send + Sync`; state changes and seeks are queued by GStreamer and return
 //! without waiting for the streaming threads, so a control never blocks the
-//! render loop.
+//! render loop. Because a flushing seek makes the position query unavailable
+//! for a poll or two, [`VideoTransport::position_ms`] reports the seek target
+//! until the pipeline settles; the UI scrubber therefore never snaps back to
+//! the start after a seek or a rate change.
 
 use std::time::Duration;
 
@@ -39,15 +53,15 @@ use std::time::Duration;
 /// Positions and durations are milliseconds because that is what the control
 /// plane (and the UI scrubber) uses; [`Self::position`] and [`Self::duration`]
 /// convert to [`Duration`] for engine-side arithmetic.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VideoTransport {
     /// Playback was paused through the transport API.
     pub paused: bool,
     /// Frames are being produced: the pipeline is in `PLAYING`, not paused and
     /// not parked at end-of-stream.
     pub playing: bool,
-    /// The last position the pipeline reported, in milliseconds (0 when the
-    /// source has no clock, e.g. a camera).
+    /// The last position the pipeline reported, in milliseconds (the target of
+    /// a seek until it flushes, 0 when the source has no clock, e.g. a camera).
     pub position_ms: u64,
     /// Clip length in milliseconds; `None` for live sources and for a file
     /// whose demuxer has not reported a duration yet.
@@ -58,6 +72,23 @@ pub struct VideoTransport {
     pub eos: bool,
     /// The source supports seeking (file sources).
     pub seekable: bool,
+    /// Playback speed (1.0 is real time, 0.1–10 accepted for files).
+    pub playback_rate: f64,
+}
+
+impl Default for VideoTransport {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            playing: false,
+            position_ms: 0,
+            duration_ms: None,
+            looping: false,
+            eos: false,
+            seekable: false,
+            playback_rate: 1.0,
+        }
+    }
 }
 
 impl VideoTransport {
@@ -102,6 +133,25 @@ pub fn clamp_seek(position: Duration, duration: Option<Duration>) -> Duration {
         Some(duration) => position.min(duration),
         None => position,
     }
+}
+
+/// The slowest playback rate the transport accepts.
+pub const MIN_PLAYBACK_RATE: f64 = 0.1;
+/// The fastest playback rate the transport accepts.
+pub const MAX_PLAYBACK_RATE: f64 = 10.0;
+
+/// Validate and clamp a requested playback rate.
+///
+/// `None` means the caller passed something that is not a usable speed (zero,
+/// negative or non-finite: `NaN`/`±infinity`); a finite positive rate is
+/// returned clamped into [`MIN_PLAYBACK_RATE`]..=[`MAX_PLAYBACK_RATE`], which is
+/// the span the legacy `VideoControl.vue` speed slider covered.
+pub fn clamp_playback_rate(rate: f64) -> Option<f64> {
+    if !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
+
+    Some(rate.clamp(MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE))
 }
 
 /// Convert a duration into the millisecond field of [`VideoTransport`].
@@ -168,8 +218,40 @@ mod tests {
         assert!(!transport.looping);
         assert!(!transport.eos);
         assert!(!transport.seekable);
+        assert_eq!(transport.playback_rate, 1.0);
         assert_eq!(transport.progress(), None);
         assert_eq!(transport.remaining_ms(), None);
+    }
+
+    #[test]
+    fn playback_rates_are_clamped_to_the_legacy_speed_range() {
+        assert_eq!(clamp_playback_rate(1.0), Some(1.0));
+        assert_eq!(clamp_playback_rate(0.5), Some(0.5));
+        assert_eq!(clamp_playback_rate(MIN_PLAYBACK_RATE), Some(0.1));
+        assert_eq!(clamp_playback_rate(MAX_PLAYBACK_RATE), Some(10.0));
+        assert_eq!(
+            clamp_playback_rate(0.01),
+            Some(MIN_PLAYBACK_RATE),
+            "a slower request clamps to the slowest supported speed"
+        );
+        assert_eq!(
+            clamp_playback_rate(100.0),
+            Some(MAX_PLAYBACK_RATE),
+            "a faster request clamps to the fastest supported speed"
+        );
+    }
+
+    #[test]
+    fn unusable_playback_rates_are_rejected() {
+        assert_eq!(clamp_playback_rate(0.0), None, "zero is not a speed");
+        assert_eq!(
+            clamp_playback_rate(-1.0),
+            None,
+            "backwards play is rejected"
+        );
+        assert_eq!(clamp_playback_rate(f64::NAN), None);
+        assert_eq!(clamp_playback_rate(f64::INFINITY), None);
+        assert_eq!(clamp_playback_rate(f64::NEG_INFINITY), None);
     }
 
     #[test]

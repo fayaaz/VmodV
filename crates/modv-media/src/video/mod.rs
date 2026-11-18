@@ -97,7 +97,9 @@ pub use portal::{
 pub use source::{
     VideoError, VideoSource, VideoSourceState, VideoSourceStatus, ensure_gst, gstreamer_version,
 };
-pub use transport::{VideoTransport, clamp_seek};
+pub use transport::{
+    MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, VideoTransport, clamp_playback_rate, clamp_seek,
+};
 
 #[cfg(test)]
 mod tests {

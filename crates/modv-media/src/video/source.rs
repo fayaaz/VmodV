@@ -42,7 +42,7 @@ use super::pipeline::{
     SINK_NAME, VideoSourceConfig, VideoSourceKind, check_required_elements, pipeline_description,
     screen_support,
 };
-use super::transport::{VideoTransport, clamp_seek, duration_millis};
+use super::transport::{VideoTransport, clamp_playback_rate, clamp_seek, duration_millis};
 
 /// How long [`VideoSource::start`] waits for the pipeline to preroll.
 ///
@@ -57,6 +57,9 @@ pub const STOP_TIMEOUT_MS: u64 = 2_000;
 /// A real clip can never be 584 million years long, and [`super::transport`]
 /// saturates its millisecond conversion one below this value.
 const DURATION_UNKNOWN_MS: u64 = u64::MAX;
+
+/// Sentinel for "no position has been reported yet" (the same reserved value).
+const POSITION_UNKNOWN_MS: u64 = u64::MAX;
 
 /// Where a source is in its lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +213,12 @@ pub struct VideoSource {
     /// Cached `query_duration` result, or [`DURATION_UNKNOWN_MS`] until the
     /// demuxer reports one (a `DurationChanged` message invalidates it).
     duration_ms: AtomicU64,
+    /// The last position the pipeline reported (or the target of a seek that
+    /// is still flushing), so a control that needs the position does not read
+    /// the pre-flush `None`/zero and jump to the start.
+    last_position_ms: AtomicU64,
+    /// Playback speed applied through a rate seek (1.0 = real time).
+    playback_rate: Mutex<f64>,
     config: VideoSourceConfig,
     stopped: bool,
 }
@@ -303,6 +312,8 @@ impl VideoSource {
             paused: AtomicBool::new(false),
             looping: AtomicBool::new(true),
             duration_ms: AtomicU64::new(DURATION_UNKNOWN_MS),
+            last_position_ms: AtomicU64::new(POSITION_UNKNOWN_MS),
+            playback_rate: Mutex::new(1.0),
             config,
             stopped: false,
         })
@@ -341,6 +352,14 @@ impl VideoSource {
     /// Whether playback was paused through [`Self::pause`].
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
+    }
+
+    /// The playback speed last applied (1.0 = real time).
+    pub fn playback_rate(&self) -> f64 {
+        *self
+            .playback_rate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Whether this source has a timeline to seek (a video file).
@@ -382,6 +401,7 @@ impl VideoSource {
             looping: self.is_looping(),
             eos,
             seekable,
+            playback_rate: self.playback_rate(),
         }
     }
 
@@ -458,20 +478,108 @@ impl VideoSource {
                 ))
             })?;
 
+        self.last_position_ms
+            .store(duration_millis(target), Ordering::Relaxed);
         self.ended.store(false, Ordering::SeqCst);
 
         Ok(self.transport())
     }
 
+    /// Change the playback speed of a video file (0.1–10, 1.0 is real time).
+    ///
+    /// GStreamer has no `set_rate`: a rate change is a flushing, accurate seek
+    /// at the *current* position carrying the new seek rate. The pipeline
+    /// state is untouched, so this keeps a paused file paused and a playing
+    /// file playing at the new speed. A file parked at end-of-stream keeps its
+    /// latch and only stores the rate (it applies when it is played again).
+    ///
+    /// Returns [`VideoError::Unsupported`] for non-finite/non-positive rates and
+    /// for live sources (a camera or test pattern has no timeline to rate).
+    pub fn set_playback_rate(&self, rate: f64) -> Result<VideoTransport, VideoError> {
+        // Pick up an end-of-stream that happened since the last poll before
+        // deciding whether a seek is needed.
+        if !self.stopped {
+            self.poll_bus();
+        }
+
+        self.ensure_controllable()?;
+
+        if !self.is_seekable() {
+            return Err(VideoError::Unsupported(format!(
+                "a {} source has no timeline to rate",
+                self.kind_label()
+            )));
+        }
+
+        let Some(rate) = clamp_playback_rate(rate) else {
+            return Err(VideoError::Unsupported(format!(
+                "playback rate {rate} must be a finite positive number"
+            )));
+        };
+
+        // A parked file stays parked: seeking at the end would only post
+        // end-of-stream again. The speed applies when it is replayed.
+        if !self.is_eos() {
+            // `position_ms` falls back to the last known position (or the
+            // target of a seek still flushing), so a slider dragged quickly
+            // cannot anchor the next rate seek at a spurious zero.
+            let position = self
+                .position_ms()
+                .map(gst::ClockTime::from_mseconds)
+                .unwrap_or(gst::ClockTime::ZERO);
+
+            self.pipeline
+                .seek(
+                    rate,
+                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                    gst::SeekType::Set,
+                    position,
+                    gst::SeekType::None,
+                    gst::ClockTime::NONE,
+                )
+                .map_err(|error| {
+                    VideoError::State(format!(
+                        "could not set the playback rate to {rate}: {error}"
+                    ))
+                })?;
+
+            self.last_position_ms
+                .store(duration_millis(Duration::from(position)), Ordering::Relaxed);
+        }
+
+        *self
+            .playback_rate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = rate;
+
+        Ok(self.transport())
+    }
+
     /// The last position the pipeline reported, in milliseconds (files only).
+    ///
+    /// A flushing seek makes `query_position` return `None` for a poll or two,
+    /// so the last known position is reported in the meantime; a successful
+    /// seek also stores its target, which keeps the position steady while it
+    /// flushes.
     fn position_ms(&self) -> Option<u64> {
         if self.stopped || !self.is_seekable() {
             return None;
         }
 
-        self.pipeline
-            .query_position::<gst::ClockTime>()
-            .map(|position| position.mseconds())
+        match self.pipeline.query_position::<gst::ClockTime>() {
+            Some(position) => {
+                let millis = position.mseconds();
+
+                self.last_position_ms.store(millis, Ordering::Relaxed);
+
+                Some(millis)
+            }
+            None => {
+                let cached = self.last_position_ms.load(Ordering::Relaxed);
+
+                (cached != POSITION_UNKNOWN_MS).then_some(cached)
+            }
+        }
     }
 
     /// The clip duration, queried once and cached (files only).
@@ -508,6 +616,7 @@ impl VideoSource {
                 VideoError::State(format!("could not restart the video file: {error}"))
             })?;
 
+        self.last_position_ms.store(0, Ordering::Relaxed);
         self.ended.store(false, Ordering::SeqCst);
 
         Ok(())
@@ -617,6 +726,12 @@ impl VideoSource {
         self.ended.store(false, Ordering::SeqCst);
         self.duration_ms
             .store(DURATION_UNKNOWN_MS, Ordering::Relaxed);
+        self.last_position_ms
+            .store(POSITION_UNKNOWN_MS, Ordering::Relaxed);
+        *self
+            .playback_rate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = 1.0;
 
         let _ = self.pipeline.set_state(gst::State::Null);
         let _ = self
@@ -1609,6 +1724,314 @@ mod tests {
         assert!(
             playing.position_ms < duration / 2,
             "the replay starts near the beginning: {playing:?}"
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_video_file_applies_playback_rates() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        source.set_looping(false);
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+        wait_until("a duration", std::time::Duration::from_secs(3), || {
+            source.transport().duration_ms.is_some()
+        });
+
+        assert_eq!(
+            source.transport().playback_rate,
+            1.0,
+            "a file starts at real time"
+        );
+
+        let changed = source.set_playback_rate(2.0).expect("2x");
+
+        assert_eq!(changed.playback_rate, 2.0);
+        assert!(!changed.paused, "a rate change does not pause: {changed:?}");
+        assert!(!changed.eos, "{changed:?}");
+
+        // At 2x, half a second of wall clock is about a second of media. The
+        // sink is clock-synced, so the rate is a wall-clock property, not a
+        // "decode as fast as possible" one.
+        let before = source.transport().position_ms;
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let after = source.transport().position_ms;
+
+        assert!(
+            after >= before + 650,
+            "2x should advance faster than real time: {before} -> {after}"
+        );
+
+        let slow = source.set_playback_rate(0.25).expect("0.25x");
+
+        assert_eq!(slow.playback_rate, 0.25);
+
+        let before = source.transport().position_ms;
+
+        std::thread::sleep(std::time::Duration::from_millis(600));
+
+        let after = source.transport().position_ms;
+
+        assert!(
+            after < before + 450,
+            "0.25x should advance slower than real time: {before} -> {after}"
+        );
+        assert!(!source.transport().eos, "the clip must not have ended");
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn changing_the_rate_while_paused_keeps_the_file_paused() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        source.set_looping(false);
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+        source.pause().expect("pause");
+
+        // Let the pause settle so the position is stable before the rate seek.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        let paused_at = source.transport().position_ms;
+        let changed = source.set_playback_rate(3.0).expect("3x while paused");
+
+        assert!(
+            changed.paused,
+            "a rate change must not resume a paused file: {changed:?}"
+        );
+        assert_eq!(changed.playback_rate, 3.0);
+        assert!(!changed.playing, "{changed:?}");
+
+        std::thread::sleep(std::time::Duration::from_millis(400));
+
+        let parked = source.transport();
+
+        assert!(parked.paused, "{parked:?}");
+        assert!(
+            parked.position_ms < paused_at + 150,
+            "a rate change must preserve the paused position: {paused_at} -> {}",
+            parked.position_ms
+        );
+
+        source.resume().expect("resume");
+
+        let position = source.transport().position_ms;
+
+        wait_until(
+            "playback at the new rate",
+            std::time::Duration::from_secs(2),
+            || source.transport().position_ms > position + 50,
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_rate_change_at_end_of_stream_keeps_the_file_parked() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        source.set_looping(false);
+
+        wait_until("end-of-stream", std::time::Duration::from_secs(8), || {
+            source.transport().eos
+        });
+
+        let ended = source.transport();
+
+        let changed = source.set_playback_rate(2.0).expect("a rate change at EOS");
+
+        assert_eq!(changed.playback_rate, 2.0);
+        assert!(
+            changed.eos,
+            "changing the rate must not replay a finished file: {changed:?}"
+        );
+        assert!(!changed.playing, "{changed:?}");
+        assert_eq!(
+            changed.position_ms, ended.position_ms,
+            "the parked position is preserved"
+        );
+
+        // The stored rate applies when the file is played again.
+        let replayed = source.seek(std::time::Duration::ZERO).expect("replay");
+
+        assert!(!replayed.eos, "{replayed:?}");
+        assert_eq!(replayed.playback_rate, 2.0);
+
+        let frames = source.status().frames;
+
+        wait_until(
+            "a replayed frame",
+            std::time::Duration::from_secs(3),
+            || source.status().frames > frames,
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_rate_change_after_a_loop_keeps_the_file_looping() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        // The fixture is two seconds at 30 fps: > 65 frames means the first
+        // loop already restarted the clip.
+        wait_until("the first loop", std::time::Duration::from_secs(8), || {
+            source.status().frames > 65
+        });
+
+        let changed = source.set_playback_rate(2.0).expect("2x after a loop");
+
+        assert!(changed.looping, "{changed:?}");
+        assert!(!changed.eos, "a looping file never parks: {changed:?}");
+        assert_eq!(changed.playback_rate, 2.0);
+
+        let frames = source.status().frames;
+
+        wait_until(
+            "frames after the rate change",
+            std::time::Duration::from_secs(3),
+            || source.status().frames > frames,
+        );
+
+        assert!(
+            !source.transport().eos,
+            "the looped file is still not ended"
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rapid_rate_changes_keep_the_position() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        source.set_looping(false);
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+
+        wait_until("playback", std::time::Duration::from_secs(3), || {
+            source.transport().position_ms > 150
+        });
+
+        let before = source.transport().position_ms;
+        source.set_playback_rate(2.0).expect("2x");
+
+        // A speed slider fires again while the previous rate seek is still
+        // flushing; the second seek must anchor at the position the first one
+        // targeted instead of the pre-flush zero.
+        let after = source.set_playback_rate(3.0).expect("3x during the flush");
+
+        assert_eq!(after.playback_rate, 3.0);
+        assert!(
+            after.position_ms + 100 >= before,
+            "a rate change during the previous flush must not jump to the start: \
+             {before} -> {}",
+            after.position_ms
+        );
+
+        wait_until(
+            "playback after the rapid rate changes",
+            std::time::Duration::from_secs(2),
+            || source.transport().position_ms > before + 100,
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unusable_playback_rates_are_rejected() {
+        if let Some(reason) = test_support::missing_elements(&["videotestsrc", "appsink"]) {
+            println!("skipping the rejected rates: {reason}");
+            return;
+        }
+
+        let mut source = start_pattern(64, 48);
+
+        for rate in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -2.0] {
+            let error = source
+                .set_playback_rate(rate)
+                .expect_err("an unusable rate must be rejected");
+
+            assert!(matches!(error, VideoError::Unsupported(_)), "{error}");
+        }
+
+        assert_eq!(
+            source.transport().playback_rate,
+            1.0,
+            "a rejected rate leaves the previous one"
+        );
+
+        let error = source
+            .set_playback_rate(2.0)
+            .expect_err("a live source has no timeline to rate");
+
+        assert!(matches!(error, VideoError::Unsupported(_)), "{error}");
+
+        source.stop();
+
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+
+        // Out-of-range finite rates clamp to the supported span instead of
+        // being rejected, like the legacy speed slider's bounds.
+        assert_eq!(
+            source
+                .set_playback_rate(0.01)
+                .expect("too slow")
+                .playback_rate,
+            0.1
+        );
+        assert_eq!(
+            source
+                .set_playback_rate(100.0)
+                .expect("too fast")
+                .playback_rate,
+            10.0
+        );
+        assert_eq!(
+            source
+                .set_playback_rate(1.0)
+                .expect("back to normal")
+                .playback_rate,
+            1.0
         );
 
         source.stop();

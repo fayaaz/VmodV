@@ -156,6 +156,15 @@ impl VideoHub {
         self.with_source(id)?.set_paused(paused)
     }
 
+    /// Change the playback speed of a video file (1.0 = real time, 0.1–10).
+    ///
+    /// See [`VideoSource::set_playback_rate`]: GStreamer applies a rate with a
+    /// flushing seek at the current position, so the pause state and the
+    /// position are preserved.
+    pub fn set_playback_rate(&self, id: &str, rate: f64) -> Result<VideoTransport, VideoError> {
+        self.with_source(id)?.set_playback_rate(rate)
+    }
+
     /// Seek a video file to `position` (clamped to the clip; see
     /// [`VideoSource::seek`] for the paused/playing semantics).
     pub fn seek_source(
@@ -263,6 +272,7 @@ mod tests {
             hub.set_paused("missing", true),
             hub.seek_source("missing", std::time::Duration::from_millis(100)),
             hub.set_looping("missing", true),
+            hub.set_playback_rate("missing", 2.0),
         ] {
             match result {
                 Err(VideoError::UnknownSource(id)) => assert_eq!(id, "missing"),
@@ -319,6 +329,11 @@ mod tests {
             .expect_err("a live source cannot seek");
         assert!(matches!(error, VideoError::Unsupported(_)), "{error}");
 
+        let error = hub
+            .set_playback_rate("pattern", 2.0)
+            .expect_err("a live source has no timeline to rate");
+        assert!(matches!(error, VideoError::Unsupported(_)), "{error}");
+
         let transports = hub.transports();
         assert_eq!(transports.len(), 1);
         assert_eq!(transports[0].0, "pattern");
@@ -358,6 +373,10 @@ mod tests {
         assert!(!fresh.eos, "{fresh:?}");
         assert_eq!(fresh.position_ms, 0);
         assert!(fresh.looping, "a new source loops by default: {fresh:?}");
+        assert_eq!(
+            fresh.playback_rate, 1.0,
+            "a restart resets the playback rate"
+        );
 
         hub.stop_all();
     }
