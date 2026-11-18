@@ -235,6 +235,7 @@ fn alpha_slider<'a>(harness: &'a Harness<'static, UiState>) -> egui_kittest::Nod
 }
 
 #[test]
+// `alphaStateCanBeSet.spec.js`.
 fn alpha_can_be_set() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
@@ -269,6 +270,7 @@ fn alpha_can_be_set() {
 }
 
 #[test]
+// `blendModeStateCanBeSet.spec.js`.
 fn blend_mode_can_be_set() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
@@ -310,6 +312,7 @@ fn blend_mode_can_be_set() {
 }
 
 #[test]
+// `clearingStateCanBeToggledBetween0and1.spec.js`.
 fn clearing_state_can_be_toggled_between_0_and_1() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
@@ -338,6 +341,7 @@ fn clearing_state_can_be_toggled_between_0_and_1() {
 }
 
 #[test]
+// `enabledStateCanBeToggledBetween01and2.spec.js` (the 0/1 half).
 fn enabled_state_can_be_toggled_between_1_and_0() {
     let (mut harness, snapshot) = build();
 
@@ -372,6 +376,7 @@ fn enabled_state_can_be_toggled_between_1_and_0() {
 }
 
 #[test]
+// `groupNameCanBeChanged.spec.js`.
 fn group_name_can_be_changed() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
@@ -396,6 +401,7 @@ fn group_name_can_be_changed() {
 }
 
 #[test]
+// `inheritAndInheritFromStateCanBeSet.spec.js` (the inherit half).
 fn inherit_can_be_set() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
@@ -421,6 +427,7 @@ fn inherit_can_be_set() {
 }
 
 #[test]
+// `pipelineStateCanBeToggledBetween0and1.spec.js`.
 fn pipeline_state_can_be_toggled_between_0_and_1() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
@@ -503,6 +510,7 @@ fn removing_the_focused_group_clears_it() {
 }
 
 #[test]
+// `newGroupButtonCreatesANewGroup.spec.js`.
 fn the_new_group_button_creates_a_group() {
     let (mut harness, snapshot) = build();
 

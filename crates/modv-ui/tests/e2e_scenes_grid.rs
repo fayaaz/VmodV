@@ -180,6 +180,8 @@ fn double_click(harness: &mut Harness<'static, UiState>, pos: egui::Pos2) {
 }
 
 #[test]
+// `performanceGrid.spec.js`: "hovering a grid cell previews the saved group
+// and leaves a still".
 fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
     let (mut harness, snapshot) = build();
 
@@ -248,6 +250,7 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
 }
 
 #[test]
+// `performanceGrid.spec.js`: "the Scenes grid adds a new empty Scene column".
 fn the_grid_adds_a_new_empty_scene_column() {
     let (mut harness, snapshot) = build();
     assert_eq!(snapshot.lock().unwrap().scenes.len(), 1);
@@ -271,6 +274,8 @@ fn the_grid_adds_a_new_empty_scene_column() {
 }
 
 #[test]
+// `performanceGrid.spec.js`: "clearing a grid cell removes its modules after
+// confirmation".
 fn clearing_a_cell_removes_its_modules() {
     let (mut harness, snapshot) = build();
 
@@ -302,11 +307,13 @@ fn clearing_a_cell_removes_its_modules() {
 }
 
 #[test]
+// `performanceGrid.spec.js`: "editing a grid cell saves added modules back
+// into the Scene" (native live-capture path).
 fn capturing_the_live_row_saves_the_added_modules_into_the_cell() {
     // The native grid has no in-cell editor dialog. Its equivalent "edit this
     // cell" path is: add a module to the live Group (Gallery), then capture
     // that live row back into the saved cell. The store half is covered by
-    // scene_ops.rs:capture_scene_row_to_scene_saves_the_live_group.
+    // scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows.
     let (mut harness, _snapshot) = build();
 
     let cell = harness.get_by_label("Alpha row 1").rect();
@@ -326,6 +333,8 @@ fn capturing_the_live_row_saves_the_added_modules_into_the_cell() {
 }
 
 #[test]
+// `performanceGrid.spec.js`: "renaming a Scene column updates the grid and
+// the Scene".
 fn renaming_a_scene_column_updates_the_grid_and_the_scene() {
     let (mut harness, snapshot) = build();
 
@@ -354,6 +363,8 @@ fn renaming_a_scene_column_updates_the_grid_and_the_scene() {
 }
 
 #[test]
+// `performanceGrid.spec.js`: "editing an empty Scene cell creates a Group and
+// saves its modules" (the create half).
 fn editing_an_empty_cell_creates_a_group() {
     let (mut harness, snapshot) = build();
     // Make row 2 empty so the double-click has an empty cell to create in.
