@@ -46,11 +46,11 @@ use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::cli::{AudioSourceSelection, Cli};
 use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
-use crate::isf_watch::IsfWatcher;
 use crate::media::MediaHub;
 use crate::media_dialogs::{self, DocumentKind, FilePicker};
 use crate::media_profiles::{self, DEFAULT_PROFILE, PROJECT_SETTINGS_FILENAME, ProjectSettings};
 use crate::media_settings::{CameraMode, MediaSettings, plan_restore, resolve_mode};
+use crate::media_watch::{MediaFolder, MediaWatcher};
 use crate::midi::MidiClient;
 use crate::pacing::FramePacer;
 use crate::report::AdapterSummary;
@@ -342,7 +342,7 @@ pub struct NativeApp {
     last_osc_poll: Instant,
     isf_dir: Option<PathBuf>,
     user_isf_dirs: Vec<PathBuf>,
-    isf_watcher: Option<IsfWatcher>,
+    media_watcher: Option<MediaWatcher>,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -532,9 +532,12 @@ impl NativeApp {
             }
         };
         let midi_client = MidiClient::new();
-        let isf_watcher = IsfWatcher::new(&user_isf_dirs);
-        if isf_watcher.is_some() {
-            eprintln!("ui: INFO watching user ISF folders for changes");
+        let media_watcher =
+            MediaWatcher::for_profile(&media_root, &active_profile, &extra_isf_dirs);
+        if media_watcher.is_some() {
+            eprintln!(
+                "ui: INFO watching the {active_profile:?} media tree for ISF/image/video/palette changes"
+            );
         }
         if midi_client.available() {
             eprintln!("ui: INFO MIDI input available (hot-plug polled at 1 Hz)");
@@ -612,7 +615,7 @@ impl NativeApp {
             last_osc_poll: start,
             isf_dir,
             user_isf_dirs,
-            isf_watcher,
+            media_watcher,
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -980,8 +983,19 @@ impl NativeApp {
             self.restore_pending_cameras();
             self.last_camera_scan = now;
         }
-        if self.isf_watcher.as_mut().is_some_and(IsfWatcher::pump) {
-            self.rescan_modules();
+        if let Some(burst) = self.media_watcher.as_mut().and_then(MediaWatcher::pump) {
+            if burst.has(MediaFolder::Isf) {
+                self.rescan_modules();
+            }
+            let others = burst.other_folders();
+            if !others.is_empty() {
+                let labels: Vec<&str> = others.iter().map(|folder| folder.label()).collect();
+                eprintln!(
+                    "ui: INFO media folders changed: {} ({} event(s)); no engine re-registration needed",
+                    labels.join(", "),
+                    burst.events
+                );
+            }
         }
         self.drain_ui_commands(event_loop);
         if self.done {
@@ -1621,7 +1635,8 @@ impl NativeApp {
     fn rebuild_user_isf_dirs(&mut self) {
         self.user_isf_dirs =
             user_isf_dirs(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
-        self.isf_watcher = IsfWatcher::new(&self.user_isf_dirs);
+        self.media_watcher =
+            MediaWatcher::for_profile(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
     }
 
     /// Create `<userData>/media/<name>` with the Electron folder set and switch
