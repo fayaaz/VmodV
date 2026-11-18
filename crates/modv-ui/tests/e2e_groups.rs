@@ -275,7 +275,7 @@ fn blend_mode_can_be_set() {
     let (mut harness, snapshot) = build();
     select_group(&mut harness, "Background");
 
-    for mode in ["screen", "multiply", "normal"] {
+    for &mode in modv_ui::COMPOSITE_OPERATIONS {
         // The closed combo shows the current mode; opening it lists every
         // COMPOSITE_OPERATIONS entry as a selectable row.
         let selected = snapshot
@@ -289,11 +289,15 @@ fn blend_mode_can_be_set() {
             .clone();
         harness.get_by_value(&selected).click();
         harness.run();
+        // The list is taller than the combo popup's max height; scroll the
+        // option into view before clicking, like a real user would.
+        harness.get_by_label(mode).scroll_to_me();
+        harness.run();
         harness.get_by_label(mode).click();
 
         let actions = run_and_apply(&mut harness, &snapshot);
         let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
-        assert_eq!(updates.len(), 1, "one blend update: {actions:?}");
+        assert_eq!(updates.len(), 1, "one blend update for {mode}: {actions:?}");
         assert_eq!(updates[0].payload["groupId"], "group-bg");
         assert_eq!(updates[0].payload["key"], "compositeOperation");
         assert_eq!(updates[0].payload["value"], mode);
