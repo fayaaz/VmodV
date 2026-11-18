@@ -37,16 +37,15 @@ Merge commits are ignored.
    commit does not re-trigger the workflow (a `chore(release):` subject
    guard in the workflow double-checks this).
 
-The nightly prerelease (`nightly.yml`) is unaffected: it derives
-`${NATIVE_VERSION}-nightly.<YYYYMMDD>` from the Makefile, so it tracks the
-latest stable release base.
+This is the only release channel: the old rolling `nightly` prerelease was
+removed — download the latest `vX.Y.Z` release for current artifacts.
 
 ## Version line and tags
 
 - Release tags are `vX.Y.Z` (e.g. `v2.1.0`). The workflow only considers
   tags matching `v[0-9]*.[0-9]*.[0-9]*`; the legacy `3.x` tags (no `v`
-  prefix, unreachable from the rewritten history) and `nightly` / `v1.x-final`
-  are ignored.
+  prefix, unreachable from the rewritten history) and `v1.x-final` are
+  ignored.
 - The `v2.0.0` tag was placed on the commit that set `NATIVE_VERSION` to
   `2.0.0` (`8b9c40ed`) to seed the automation base. Everything before it is
   accounted for as 2.0.0, so the first automated release computed from it

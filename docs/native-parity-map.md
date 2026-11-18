@@ -171,8 +171,9 @@ Still open:
    vector pad.
 6. Multi-output windows (single `output-0` today), a structured daily logger
    and the P1 splash/file dialogs.
-7. P9: Flatpak and the clean-VM installer pass. The nightly release is
-   Rust-only now; Electron/Node deletion is done and the archived tree is
+7. P9: Flatpak and the clean-VM installer pass. The stable release pipeline is
+   the automated semantic-versioning workflow (`release.yml`, see
+   `docs/releasing.md`); Electron/Node deletion is done and the archived tree is
    documented in [legacy-electron.md](./legacy-electron.md).
 8. The clean-VM manual checklist for audio/cameras/NDI. No NDI/GPU hardware
    verification is recorded by this refresh; see the hardware waivers above

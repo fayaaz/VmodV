@@ -22,7 +22,7 @@ Last updated: 2026-11-18.
 | P5 — docking | **Done (custom layout)** | Resizable Groups/Inspector/dock/centre sections; every right-panel tab detaches to the strip, a dock column or an in-app floating window; panel sizes, dock width, tab placements and window bounds persist to `<userData>/native-layout.json` (atomic, debounced, clamped). This is the hand-rolled `LayoutState`/`LayoutSettings` model, not `egui_tiles`. |
 | P6 — media manager | **Partial** | `MediaHub` is owned by the native shell: camera panel (ordered/remembered/restored inputs + resolution/FPS), test pattern and source status, with engine `media/start-file`/`start-screen` plumbing. User ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Native file/screen pickers, media-manager file dialogs, project profiles and the full media-tree watch remain. |
 | P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits the four device flags. The opt-in Boa plugin host (D5) remains; the Plugins panel is deliberately disabled until it lands. |
-| P8/P9 — parity/packaging | **Complete (Rust-only)** | `docs/native-parity-map.md` records the native coverage. `make build` produces the native AppImage and `.deb` (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, `make test-e2e-native` runs the real-binary harness, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. `NATIVE_VERSION` defaults to 2.0.0 and `nightly.yml` is native-only. Electron/Node and the JS suites are gone; the archived tree lives on `legacy-electron`/`v1.x-final`. Flatpak remains. |
+| P8/P9 — parity/packaging | **Complete (Rust-only)** | `docs/native-parity-map.md` records the native coverage. `make build` produces the native AppImage and `.deb` (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, `make test-e2e-native` runs the real-binary harness, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. `NATIVE_VERSION` defaults to 2.0.0 and is bumped automatically by the semantic-versioning release workflow (`release.yml`, see `docs/releasing.md`); the rolling `nightly` was removed in favour of that. Electron/Node and the JS suites are gone; the archived tree lives on `legacy-electron`/`v1.x-final`. Flatpak remains. |
 
 ## Rust-only cleanup (2026-11-18)
 
@@ -136,8 +136,10 @@ with a temporary userData directory.
 3. P7: opt-in Boa plugin host (D5) and enabling the Plugins panel.
 4. P8: native e2e/perf/soak harness, multi-output windows, and manual
    GPU/NDI/camera checks (no NDI hardware verification is recorded yet).
-5. P9: Flatpak and the clean-VM installer pass. The nightly is Rust-only and
-   the Electron tree is deleted (archived on `legacy-electron`/`v1.x-final`);
+5. P9: Flatpak and the clean-VM installer pass. Releases are cut by the
+   automated semantic-versioning workflow (`release.yml`, see
+   `docs/releasing.md`); the Electron tree is deleted (archived on
+   `legacy-electron`/`v1.x-final`);
    native 2.0.0 packaging and `make dev` are the only build path
    (`docs/native-2.0-release.md`).
 6. P1 residuals: structured daily logger, splash and native file dialogs.
@@ -221,8 +223,9 @@ with a temporary userData directory.
 - **P9** has a native AppImage (`make appimage-native`), Debian package
   (`make native-deb`, checked by `make native-deb-check`) and a Rust-only CI
   workflow (`.github/workflows/native.yml`). `make build` produces both native
-  installers, `make dev` runs the native shell, and `nightly.yml` is
-  native-only. Flatpak and the clean-VM installer pass remain.
+  installers, `make dev` runs the native shell, and `release.yml` cuts
+  automated stable releases from `main`. Flatpak and the clean-VM installer
+  pass remain.
 
 ## Constraints honoured
 

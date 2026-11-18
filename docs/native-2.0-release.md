@@ -31,8 +31,9 @@ binary and assets.
 Versions:
 
 - `NATIVE_VERSION ?= 2.0.0` in the `Makefile` names the installers. Override it
-  with `NATIVE_VERSION=...`; CI appends `-nightly.<YYYYMMDD>` for rolling
-  builds.
+  with `NATIVE_VERSION=...` for local builds; `release.yml` bumps it and
+  passes the computed version automatically for stable releases (see
+  `docs/releasing.md`).
 - The Cargo workspace stays at its internal `0.1.0` metadata. The package
   version, not `modv --version`, is the release version.
 
@@ -92,9 +93,10 @@ and logging).
 - `.github/workflows/native.yml` runs clippy/fmt, the workspace tests
   (`modv-app` serial), the native e2e harness and both package builds on
   changes, uploading workflow artifacts.
-- `.github/workflows/nightly.yml` runs the same checks on `main` and publishes
-  `2.0.0-nightly.<YYYYMMDD>` AppImage/deb to the rolling `nightly`
-  prerelease. There is no Electron job.
+- `.github/workflows/release.yml` runs on every push to `main` that contains
+  qualifying conventional commits and publishes the versioned AppImage/deb to
+  a `vX.Y.Z` GitHub release (see `docs/releasing.md`). There is no Electron
+  job and no rolling nightly.
 - Stable 2.0.0 artifacts are built with `make build` (or `NATIVE_VERSION`
   overridden) from a green commit.
 

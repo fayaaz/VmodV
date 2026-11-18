@@ -1,8 +1,8 @@
 name: Native Rust CI
 
 # Rust-only lint/test/packaging for the native shell. Every change is built,
-# tested and packaged without Node, Yarn or Electron; nightly.yml publishes the
-# same AppImage/.deb to the rolling nightly release.
+# tested and packaged without Node, Yarn or Electron. Stable releases are
+# published by release.yml (see docs/releasing.md).
 on:
   push:
     branches:
