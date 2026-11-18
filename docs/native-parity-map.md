@@ -34,11 +34,12 @@ still missing), **W** waived with a reason, **N** not started.
 | `groups/groupsCanBeRearranged.spec.js` | native up/down `groups/orderByIds` | C |
 | `groups/backspaceRemovesFocusedGroup.spec.js` | native `x` button; keyboard delete pending | P |
 | `inputLinks/inputConfigUpdatesWhenControlIsFocused.spec.js` | native focused-input link editor (`widgets/input_link.rs` tests) | C |
-| `main/quitCleansUp.spec.js` | native `NativeApp::shutdown` + engine snapshot/shutdown tests; `--frames` smoke | P (manual packaged check) |
+| `main/quitCleansUp.spec.js` | native `NativeApp::shutdown` + engine snapshot/shutdown tests; `tools/native-smoke.sh` checks exit-snapshot write and SIGKILL recovery | P (packaged quit cleanup still manual) |
 | `main/windowState.spec.js` | `modv-app/src/window_state.rs` unit tests (normalise/atomic/clamp) | C |
 | `packaging/linuxBundleIsTrimmed.spec.js` | `tools/native-deb-check.sh` verifies the native package contents; `native.yml` builds the AppImage/.deb. The Electron bundle is unchanged | C |
+| packaged native smoke | `tools/native-smoke.sh`: headless `--frames --bench`, windowed apply-scene, state round-trip, AppRun log, SIGKILL recovery, optional bounded soak | C (native AppImage run) |
 | `presets/generatesAPresetWithExpectedKeys.spec.js` | Rust preset round-trip tests (existing) | C |
-| `scenes/defaultScenes.spec.js` | `default_scenes` Rust tests + native 62-Scene seed | C |
+| `scenes/defaultScenes.spec.js` | `default_scenes` Rust tests + native 61-Scene seed | C |
 | `scenes/captureLiveState.spec.js` | engine `scenes/captureLiveStateToScene` tests + native Scene menu action | C |
 | `scenes/sceneSnapshotsAndPerformance.spec.js` | `scene_ops`/performance tests + native Scenes panel | P (kittest automation pending) |
 | `scenes/performanceGrid.spec.js` | `scene_rows`/`scene_columns` tests + native grid | P |
@@ -51,7 +52,7 @@ still missing), **W** waived with a reason, **N** not started.
 | `point10/*.spec.js` (8 specs) | existing lavapipe goldens + `modv-renderers` GPU tests; native compositor uses the same engine | C |
 | `audio/systemAudio.spec.js` | engine `AudioFeed` tests; native opens PipeWire monitor with input fallback (verified on host); host-PipeWire manual check | P |
 | `audio/tempoDetector.spec.js` | `modv-media` tempo tests | C |
-| `engine/engineSkeleton.spec.js` | Boundary deleted; native shell tests replace it: single-process smoke, preview texture, output window, `--frames` traces | P (native e2e harness pending) |
+| `engine/engineSkeleton.spec.js` | Boundary deleted; native shell tests replace it: single-process smoke, preview texture, output window, `--frames` traces. `tools/native-smoke.sh` covers the packaged lifecycle | P (preview/output kittest pending) |
 | `engine/engineParity.spec.js` | Boundary deleted; registry/count tests, the 432-module guard and the native Gallery read model | C |
 | `main/windowState.spec.js` (packaged app) | window-state unit tests + manual packaged checklist | P |
 
@@ -69,6 +70,51 @@ still missing), **W** waived with a reason, **N** not started.
   headless action/format coverage, not hardware verification.
 - **Waived** currently only the GL-context spec (no GL in the native app);
   packaging is covered by the native AppImage/`.deb` checks rather than waived.
+
+## Native 2.0 verification evidence (2026-11-18)
+
+`tools/native-smoke.sh` was added as the packaged-app hardening gate. It never
+builds and always uses a throwaway `MODV_USER_DATA` (with a per-command
+timeout and cleanup). It prefers a built `dist/VmodV-Native-*.AppImage`, then
+`--appimage`. When neither exists it assembles the same AppDir layout around
+`crates/target/release/modv` from `packaging/native/{AppRun,log-run.sh}`; that
+fallback was validated before the release build landed. The evidence below is
+from the actual `dist/VmodV-Native-2.0.0-x86_64.AppImage` (launched with
+`--appimage-extract-and-run`).
+
+| Check | Result |
+| --- | --- |
+| `--headless --frames 600 --bench` | exit 0, valid JSON, 600 frames |
+| frame time / RSS | 5956.59 fps, mean 0.20 ms, p50 0.16 ms, p90 0.17 ms, p99 0.38 ms, 99.4 MB RSS |
+| windowed `--frames 20 --apply-scene "Mycelium Bloom"` | exit 0, Scene applied (3 Groups) |
+| state round-trip | `engine-state.json` written; second run restored 3 Groups / 2 Modules |
+| SIGKILL recovery | killed 4 s in (before the 30 s periodic save); restart restored the same snapshot, exit 0 |
+| packaged log wrapper | `<userData>/logs/vmodv-YYYY-MM-DD.log` written with `[native-launch]` header; stdout JSON untouched |
+| bounded soak | 60 s windowed: 3498 frames, 58.30 fps, peak process-group RSS 335 MB |
+| display backends | forced Wayland-only and X11-only `--frames 5` runs both exit 0 on RADV RX 9070 XT |
+| OSC | `modv-media` real-UDP loopback test + `store_ops::osc_datagrams_apply_to_state_and_mirror` pass; a live native run bound `0.0.0.0:3333` |
+| module parity | committed manifest guard: 432 = 15 2D + 27 Point10 + 36 shader + 354 ISF; 61 default Scenes reference 62 distinct names, all resolve on both sides |
+
+The app snapshot deliberately excludes `osc` runtime data (it is not a preset
+key), so OSC is covered at the socket/store boundary rather than by asserting a
+value in `engine-state.json`.
+
+### Hardware / environment waivers
+
+- **NDI hardware — waived.** This host has no `libndi.so.5`; native startup
+  logs `NDI unavailable` and continues cleanly. Sender/receiver behaviour
+  against real NDI hardware is not verifiable here.
+- **Multi-GPU matrix — waived.** Only one adapter was available (AMD RADV
+  GFX1201). NVIDIA/Intel/llvmpipe and multi-adapter layouts are untested.
+- **Clean-VM installers — waived here.** The packaged native AppImage was
+  launched with `--appimage-extract-and-run`, but installing the AppImage and
+  `.deb` on a clean VM (and desktop-menu/launcher integration) remains a
+  release checklist item.
+- **Host audio/camera content — waived.** A native run opened the PipeWire
+  monitor capture at 48 kHz, but no audio-content assertion or camera
+  enumeration against hardware is included.
+- **2 h soak — waived.** Only the bounded 60 s windowed soak above was run;
+  long soaks are not appropriate on a developer desktop.
 
 ## Open P8 work
 
@@ -93,8 +139,10 @@ Still open:
    integration tests: Groups keyboard delete, tri-state enabled and explicit
    `inheritFrom`, Gallery hover-preview kittest, Scene grid automation,
    packaged window-state/quit checks and host PipeWire audio.
-2. Add a native e2e/perf/soak harness. Native coverage is unit + kittest plus
-   headless CLI traces; the Playwright suite still targets Electron.
+2. Add a native e2e/perf/soak harness. `tools/native-smoke.sh` now covers the
+   packaged headless/windowed lifecycle, state round-trip, crash recovery,
+   launcher logging and a bounded soak; the remaining gap is kittest/UI
+   interaction coverage plus a clean-VM installer pass.
 3. P6 media manager: native file/screen pickers, media-manager file dialogs,
    project profiles and the full media-tree watch.
 4. P7: the opt-in Boa plugin host (D5), then enable the Plugins panel.
@@ -105,4 +153,5 @@ Still open:
 7. P9: Flatpak, the 2.0.0 version bump, switching the nightly release to Rust,
    deleting Electron/Node after sign-off, and docs/migration guides.
 8. The clean-VM manual checklist for audio/cameras/NDI. No NDI/GPU hardware
-   verification is recorded by this refresh.
+   verification is recorded by this refresh; see the hardware waivers above
+   for exactly what the native smoke gate does and does not cover.
