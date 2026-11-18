@@ -109,7 +109,7 @@ use modv_engine::default_scenes::{
 use modv_engine::engine_state::{
     GALLERY_GROUP_NAME, GROUP_ENABLED, Group, InheritFrom, ModuleInstance,
 };
-use modv_engine::inputs::{Input, InputLink};
+use modv_engine::inputs::{Input, InputLink, source_uses_tween_descriptor};
 use modv_engine::preset::create_preset_from_state;
 use modv_engine::props::coerce_prop_value;
 use modv_engine::scene_capture::{capture_live_state, collect_scene_groups, scene_has_groups};
@@ -2831,7 +2831,8 @@ impl Store {
                 continue;
             };
             let mut value = link.clone();
-            let is_tween = value.get("source").and_then(Value::as_str) == Some("tween");
+            let is_tween =
+                source_uses_tween_descriptor(value.get("source").and_then(Value::as_str));
             let Some(object) = value.as_object_mut() else {
                 continue;
             };
@@ -3807,7 +3808,7 @@ fn collect_scoped_scene_data(
             continue;
         };
         input_links.insert(input_id.clone(), json_value(link));
-        if link.source.as_deref() == Some("tween")
+        if source_uses_tween_descriptor(link.source.as_deref())
             && let Some(tween) = find_tween(&state.tweens, input_id)
         {
             tweens.push(tween);
@@ -4998,6 +4999,35 @@ mod tests {
             .get(&rebuilt_input)
             .expect("the tween link lands on the rebuilt input");
         assert_eq!(link.source.as_deref(), Some("tween"));
+        assert_eq!(
+            link.location.as_deref(),
+            Some(format!("tweens.tweens['{rebuilt_input}'].value[0]").as_str())
+        );
+
+        // A draw link is descriptor-backed too: the rebuilt input keeps the
+        // draw source and gets the new curve location.
+        assert_eq!(
+            store
+                .dispatch(
+                    "inputs/createInputLink",
+                    json!({
+                        "inputId": stale_input,
+                        "type": "state",
+                        "location": format!("tweens.tweens['{stale_input}'].value[0]"),
+                        "source": "draw",
+                        "min": 0,
+                        "max": 1,
+                    }),
+                )
+                .expect("the stale draw link save dispatches"),
+            json!(true)
+        );
+        let link = store
+            .state()
+            .input_links
+            .get(&rebuilt_input)
+            .expect("the draw link lands on the rebuilt input");
+        assert_eq!(link.source.as_deref(), Some("draw"));
         assert_eq!(
             link.location.as_deref(),
             Some(format!("tweens.tweens['{rebuilt_input}'].value[0]").as_str())

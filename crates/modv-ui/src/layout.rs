@@ -221,6 +221,7 @@ pub const WINDOW_ABOUT: &str = "about";
 pub const WINDOW_SCENE_TIMING: &str = "scene_timing";
 pub const WINDOW_PERFORMANCE_ROW_NAMES: &str = "performance_row_names";
 pub const WINDOW_TWEEN_CURVE: &str = "tween_curve";
+pub const WINDOW_DRAW_CURVE: &str = "draw_curve";
 pub const WINDOW_INPUT_LINK: &str = "input_link";
 
 impl Default for LayoutState {

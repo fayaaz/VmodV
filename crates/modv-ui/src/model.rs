@@ -1994,6 +1994,37 @@ impl EngineSnapshot {
     pub fn tween_for_input(&self, input_id: &str) -> Option<&TweenView> {
         self.tweens.get(input_id)
     }
+
+    /// The declared value range of the Module prop behind `input_id`.
+    ///
+    /// The focused-input editor's Min/Max fields are *link bounds*, not the
+    /// prop's own range: a tween or draw link keeps them at the identity
+    /// `0..1`. The curve editors need the prop range for their y axis and for
+    /// a new curve's default values. Component sub-inputs inherit their parent
+    /// prop's range; Group/meta controls and props without declared bounds
+    /// return `None` (the editor then falls back to its link bounds).
+    pub fn input_value_range(&self, input_id: &str) -> Option<(f64, f64)> {
+        for module in &self.modules {
+            for prop in &module.props {
+                let is_prop = prop.input_id.as_deref() == Some(input_id);
+                let is_component = prop
+                    .components
+                    .iter()
+                    .any(|component| component.input_id == input_id);
+                if !is_prop && !is_component {
+                    continue;
+                }
+                if let (Some(min), Some(max)) = (prop.min, prop.max)
+                    && min.is_finite()
+                    && max.is_finite()
+                    && max > min
+                {
+                    return Some((min, max));
+                }
+            }
+        }
+        None
+    }
 }
 
 /// The name of the engine's internal Gallery Group (`GALLERY_GROUP_NAME`).
@@ -2868,6 +2899,59 @@ mod tests {
                 (PERFORMANCE_ORDER_RANDOM, "Random"),
             ]
         );
+    }
+
+    #[test]
+    fn input_value_range_reads_the_prop_behind_a_parent_or_component_input() {
+        let mut module = ModuleView {
+            id: "m1".to_string(),
+            module_name: "Bands".to_string(),
+            ..Default::default()
+        };
+        module.props.push(PropView {
+            name: "angles".to_string(),
+            prop_type: "vec2".to_string(),
+            value: serde_json::json!([0.0, 0.0]),
+            min: Some(-180.0),
+            max: Some(180.0),
+            step: Some(1.0),
+            default: None,
+            input_id: Some("in-parent".to_string()),
+            components: vec![PropComponentView {
+                key: "0".to_string(),
+                input_id: "in-component".to_string(),
+            }],
+            tween: None,
+            options: Vec::new(),
+        });
+        module.props.push(PropView {
+            name: "alpha".to_string(),
+            prop_type: "float".to_string(),
+            value: serde_json::json!(0.5),
+            min: None,
+            max: None,
+            step: None,
+            default: None,
+            input_id: Some("in-unbounded".to_string()),
+            components: Vec::new(),
+            tween: None,
+            options: Vec::new(),
+        });
+        let snapshot = EngineSnapshot {
+            modules: vec![module],
+            ..Default::default()
+        };
+        assert_eq!(
+            snapshot.input_value_range("in-parent"),
+            Some((-180.0, 180.0))
+        );
+        assert_eq!(
+            snapshot.input_value_range("in-component"),
+            Some((-180.0, 180.0)),
+            "a component sub-input inherits the parent prop range"
+        );
+        assert_eq!(snapshot.input_value_range("in-unbounded"), None);
+        assert_eq!(snapshot.input_value_range("in-missing"), None);
     }
 
     #[test]

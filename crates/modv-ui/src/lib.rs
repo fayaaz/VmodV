@@ -55,7 +55,7 @@ pub use model::{
     timing_seconds_value, timing_value_seconds, un_premultiply_rgba, unique_resolutions,
 };
 pub use state::{
-    AUDIO_FEATURES, LibraryAssignmentTarget, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP,
-    SidePanelTab, TweenCurveEditor, TweenHandleDrag, UiAction, UiCommand, UiState,
+    AUDIO_FEATURES, DrawCurveEditor, LibraryAssignmentTarget, LinkEditor, MAX_SMOOTHING,
+    SMOOTHING_STEP, SidePanelTab, TweenCurveEditor, TweenHandleDrag, UiAction, UiCommand, UiState,
     mint_smoothing_id, texture_prop_action,
 };

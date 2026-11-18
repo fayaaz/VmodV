@@ -6,8 +6,9 @@
 //! link here.
 //!
 //! The editor follows the legacy panel layout: Min/Max at the top, then
-//! Audio / MIDI / Tween / OSC / Expression sections. Pure payload builders live
-//! in [`LinkEditor`] so the JS action shapes are unit-testable without egui.
+//! Audio / MIDI / Tween / Draw / OSC / Expression sections. Pure payload
+//! builders live in [`LinkEditor`] so the JS action shapes are unit-testable
+//! without egui.
 
 use crate::layout::WINDOW_INPUT_LINK;
 use crate::model::{EngineSnapshot, InputLinkView};
@@ -15,7 +16,7 @@ use crate::state::{
     AUDIO_FEATURES, LinkEditor, MAX_SMOOTHING, SMOOTHING_STEP, UiState, focused_input_title,
 };
 use crate::theme;
-use crate::widgets::TweenControl;
+use crate::widgets::{DrawControl, TweenControl};
 
 /// Draw the link summary for one prop and open the editor on demand.
 pub fn link_row(
@@ -53,7 +54,7 @@ pub fn link_row(
             }
         } else if ui
             .small_button("+ link")
-            .on_hover_text("Bind this input to audio, state, MIDI or OSC")
+            .on_hover_text("Bind this input to audio, draw, state, MIDI or OSC")
             .clicked()
         {
             let title = focused_input_title(input_id, prop_name, snapshot);
@@ -104,6 +105,12 @@ fn link_summary(link: &InputLinkView) -> String {
         )
     } else if source == "bpm" {
         format!("bpm  {location}")
+    } else if source == "draw" {
+        format!(
+            "draw curve  ->  {}..{}",
+            link.min.unwrap_or(0.0),
+            link.max.unwrap_or(1.0)
+        )
     } else if source == "osc" {
         format!("osc  {location}")
     } else {
@@ -203,38 +210,94 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
 
             midi_section(ui, &mut editor, snapshot, state);
 
-            let tween_enabled = !editor.exists
-                || editor.source.is_empty()
-                || editor.source == "tween";
+            let draw_source = editor.source == "draw";
+            let tween_enabled = !draw_source
+                && (!editor.exists
+                    || editor.source.is_empty()
+                    || editor.source == "tween");
+            let tween_view = if draw_source {
+                None
+            } else {
+                editor.tween.clone()
+            };
             egui::CollapsingHeader::new("Tween")
-                .default_open(editor.source == "tween" || editor.tween.is_some())
+                .default_open(!draw_source && (editor.source == "tween" || editor.tween.is_some()))
                 .show(ui, |ui| {
                     ui.add_enabled_ui(tween_enabled, |ui| {
                         let had_tween = editor.tween.is_some();
                         let mut control = TweenControl::new(
                             editor.title.clone(),
                             Some(editor.input_id.clone()),
-                            editor.tween.clone(),
+                            tween_view,
                             editor.min,
                             editor.max,
                         );
                         control.draw(ui, state);
-                        editor.tween = control.tween.clone();
-                        if had_tween && editor.tween.is_none() {
-                            // TweenControl queued both removals; mirror that in
-                            // the draft so a later Save cannot recreate a
-                            // dangling tween-sourced link.
-                            editor.exists = false;
-                            editor.use_state("modules/active");
-                            editor.tween_cleared = true;
-                        } else if !had_tween && editor.tween.is_some() {
+                        if !draw_source {
+                            editor.tween = control.tween.clone();
+                            if had_tween && editor.tween.is_none() {
+                                // TweenControl queued both removals; mirror that in
+                                // the draft so a later Save cannot recreate a
+                                // dangling tween-sourced link.
+                                editor.exists = false;
+                                editor.use_state("modules/active");
+                                editor.tween_cleared = true;
+                            } else if !had_tween && editor.tween.is_some() {
+                                editor.tween_cleared = false;
+                                editor.exists = true;
+                                editor.kind = "state".to_string();
+                                editor.source = "tween".to_string();
+                                editor.location = TweenControl::link_location(&editor.input_id);
+                                editor.matcher = None;
+                                editor.args = "[]".to_string();
+                            }
+                        }
+                    });
+                });
+
+            let draw_enabled = !editor.exists
+                || editor.source.is_empty()
+                || editor.source == "draw";
+            let (draw_min, draw_max) = snapshot
+                .input_value_range(&editor.input_id)
+                .unwrap_or((editor.min, editor.max));
+            egui::CollapsingHeader::new("Draw")
+                .default_open(editor.source == "draw")
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(draw_enabled, |ui| {
+                        let had_draw = editor.source == "draw" && editor.tween.is_some();
+                        let draw_view = if editor.source == "draw" {
+                            editor.tween.clone()
+                        } else {
+                            None
+                        };
+                        let mut control = DrawControl::new(
+                            editor.title.clone(),
+                            Some(editor.input_id.clone()),
+                            draw_view,
+                            draw_min,
+                            draw_max,
+                        );
+                        control.draw(ui, state);
+                        if had_draw {
+                            editor.tween = control.curve.clone();
+                            if editor.tween.is_none() {
+                                // The Draw control queued both removals; a
+                                // later Save must not recreate a dangling link.
+                                editor.exists = false;
+                                editor.use_state("modules/active");
+                                editor.tween_cleared = true;
+                            }
+                        } else if let Some(view) = control.curve.clone() {
+                            editor.tween = Some(view);
                             editor.tween_cleared = false;
                             editor.exists = true;
                             editor.kind = "state".to_string();
-                            editor.source = "tween".to_string();
-                            editor.location = TweenControl::link_location(&editor.input_id);
+                            editor.source = "draw".to_string();
+                            editor.location = DrawControl::link_location(&editor.input_id);
                             editor.matcher = None;
                             editor.args = "[]".to_string();
+                            editor.feature = "none".to_string();
                         }
                     });
                 });

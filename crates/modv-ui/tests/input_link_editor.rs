@@ -259,6 +259,88 @@ fn the_audio_section_saves_a_bpm_link_for_the_engine() {
 }
 
 #[test]
+fn the_draw_section_creates_a_curve_and_a_draw_link() {
+    let module = ModuleView {
+        id: "module-1".to_string(),
+        module_name: "Bands".to_string(),
+        group_id: "group-1".to_string(),
+        enabled: true,
+        alpha: 1.0,
+        alpha_input_id: None,
+        composite_operation: "normal".to_string(),
+        composite_operation_input_id: None,
+        module_type: "shader".to_string(),
+        props: vec![PropView {
+            name: "gain".to_string(),
+            prop_type: "float".to_string(),
+            value: serde_json::json!(1.0),
+            min: Some(0.0),
+            max: Some(2.0),
+            step: Some(0.001),
+            default: None,
+            input_id: Some("in-draw".to_string()),
+            components: Vec::new(),
+            tween: None,
+            options: Vec::new(),
+        }],
+    };
+    let snapshot = EngineSnapshot {
+        groups: vec![group()],
+        modules: vec![module],
+        ..Default::default()
+    };
+
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    state.link_editor = Some(LinkEditor::for_input("in-draw", "gain", &snapshot));
+
+    let draw_snapshot = snapshot.clone();
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &draw_snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("Draw").click();
+    harness.run();
+    harness.get_by_label("Start drawing").click();
+    harness.run();
+
+    let editor = harness
+        .state()
+        .link_editor
+        .as_ref()
+        .expect("the link editor stays open");
+    assert_eq!(editor.source, "draw");
+    assert_eq!(editor.kind, "state");
+    assert_eq!(editor.location, "tweens.tweens['in-draw'].value[0]");
+    assert!(editor.tween.is_some());
+    assert!(
+        harness.state().draw_editor.is_some(),
+        "the freehand canvas opens"
+    );
+
+    let actions = &harness.state_mut().take_actions();
+    assert_eq!(actions[0].action, "tweens/createTween");
+    assert_eq!(actions[0].payload["easing"], "linear");
+    assert_eq!(
+        actions[0].payload["data"][0],
+        serde_json::json!([1.0]),
+        "the flat starting line uses the prop range, not the link's 0..1 bounds"
+    );
+    assert_eq!(actions[1].action, "inputs/createInputLink");
+    assert_eq!(actions[1].payload["source"], "draw");
+    assert_eq!(actions[1].payload["min"], 0);
+    assert_eq!(actions[1].payload["max"], 1);
+}
+
+#[test]
 fn component_sub_inputs_get_link_rows_under_their_parent_prop() {
     // A color prop owns four `${parent}-${key}` sub-inputs
     // (`initialiseModuleProperties`, `modules.js:91-113`); the Inspector

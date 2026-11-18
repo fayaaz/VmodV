@@ -254,6 +254,16 @@ pub fn resolve_input_link_value_for_source(
     resolve_input_link_value(value, min, max)
 }
 
+/// Whether an Input Link source is backed by a tween descriptor.
+///
+/// `tween` is the legacy curve editor; `draw` is the native freehand editor.
+/// Both store their curve in `state.tweens` under the input id, so they share
+/// the descriptor lifecycle: a link replacing or removing one must drop it, a
+/// Scene apply must carry it, and a retargeted link must rewrite its location.
+pub fn source_uses_tween_descriptor(source: Option<&str>) -> bool {
+    matches!(source, Some("tween" | "draw"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +398,15 @@ mod tests {
             resolve_input_link_value_for_source(Some(0.0), Some(1.0), Some(1.2), Some("tween")),
             Some(1.0)
         );
+    }
+
+    #[test]
+    fn only_tween_and_draw_links_own_a_tween_descriptor() {
+        assert!(source_uses_tween_descriptor(Some("tween")));
+        assert!(source_uses_tween_descriptor(Some("draw")));
+        for source in [Some("meyda"), Some("midi"), Some("osc"), Some("bpm"), None] {
+            assert!(!source_uses_tween_descriptor(source), "{source:?}");
+        }
     }
 
     #[test]

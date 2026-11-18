@@ -16,7 +16,7 @@ use crate::model::{
     PropView, join_library_folder, normalise_library_folder, parent_library_folder,
 };
 use crate::panels::scene_grid::SceneGridState;
-use crate::widgets::{RangeControl, TweenCurve};
+use crate::widgets::{DrawCurve, RangeControl, TweenCurve};
 
 /// One engine action emitted by the UI.
 #[derive(Clone, Debug, PartialEq)]
@@ -258,6 +258,8 @@ pub struct UiState {
     pub link_editor: Option<LinkEditor>,
     /// The tween curve window currently open, if any.
     pub tween_editor: Option<TweenCurveEditor>,
+    /// The drawn-curve window currently open, if any.
+    pub draw_editor: Option<DrawCurveEditor>,
     pub show_bpm: bool,
     pub show_search: bool,
     pub command_query: String,
@@ -791,9 +793,12 @@ impl LinkEditor {
         if let Some(id) = smoothing_id {
             actions.push(UiAction::new("meyda/removeSmoothingId", Value::String(id)));
         }
-        if existing.and_then(|link| link.source.as_deref()) == Some("tween") {
+        if matches!(
+            existing.and_then(|link| link.source.as_deref()),
+            Some("tween" | "draw")
+        ) {
             // `createInputLink` replaces the record; drop the descriptor the
-            // replaced tween link owned instead of leaving an orphan.
+            // replaced tween/draw link owned instead of leaving an orphan.
             actions.push(UiAction::new(
                 "tweens/REMOVE_TWEEN",
                 serde_json::json!({ "id": self.input_id }),
@@ -1093,6 +1098,47 @@ impl TweenCurveEditor {
     }
 }
 
+/// The open freehand draw-curve editor (one window at a time).
+///
+/// The painted curve lives here for the duration of the window; the descriptor
+/// is only dispatched when a stroke or Reset completes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawCurveEditor {
+    /// The Input id (and descriptor id) the window edits.
+    pub input_id: String,
+    /// The property label shown in the window title.
+    pub title: String,
+    /// Whether the window is open; closing it clears [`UiState::draw_editor`].
+    pub open: bool,
+    /// The painted points.
+    pub curve: DrawCurve,
+    /// The previous pointer `(progress, value)` while a freehand stroke is in
+    /// flight (Shift+drag).
+    pub stroke: Option<(f64, f64)>,
+    /// The point being dragged in click-to-edit mode.
+    pub dragging: Option<usize>,
+    /// Pointer position of a press that might turn into an add click.
+    pub pending_press: Option<egui::Pos2>,
+    /// Whether the current gesture changed the curve.
+    pub changed: bool,
+}
+
+impl DrawCurveEditor {
+    /// Open an editor for `curve`.
+    pub fn new(input_id: impl Into<String>, title: impl Into<String>, curve: DrawCurve) -> Self {
+        Self {
+            input_id: input_id.into(),
+            title: title.into(),
+            open: true,
+            curve,
+            stroke: None,
+            dragging: None,
+            pending_press: None,
+            changed: false,
+        }
+    }
+}
+
 /// Mint a smoothing id client-side.
 /// The engine's `meyda/getSmoothingId` exists but the native UI cannot await
 /// an action result; the evaluator seeds an unseen id at `0` on first use
@@ -1178,6 +1224,7 @@ impl UiState {
             palette_focus: false,
             link_editor: None,
             tween_editor: None,
+            draw_editor: None,
             show_bpm: false,
             show_search: false,
             command_query: String::new(),

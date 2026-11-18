@@ -25,6 +25,7 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::inputs::source_uses_tween_descriptor;
 use crate::scene_rows::{
     get_row_group, get_row_group_index, get_row_name_index, is_row_cell_empty,
 };
@@ -649,7 +650,7 @@ pub fn copy_scene_cell(
             .cloned()
             .unwrap_or_else(|| json!({}));
 
-        if link.get("source").and_then(Value::as_str) != Some("tween") {
+        if !source_uses_tween_descriptor(link.get("source").and_then(Value::as_str)) {
             continue;
         }
 
@@ -1274,6 +1275,44 @@ mod tests {
         assert_eq!(
             result["tweens"],
             json!({"t0": {"id": "t0"}, "tw-1": {"id": "tw-1", "duration": 4}})
+        );
+    }
+
+    #[test]
+    fn copy_carries_drawn_curves_like_tween_links() {
+        let from = json!({
+            "id": "from",
+            "groups": [{"id": "g0", "name": "Effects", "modules": ["m1"]}],
+            "modules": {
+                "m1": {
+                    "id": "m1",
+                    "$props": {"amount": {"id": "i1", "type": "float"}},
+                },
+            },
+            "inputs": {
+                "inputs": {"i1": {"value": 0.5}},
+                "inputLinks": {
+                    "i1": {"source": "draw", "id": "draw-1"},
+                },
+            },
+            "tweens": [{"id": "draw-1", "data": [[0], [1]], "easing": "linear"}],
+        });
+        let to = json!({
+            "id": "to",
+            "groups": [],
+            "modules": {},
+            "inputs": {"inputs": {}, "inputLinks": {}},
+            "tweens": [],
+        });
+
+        let result = copy(&from, &to, 0, 0).unwrap();
+        assert_eq!(
+            result["tweens"],
+            json!([{"id": "draw-1", "data": [[0], [1]], "easing": "linear"}])
+        );
+        assert_eq!(
+            result["inputs"]["inputLinks"]["i1"],
+            json!({"source": "draw", "id": "draw-1"})
         );
     }
 }

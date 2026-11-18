@@ -85,7 +85,7 @@ use modv_engine::delta::{DeltaStream, Mutation};
 use modv_engine::engine_state::{
     EngineState, GALLERY_GROUP_NAME, GROUP_DISABLED, Group, InheritFrom, ModuleInstance,
 };
-use modv_engine::inputs::{Input, InputLink};
+use modv_engine::inputs::{Input, InputLink, source_uses_tween_descriptor};
 use modv_engine::preset::{
     ExpressionAssignment, PresetError, create_preset_from_state, load_preset_into_state,
 };
@@ -1981,15 +1981,15 @@ impl Store {
             group.composite_operation_input_id.clone(),
             group.pipeline_input_id.clone(),
         ];
-        // `inputs/removeInputLink` also drops a tween descriptor owned by the
-        // link (`inputs.js:182-198`). The shared `release_group` teardown below
-        // only removes the input records, so keep the tween cleanup here.
+        // `inputs/removeInputLink` also drops a tween/draw descriptor owned by
+        // the link (`inputs.js:182-198`). The shared `release_group` teardown
+        // below only removes the input records, so keep that cleanup here.
         for input_id in input_ids.into_iter().flatten() {
             if self
                 .state
                 .input_links
                 .get(&input_id)
-                .is_some_and(|link| link.source.as_deref() == Some("tween"))
+                .is_some_and(|link| source_uses_tween_descriptor(link.source.as_deref()))
             {
                 self.remove_tween(&input_id);
                 self.deltas
@@ -2991,7 +2991,7 @@ impl Store {
         // must follow the rebuilt input (legacy `restoreSceneInputs` does the
         // same rewrite when it restores a Scene's tween links).
         if retargeted
-            && source == "tween"
+            && source_uses_tween_descriptor(Some(source))
             && let Some(object) = link.get_mut("location")
             && object.is_string()
         {
@@ -3066,7 +3066,7 @@ impl Store {
         self.deltas
             .push("inputs/REMOVE_INPUT_LINK", json!({ "inputId": input_id }));
 
-        if link.as_ref().and_then(|link| link.source.as_deref()) == Some("tween") {
+        if source_uses_tween_descriptor(link.as_ref().and_then(|link| link.source.as_deref())) {
             self.remove_tween(input_id);
             self.deltas
                 .push("tweens/REMOVE_TWEEN", json!({ "id": input_id }));
@@ -6501,6 +6501,65 @@ mod tests {
     }
 
     #[test]
+    fn draw_links_resolve_from_the_same_tween_runtime() {
+        let mut store = Store::new();
+        store.state.modules.insert(
+            "m-draw".to_string(),
+            csv_module("m-draw", json!({ "enabled": true })),
+        );
+        store.state.modules.get_mut("m-draw").expect("module").props = json!({ "amount": 0.0 });
+        store
+            .dispatch(
+                "inputs/addInput",
+                json!({
+                    "id": "in-draw",
+                    "type": "action",
+                    "location": "modules/updateProp",
+                    "data": {"moduleId": "m-draw", "prop": "amount"},
+                }),
+            )
+            .expect("addInput");
+        store
+            .dispatch(
+                "inputs/createInputLink",
+                json!({
+                    "inputId": "in-draw",
+                    "type": "state",
+                    "location": "tweens.tweens['draw-1'].value[0]",
+                    "source": "draw",
+                    "min": null,
+                    "max": null,
+                }),
+            )
+            .expect("createInputLink");
+
+        let mut descriptor =
+            modv_engine::tweens::TweenDescriptor::new("draw-1", vec![vec![0.0], vec![1.0]]);
+        descriptor.use_bpm = false;
+        descriptor.duration = 100.0;
+        descriptor.looping = false;
+        descriptor.direction = "normal".to_string();
+        descriptor.easing = "linear".to_string();
+        store.state.tweens = json!([descriptor.to_json()]);
+        store.reload_tweens();
+
+        store.update_input_links(&AudioFrame::default(), Duration::ZERO);
+        assert_eq!(
+            store.state().modules["m-draw"].props["amount"],
+            json!(0.0),
+            "the draw link starts on frame 0"
+        );
+        store.update_input_links(&AudioFrame::default(), Duration::ZERO);
+        let advanced = store.state().modules["m-draw"].props["amount"]
+            .as_f64()
+            .expect("number");
+        assert!(
+            (advanced - 1.0 / 3.0).abs() < 1e-5,
+            "the draw link advances like a tween (got {advanced})"
+        );
+    }
+
+    #[test]
     fn set_bpm_rejects_non_positive_tempos_and_leaves_the_tweens_alone() {
         let mut store = Store::new();
         store.state.tweens = json!([modv_engine::scene_link_defaults::default_link_tween(
@@ -8294,6 +8353,52 @@ mod tests {
                 "inputs/REMOVE_INPUT_LINK",
                 "tweens/REMOVE_TWEEN"
             ]
+        );
+    }
+
+    #[test]
+    fn removing_a_draw_link_drops_the_curve_descriptor() {
+        let mut store = Store::new();
+        store
+            .dispatch(
+                "inputs/addInput",
+                json!({"id": "input-draw", "type": "action", "location": "modules/updateProp"}),
+            )
+            .expect("addInput");
+        store
+            .dispatch(
+                "inputs/createInputLink",
+                json!({
+                    "inputId": "input-draw",
+                    "type": "state",
+                    "location": "tweens.tweens['input-draw'].value[0]",
+                    "source": "draw",
+                }),
+            )
+            .expect("createInputLink");
+        store.state.tweens = json!([{
+            "id": "input-draw",
+            "data": [[0.0], [0.5], [1.0]],
+            "keyframeTimes": [0.0, 0.5, 1.0],
+            "easing": "linear",
+        }]);
+        store.drain_deltas();
+
+        store
+            .dispatch("inputs/removeInputLink", json!({"inputId": "input-draw"}))
+            .expect("removeInputLink");
+
+        assert!(!store.state().input_links.contains_key("input-draw"));
+        assert_eq!(
+            store.state().tweens,
+            json!([]),
+            "the drawn descriptor is owned by its link"
+        );
+        let deltas = store.drain_deltas();
+        assert!(
+            deltas
+                .iter()
+                .any(|delta| delta.r#type == "tweens/REMOVE_TWEEN")
         );
     }
 
