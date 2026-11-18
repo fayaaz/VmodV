@@ -15,6 +15,7 @@ use crate::layout::{
     LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
     WINDOW_TEMPO,
 };
+use crate::library_drag::MediaLibraryDrag;
 use crate::model::{
     COMPOSITE_OPERATIONS, EngineSnapshot, LibraryKind, MediaAction, MediaAssetView, ModuleMetaView,
     PropView, ScreenCaptureView, asset_meta_label, format_duration, gallery_preview_key,
@@ -22,13 +23,14 @@ use crate::model::{
 };
 use crate::panels::scene_grid::draw_scene_grid;
 use crate::state::{
-    DEFAULT_OSC_HOST, GalleryCategory, SidePanelTab, UiAction, UiCommand, UiState,
-    filter_gallery_modules,
+    DEFAULT_OSC_HOST, GalleryCategory, LibraryAssignmentTarget, SidePanelTab, UiAction, UiCommand,
+    UiState, filter_gallery_modules, texture_prop_action,
 };
 use crate::tab_drag::{TabDrag, TabDropTarget, floating_bounds_for_drop};
 use crate::theme;
 use crate::widgets::input_link::{link_editor_window, link_row};
 use crate::widgets::range_control::chip;
+use crate::widgets::texture_control::TextureControlChange;
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 
 /// The Groups panel's minimum width, matching `ui_layout::MIN_GROUPS_WIDTH`.
@@ -1508,7 +1510,7 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
         );
     }
     for prop in &module.props {
-        draw_prop(ui, &module.id, prop, snapshot, state);
+        draw_prop(ui, &module.id, &module.module_name, prop, snapshot, state);
         if let Some(input_id) = &prop.input_id {
             link_row(ui, &prop.name, input_id, snapshot, state);
         }
@@ -2814,6 +2816,27 @@ fn library_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         );
     });
 
+    if let Some(target) = state.library_target.clone() {
+        egui::Frame::NONE
+            .fill(theme::ACCENT_DIM)
+            .inner_margin(Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(target.describe()).size(12.0));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Cancel").clicked() {
+                            state.clear_library_target();
+                        }
+                    });
+                });
+                ui.label(
+                    egui::RichText::new("Click a matching asset to assign it.")
+                        .size(10.5)
+                        .color(theme::MUTED),
+                );
+            });
+    }
+
     let subfolders = library.subfolders(state.library_kind, &state.library_folder);
     if !subfolders.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -2898,7 +2921,15 @@ fn library_tile(ui: &mut egui::Ui, asset: &MediaAssetView, state: &mut UiState) 
     let size = vec2(132.0, 112.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &asset.name));
+    if response.drag_started() {
+        response.dnd_set_drag_payload(MediaLibraryDrag::new(asset));
+    }
+
     let selected = state.selected_library_asset.as_deref() == Some(asset.path.as_str());
+    let armed = state
+        .library_target
+        .as_ref()
+        .is_some_and(|target| target.kind == asset.kind);
     let dragging = response.dragged();
     let fill = if selected || dragging {
         theme::ACCENT_DIM
@@ -2963,7 +2994,7 @@ fn library_tile(ui: &mut egui::Ui, asset: &MediaAssetView, state: &mut UiState) 
         CornerRadius::same(0),
         Stroke::new(
             1.0,
-            if selected || dragging {
+            if armed || selected || dragging {
                 theme::ACCENT
             } else {
                 theme::BORDER
@@ -2974,6 +3005,9 @@ fn library_tile(ui: &mut egui::Ui, asset: &MediaAssetView, state: &mut UiState) 
 
     if response.clicked() {
         state.selected_library_asset = Some(asset.path.clone());
+        if armed {
+            state.assign_library_asset(asset);
+        }
     }
 }
 
@@ -3590,6 +3624,7 @@ fn inspector_empty(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiS
 fn draw_prop(
     ui: &mut egui::Ui,
     module_id: &str,
+    module_name: &str,
     prop: &PropView,
     snapshot: &EngineSnapshot,
     state: &mut UiState,
@@ -3743,15 +3778,21 @@ fn draw_prop(
         }
         "texture" => {
             let mut control = TextureControl::new(&prop.name, &prop.value);
-            if let Some(value) = control.draw(ui, &snapshot.texture_sources) {
-                state.push_action(
-                    "modules/updateProp",
-                    serde_json::json!({
-                        "moduleId": module_id,
-                        "prop": prop.name,
-                        "data": { "value": value },
-                    }),
-                );
+            match control.draw(ui, &snapshot.texture_sources, &snapshot.library) {
+                Some(TextureControlChange::Value(value)) => {
+                    state
+                        .actions
+                        .push(texture_prop_action(module_id, &prop.name, value));
+                }
+                Some(TextureControlChange::PickFromLibrary { kind }) => {
+                    state.arm_library_target(LibraryAssignmentTarget {
+                        module_id: module_id.to_string(),
+                        module_name: module_name.to_string(),
+                        prop_name: prop.name.clone(),
+                        kind,
+                    });
+                }
+                None => {}
             }
         }
         "font" => {

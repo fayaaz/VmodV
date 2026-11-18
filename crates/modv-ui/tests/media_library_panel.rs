@@ -2,14 +2,20 @@
 //!
 //! The Library browses the active profile's image/video/palette folders
 //! recursively. These tests drive the real shell: the tab strip, folder
-//! switching/back, the grid, the Rescan command and the empty/error states.
-//! Asset assignment is covered by the library/texture-control tests.
+//! switching/back, the grid, the Rescan command, the click-to-assign flow and
+//! a Library tile dropped onto a texture prop. The prop payload asserted here
+//! is the same one the manual path editor writes.
 
+use accesskit::Role;
+use egui::{Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::model::{LibraryKind, MediaAssetView, MediaLibraryView};
 use modv_ui::state::SidePanelTab;
-use modv_ui::{EngineSnapshot, UiCommand, UiState};
+use modv_ui::{
+    EngineSnapshot, GroupView, ModuleView, PropView, TabPlacement, USE_FROM_LIBRARY_LABEL,
+    UiCommand, UiState,
+};
 
 fn asset(
     name: &str,
@@ -82,6 +88,51 @@ fn library() -> MediaLibraryView {
         ],
         truncated: false,
         error: None,
+    }
+}
+
+fn module_snapshot(prop_type: &str) -> EngineSnapshot {
+    EngineSnapshot {
+        groups: vec![GroupView {
+            id: "group-1".to_string(),
+            name: "Effects".to_string(),
+            enabled: true,
+            hidden: false,
+            alpha: 1.0,
+            alpha_input_id: None,
+            composite_operation: "normal".to_string(),
+            composite_operation_input_id: None,
+            inherit: true,
+            clearing: true,
+            pipeline: false,
+            module_ids: vec!["module-1".to_string()],
+        }],
+        modules: vec![ModuleView {
+            id: "module-1".to_string(),
+            module_name: "Image Layer".to_string(),
+            group_id: "group-1".to_string(),
+            enabled: true,
+            alpha: 1.0,
+            alpha_input_id: None,
+            composite_operation: "normal".to_string(),
+            composite_operation_input_id: None,
+            module_type: "isf".to_string(),
+            props: vec![PropView {
+                name: "photo".to_string(),
+                prop_type: "texture".to_string(),
+                value: serde_json::json!({ "type": prop_type, "options": { "path": "" } }),
+                min: None,
+                max: None,
+                step: None,
+                default: None,
+                input_id: None,
+                components: Vec::new(),
+                tween: None,
+                options: Vec::new(),
+            }],
+        }],
+        library: library(),
+        ..Default::default()
     }
 }
 
@@ -226,6 +277,213 @@ fn rescan_queues_the_library_refresh_command() {
     assert_eq!(
         harness.state_mut().take_commands(),
         vec![UiCommand::RescanLibrary]
+    );
+}
+
+#[test]
+fn use_from_library_arms_the_prop_and_a_click_assigns_it() {
+    let mut state = library_state();
+    state.side_panel_tab = SidePanelTab::Inspector;
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    let mut harness = build(module_snapshot("image"), state);
+    harness.run();
+
+    harness.get_by_label(USE_FROM_LIBRARY_LABEL).click();
+    harness.run();
+
+    assert_eq!(
+        harness.state().side_panel_tab,
+        SidePanelTab::Library,
+        "the Library opens on the matching folder"
+    );
+    assert_eq!(harness.state().library_kind, LibraryKind::Image);
+    harness.get_by_label("Pick images for Image Layer / photo");
+
+    harness.get_by_label("still.png").click();
+    harness.run();
+
+    assert_eq!(
+        harness.state_mut().take_actions(),
+        vec![modv_ui::texture_prop_action(
+            "module-1",
+            "photo",
+            serde_json::json!({
+                "type": "image",
+                "options": { "path": "live/image/still.png" },
+            })
+        )],
+        "the exact prop payload the manual path editor writes"
+    );
+    assert!(harness.state().library_target.is_none());
+    assert!(
+        harness
+            .query_by_label("Pick images for Image Layer / photo")
+            .is_none(),
+        "the banner clears after the pick"
+    );
+}
+
+#[test]
+fn typing_a_path_by_hand_still_writes_the_prop() {
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    let mut harness = build(module_snapshot("image"), state);
+    harness.run();
+
+    // The Inspector's image path field is the only text input on the right.
+    // Queue focus + text while the node borrow is alive, then run once.
+    {
+        let field = harness
+            .get_all_by_role(Role::TextInput)
+            .find(|node| node.rect().left() > 1000.0)
+            .expect("image path field");
+        field.focus();
+        field.type_text("live/image/manual.png");
+    }
+    harness.run();
+
+    assert_eq!(
+        harness.state_mut().take_actions(),
+        vec![modv_ui::texture_prop_action(
+            "module-1",
+            "photo",
+            serde_json::json!({
+                "type": "image",
+                "options": { "path": "live/image/manual.png" },
+            })
+        )],
+        "the manual path editor still writes the same prop value"
+    );
+}
+
+#[test]
+fn cancelling_a_pending_pick_keeps_the_prop_untouched() {
+    let mut state = library_state();
+    state.side_panel_tab = SidePanelTab::Inspector;
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    let mut harness = build(module_snapshot("video"), state);
+    harness.run();
+
+    harness.get_by_label(USE_FROM_LIBRARY_LABEL).click();
+    harness.run();
+    assert_eq!(harness.state().library_kind, LibraryKind::Video);
+    harness.get_by_label("Pick videos for Image Layer / photo");
+
+    harness.get_by_label("Cancel").click();
+    harness.run();
+
+    assert!(harness.state().library_target.is_none());
+    harness.get_by_label("clip.mp4").click();
+    harness.run();
+    assert!(
+        harness.state().actions.is_empty(),
+        "a click without an armed prop only selects: {:?}",
+        harness.state().actions
+    );
+    assert_eq!(
+        harness.state().selected_library_asset.as_deref(),
+        Some("live/video/clip.mp4")
+    );
+}
+
+/// Drag from `from` to `to`, releasing with a raw pointer event (the pattern
+/// `gallery_drag_drop.rs` uses).
+fn drag(harness: &mut Harness<'static, UiState>, from: egui::Pos2, to: egui::Pos2) {
+    harness.hover_at(from);
+    harness.run();
+    harness.drag_at(from);
+    harness.run();
+    harness.hover_at(to);
+    harness.run();
+    harness.event(egui::Event::PointerButton {
+        pos: to,
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    harness.run();
+}
+
+#[test]
+fn a_library_tile_carries_the_typed_asset_payload_while_dragging() {
+    let mut harness = build(
+        EngineSnapshot {
+            library: library(),
+            ..Default::default()
+        },
+        library_state(),
+    );
+    harness.run();
+
+    let tile = harness.get_by_label("still.png").rect().center();
+    harness.hover_at(tile);
+    harness.run();
+    harness.drag_at(tile);
+    harness.run();
+    harness.hover_at(tile + egui::vec2(0.0, 20.0));
+    harness.run();
+
+    let payload = egui::DragAndDrop::payload::<modv_ui::MediaLibraryDrag>(&harness.ctx)
+        .expect("the tile is a drag source");
+    assert_eq!(payload.path, "live/image/still.png");
+    assert_eq!(payload.kind, LibraryKind::Image);
+    assert_eq!(payload.name, "still.png");
+}
+
+#[test]
+fn dragging_an_asset_onto_a_texture_prop_writes_the_asset_payload() {
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    // Dock the Library so it is visible next to the Inspector.
+    state
+        .layout
+        .tabs
+        .set_placement(SidePanelTab::Library, TabPlacement::Docked);
+    let mut harness = build(module_snapshot("image"), state);
+    harness.run();
+
+    let tile = harness.get_by_label("still.png").rect().center();
+    let control = harness.get_by_label("photo").rect().center();
+    drag(&mut harness, tile, control);
+
+    assert_eq!(
+        harness.state_mut().take_actions(),
+        vec![modv_ui::texture_prop_action(
+            "module-1",
+            "photo",
+            serde_json::json!({
+                "type": "image",
+                "options": { "path": "live/image/still.png" },
+            })
+        )]
+    );
+}
+
+#[test]
+fn a_video_asset_cannot_be_dropped_on_an_image_prop() {
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    state
+        .layout
+        .tabs
+        .set_placement(SidePanelTab::Library, TabPlacement::Docked);
+    state.library_kind = LibraryKind::Video;
+    let mut harness = build(module_snapshot("image"), state);
+    harness.run();
+
+    let tile = harness.get_by_label("clip.mp4").rect().center();
+    let control = harness.get_by_label("photo").rect().center();
+    drag(&mut harness, tile, control);
+
+    assert!(
+        harness.state().actions.is_empty(),
+        "an image prop keeps its kind: {:?}",
+        harness.state().actions
     );
 }
 
