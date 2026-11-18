@@ -592,6 +592,7 @@ impl NativeApp {
             }
         }
         apply_startup_scene(&mut store, cli.apply_scene.as_deref());
+        start_cli_performance(&mut store, cli.start_performance);
 
         // Audio capture selection: explicit `--audio-source`/`--audio-device`
         // (or their MODV_* environment fallbacks) wins, then the choice saved
@@ -3995,6 +3996,19 @@ fn apply_startup_scene(store: &mut Store, query: Option<&str>) {
     }
 }
 
+/// Start performance mode when the CLI asked for it (`--start-performance`).
+fn start_cli_performance(store: &mut Store, requested: bool) {
+    if !requested {
+        return;
+    }
+    match store.dispatch("scenes/startPerformance", serde_json::json!({})) {
+        Ok(value) => {
+            eprintln!("ui: INFO performance mode started from the command line: {value}")
+        }
+        Err(error) => eprintln!("ui: WARN could not start performance mode: {error}"),
+    }
+}
+
 /// Build the native shell's store: restore the shared engine snapshot, then
 /// hydrate/seed the Scene list beside it.
 ///
@@ -5513,5 +5527,14 @@ module.exports = {
             "the default userData state path must restore the live groups"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_start_performance_flag_initialises_the_runtime() {
+        let mut store = Store::new();
+        start_cli_performance(&mut store, false);
+        assert!(!store.performance_enabled());
+        start_cli_performance(&mut store, true);
+        assert!(store.performance_enabled());
     }
 }

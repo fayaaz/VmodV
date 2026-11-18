@@ -208,6 +208,9 @@ pub struct Cli {
     pub list_audio_devices: bool,
     /// Native shell only: apply this Scene name/id after seeding.
     pub apply_scene: Option<String>,
+    /// Native shell only: start performance mode after the startup Scene and
+    /// tick/seed, without needing the UI.
+    pub start_performance: bool,
     /// Native shell only: load a preset/Scene/playlist document at startup and
     /// use a plain preset as the default "Save preset" target.
     pub preset: Option<PathBuf>,
@@ -362,6 +365,12 @@ pub fn parse() -> Cli {
                 .help("Native shell: apply this Scene name/id after seeding"),
         )
         .arg(
+            Arg::new("start-performance")
+                .long("start-performance")
+                .action(clap::ArgAction::SetTrue)
+                .help("Native shell: start performance mode after startup"),
+        )
+        .arg(
             Arg::new("preset")
                 .long("preset")
                 .value_name("PATH")
@@ -477,6 +486,7 @@ pub fn parse() -> Cli {
         audio_device,
         list_audio_devices: matches.get_flag("list-audio-devices"),
         apply_scene: matches.get_one::<String>("apply-scene").cloned(),
+        start_performance: matches.get_flag("start-performance"),
         preset: matches.get_one::<String>("preset").map(PathBuf::from),
         scene: matches.get_one::<String>("scene").map(PathBuf::from),
         playlist: matches.get_one::<String>("playlist").map(PathBuf::from),
