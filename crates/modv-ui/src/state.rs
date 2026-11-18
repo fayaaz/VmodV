@@ -40,7 +40,7 @@ impl UiAction {
 }
 
 /// An application command that is not an engine action.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum UiCommand {
     Quit,
     OpenOutputWindow,
@@ -73,6 +73,12 @@ pub enum UiCommand {
     },
     /// Re-enumerate cpal input devices (hot-plug).
     RefreshAudioDevices,
+    /// Turn the opt-in JavaScript plugin host on/off. Enabling without recorded
+    /// consent is rejected by the runtime; the panel asks first.
+    SetPluginsEnabled(bool),
+    /// Record or withdraw the plugin sandbox consent. Withdrawing consent also
+    /// disables the host (the runtime enforces that).
+    SetPluginConsent(bool),
 }
 
 /// P0 framework-spike evidence and the go/no-go state.
@@ -200,6 +206,8 @@ pub struct UiState {
     pub show_profile_dialog: bool,
     pub profile_name: String,
     pub profile_error: Option<String>,
+    /// The JavaScript-plugin consent modal, shown by the first enable attempt.
+    pub show_plugin_consent: bool,
 }
 
 /// Which panel the right side shows.
@@ -874,6 +882,7 @@ impl UiState {
             show_profile_dialog: false,
             profile_name: String::new(),
             profile_error: None,
+            show_plugin_consent: false,
         }
     }
 
@@ -887,6 +896,27 @@ impl UiState {
         self.show_profile_dialog = true;
         self.profile_name.clear();
         self.profile_error = None;
+    }
+
+    /// Show the JavaScript-plugin consent dialog (the first enable attempt).
+    pub fn open_plugin_consent(&mut self) {
+        self.show_plugin_consent = true;
+    }
+
+    /// Accept the consent notice **and** turn the host on.
+    ///
+    /// The two commands are queued in order (`SetPluginConsent(true)` first),
+    /// so the runtime never sees an enable without recorded consent even if
+    /// the shell applies them one at a time.
+    pub fn confirm_plugin_consent(&mut self) {
+        self.commands.push(UiCommand::SetPluginConsent(true));
+        self.commands.push(UiCommand::SetPluginsEnabled(true));
+        self.show_plugin_consent = false;
+    }
+
+    /// Dismiss the consent dialog without changing the recorded consent.
+    pub fn cancel_plugin_consent(&mut self) {
+        self.show_plugin_consent = false;
     }
 
     /// Queue the profile named by the modal, or show why the name is unusable.

@@ -63,6 +63,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     shortcuts_window(ui.ctx(), state);
     file_dialog_window(ui.ctx(), state);
     profile_dialog_window(ui.ctx(), state);
+    plugin_consent_window(ui.ctx(), state);
     link_editor_window(ui, snapshot, state);
     bpm_window(ui.ctx(), snapshot, state);
     command_palette(ui.ctx(), snapshot, state);
@@ -87,7 +88,8 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
     });
     // A modal picker owns the keyboard: Ctrl+S while naming a file must not
     // save a preset, and Ctrl+O must not stack a second picker.
-    let modal = state.file_dialog.is_some() || state.show_profile_dialog;
+    let modal =
+        state.file_dialog.is_some() || state.show_profile_dialog || state.show_plugin_consent;
     if save && !modal {
         state.queue(UiCommand::SavePreset);
     }
@@ -123,6 +125,7 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.file_dialog = None;
         state.show_profile_dialog = false;
         state.profile_error = None;
+        state.show_plugin_consent = false;
         state.scene_grid.renaming = None;
         state.scene_grid.timing_edit = None;
         state.scene_grid.row_names_edit = None;
@@ -1400,7 +1403,7 @@ fn tab_content(
         SidePanelTab::Media => media_panel(ui, snapshot, state),
         SidePanelTab::Audio => audio_panel(ui, snapshot, state),
         SidePanelTab::Info => info_panel(ui, snapshot),
-        SidePanelTab::Plugins => plugins_panel(ui),
+        SidePanelTab::Plugins => plugins_panel(ui, snapshot, state),
         SidePanelTab::Midi => midi_panel(ui, snapshot, state),
         SidePanelTab::Ndi => ndi_panel(ui, snapshot, state),
         SidePanelTab::Osc => osc_panel(ui, snapshot, state),
@@ -2307,37 +2310,162 @@ fn osc_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
     }
 }
 
-fn plugins_panel(ui: &mut egui::Ui) {
+fn plugins_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let view = &snapshot.plugins;
+
     ui.label(
         egui::RichText::new("JavaScript plugins")
             .strong()
             .size(13.0),
     );
     ui.label(
-        egui::RichText::new(
-            "D5 keeps plugins, but the native shell has not landed the sandboxed Boa host yet. The switch is deliberately disabled until the consent flow and restricted host API exist; the legacy Electron build remains available for grab-canvas.",
-        )
-        .size(12.0)
-        .color(theme::MUTED),
+        egui::RichText::new("Advanced: JavaScript plugins")
+            .strong()
+            .size(12.0)
+            .color(theme::WARNING),
     );
-    ui.add_enabled(
-        false,
-        egui::Checkbox::new(&mut false, "Enable JavaScript plugins (advanced)"),
-    );
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new("Bundled plugins").strong().size(12.0));
-    ui.add_enabled(
-        false,
-        egui::Checkbox::new(&mut false, "grab-canvas  (not ported)"),
-    );
-    ui.separator();
     ui.label(
         egui::RichText::new(
-            "Expressions already run in-engine through Boa; this panel is only about the opt-in plugin host.",
+            "Plugins are third-party JavaScript. In the native shell they run in a \
+             restricted Boa sandbox, not a security boundary.",
+        )
+        .size(11.5)
+        .color(theme::MUTED),
+    );
+    ui.label(
+        egui::RichText::new(
+            "The sandbox exposes no DOM, and no filesystem or network globals: plugins \
+             see an allow-listed read-only state snapshot and a small RGBA frame \
+             capture. modV.ws is not wired yet. Only enable scripts you trust.",
         )
         .size(11.0)
         .color(theme::MUTED),
     );
+
+    let mut enabled = view.enabled;
+    if ui
+        .checkbox(&mut enabled, "Enable JavaScript plugins (advanced)")
+        .on_hover_text(
+            "Run the scripts listed below. The first enable asks for consent; \
+             disabling stops execution immediately.",
+        )
+        .changed()
+    {
+        if enabled && !view.consented {
+            // Never queue the enable here: confirmation in the dialog is what
+            // records consent and turns the host on.
+            state.open_plugin_consent();
+        } else {
+            state.queue(UiCommand::SetPluginsEnabled(enabled));
+        }
+    }
+
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(view.summary())
+                .size(11.0)
+                .color(if view.is_running() {
+                    theme::ACCENT
+                } else {
+                    theme::MUTED
+                }),
+        );
+        if view.consented {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .small_button("Revoke consent")
+                    .on_hover_text(
+                        "Withdraw the plugin consent and stop every running script. \
+                         The enable switch turns off too.",
+                    )
+                    .clicked()
+                {
+                    state.queue(UiCommand::SetPluginConsent(false));
+                }
+            });
+        }
+    });
+
+    if let Some(reason) = view.gate_reason() {
+        ui.label(egui::RichText::new(reason).size(11.5).color(theme::MUTED));
+    }
+
+    ui.separator();
+    ui.label(
+        egui::RichText::new(format!(
+            "{} plugin script(s) discovered.",
+            view.plugins.len()
+        ))
+        .size(12.0)
+        .color(theme::MUTED),
+    );
+}
+
+/// The JavaScript-plugin consent dialog.
+///
+/// The first enable only opens this window; the checkbox itself never queues a
+/// command. Confirming records consent **and** enables the host, cancelling
+/// changes nothing.
+fn plugin_consent_window(ctx: &egui::Context, state: &mut UiState) {
+    if !state.show_plugin_consent {
+        return;
+    }
+    let mut open = true;
+    let mut confirm = false;
+    let mut cancel = false;
+    egui::Window::new("Enable JavaScript plugins")
+        .id(egui::Id::unique("modv-plugin-consent"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(460.0)
+        .show(ctx, |ui| {
+            ui.label(
+                egui::RichText::new("Advanced")
+                    .strong()
+                    .size(12.0)
+                    .color(theme::WARNING),
+            );
+            ui.label("JavaScript plugins run arbitrary JavaScript inside modV.");
+            ui.label(
+                "They run in a restricted Boa sandbox with no DOM, no filesystem or \
+                 network globals, and no bundled grab-canvas.",
+            );
+            ui.label(
+                "Plugins can read an allow-listed, read-only snapshot of modV state \
+                 (tempo, audio bands, group and module names) and request a small RGBA \
+                 capture of the output. modV.ws is not wired in the native shell yet.",
+            );
+            ui.label(
+                "The sandbox is a containment layer, not a security boundary: a bug in \
+                 the host or in a plugin can still affect the running app. Only enable \
+                 scripts you trust.",
+            );
+            ui.label(
+                egui::RichText::new(
+                    "You can disable plugins or revoke this consent at any time in the \
+                     Plugins panel.",
+                )
+                .size(11.0)
+                .color(theme::MUTED),
+            );
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Enable plugins").clicked() {
+                    confirm = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+
+    if confirm {
+        state.confirm_plugin_consent();
+    }
+    if cancel || !open {
+        state.cancel_plugin_consent();
+    }
 }
 
 fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {

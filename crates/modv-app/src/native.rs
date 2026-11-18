@@ -33,9 +33,10 @@ use modv_ui::{
     AudioDeviceView, AudioSelectionView, AudioView, CameraModeView, CameraView, EngineHealth,
     EngineSnapshot, FileDialogAction, GroupView, InputLinkView, MediaAction, MediaSnapshot,
     MediaSourceView, MidiDeviceView, MidiSnapshot, ModuleMetaView, ModuleView, PerformanceView,
-    PreviewRequest, PreviewTexture, ProjectView, PropComponentView, PropView, RowMonitorView,
-    SceneCellView, SceneView, SidePanelTab, TextureSourceView, TweenView, UiAction, UiCommand,
-    UiState, gallery_preview_key, scene_preview_key,
+    PluginInfoView, PluginPropView, PluginView, PreviewRequest, PreviewTexture, ProjectView,
+    PropComponentView, PropView, RowMonitorView, SceneCellView, SceneView, SidePanelTab,
+    TextureSourceView, TweenView, UiAction, UiCommand, UiState, gallery_preview_key,
+    scene_preview_key,
 };
 use serde_json::Value;
 use winit::application::ApplicationHandler;
@@ -257,6 +258,52 @@ fn osc_snapshot(store: &Store, servers: &[OscServerView]) -> OscSnapshot {
     }
 }
 
+/// Build the Plugins panel read model from the authoritative runtime.
+///
+/// Pure and cheap: the descriptor props are already serialised values, so this
+/// parses each schema into a [`PluginPropView`] without evaluating JavaScript.
+/// The shell calls it at 1 Hz while the tab is visible and after every plugin
+/// command, never per frame.
+fn plugin_snapshot(runtime: &PluginRuntime) -> PluginView {
+    let plugins = runtime
+        .plugins()
+        .iter()
+        .map(|entry| PluginInfoView {
+            path: entry.path.clone(),
+            name: entry.name.clone(),
+            author: entry.author.clone(),
+            version: entry.version.clone(),
+            enabled: entry.enabled,
+            active: entry.active,
+            loaded: entry.loaded,
+            failed: entry.failed,
+            error: entry.error.clone(),
+            source_bytes: entry.source_bytes,
+            capture: entry.capture.map(|capture| [capture.width, capture.height]),
+            props: entry
+                .props
+                .as_object()
+                .map(|props| {
+                    props
+                        .iter()
+                        .filter_map(|(name, schema)| PluginPropView::from_schema(name, schema))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect();
+    PluginView {
+        enabled: runtime.settings().enabled,
+        consented: runtime.consented(),
+        loaded_count: runtime.loaded_count(),
+        plugins,
+        logs: runtime.logs().to_vec(),
+        capture: runtime
+            .capture_config()
+            .map(|capture| [capture.width, capture.height]),
+    }
+}
+
 /// The native application state.
 pub struct NativeApp {
     cli: Cli,
@@ -332,6 +379,15 @@ pub struct NativeApp {
     midi_client: MidiClient,
     /// The opt-in sandboxed Boa plugin runtime (settings, discovery, hooks).
     plugin_runtime: PluginRuntime,
+    /// The Plugins panel view, rebuilt at 1 Hz while the tab is visible (and
+    /// immediately after a plugin command).
+    plugin_view: PluginView,
+    last_plugin_poll: Instant,
+    /// Whether the Plugins tab was visible on the previous frame (the panel
+    /// clears its retained log window on reopen).
+    plugins_visible: bool,
+    /// Whether the Plugins tab has been on screen at all.
+    plugins_seen: bool,
     /// Set after the first failed plugin capture read-back so a broken GPU
     /// path logs once instead of every capture interval.
     plugin_capture_error_logged: bool,
@@ -596,6 +652,7 @@ impl NativeApp {
                 "ui: INFO {discovered_plugins} JavaScript plugin(s) discovered; plugins are disabled"
             );
         }
+        let plugin_view = plugin_snapshot(&plugin_runtime);
 
         let egui_ctx = egui::Context::default();
         modv_ui::theme::apply(&egui_ctx);
@@ -660,6 +717,10 @@ impl NativeApp {
             audio_settings_path,
             midi_client,
             plugin_runtime,
+            plugin_view,
+            last_plugin_poll: start,
+            plugins_visible: false,
+            plugins_seen: false,
             plugin_capture_error_logged: false,
             ndi_error_logged: false,
             ndi_view,
@@ -1595,7 +1656,7 @@ impl NativeApp {
         self.last_osc_poll = Instant::now();
     }
 
-    /// Refresh the NDI/OSC panel views at 1 Hz, only while their tab is
+    /// Refresh the NDI/OSC/Plugins panel views at 1 Hz, only while their tab is
     /// visible (active in the strip, or docked/floating).
     fn poll_panel_views(&mut self, now: Instant) {
         if self.ui_state.is_tab_visible(SidePanelTab::Ndi)
@@ -1608,6 +1669,30 @@ impl NativeApp {
         {
             self.refresh_osc_view();
         }
+
+        // The plugin runtime mutates outside the UI (hooks run and prop values
+        // move every frame), so the panel reads a cached view. Reopening the
+        // tab starts a fresh log window; a command refreshes immediately in
+        // `drain_ui_commands`, so the 1 Hz poll only covers background churn.
+        let visible = self.ui_state.is_tab_visible(SidePanelTab::Plugins);
+        if visible {
+            if !self.plugins_visible && self.plugins_seen {
+                self.plugin_runtime.clear_logs();
+            }
+            self.plugins_seen = true;
+            if !self.plugins_visible
+                || now.saturating_duration_since(self.last_plugin_poll) >= PANEL_POLL_INTERVAL
+            {
+                self.refresh_plugin_view();
+            }
+        }
+        self.plugins_visible = visible;
+    }
+
+    /// Rebuild the Plugins panel view and restart its 1 Hz poll window.
+    fn refresh_plugin_view(&mut self) {
+        self.plugin_view = plugin_snapshot(&self.plugin_runtime);
+        self.last_plugin_poll = Instant::now();
     }
 
     fn add_module_to_group(&mut self, action: &UiAction) {
@@ -1683,6 +1768,18 @@ impl NativeApp {
                     self.set_audio_source(&source, device.as_deref());
                 }
                 UiCommand::RefreshAudioDevices => self.refresh_audio_devices(),
+                UiCommand::SetPluginsEnabled(enabled) => {
+                    if let Err(error) = self.plugin_runtime.set_enabled(enabled) {
+                        self.record_error(format!("plugin master switch failed: {error}"));
+                    }
+                    self.refresh_plugin_view();
+                }
+                UiCommand::SetPluginConsent(consented) => {
+                    if let Err(error) = self.plugin_runtime.set_consented(consented) {
+                        self.record_error(format!("plugin consent failed: {error}"));
+                    }
+                    self.refresh_plugin_view();
+                }
             }
         }
     }
@@ -2547,7 +2644,7 @@ impl NativeApp {
             expressions: expression_views(state),
             media,
             midi,
-            plugins: Default::default(),
+            plugins: self.plugin_view.clone(),
             ndi: self.ndi_view.clone(),
             osc: self.osc_view.clone(),
             audio_devices: self.audio_devices.clone(),
