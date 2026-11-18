@@ -1835,13 +1835,56 @@ fn midi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState)
         if let Some(error) = &midi.error {
             ui.label(egui::RichText::new(error).size(12.0).color(theme::MUTED));
         }
-        return;
+    } else {
+        ui.label(
+            egui::RichText::new(format!("{} MIDI input(s)", midi.devices.len()))
+                .size(12.0)
+                .color(theme::MUTED),
+        );
     }
-    ui.label(
-        egui::RichText::new(format!("{} MIDI input(s)", midi.devices.len()))
+
+    // One-shot Learn status. Learn itself is only offered by the focused
+    // input's editor: a global Learn could not name the input it binds.
+    if let Some(arm) = &midi.learning {
+        ui.separator();
+        ui.label(
+            egui::RichText::new("Waiting for MIDI…")
+                .strong()
+                .color(theme::ACCENT),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "The next MIDI message creates a link for input {}.",
+                arm.input_id
+            ))
             .size(12.0)
             .color(theme::MUTED),
-    );
+        );
+        if ui
+            .button("Cancel")
+            .on_hover_text("Stop waiting; no link is created")
+            .clicked()
+        {
+            state.push_action("midi/cancelLearn", serde_json::Value::Null);
+            if let Some(editor) = state.link_editor.as_mut() {
+                editor.cancel_midi_learn();
+            }
+        }
+    }
+    if let Some(result) = &midi.last_learn {
+        ui.label(
+            egui::RichText::new(format!(
+                "Last learned: {} channel {} type {}",
+                result.device, result.channel, result.type_
+            ))
+            .size(12.0)
+            .color(theme::MUTED),
+        );
+    }
+
+    if !midi.available {
+        return;
+    }
     ui.separator();
     if midi.devices.is_empty() {
         ui.label(

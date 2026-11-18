@@ -399,6 +399,18 @@ pub const MAX_SMOOTHING: f64 = 1.0;
 /// `SMOOTHING_STEP` from `application/worker/audio-features.js`.
 pub const SMOOTHING_STEP: f64 = 0.001;
 
+/// The one-shot MIDI Learn arm a [`LinkEditor`] is waiting on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MidiLearnDraft {
+    /// The `last_learn.id` observed when Learn was clicked. Only a newer
+    /// result can answer this arm, so a result left in the snapshot can never
+    /// create a second link.
+    pub floor: Option<u64>,
+    /// The engine arm id, once the snapshot reported it. It lets the editor
+    /// notice that another input replaced its arm.
+    pub arm: Option<u64>,
+}
+
 /// The focused-input link editor's draft values.
 ///
 /// Legacy `InputConfig.vue` is a focused-input panel with Min/Max at the top
@@ -436,6 +448,8 @@ pub struct LinkEditor {
     /// Set after Remove so a one-frame-old snapshot does not re-adopt the
     /// tween descriptor the engine is about to drop.
     pub tween_cleared: bool,
+    /// The pending one-shot MIDI Learn arm, while “Waiting for MIDI…” shows.
+    pub midi_learn: Option<MidiLearnDraft>,
     pub exists: bool,
     pub error: Option<String>,
 }
@@ -461,6 +475,7 @@ impl LinkEditor {
             expression_cleared: false,
             tween: None,
             tween_cleared: false,
+            midi_learn: None,
             exists: false,
             error: None,
         }
@@ -523,6 +538,7 @@ impl LinkEditor {
             expression_cleared: false,
             tween: None,
             tween_cleared: false,
+            midi_learn: None,
             exists: true,
             error: None,
         }
@@ -598,6 +614,119 @@ impl LinkEditor {
     pub fn use_osc(&mut self, location: impl Into<String>) {
         self.use_state(location);
         self.source = "osc".to_string();
+    }
+
+    /// Arm a one-shot MIDI Learn for this input from the current snapshot.
+    ///
+    /// `floor` records the newest result the editor has already seen, so a
+    /// stale result that is still in the snapshot cannot create a link for a
+    /// later arm. The caller queues `midi/learn`; this only changes the draft.
+    pub fn start_midi_learn(&mut self, snapshot: &EngineSnapshot) {
+        self.midi_learn = Some(MidiLearnDraft {
+            floor: snapshot.midi.last_learn.as_ref().map(|result| result.id),
+            arm: None,
+        });
+        self.error = None;
+    }
+
+    /// Stop showing “Waiting for MIDI…” (Cancel, Forget or the editor closing).
+    pub fn cancel_midi_learn(&mut self) {
+        self.midi_learn = None;
+    }
+
+    pub fn is_waiting_for_midi(&self) -> bool {
+        self.midi_learn.is_some()
+    }
+
+    /// Adopt a resolved Learn, returning the actions to queue.
+    ///
+    /// Electron's `MIDI.vue` dispatches `inputs/createInputLink` with kind
+    /// `mutation`, source `midi`, the quoted `channelData` location and the
+    /// `midi/WRITE_DATA` matcher. The native editor additionally releases a
+    /// stale smoothing id (and tween descriptor) from the link it replaces,
+    /// which the JS path leaks.
+    pub fn sync_midi_learn(&mut self, snapshot: &EngineSnapshot) -> Vec<UiAction> {
+        let Some(mut draft) = self.midi_learn else {
+            return Vec::new();
+        };
+
+        if let Some(result) = snapshot.midi.last_learn.as_ref()
+            && result.input_id == self.input_id
+            && Some(result.id) > draft.floor
+        {
+            self.midi_learn = None;
+            return self.apply_midi_result(result, snapshot);
+        }
+
+        if let Some(arm) = snapshot.midi.learning.as_ref() {
+            if arm.input_id == self.input_id {
+                draft.arm = Some(arm.id);
+                self.midi_learn = Some(draft);
+            } else {
+                // One arm at a time: a Learn for another input replaced ours.
+                self.midi_learn = None;
+                self.error = Some(format!(
+                    "MIDI Learn moved to input {}; click Learn again",
+                    arm.input_id
+                ));
+            }
+            return Vec::new();
+        }
+
+        // The engine arm we saw is gone without a result (cancelled from the
+        // MIDI panel or the editor that owned it closed).
+        if draft.arm.is_some() {
+            self.midi_learn = None;
+        }
+        Vec::new()
+    }
+
+    fn apply_midi_result(
+        &mut self,
+        result: &crate::MidiLearnResultView,
+        snapshot: &EngineSnapshot,
+    ) -> Vec<UiAction> {
+        let mut actions = Vec::new();
+        let existing = snapshot.input_links.get(&self.input_id);
+        let smoothing_id = self
+            .smoothing_id
+            .take()
+            .or_else(|| existing.and_then(crate::InputLinkView::smoothing_id));
+        if let Some(id) = smoothing_id {
+            actions.push(UiAction::new("meyda/removeSmoothingId", Value::String(id)));
+        }
+        if existing.and_then(|link| link.source.as_deref()) == Some("tween") {
+            // `createInputLink` replaces the record; drop the descriptor the
+            // replaced tween link owned instead of leaving an orphan.
+            actions.push(UiAction::new(
+                "tweens/REMOVE_TWEEN",
+                serde_json::json!({ "id": self.input_id }),
+            ));
+            self.tween = None;
+            self.tween_cleared = true;
+        }
+
+        self.kind = "mutation".to_string();
+        self.source = "midi".to_string();
+        self.location = midi_link_location(&result.device, result.channel, result.type_);
+        self.matcher = Some(midi_link_matcher(
+            &result.device,
+            result.channel,
+            result.type_,
+        ));
+        self.args = "[]".to_string();
+        self.feature = "none".to_string();
+        self.smoothing_value = 0.0;
+        self.min = 0.0;
+        self.max = 1.0;
+        self.exists = true;
+        self.error = None;
+        actions.push(UiAction::new(
+            "inputs/createInputLink",
+            self.link_payload()
+                .expect("a learned MIDI link has a valid payload"),
+        ));
+        actions
     }
 
     /// The JS smoothing slider is inverted: `MAX_SMOOTHING - smoothingValue`.
@@ -880,6 +1009,23 @@ pub fn mint_smoothing_id() -> String {
     format!("native-smoothing-{nanos}-{counter}")
 }
 
+/// The `MIDI.vue` location for a learned message:
+/// `midi.devices['<id>-<name>-<manufacturer>'].channelData['<channel>']['<type>']`.
+///
+/// The device key and channel indexes are quoted exactly as the JS template
+/// writes them, even though the channel/type indexes are numeric.
+pub fn midi_link_location(device: &str, channel: i64, type_: i64) -> String {
+    format!("midi.devices['{device}'].channelData['{channel}']['{type_}']")
+}
+
+/// The `MIDI.vue` mutation matcher for a learned message.
+pub fn midi_link_matcher(device: &str, channel: i64, type_: i64) -> Value {
+    serde_json::json!({
+        "type": "midi/WRITE_DATA",
+        "payload": { "id": device, "channel": channel, "type": type_ },
+    })
+}
+
 /// Status-bar values mirrored from the engine snapshot.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StatusState {
@@ -1039,6 +1185,22 @@ impl UiState {
     /// Push one engine action.
     pub fn push_action(&mut self, action: impl Into<String>, payload: Value) {
         self.actions.push(UiAction::new(action, payload));
+    }
+
+    /// Open the focused-input link editor.
+    ///
+    /// Opening another input's editor closes the current one, so a pending
+    /// MIDI Learn owned by the replaced editor is cancelled; only the editor
+    /// can consume the result and a stale arm must not fire later.
+    pub fn open_link_editor(&mut self, editor: LinkEditor) {
+        if self
+            .link_editor
+            .as_ref()
+            .is_some_and(LinkEditor::is_waiting_for_midi)
+        {
+            self.push_action("midi/cancelLearn", Value::Null);
+        }
+        self.link_editor = Some(editor);
     }
 
     /// Switch the Library folder. Changing kind returns to that kind's root;
@@ -1286,6 +1448,30 @@ mod tests {
 
         assert_eq!(state.take_commands(), vec![UiCommand::OpenOutputWindow]);
         assert!(state.take_commands().is_empty());
+    }
+
+    #[test]
+    fn opening_another_link_editor_cancels_a_pending_midi_learn() {
+        let mut state = UiState::new();
+        let snapshot = EngineSnapshot::default();
+        let mut waiting = LinkEditor::audio("input-1", "gain");
+        waiting.start_midi_learn(&snapshot);
+        state.open_link_editor(waiting);
+        assert!(state.actions.is_empty());
+
+        state.open_link_editor(LinkEditor::audio("input-2", "gain"));
+
+        assert_eq!(
+            state.take_actions(),
+            vec![UiAction::new("midi/cancelLearn", Value::Null)]
+        );
+        assert_eq!(
+            state
+                .link_editor
+                .as_ref()
+                .map(|editor| editor.input_id.as_str()),
+            Some("input-2")
+        );
     }
 
     #[test]

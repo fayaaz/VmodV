@@ -35,12 +35,12 @@ pub fn link_row(
             ui.label(egui::RichText::new(summary).size(11.0).color(theme::MUTED))
                 .on_hover_text(format!("input {input_id}"));
             if ui.small_button("Edit").clicked() {
-                state.link_editor = Some(LinkEditor::for_input(input_id, prop_name, snapshot));
+                state.open_link_editor(LinkEditor::for_input(input_id, prop_name, snapshot));
             }
             if ui.small_button("x").on_hover_text("Remove link").clicked() {
                 // Releasing the smoothing id keeps the evaluator registry from
                 // leaking entries the way the JS panel had to fix.
-                if let Some(id) = smoothing_id(link) {
+                if let Some(id) = link.smoothing_id() {
                     state.push_action("meyda/removeSmoothingId", serde_json::json!(id));
                 }
                 state.push_action(
@@ -53,7 +53,7 @@ pub fn link_row(
             .on_hover_text("Bind this input to audio, state, MIDI or OSC")
             .clicked()
         {
-            state.link_editor = Some(LinkEditor::for_input(input_id, prop_name, snapshot));
+            state.open_link_editor(LinkEditor::for_input(input_id, prop_name, snapshot));
         }
 
         // The legacy E badge marks an input with an expression assignment,
@@ -105,20 +105,6 @@ fn link_summary(link: &InputLinkView) -> String {
     }
 }
 
-fn smoothing_id(link: &InputLinkView) -> Option<String> {
-    link.args
-        .as_ref()
-        .and_then(|args| args.as_array())
-        .filter(|args| args.len() > 2)
-        .and_then(|args| args.get(1))
-        .and_then(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| value.as_u64().map(|number| number.to_string()))
-        })
-}
-
 /// A small live readout for the audio features the snapshot carries.
 fn feature_readout(feature: &str, snapshot: &EngineSnapshot) -> Option<String> {
     match feature {
@@ -152,6 +138,10 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
     } else {
         editor.tween_cleared = false;
     }
+    // A resolved Learn updates the draft and queues the link before the
+    // sections draw, so the frame that receives the event already shows it.
+    let midi_actions = editor.sync_midi_learn(snapshot);
+    state.actions.extend(midi_actions);
 
     let mut open = true;
     let mut save = false;
@@ -200,32 +190,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
 
             audio_section(ui, &mut editor, snapshot, state);
 
-            let midi_enabled = !editor.exists
-                || editor.source.is_empty()
-                || matches!(editor.source.as_str(), "midi" | "state");
-            egui::CollapsingHeader::new("MIDI")
-                .default_open(editor.source == "midi")
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(midi_enabled, |ui| {
-                        ui.label(
-                            egui::RichText::new(
-                                "State path read from MIDI, e.g. midi.data.<device>.<channel>",
-                            )
-                            .size(12.0)
-                            .color(theme::MUTED),
-                        );
-                        ui.horizontal(|ui| {
-                            if ui.button("Use MIDI").clicked() {
-                                editor.use_midi("midi.data.device.channel");
-                            }
-                            ui.add(
-                                egui::TextEdit::singleline(&mut editor.location)
-                                    .desired_width(240.0)
-                                    .hint_text("midi.data.device.channel"),
-                            );
-                        });
-                    });
-                });
+            midi_section(ui, &mut editor, snapshot, state);
 
             let tween_enabled = !editor.exists
                 || editor.source.is_empty()
@@ -378,19 +343,146 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
         state.actions.push(action);
     }
 
+    let waiting_for_midi = editor.is_waiting_for_midi();
+    let mut kept = false;
     if save {
         match editor.save_actions() {
             Ok(actions) => state.actions.extend(actions),
             Err(error) => {
                 editor.error = Some(error);
                 state.link_editor = Some(editor);
+                kept = true;
             }
         }
     } else if remove {
         state.actions.extend(editor.remove_actions());
     } else if !cancel && open {
         state.link_editor = Some(editor);
+        kept = true;
     }
+    if !kept && waiting_for_midi {
+        // Closing/saving the editor must not leave an arm that can create a
+        // link for an input the user is no longer editing.
+        state.push_action("midi/cancelLearn", serde_json::Value::Null);
+    }
+}
+
+/// The MIDI section: one-shot Learn, the learned link's Forget, and the
+/// manual state-path field.
+///
+/// Electron's `MIDI.vue` only offers Learn/Forget; the manual field is the
+/// native editor's existing convenience and builds a `state` link on the
+/// typed path. Learn is available for any non-MIDI link too, because
+/// `inputs/createInputLink` replaces the record (the safe path additionally
+/// releases the replaced link's smoothing id/tween).
+fn midi_section(
+    ui: &mut egui::Ui,
+    editor: &mut LinkEditor,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+) {
+    let midi_enabled = !editor.exists
+        || editor.source.is_empty()
+        || matches!(editor.source.as_str(), "midi" | "state");
+    let existing = snapshot.input_links.get(&editor.input_id);
+    let has_midi_link = existing.is_some_and(|link| link.source.as_deref() == Some("midi"));
+    egui::CollapsingHeader::new("MIDI")
+        .default_open(editor.source == "midi")
+        .show(ui, |ui| {
+            if !snapshot.midi.available {
+                ui.label(
+                    egui::RichText::new(
+                        "MIDI is unavailable on this host; Learn waits for a device to appear.",
+                    )
+                    .size(12.0)
+                    .color(theme::MUTED),
+                );
+            }
+
+            if has_midi_link {
+                if let Some(location) = existing.and_then(|link| link.location.as_deref()) {
+                    ui.label(
+                        egui::RichText::new(location)
+                            .monospace()
+                            .size(11.0)
+                            .color(theme::MUTED),
+                    );
+                }
+                if ui
+                    .button("Forget")
+                    .on_hover_text("Remove this MIDI link")
+                    .clicked()
+                {
+                    if editor.is_waiting_for_midi() {
+                        editor.cancel_midi_learn();
+                        state.push_action("midi/cancelLearn", serde_json::Value::Null);
+                    }
+                    state.actions.extend(editor.remove_actions());
+                }
+            } else if editor.is_waiting_for_midi() {
+                ui.label(
+                    egui::RichText::new("Waiting for MIDI…")
+                        .strong()
+                        .color(theme::ACCENT),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Move a knob or press a pad on any MIDI input; a clock tick does not learn.",
+                    )
+                    .size(12.0)
+                    .color(theme::MUTED),
+                );
+                if ui
+                    .button("Cancel")
+                    .on_hover_text("Stop waiting; no link is created")
+                    .clicked()
+                {
+                    editor.cancel_midi_learn();
+                    state.push_action("midi/cancelLearn", serde_json::Value::Null);
+                }
+            } else if ui
+                .button("Learn")
+                .on_hover_text("Bind this input to the next MIDI message")
+                .clicked()
+            {
+                editor.start_midi_learn(snapshot);
+                state.push_action(
+                    "midi/learn",
+                    serde_json::json!({ "inputId": editor.input_id }),
+                );
+            }
+
+            if let Some(result) = &snapshot.midi.last_learn {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Last learned: {} channel {} type {}",
+                        result.device, result.channel, result.type_
+                    ))
+                    .size(11.0)
+                    .color(theme::MUTED),
+                );
+            }
+
+            ui.add_enabled_ui(midi_enabled, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "State path read from MIDI, e.g. midi.devices['<device>'].channelData['<channel>']['<type>']",
+                    )
+                    .size(12.0)
+                    .color(theme::MUTED),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Use MIDI").clicked() {
+                        editor.use_midi("midi.data.device.channel");
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut editor.location)
+                            .desired_width(240.0)
+                            .hint_text("midi.data.device.channel"),
+                    );
+                });
+            });
+        });
 }
 
 fn audio_section(
@@ -535,7 +627,7 @@ fn state_section(ui: &mut egui::Ui, editor: &mut LinkEditor) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExpressionView, TweenView};
+    use crate::{ExpressionView, TweenView, UiAction};
 
     #[test]
     fn feature_list_matches_the_legacy_audio_panel() {
@@ -856,5 +948,184 @@ mod tests {
         assert_eq!(payload["type"], "state");
         assert_eq!(payload["location"], "modules/active");
         assert!(payload.get("args").is_none());
+    }
+
+    fn midi_result() -> crate::MidiLearnResultView {
+        crate::MidiLearnResultView {
+            id: 1,
+            input_id: "input-1".to_string(),
+            device: "dev-Keyboard-Acme".to_string(),
+            channel: 2,
+            type_: 144,
+        }
+    }
+
+    fn midi_snapshot(
+        learning: Option<crate::MidiLearnArmView>,
+        last: Option<crate::MidiLearnResultView>,
+        link: Option<InputLinkView>,
+    ) -> EngineSnapshot {
+        let mut snapshot = EngineSnapshot {
+            midi: crate::MidiSnapshot {
+                available: true,
+                error: None,
+                devices: Vec::new(),
+                learning,
+                last_learn: last,
+            },
+            ..Default::default()
+        };
+        if let Some(link) = link {
+            snapshot.input_links.insert(link.input_id.clone(), link);
+        }
+        snapshot
+    }
+
+    #[test]
+    fn a_learned_result_updates_the_draft_and_queues_the_exact_link() {
+        let before = midi_snapshot(None, None, None);
+        let mut editor = LinkEditor::audio("input-1", "gain");
+        editor.start_midi_learn(&before);
+        let after = midi_snapshot(None, Some(midi_result()), None);
+
+        let actions = editor.sync_midi_learn(&after);
+
+        assert_eq!(
+            actions,
+            vec![UiAction::new(
+                "inputs/createInputLink",
+                serde_json::json!({
+                    "inputId": "input-1",
+                    "type": "mutation",
+                    "source": "midi",
+                    "location": "midi.devices['dev-Keyboard-Acme'].channelData['2']['144']",
+                    "match": {
+                        "type": "midi/WRITE_DATA",
+                        "payload": {
+                            "id": "dev-Keyboard-Acme",
+                            "channel": 2,
+                            "type": 144,
+                        },
+                    },
+                    "min": 0.0,
+                    "max": 1.0,
+                }),
+            )]
+        );
+        assert_eq!(editor.kind, "mutation");
+        assert_eq!(editor.source, "midi");
+        assert_eq!(
+            editor.location,
+            "midi.devices['dev-Keyboard-Acme'].channelData['2']['144']"
+        );
+        assert_eq!(
+            editor.matcher,
+            Some(serde_json::json!({
+                "type": "midi/WRITE_DATA",
+                "payload": { "id": "dev-Keyboard-Acme", "channel": 2, "type": 144 },
+            }))
+        );
+        assert!(!editor.is_waiting_for_midi());
+        assert!(
+            editor.sync_midi_learn(&after).is_empty(),
+            "a result left in the snapshot cannot create a second link"
+        );
+    }
+
+    #[test]
+    fn learning_over_an_audio_link_releases_its_smoothing_id() {
+        let existing = InputLinkView {
+            input_id: "input-1".to_string(),
+            kind: "getter".to_string(),
+            location: Some("meyda/getFeature".to_string()),
+            args: Some(serde_json::json!(["bass", "sm-42", 0.4])),
+            source: Some("meyda".to_string()),
+            min: Some(0.0),
+            max: Some(1.0),
+            matcher: None,
+        };
+        let before = midi_snapshot(None, None, Some(existing.clone()));
+        let mut editor = LinkEditor::for_input("input-1", "gain", &before);
+        editor.start_midi_learn(&before);
+        let after = midi_snapshot(None, Some(midi_result()), Some(existing));
+
+        let actions = editor.sync_midi_learn(&after);
+
+        assert_eq!(actions[0].action, "meyda/removeSmoothingId");
+        assert_eq!(actions[0].payload, serde_json::json!("sm-42"));
+        assert_eq!(actions[1].action, "inputs/createInputLink");
+        assert_eq!(actions[1].payload["source"], "midi");
+        assert!(
+            actions[1].payload.get("args").is_none(),
+            "the learned MIDI link carries no args"
+        );
+        assert_eq!(editor.smoothing_id, None);
+    }
+
+    #[test]
+    fn learning_over_a_tween_link_drops_the_descriptor() {
+        let existing = InputLinkView {
+            input_id: "input-1".to_string(),
+            kind: "state".to_string(),
+            location: Some("tweens.tweens['input-1'].value[0]".to_string()),
+            args: None,
+            source: Some("tween".to_string()),
+            min: Some(0.0),
+            max: Some(1.0),
+            matcher: None,
+        };
+        let before = midi_snapshot(None, None, Some(existing.clone()));
+        let mut editor = LinkEditor::for_input("input-1", "gain", &before);
+        editor.tween = Some(crate::TweenView {
+            id: "input-1".to_string(),
+            ..Default::default()
+        });
+        editor.start_midi_learn(&before);
+        let after = midi_snapshot(None, Some(midi_result()), Some(existing));
+
+        let actions = editor.sync_midi_learn(&after);
+
+        assert_eq!(
+            actions[0],
+            UiAction::new(
+                "tweens/REMOVE_TWEEN",
+                serde_json::json!({ "id": "input-1" })
+            )
+        );
+        assert_eq!(actions[1].action, "inputs/createInputLink");
+        assert!(editor.tween.is_none());
+        assert!(editor.tween_cleared);
+    }
+
+    #[test]
+    fn an_arm_replaced_by_another_input_stops_waiting() {
+        let before = midi_snapshot(None, None, None);
+        let mut editor = LinkEditor::audio("input-1", "gain");
+        editor.start_midi_learn(&before);
+        let after = midi_snapshot(
+            Some(crate::MidiLearnArmView {
+                input_id: "input-2".to_string(),
+                id: 2,
+            }),
+            None,
+            None,
+        );
+
+        assert!(editor.sync_midi_learn(&after).is_empty());
+        assert!(!editor.is_waiting_for_midi());
+        assert!(editor.error.is_some(), "the editor explains the lost arm");
+    }
+
+    #[test]
+    fn a_typed_midi_location_is_kept_in_the_payload() {
+        let mut editor = LinkEditor::audio("input-1", "gain");
+        editor.use_midi("midi.devices['dev-Pad-Acme'].channelData['5']['176']");
+        let payload = editor.link_payload().expect("midi payload");
+        assert_eq!(payload["type"], "state");
+        assert_eq!(payload["source"], "midi");
+        assert_eq!(
+            payload["location"],
+            "midi.devices['dev-Pad-Acme'].channelData['5']['176']"
+        );
     }
 }
