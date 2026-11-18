@@ -134,8 +134,13 @@
 //! bottom-left. `isf_FragNormCoord` is therefore top-left origin here, which
 //! keeps texture sampling visually identical to the Electron renderer (in
 //! wgpu, texture `v = 0` is also the first row) while mirroring shaders that
-//! treat `isf_FragNormCoord` as a Cartesian coordinate. This matches the
-//! convention already documented for the shader renderer (`shader/mod.rs`).
+//! treat `isf_FragNormCoord` as a Cartesian coordinate. Self-contained
+//! generators — every sampler names one of the document's own `PASSES`
+//! targets, so no externally-supplied image can shift orientation —
+//! are the exception: they draw bottom-left like WebGL, see
+//! [`self_contained`]. Textures the engine supplies (group canvas, NDI,
+//! library images, cameras) keep the top-left origin so input sampling
+//! stays upright.
 //! `isf_FragCoord` is a macro over `gl_FragCoord` rather than a varying: the
 //! vendored vertex skeleton assigns a different case (`isf_fragCoord`) and
 //! never declares it as an output, so the original is an unbound varying in
@@ -357,6 +362,21 @@ pub fn texture_inputs(doc: &IsfDocument) -> Vec<String> {
 /// Whether an ISF input type is sampled as a texture.
 pub fn is_texture_type(type_: &str) -> bool {
     matches!(type_, "image" | "audio" | "audioFFT")
+}
+
+/// True when every sampler binding names one of the document's own `PASSES`
+/// targets — nothing samples an externally-supplied image, audio or imported
+/// asset. Such shaders are coordinate-built generators written for WebGL's
+/// bottom-left origin, exactly like the texture-free single-pass generators;
+/// they draw with [`super::runtime::BOTTOM_LEFT_VERTEX_WGSL`] and their
+/// `gl_FragCoord` reads are Y-flipped. Everything else is a filter and keeps
+/// the wgpu top-left origin so input sampling stays upright.
+pub fn self_contained(doc: &IsfDocument) -> bool {
+    texture_bindings(doc).iter().all(|binding| {
+        doc.passes
+            .iter()
+            .any(|pass| pass.target.as_deref() == Some(binding.name.as_str()))
+    })
 }
 
 /// Bindings for [`texture_inputs`]: binding 0 is the uniform block, then each
@@ -634,8 +654,8 @@ fn build_fragment_glsl_inner(
             ));
         }
     }
-    if bindings.is_empty() {
-        // A texture-free ISF shader is a generator written for WebGL, where
+    if self_contained(doc) {
+        // A self-contained ISF shader is a generator written for WebGL, where
         // `gl_FragCoord` is bottom-left. The runtime draws it with the
         // bottom-left vertex shader (see `BOTTOM_LEFT_VERTEX_WGSL`), so the
         // pixel coordinate must be flipped too or the whole image is
@@ -818,15 +838,24 @@ pub fn build_vertex_glsl(doc: &IsfDocument) -> String {
 
     out.push_str("void isf_vertShaderInit() {\n");
     out.push_str("  gl_Position = vec4(isf_position, 0.0, 1.0);\n");
-    out.push_str(
+    if self_contained(doc) {
+        // Bottom-left origin, like the WebGL default: a self-contained
+        // generator ignores input sampling, so the legacy convention keeps
+        // the image upright next to the Electron renderer.
+        out.push_str(
+            "  isf_FragNormCoord = vec2((gl_Position.x + 1.0) / 2.0, (gl_Position.y + 1.0) / 2.0);\n",
+        );
+    } else {
         // Top-left origin: wgpu samples texture v=0 from the first row and
         // the engine's fragments use top-left `gl_FragCoord`. Legacy WebGL
         // flips textures on upload (`UNPACK_FLIP_Y_WEBGL`), so its
         // bottom-left varying produced the same upright result; emitting the
         // GL origin here made every sidecar filter sample the window
         // upside-down.
-        "  isf_FragNormCoord = vec2((gl_Position.x + 1.0) / 2.0, 1.0 - (gl_Position.y + 1.0) / 2.0);\n",
-    );
+        out.push_str(
+            "  isf_FragNormCoord = vec2((gl_Position.x + 1.0) / 2.0, 1.0 - (gl_Position.y + 1.0) / 2.0);\n",
+        );
+    }
     out.push_str("}\n\n");
     out.push_str(&assign_output_locations(&body.source, 1));
     out.push_str(&global_init_function(&body.global_initialisers));
@@ -987,7 +1016,7 @@ fn remove_declaration_lines(source: &str, names: &[String]) -> String {
 
 fn rewrite_fragment_body(doc: &IsfDocument) -> RewrittenBody {
     let mut body = rewrite_fragment_source(&doc.fragment_source, &texture_inputs(doc));
-    if texture_bindings(doc).is_empty() {
+    if self_contained(doc) {
         // Match the bottom-left vertex shader: `gl_FragCoord` in a generator
         // must start at the bottom-left, like WebGL. Textured shaders keep the
         // wgpu top-left origin so input sampling stays upright.
@@ -2956,6 +2985,101 @@ mod tests {
     }
 
     #[test]
+    fn self_contained_buffer_only_shaders_flip_gl_fragcoord_to_bottom_left() {
+        // The multi-pass half of the texture-free generator class: every
+        // binding names one of the document's own PASSES targets, so nothing
+        // samples an externally-supplied image. `Life.fs` and
+        // `fractal-mountain-tunnel.fs` are in this class; they used to render
+        // vertically mirrored vs WebGL with zero signal to the user.
+        let shader = r#"/*{
+            "PASSES": [
+                { "TARGET": "accum", "PERSISTENT": true }
+            ]
+        }*/
+        void main() { vec2 p = gl_FragCoord.xy / RENDERSIZE; gl_FragColor = vec4(p, 0.0, 1.0); }"#;
+        let glsl = build_fragment_glsl(&doc(shader), 0);
+        assert!(glsl.contains("RENDERSIZE.y - gl_FragCoord.y"), "{glsl}");
+        assert!(glsl.contains("#define isf_FragCoord (floor(isf_gl_frag_coord().xy))"));
+        assert!(!glsl.contains("p = gl_FragCoord.xy"), "{glsl}");
+    }
+
+    #[test]
+    fn externally_supplied_multipass_shaders_keep_the_top_left_fragcoord() {
+        // The divider that defines the class: one `image` input poisons it.
+        // Buffer-only stays bottom-left; image + buffers stays top-left.
+        let shader = r#"/*{
+            "INPUTS": [
+                { "NAME": "inputImage", "TYPE": "image" }
+            ],
+            "PASSES": [
+                { "TARGET": "accum", "PERSISTENT": true }
+            ]
+        }*/
+        void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
+        let glsl = build_fragment_glsl(&doc(shader), 0);
+        assert!(!glsl.contains("isf_gl_frag_coord"), "{glsl}");
+        assert!(glsl.contains("#define isf_FragCoord (floor(gl_FragCoord.xy))"));
+    }
+
+    #[test]
+    fn self_contained_predicate_matches_the_review_class() {
+        let probe = r#"/*{ "PASSES": [ { "TARGET": "accum" } ] }*/
+        void main() {}"#;
+        assert!(self_contained(&doc(probe)));
+        let with_image = r#"/*{
+            "INPUTS": [ { "NAME": "photo", "TYPE": "image" } ],
+            "PASSES": [ { "TARGET": "accum" } ]
+        }*/
+        void main() {}"#;
+        assert!(!self_contained(&doc(with_image)));
+        let audio_only = r#"/*{
+            "INPUTS": [ { "NAME": "audio", "TYPE": "audio" } ],
+            "PASSES": [ { "TARGET": "accum" } ]
+        }*/
+        void main() {}"#;
+        assert!(!self_contained(&doc(audio_only)));
+        let untargeted_only_sidecar = r#"/*{
+            "PASSES": [ { "TARGET": "accum" } ]
+        }*/
+        void main() {}"#;
+        assert!(self_contained(&doc(untargeted_only_sidecar)));
+    }
+
+    #[test]
+    fn self_contained_sidecar_generator_emits_the_bottom_left_norm_varying() {
+        let probe = r#"/*{
+            "PASSES": [
+                { "TARGET": "accum", "PERSISTENT": true }
+            ]
+        }*/
+        void main() { gl_FragColor = vec4(1.0); }"#;
+        let vertex = "void main() { isf_vertShaderInit(); }";
+        let document = parse_isf(probe, Some(vertex)).expect("the sidecar test shader parses");
+        let glsl = build_vertex_glsl(&document);
+        assert!(
+            glsl.contains(
+                "isf_FragNormCoord = vec2((gl_Position.x + 1.0) / 2.0, (gl_Position.y + 1.0) / 2.0)"
+            ),
+            "{glsl}"
+        );
+    }
+
+    #[test]
+    fn externally_supplied_sidecar_generator_keeps_the_top_left_norm_varying() {
+        let probe = r#"/*{
+            "INPUTS": [ { "NAME": "inputImage", "TYPE": "image" } ],
+            "PASSES": [
+                { "TARGET": "accum", "PERSISTENT": true }
+            ]
+        }*/
+        void main() { gl_FragColor = vec4(1.0); }"#;
+        let vertex = "void main() { isf_vertShaderInit(); }";
+        let document = parse_isf(probe, Some(vertex)).expect("the sidecar test shader parses");
+        let glsl = build_vertex_glsl(&document);
+        assert!(glsl.contains("1.0 - (gl_Position.y + 1.0) / 2.0"), "{glsl}");
+    }
+
+    #[test]
     fn pass_index_reaches_the_prelude_define() {
         let glsl = build_fragment_glsl(&doc("void main() {}"), 3);
         assert!(glsl.contains("#define ISF_PASS_INDEX 3"));
@@ -3095,7 +3219,12 @@ void main() { gl_FragColor = vec4(left_coord, mouse); }"#;
 
     #[test]
     fn vertex_skeleton_declares_the_isf_contract() {
-        let shader = r#"/*{ "INPUTS": [ { "NAME": "blurAmount", "TYPE": "float" } ] }*/
+        // A sidecar filter that samples an input image must keep the wgpu
+        // top-left origin so the group canvas stays upright (the Round-26
+        // contract this test pins). A self-contained sidecar generator gets
+        // the bottom-left varying instead — see
+        // `self_contained_sidecar_generator_emits_the_bottom_left_norm_varying`.
+        let shader = r#"/*{ "INPUTS": [ { "NAME": "blurAmount", "TYPE": "float" }, { "NAME": "inputImage", "TYPE": "image" } ] }*/
         void main() {}"#;
         let vertex = r#"#if __VERSION__ <= 120
 varying vec2 texOffsets[5];

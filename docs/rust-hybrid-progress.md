@@ -387,13 +387,17 @@ supervisor mode, lost `engine/state` events, engine-mode renderer TypeErrors.
   entry stays as the fallback when no sinks are discovered (or on non-Linux).
   Requires the host PipeWire tools (`pw-dump`/`pw-record`); the `.deb` should
   depend on `pipewire-bin`.
-- **Texture-free ISF generators are upright.** `gl_FragCoord` is bottom-left
-  in WebGL but top-left in wgpu. Texture-free shaders already used the
-  bottom-left vertex shader, but the pixel coordinate stayed top-left, so
+- **Self-contained ISF generators are upright.** `gl_FragCoord` is bottom-left
+  in WebGL but top-left in wgpu. Texture-free single-pass shaders already used
+  the bottom-left vertex shader, but the pixel coordinate stayed top-left, so
   generators that build their camera from `gl_FragCoord` (The Pool Rooms,
-  `st_Ms2SD1`, and 29 other corpus raymarchers) rendered vertically mirrored.
+  `st_Ms2SD1`, and 26 other corpus raymarchers) rendered vertically mirrored.
   The translator now routes `gl_FragCoord` (and `isf_FragCoord`) through a
-  Y-flipped helper for texture-free shaders; textured shaders keep the
+  Y-flipped helper for self-contained shaders — every sampler names one of
+  the document's own `PASSES` targets — so the buffer-only multi-pass class
+  (`Life.fs`, `Circle Trails.fs`, `Etch-a-Sketch.fs`, `Color History.fs`,
+  `Random Shape Blast.fs`, `Helix Eye.fs` and the four `*-tunnel.fs`
+  raymarchers) matches WebGL too; externally-supplied shaders keep the
   top-left origin so input sampling stays upright.
 - **Audio pump while the output window is watched.** Engine mode drives the
   renderer's analyser from `requestAnimationFrame`; Chromium throttled it when

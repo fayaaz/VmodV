@@ -61,10 +61,14 @@ Vertex skeleton injects `void isf_vertShaderInit()` + per-buffer uniforms.
 `isf_vertShaderInit` sets `isf_position` (attribute, -1..1), `gl_Position`,
 `isf_FragNormCoord`, `isf_FragCoord = floor(norm * RENDERSIZE)`.
 
-Texture-free generators (raymarchers, shadertoy conversions) are drawn with
-the legacy bottom-left vertex shader and their `gl_FragCoord`/`isf_FragCoord`
+Self-contained generators (raymarchers, shadertoy conversions, and multi-pass
+shaders whose every sampler names one of the document's own `PASSES` buffer
+targets — buffer-only, nothing externally supplied) are drawn with the
+legacy bottom-left vertex shader and their `gl_FragCoord`/`isf_FragCoord`
 reads are Y-flipped in the translator, so they match WebGL. Shaders that
-sample textures keep the wgpu top-left origin so input sampling stays upright.
+sample externally-supplied textures (including the engine binding a group
+canvas, camera, video, NDI or library image) keep the wgpu top-left origin
+so input sampling stays upright.
 
 TIME/TIMEDELTA/FRAMEINDEX/DATE are also set every frame by
 `ISFRenderer.setDateUniforms` (`TIME = (now - startTime)/1000`, startTime =
@@ -135,11 +139,14 @@ harmless).
 (`translate_with_sidecar_vertex`) and links them with explicit locations.
 
 - **Coordinate origin.** `isf_FragNormCoord` is emitted top-left
-  (`1 - (y + 1) / 2`), matching wgpu texture sampling and the fragment's
-  top-left `gl_FragCoord`. WebGL flips textures on upload
+  (`1 - (y + 1) / 2`) for externally-supplied sidecar shaders (the Round-26
+  fix), matching wgpu texture sampling and the fragment's top-left
+  `gl_FragCoord` there. WebGL flips textures on upload
   (`UNPACK_FLIP_Y_WEBGL`), so its bottom-left varying produced the same
   upright result; keeping the GL origin made every sidecar filter sample the
-  group canvas mirrored.
+  group canvas mirrored. A self-contained sidecar generator (every sampler
+  names one of the document's own `PASSES` targets) is the exception: it
+  emits the bottom-left varying so it matches WebGL.
 - **Geometry.** Sidecar shaders draw the legacy six-vertex quad
   (`ISFGLProgram.bindVertices`), not the oversized full-screen triangle.
   `.vs` files evaluate non-linear maths in the vertex stage from
