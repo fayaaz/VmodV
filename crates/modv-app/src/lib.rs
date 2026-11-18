@@ -25,6 +25,7 @@ pub mod native;
 pub mod ndi_runtime;
 pub mod pacing;
 pub mod performance;
+pub mod plugin_runtime;
 pub mod report;
 pub mod scene_ops;
 pub mod scene_preview;
