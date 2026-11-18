@@ -49,6 +49,8 @@ cargo build --locked --release --manifest-path "$ROOT/crates/Cargo.toml" \
 
 install -Dm755 "$ROOT/crates/target/release/modv" \
     "$PKGROOT/usr/lib/vmodv-native/modv"
+install -Dm755 "$ROOT/packaging/native/log-run.sh" \
+    "$PKGROOT/usr/lib/vmodv-native/log-run.sh"
 install -Dm755 "$ROOT/packaging/native/deb-launcher.sh" "$PKGROOT/usr/bin/modv"
 ln -s modv "$PKGROOT/usr/bin/vmodv-native"
 

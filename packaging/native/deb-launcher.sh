@@ -10,8 +10,13 @@ PREFIX=$(CDPATH= cd -- "$HERE/.." && pwd)
 
 BIN="$PREFIX/lib/vmodv-native/modv"
 [ -x "$BIN" ] || BIN=/usr/lib/vmodv-native/modv
+LOG_RUN="$PREFIX/lib/vmodv-native/log-run.sh"
+[ -x "$LOG_RUN" ] || LOG_RUN=/usr/lib/vmodv-native/log-run.sh
 
 : "${MODV_ISF_DIR:=$PREFIX/share/vmodv/isf}"
 : "${MODV_ASSETS_DIR:=$PREFIX/share/vmodv/textures}"
 export MODV_ISF_DIR MODV_ASSETS_DIR
+if [ -x "$LOG_RUN" ]; then
+    exec "$LOG_RUN" "$BIN" "$@"
+fi
 exec "$BIN" "$@"

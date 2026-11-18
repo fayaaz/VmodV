@@ -20,6 +20,8 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/vmodv"
 cargo build --release --manifest-path "$ROOT/crates/Cargo.toml" -p modv-app --bin modv
 
 install -Dm755 "$ROOT/crates/target/release/modv" "$APPDIR/usr/bin/modv"
+install -Dm755 "$ROOT/packaging/native/log-run.sh" \
+    "$APPDIR/usr/bin/log-run.sh"
 cp -a "$ROOT/src/renderer/src/application/renderers/isf/modules/isf" \
     "$APPDIR/usr/share/vmodv/isf"
 cp -a "$ROOT/src/renderer/src/application/point10/textures" \
