@@ -1780,6 +1780,30 @@ impl NativeApp {
                     }
                     self.refresh_plugin_view();
                 }
+                UiCommand::SetPluginEnabled { path, enabled } => {
+                    if let Err(error) = self.plugin_runtime.set_plugin_enabled(&path, enabled) {
+                        self.record_error(format!("plugin switch failed: {error}"));
+                    }
+                    self.refresh_plugin_view();
+                }
+                UiCommand::RescanPlugins => {
+                    self.plugin_runtime.rescan();
+                    self.refresh_plugin_view();
+                }
+                UiCommand::ReloadPlugins => {
+                    self.plugin_runtime.reload();
+                    self.refresh_plugin_view();
+                }
+                UiCommand::SetPluginProp { path, prop, value } => {
+                    if let Err(error) = self.plugin_runtime.set_prop(&path, &prop, value) {
+                        self.record_error(format!("plugin prop {prop} failed: {error}"));
+                    }
+                    self.refresh_plugin_view();
+                }
+                UiCommand::ClearPluginLogs => {
+                    self.plugin_runtime.clear_logs();
+                    self.refresh_plugin_view();
+                }
             }
         }
     }
@@ -3687,6 +3711,142 @@ impl ApplicationHandler for NativeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plugin_temp_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-native-{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("plugins")).expect("plugin temp dir");
+        dir
+    }
+
+    #[test]
+    fn plugin_snapshot_extracts_props_status_errors_and_capture() {
+        use crate::plugin_runtime::PLUGIN_SETTINGS_FILENAME;
+        use modv_ui::{PluginPropKindView, PluginStatus};
+
+        let dir = plugin_temp_dir("plugin-snapshot");
+        let plugins = dir.join("plugins");
+        std::fs::write(plugins.join("a-broken.js"), "module.exports = {").expect("broken plugin");
+        let probe = plugins.join("b-probe.js");
+        std::fs::write(
+            &probe,
+            r#"
+module.exports = {
+  name: "Probe",
+  author: "modV tests",
+  version: "2.0.0",
+  captureWidth: 4,
+  captureHeight: 3,
+  props: {
+    gain: { type: "float", default: 0.25, min: 0, max: 1, step: 0.01 },
+    mode: {
+      type: "select",
+      default: "a",
+      options: [
+        { label: "A", value: "a" },
+        { label: "B", value: "b" },
+      ],
+    },
+  },
+  init({ log }) { log("info", "init"); },
+  postProcessFrame() {},
+};
+"#,
+        )
+        .expect("probe plugin");
+
+        let mut runtime =
+            PluginRuntime::load(dir.join(PLUGIN_SETTINGS_FILENAME), vec![plugins.clone()]);
+        runtime.start();
+
+        // Gated: the scripts are listed, nothing is evaluated.
+        let view = plugin_snapshot(&runtime);
+        assert!(!view.enabled && !view.consented);
+        assert!(!view.is_running());
+        assert_eq!(view.summary(), "Not running");
+        assert_eq!(view.plugins.len(), 2);
+        assert!(view.plugins.iter().all(|plugin| !plugin.loaded));
+        assert!(view.plugins.iter().all(|plugin| plugin.props.is_empty()));
+        assert_eq!(view.loaded_count, 0);
+
+        runtime.set_consented(true).expect("consent");
+        runtime.set_enabled(true).expect("enable");
+        let view = plugin_snapshot(&runtime);
+        assert!(view.enabled && view.consented && view.is_running());
+        assert_eq!(view.loaded_count, 1);
+        assert_eq!(view.summary(), "1 of 2 plugins loaded");
+
+        let broken = &view.plugins[0];
+        assert_eq!(broken.title(), "a-broken");
+        assert_eq!(broken.status(), PluginStatus::Error);
+        assert!(broken.error.is_some(), "{:?}", broken.error);
+
+        let info = &view.plugins[1];
+        assert_eq!(info.name, "Probe");
+        assert_eq!(info.author, "modV tests");
+        assert_eq!(info.version, "2.0.0");
+        assert_eq!(info.credit(), "modV tests · v2.0.0");
+        assert_eq!(info.status(), PluginStatus::Loaded);
+        assert_eq!(info.capture, Some([4, 3]));
+        assert_eq!(info.capture_label().as_deref(), Some("capture 4×3"));
+        assert_eq!(view.capture, Some([4, 3]));
+        assert_eq!(view.capture_label().as_deref(), Some("capture 4×3"));
+
+        let gain = info
+            .props
+            .iter()
+            .find(|prop| prop.name == "gain")
+            .expect("float prop");
+        assert_eq!(gain.kind, PluginPropKindView::Float);
+        assert_eq!(gain.value, serde_json::json!(0.25));
+        assert_eq!(
+            (gain.min, gain.max, gain.step),
+            (Some(0.0), Some(1.0), Some(0.01))
+        );
+
+        let mode = info
+            .props
+            .iter()
+            .find(|prop| prop.name == "mode")
+            .expect("select prop");
+        assert_eq!(mode.kind, PluginPropKindView::Select);
+        assert_eq!(mode.selected_label(), Some("A"));
+
+        assert!(
+            view.logs
+                .iter()
+                .any(|line| line.contains("Probe") && line.contains("init")),
+            "{:?}",
+            view.logs
+        );
+
+        // A prop write is reflected by the next snapshot.
+        runtime
+            .set_prop(&probe.to_string_lossy(), "gain", serde_json::json!(0.75))
+            .expect("set gain");
+        let view = plugin_snapshot(&runtime);
+        let gain = view.plugins[1]
+            .props
+            .iter()
+            .find(|prop| prop.name == "gain")
+            .expect("float prop");
+        assert_eq!(gain.value, serde_json::json!(0.75));
+
+        runtime.set_enabled(false).expect("disable");
+        let view = plugin_snapshot(&runtime);
+        assert!(!view.enabled);
+        assert_eq!(view.plugins[1].status(), PluginStatus::Disabled);
+        assert_eq!(view.loaded_count, 0);
+        assert_eq!(view.capture, None);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn an_osc_listener_receives_into_the_panel_state_and_view() {

@@ -2389,16 +2389,302 @@ fn plugins_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
     if let Some(reason) = view.gate_reason() {
         ui.label(egui::RichText::new(reason).size(11.5).color(theme::MUTED));
     }
+    if let Some(capture) = view.capture_label() {
+        ui.label(
+            egui::RichText::new(format!("{capture} at up to 20 Hz"))
+                .monospace()
+                .size(10.5)
+                .color(theme::MUTED),
+        );
+    }
 
     ui.separator();
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("DISCOVERED PLUGINS")
+                .strong()
+                .size(11.0),
+        );
+        ui.label(
+            egui::RichText::new(format!("({})", view.plugins.len()))
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .small_button("Reload")
+                .on_hover_text(
+                    "Re-evaluate every discovered script without changing the file set \
+                     (use after editing a plugin in place).",
+                )
+                .clicked()
+            {
+                state.queue(UiCommand::ReloadPlugins);
+            }
+            if ui
+                .small_button("Rescan")
+                .on_hover_text(
+                    "Re-read the active profile's plugin/ folder and <userData>/plugins.",
+                )
+                .clicked()
+            {
+                state.queue(UiCommand::RescanPlugins);
+            }
+        });
+    });
+
+    if view.plugins.is_empty() {
+        ui.label(
+            egui::RichText::new(
+                "No plugin scripts found. Put .js files in the active project's plugin/ \
+                 folder or <userData>/plugins, then Rescan.",
+            )
+            .size(12.0)
+            .color(theme::MUTED),
+        );
+    } else {
+        // A gated host greyed the whole list: the rows are visible so the user
+        // can see what would run, but nothing is clickable until the gate is
+        // on (the explanation above says why).
+        ui.add_enabled_ui(view.is_running(), |ui| {
+            for plugin in &view.plugins {
+                plugin_row(ui, plugin, view.is_running(), state);
+            }
+        });
+    }
+
+    ui.separator();
+    plugin_logs_section(ui, view, state);
+}
+
+/// One discovered plugin: status, metadata, path, capture size, its generated
+/// controls and the per-plugin switch.
+fn plugin_row(
+    ui: &mut egui::Ui,
+    plugin: &crate::model::PluginInfoView,
+    running: bool,
+    state: &mut UiState,
+) {
+    let status = plugin.status();
+    let status_colour = match status {
+        crate::model::PluginStatus::Loaded => theme::OK,
+        crate::model::PluginStatus::Disabled => theme::MUTED,
+        crate::model::PluginStatus::Error => theme::DANGER,
+    };
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+        ui.painter()
+            .circle_filled(rect.center(), 4.0, status_colour);
+        ui.label(egui::RichText::new(plugin.title()).strong().size(13.0));
+        ui.label(
+            egui::RichText::new(status.label())
+                .size(10.5)
+                .color(status_colour),
+        );
+        ui.add_space(2.0);
+        let mut enabled = plugin.enabled;
+        if ui
+            .checkbox(&mut enabled, "Enabled")
+            .on_hover_text(format!("Run {}", plugin.title()))
+            .changed()
+        {
+            state.queue(UiCommand::SetPluginEnabled {
+                path: plugin.path.clone(),
+                enabled,
+            });
+        }
+    });
+
+    if !plugin.credit().is_empty() {
+        ui.label(
+            egui::RichText::new(plugin.credit())
+                .size(11.0)
+                .color(theme::MUTED),
+        );
+    }
+    let path = truncate(&plugin.path, 52);
     ui.label(
-        egui::RichText::new(format!(
-            "{} plugin script(s) discovered.",
-            view.plugins.len()
-        ))
-        .size(12.0)
-        .color(theme::MUTED),
-    );
+        egui::RichText::new(path)
+            .monospace()
+            .size(10.5)
+            .color(theme::MUTED),
+    )
+    .on_hover_text(&plugin.path);
+    if let Some(error) = &plugin.error {
+        ui.colored_label(theme::DANGER, error);
+    }
+    if let Some(capture) = plugin.capture_label() {
+        ui.label(
+            egui::RichText::new(capture)
+                .monospace()
+                .size(10.5)
+                .color(theme::MUTED),
+        );
+    }
+
+    if !plugin.props.is_empty() {
+        ui.add_space(2.0);
+        // Controls are live only while the host runs this plugin; a disabled
+        // plugin has no Boa context to write into.
+        ui.add_enabled_ui(running && plugin.loaded && plugin.enabled, |ui| {
+            for prop in &plugin.props {
+                plugin_prop_control(ui, plugin, prop, state);
+            }
+        });
+    }
+    ui.separator();
+}
+
+/// One generated control for a plugin prop schema.
+fn plugin_prop_control(
+    ui: &mut egui::Ui,
+    plugin: &crate::model::PluginInfoView,
+    prop: &crate::model::PluginPropView,
+    state: &mut UiState,
+) {
+    use crate::model::PluginPropKindView;
+
+    let queue = |state: &mut UiState, value: serde_json::Value| {
+        state.queue(UiCommand::SetPluginProp {
+            path: plugin.path.clone(),
+            prop: prop.name.clone(),
+            value,
+        });
+    };
+
+    match prop.kind {
+        PluginPropKindView::Int | PluginPropKindView::Float => {
+            let (min, max, step) = prop.bounds();
+            let mut control = RangeControl::new(
+                &prop.name,
+                prop.value.as_f64().unwrap_or(0.0),
+                min,
+                max,
+                step,
+            );
+            if let Some(default) = prop.default.as_f64() {
+                control = control.with_default(default);
+            }
+            if control.draw(ui) {
+                queue(state, prop.number_value(control.value));
+            }
+        }
+        PluginPropKindView::Bool => {
+            let mut value = prop.value.as_bool().unwrap_or(false);
+            if ui.checkbox(&mut value, &prop.name).changed() {
+                queue(state, serde_json::Value::Bool(value));
+            }
+        }
+        PluginPropKindView::Text => {
+            let mut text = prop.value.as_str().unwrap_or_default().to_string();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(&prop.name)
+                        .size(13.0)
+                        .color(theme::MUTED),
+                );
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .id_salt(("modv-plugin-prop", &plugin.path, &prop.name))
+                        .desired_width(ui.available_width().max(80.0)),
+                );
+                if response.changed() {
+                    queue(state, serde_json::Value::String(text.clone()));
+                }
+            });
+        }
+        PluginPropKindView::Color => {
+            let mut control = ColorControl::new(&prop.name, &prop.value);
+            if control.draw(ui) {
+                queue(state, crate::model::plugin_color_value(control.rgba));
+            }
+        }
+        PluginPropKindView::Select => {
+            let selected = prop
+                .selected_label()
+                .map(str::to_string)
+                .unwrap_or_else(|| prop.value.to_string());
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(&prop.name)
+                        .size(13.0)
+                        .color(theme::MUTED),
+                );
+                egui::ComboBox::from_id_salt(("modv-plugin-prop", &plugin.path, &prop.name))
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for option in &prop.options {
+                            let is_selected = option.value == prop.value;
+                            if ui.selectable_label(is_selected, &option.label).clicked() {
+                                queue(state, option.value.clone());
+                            }
+                        }
+                    });
+            });
+        }
+    }
+}
+
+/// The collapsible deduplicated runtime-log window.
+fn plugin_logs_section(ui: &mut egui::Ui, view: &crate::model::PluginView, state: &mut UiState) {
+    let has_problem = view.logs.iter().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("error") || lower.contains("warn")
+    });
+    let label = if view.logs.is_empty() {
+        "Logs & errors".to_string()
+    } else {
+        format!("Logs & errors ({})", view.logs.len())
+    };
+    egui::CollapsingHeader::new(label)
+        .id_salt("modv-plugin-logs")
+        .default_open(has_problem)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button("Clear")
+                    .on_hover_text("Drop the retained panel lines")
+                    .clicked()
+                {
+                    state.queue(UiCommand::ClearPluginLogs);
+                }
+                if ui
+                    .small_button("Copy")
+                    .on_hover_text("Copy every retained line to the clipboard")
+                    .clicked()
+                {
+                    ui.ctx().copy_text(view.logs.join("\n"));
+                }
+            });
+            if view.logs.is_empty() {
+                ui.label(
+                    egui::RichText::new("No plugin messages.")
+                        .size(11.5)
+                        .color(theme::MUTED),
+                );
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("modv-plugin-logs-scroll")
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        for line in &view.logs {
+                            let colour = if line.contains("error") {
+                                theme::DANGER
+                            } else if line.contains("warn") {
+                                theme::WARNING
+                            } else {
+                                theme::MUTED
+                            };
+                            ui.label(
+                                egui::RichText::new(line)
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(colour),
+                            );
+                        }
+                    });
+            }
+        });
 }
 
 /// The JavaScript-plugin consent dialog.

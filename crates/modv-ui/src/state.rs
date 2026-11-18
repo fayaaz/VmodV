@@ -79,6 +79,24 @@ pub enum UiCommand {
     /// Record or withdraw the plugin sandbox consent. Withdrawing consent also
     /// disables the host (the runtime enforces that).
     SetPluginConsent(bool),
+    /// Run one discovered plugin or stop it, by absolute script path.
+    SetPluginEnabled {
+        path: String,
+        enabled: bool,
+    },
+    /// Re-read the plugin folders (new/removed/edited scripts).
+    RescanPlugins,
+    /// Force every discovered plugin through load + `init` again.
+    ReloadPlugins,
+    /// Write one plugin prop through `PluginHost::set_prop`. The runtime
+    /// coerces the value against the descriptor schema before persisting it.
+    SetPluginProp {
+        path: String,
+        prop: String,
+        value: Value,
+    },
+    /// Drop the runtime's retained `plugin: …` panel lines.
+    ClearPluginLogs,
 }
 
 /// P0 framework-spike evidence and the go/no-go state.
