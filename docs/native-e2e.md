@@ -34,9 +34,10 @@ One JSON object per line, UTF-8, `\n`-terminated. Requests:
 {"id": 1, "cmd": "state"}
 {"id": 2, "cmd": "dispatch", "action": "groups/createGroup", "payload": {"name": "Effects"}}
 {"id": 3, "cmd": "screenshot", "path": "/tmp/frame.png", "width": 640, "height": 360}
-{"id": 4, "cmd": "quit"}
-{"id": 5, "cmd": "ping"}
-{"id": 6, "cmd": "version"}
+{"id": 4, "cmd": "save"}
+{"id": 5, "cmd": "quit"}
+{"id": 6, "cmd": "ping"}
+{"id": 7, "cmd": "version"}
 ```
 
 Responses are correlated by the exact `id` value (number, string, …):
@@ -66,12 +67,13 @@ Responses are correlated by the exact `id` value (number, string, …):
 | `state` | — | Store snapshot + shell runtime | See [State shape](#state-shape). |
 | `dispatch` | `action` (string), `payload` (any JSON, optional) | The store action's JSON result | Runs on the winit thread; unknown actions follow `Store::dispatch` (usually `null`). Store errors are `ok: false`. |
 | `screenshot` | `path` (string), `width`/`height` (optional positive integers) | `{"path", "width", "height", "bytes"}` | Renders the current store state, reads the compositor's main texture back, box-downsamples and writes a PNG. Missing dimensions default to the compositor's main size. |
+| `save` | — | `{"path", "framesPresented"}` | Writes the same `engine-state.json` snapshot as File → Save engine snapshot. Crash/restart tests use it to establish the snapshot a supervisor restores before killing the process. |
 | `quit` | — | `{"quitting": true}` | Same path as File → Quit: saves `engine-state.json`/`scenes.json`, window state, layout, then exits 0. The acknowledgement is flushed before the process exits. |
 
-`state`, `ping` and `version` are pure reads. `dispatch` and `screenshot` run on
-the winit loop between frames. A screenshot includes an explicit
-`render_engine(None)` so a `dispatch` earlier in the same request batch is
-visible in the captured pixels.
+`state`, `ping` and `version` are pure reads. `dispatch`, `save` and
+`screenshot` run on the winit loop between frames. A screenshot includes an
+explicit `render_engine(None)` so a `dispatch` earlier in the same request batch
+is visible in the captured pixels.
 
 ### State shape
 
@@ -102,7 +104,10 @@ _engine             { framesPresented }   (same sidecar as engine-state.json)
 ```
 
 `groups`/`modules`/`inputs`/`scenes`/`performance` are the authoritative store
-values; `runtime` and `audio` are filled from the shell.
+values; `runtime` and `audio` are filled from the shell. `runtime.window` is the
+main window's live logical size (a saved `window-state.json` overrides
+`--width`/`--height` after the first launch), while `runtime.resolution` is the
+compositor main texture, which follows the output window.
 
 ### Lifecycle and threading
 
@@ -133,9 +138,11 @@ printf '%s\n' '{"id":1,"cmd":"ping"}' | socat - UNIX-CONNECT:/tmp/modv-control.s
 ## Rust process harness
 
 `crates/modv-app/tests/e2e/mod.rs` is the shared harness module;
-`crates/modv-app/tests/e2e_harness.rs` contains the first three proofs
+`crates/modv-app/tests/e2e_harness.rs` contains the control-socket proofs
 (default-seeded state + clean quit, dispatch/Scene/screenshot, error and
-reconnect handling).
+reconnect handling) and `crates/modv-app/tests/e2e_process.rs` ports the
+process-level Playwright intents (kill/restart, main-window render, default
+Group, window placement, Scene JSON opened like a preset).
 
 ### Spawning
 
@@ -150,12 +157,19 @@ let mut app = NativeHarness::builder()
 app.wait_ready();                       // ping until the frame loop is live
 ```
 
+Restart tests own one `userData` tree across several launches: create it with
+`e2e::temp_root("name")`, pass `root.join("userData")` to
+`NativeHarnessBuilder::user_data`, and remove the root when the test ends. The
+harness never deletes an explicit userData directory, so `engine-state.json`,
+`scenes.json` and `window-state.json` survive the process boundary.
+
 `spawn()` launches `env!("CARGO_BIN_EXE_modv")` (the binary Cargo just built)
 with:
 
-- a unique temp `MODV_USER_DATA`, `HOME` and `XDG_RUNTIME_DIR` (so defaults
-  are seeded into a throwaway `engine-state.json`/`scenes.json`, never the
-  developer's `~/.config/VmodV`);
+- a unique temp `MODV_USER_DATA` (or the explicit `user_data(...)` path),
+  `HOME` and `XDG_RUNTIME_DIR` (so defaults are seeded into a throwaway
+  `engine-state.json`/`scenes.json`, never the developer's
+  `~/.config/VmodV`);
 - `--socket <unique path>` and the requested `--width`/`--height`;
 - any extra CLI args (`--apply-scene`, `--preset`, `--scene`, `--playlist`,
   `--start-performance`, `--frames`, …);
@@ -173,12 +187,14 @@ with:
 | `call(request)` | Send any request; injects the id, returns `result` or `Err(error)`. |
 | `screenshot(path, width, height)` | Write a PNG; returns the wire result. Use `None` dimensions for the full main texture. |
 | `quit()` | Graceful `quit` (reply is flushed before exit). |
+| `save()` | Write `engine-state.json` now (`save`); returns the path and frame count. |
 | `wait_exit(timeout)` / `assert_exit(code)` | Reap the child; asserts and prints logs on the wrong status/timeout. |
 | `wait_for_state(timeout, predicate)` | Poll `state` until a predicate holds (no arbitrary sleeps in tests). |
 | `logs()` / `log_path()` | The combined stdout/stderr log. |
 | `user_data()`, `state_path()`, `socket_path()`, `temp_dir()`, `pid()` | Diagnostics and on-disk assertions. |
 | `disconnect()` | Drop the persistent client; the next request reconnects. |
 | `kill()` | Force-kill the process (tests that need crash files). |
+| `kill_and_wait()` | SIGKILL and return the `ExitStatus` (assert `signal() == 9`). |
 
 `Drop` kills the child if it is still alive. The temp tree is removed on
 success unless `MODV_E2E_KEEP=1` (or `.keep(true)`); a panicking test always
@@ -209,10 +225,11 @@ adapter. No host display, GPU or sound server is required. Run:
 
 ```bash
 make engine-test ARGS="-p modv-app --test e2e_harness -- --test-threads=1"
+make engine-test ARGS="-p modv-app --test e2e_process -- --test-threads=1"
 ```
 
 `.github/workflows/native.yml` runs the unit tests
-(`-p modv-app --lib`) and the harness (separate step, serial). A developer
+(`-p modv-app --lib`) and the harness (separate steps, serial). A developer
 host with a real display/GPU simply inherits `DISPLAY`/`WAYLAND_DISPLAY`; the
 harness does not change the running desktop.
 
@@ -270,11 +287,48 @@ wall-clock sleeps; the harness timeouts are failure bounds, not pacing.
 `tests/e2e_harness.rs`:
 
 - `native_shell_serves_state_seeds_defaults_and_quits_cleanly` — ping/version,
-  empty live Groups, seeded default Scenes, audio/tween/input sections, quit
-  acknowledgement, exit 0 and a valid `engine-state.json`.
+  one `"New Group"` default Group, seeded default Scenes, audio/tween/input
+  sections, quit acknowledgement, exit 0 and a valid `engine-state.json`.
 - `dispatch_updates_state_and_screenshot_writes_a_png` — creates a Group,
   applies the first default Scene with Groups, observes `appliedSceneId` and
   live Groups in `state`, writes a 320×180 PNG and decodes it.
 - `control_socket_reports_errors_reconnects_and_logs` — malformed commands and
   store errors come back as `ok: false`; a dropped client does not stop the
   server; the log records the listening path; quit is clean.
+
+`tests/e2e_process.rs`:
+
+- `engine_skeleton_survives_sigkill_and_restores_state` — presents a frame,
+  writes a `save` snapshot, SIGKILLs the shell (`signal() == 9`), relaunches
+  over the same userData and observes the restored Group and a new pid. The
+  Electron `MODV_ENGINE` supervisor path is a windowed `modv-engine` child; it
+  has no test seam that survives without Electron, so the native
+  single-process shell ports the intent: the same snapshot format, the same
+  kill without a graceful quit, and a clean replacement process. The
+  supervisor's watchdog/restart budget itself is covered by its own Rust unit
+  tests, not the process harness.
+- `renders_the_main_window_at_the_requested_size` — readiness, live
+  `runtime.frames`, `runtime.window` equals the requested 640×360, and a
+  decoded 640×360 (16:9) PNG.
+- `fresh_native_start_creates_exactly_one_default_group` — one enabled
+  `"New Group"` on a fresh userData; after adding a user Group and quitting,
+  the relaunch restores exactly two Groups with the same default id (no
+  duplicate).
+- `window_state_survives_a_restart` — a 720×405 launch saves
+  `window-state.json`; a relaunch requesting 800×600 keeps the saved main
+  window and the saved `output-0` compositor size.
+- `a_scene_json_opened_like_a_preset_is_applied_as_a_scene` — a Scene document
+  passed as `--preset` is listed, sets `appliedSceneId`/`currentSceneId`, and
+  its Group + Ball Module are live (no default Group is seeded on top).
+
+### Native startup parity
+
+The native shell owns the store instead of an Electron renderer, so it
+reproduces the renderer's boot dispatch itself. On a **fresh** native start —
+no restored `engine-state.json`, no successful startup preset/Scene (a
+playlist import does not replace the live stack), no `--apply-scene` — it
+dispatches `groups/createGroup` with `enabled: 1`, which yields the same
+`"New Group"` (and control inputs) as `application/index.js:446-456`. A
+restored snapshot, preset/Scene document, applied Scene or any existing Group
+wins, so nothing is duplicated. Headless (`--headless`/`--screenshot`) and
+`modv-engine` paths never run this: they keep their empty-start behaviour.

@@ -2,9 +2,10 @@
 //!
 //! The Electron e2e suite drives a live app through Playwright; the native
 //! equivalent launches the real binary (no mocks, no in-process `NativeApp`)
-//! with a temporary userData tree, a JSON-lines control socket and a virtual
-//! display when the environment has none. Tests then assert `state`, dispatch
-//! Vuex-style actions, capture compositor frames and verify the process exit.
+//! with a temporary userData tree (or an explicit one for restart tests), a
+//! JSON-lines control socket and a virtual display when the environment has
+//! none. Tests then assert `state`, dispatch Vuex-style actions, capture
+//! compositor frames and verify the process exit.
 //!
 //! ```ignore
 //! use crate::e2e::NativeHarness;
@@ -49,6 +50,7 @@ pub struct NativeHarnessBuilder {
     height: u32,
     args: Vec<String>,
     keep: bool,
+    user_data: Option<PathBuf>,
 }
 
 impl Default for NativeHarnessBuilder {
@@ -58,6 +60,7 @@ impl Default for NativeHarnessBuilder {
             height: 540,
             args: Vec::new(),
             keep: std::env::var("MODV_E2E_KEEP").is_ok_and(|value| value == "1"),
+            user_data: None,
         }
     }
 }
@@ -107,6 +110,17 @@ impl NativeHarnessBuilder {
         self
     }
 
+    /// Reuse an explicit `<userData>` tree instead of a per-launch temp one.
+    ///
+    /// Restart tests spawn a sequence of shells over the same tree (state,
+    /// Scenes, window placement), so the caller owns it: create it with
+    /// [`temp_root`] and remove it when the test finishes. The harness never
+    /// deletes an explicit userData directory.
+    pub fn user_data(mut self, path: impl Into<PathBuf>) -> Self {
+        self.user_data = Some(path.into());
+        self
+    }
+
     /// Spawn the native shell and wait until it answers `ping`.
     pub fn spawn(self) -> NativeHarness {
         NativeHarness::launch(self)
@@ -144,7 +158,10 @@ impl NativeHarness {
     fn launch(options: NativeHarnessBuilder) -> Self {
         let temp_dir = unique_dir("native-e2e");
         fs::create_dir_all(&temp_dir).expect("create harness temp dir");
-        let user_data = temp_dir.join("userData");
+        let user_data = match options.user_data.clone() {
+            Some(path) => path,
+            None => temp_dir.join("userData"),
+        };
         let home = temp_dir.join("home");
         let runtime_dir = temp_dir.join("runtime");
         fs::create_dir_all(&user_data).expect("create userData dir");
@@ -237,7 +254,7 @@ impl NativeHarness {
         &self.socket_path
     }
 
-    /// The harness temp directory (logs, screenshots, screenshots).
+    /// The harness temp directory (logs, screenshots, display log).
     pub fn temp_dir(&self) -> &Path {
         &self.temp_dir
     }
@@ -393,6 +410,14 @@ impl NativeHarness {
         self.expect(json!({ "cmd": "quit" }))
     }
 
+    /// `save`: write `engine-state.json` now (File → Save engine snapshot).
+    ///
+    /// Crash tests use this to establish the snapshot a supervisor would
+    /// restore after the process disappears without a graceful quit.
+    pub fn save(&mut self) -> Value {
+        self.expect(json!({ "cmd": "save" }))
+    }
+
     /// Drop the persistent client so the next request opens a new connection.
     pub fn disconnect(&mut self) {
         self.client = None;
@@ -457,6 +482,16 @@ impl NativeHarness {
             let _ = child.wait();
         }
         Ok(())
+    }
+
+    /// SIGKILL the shell and return its wait status (crash tests).
+    pub fn kill_and_wait(&mut self) -> ExitStatus {
+        let mut child = self
+            .child
+            .take()
+            .expect("kill_and_wait needs a running native shell");
+        let _ = child.kill();
+        child.wait().expect("reap the killed native shell")
     }
 
     fn expect(&mut self, request: Value) -> Value {
@@ -752,6 +787,17 @@ fn unique_dir(prefix: &str) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!("modv-{prefix}-{}-{nanos}", std::process::id()))
+}
+
+/// Create a unique temp directory for a multi-launch test.
+///
+/// The harness removes only its own per-launch tree, so a restart test owns
+/// this root: pass `root.join("userData")` to
+/// [`NativeHarnessBuilder::user_data`] and remove `root` when the test ends.
+pub fn temp_root(prefix: &str) -> PathBuf {
+    let dir = unique_dir(prefix);
+    fs::create_dir_all(&dir).expect("create harness temp root");
+    dir
 }
 
 fn set_private_dir(path: &Path) {

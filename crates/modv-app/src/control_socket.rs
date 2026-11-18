@@ -8,7 +8,8 @@
 //! {"id": 1, "cmd": "state"}
 //! {"id": 2, "cmd": "dispatch", "action": "groups/createGroup", "payload": {"name": "Effects"}}
 //! {"id": 3, "cmd": "screenshot", "path": "/tmp/frame.png", "width": 640, "height": 360}
-//! {"id": 4, "cmd": "quit"}
+//! {"id": 4, "cmd": "save"}
+//! {"id": 5, "cmd": "quit"}
 //! ```
 //!
 //! Every request gets exactly one response on the same connection:
@@ -94,6 +95,8 @@ pub enum Command {
     },
     /// `quit`: graceful shutdown through the same path as File → Quit.
     Quit,
+    /// `save`: write the engine snapshot (`engine-state.json`) now.
+    Save,
     /// `ping`: readiness probe.
     Ping,
     /// `version`: binary/protocol version probe.
@@ -135,6 +138,7 @@ pub fn parse_request(line: &str) -> Result<Request, RequestError> {
         "ping" => Command::Ping,
         "version" => Command::Version,
         "quit" => Command::Quit,
+        "save" => Command::Save,
         "dispatch" => {
             let action = object
                 .get("action")
@@ -692,6 +696,7 @@ mod tests {
             (r#"{"id":5,"cmd":"ping"}"#, Command::Ping),
             (r#"{"id":6,"cmd":"version"}"#, Command::Version),
             (r#"{"id":7,"cmd":"quit"}"#, Command::Quit),
+            (r#"{"id":8,"cmd":"save"}"#, Command::Save),
         ] {
             assert_eq!(parse_request(line).expect("command").command, expected);
         }
