@@ -1,0 +1,1485 @@
+{
+  "specs": [
+    {
+      "file": "tests/e2e/main.spec.js",
+      "notes": "Placeholder file: every test in main.spec.js is commented out.",
+      "tests": []
+    },
+    {
+      "file": "tests/e2e/spec/audio/systemAudio.spec.js",
+      "tests": [
+        {
+          "name": "the worker store exposes the system audio state",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/src/model.rs:the_audio_selection_view_exposes_the_system_audio_state"
+          ],
+          "notes": "Native exposes the same facts as AudioSelectionView (source, device, capture rate, error, active label) instead of the worker mediaStream.systemAudio record; the view field contract is pinned by the model test."
+        },
+        {
+          "name": "the renderer store lists the system audio source",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/audio_panel.rs:audio_panel_lists_the_system_monitor_default_input_and_devices"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "the main process writes a log file into the config folder",
+          "status": "covered",
+          "rust": [
+            "tools/native-smoke.sh:packaged AppRun writes the dated log (check d)",
+            "crates/modv-app/tests/e2e_harness.rs:control_socket_reports_errors_reconnects_and_logs"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/audio/tempoDetector.spec.js",
+      "tests": [
+        {
+          "name": "exposes the pure detector API",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:exposes_a_pure_detector_api_with_empty_defaults",
+            "crates/modv-media/src/audio/tempo.rs:resets_to_the_initial_state"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "detects 120 BPM within 2 BPM",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:detects_a_120_bpm_onset_pattern_within_2_bpm"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "detects 128 BPM within 2 BPM",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:detects_a_128_bpm_onset_pattern_within_2_bpm"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "detects 140 BPM within 2 BPM",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:detects_a_140_bpm_onset_pattern_within_2_bpm"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "detects 174 BPM within 2 BPM",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:detects_a_174_bpm_onset_pattern_within_2_bpm"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "detects 178 BPM within 2 BPM",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:detects_a_178_bpm_onset_pattern_within_2_bpm"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "keeps a genuine half-time 87 BPM pattern at 87 BPM",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:keeps_a_genuine_half_time_87_bpm_pattern_at_87_bpm"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "does not report fast drum & bass at half time",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:does_not_report_fast_drum_and_bass_at_half_time"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "handles timing jitter, noise and weak off-beat ghosts",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:handles_timing_jitter_noise_and_weak_off_beat_ghosts"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "handles jitter and noise at slow tempos",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:handles_jitter_and_noise_at_slow_tempos"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "stays stable once it has a confident estimate",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:stays_stable_once_it_has_a_confident_estimate"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "reports no tempo and low confidence for silence",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:reports_no_tempo_and_low_confidence_for_silence"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "never leaves the supported BPM range",
+          "status": "covered",
+          "rust": [
+            "crates/modv-media/src/audio/tempo.rs:stays_inside_the_supported_bpm_range"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/engine/engineBpmInputLink.spec.js",
+      "tests": [
+        {
+          "name": "drives rave.exe's BPM input from the detected tempo",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/store_ops.rs:bpm_input_links_wait_for_a_tempo_and_then_pass_it_through",
+            "crates/modv-app/src/store_ops.rs:bpm_source_selects_which_tempo_writes_apply",
+            "crates/modv-engine/src/default_scenes.rs:adds_a_version_8_rave_exe_scene"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/engine/engineParity.spec.js",
+      "tests": [
+        {
+          "name": "gallery, audio links, transparency and previews",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/module_registry.rs:registered_module_count_matches_the_parity_baseline",
+            "crates/modv-app/src/store_ops.rs:input_links_write_module_props_from_audio",
+            "crates/modv-renderers/src/point10/scene_tests.rs:it_is_coming_for_you_keeps_the_background_transparent",
+            "crates/modv-app/src/compositor.rs:preview_ring_flattens_transparency_onto_opaque_black",
+            "crates/modv-app/src/compositor.rs:module_preview_renders_a_point10_scene"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/engine/engineSkeleton.spec.js",
+      "tests": [
+        {
+          "name": "engine presents frames, survives a kill and restarts",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_process.rs:engine_skeleton_survives_sigkill_and_restores_state",
+            "crates/modv-app/src/supervisor.rs:engine_shutdown_flushes_the_snapshot_and_requests_exit"
+          ],
+          "notes": "The native shell is a single process with no separate supervised engine child: the process test renders, SIGKILLs the shell, relaunches over the same userData and asserts the saved snapshot (Group + frames) is restored. It covers the same kill-survival intent; the Electron supervisor restart budget is not recreated."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/defaultGroupIsFocusedByDefault.spec.js",
+      "tests": [
+        {
+          "name": "default group is focused by default",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:the_default_group_is_focused_by_default"
+          ],
+          "notes": "Native selects the first live Group on startup; there is no Gallery Group to skip."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/fullScreenGlContextsAreNotAntialiased.spec.js",
+      "tests": [
+        {
+          "name": "full-screen-quad GL contexts do not request antialiasing",
+          "status": "waived",
+          "notes": "Asserts Chromium WebGL context attributes (antialias:false) on the worker's OffscreenCanvas aux outputs. Native ISF/shader passes are wgpu pipelines with no multisample state, so there is no context attribute to inspect."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/galleryGroupInheritsOnlyWhenHovered.spec.js",
+      "tests": [
+        {
+          "name": "the Gallery group inherits only while an item is hovered",
+          "status": "waived",
+          "notes": "The legacy worker Gallery Group canvas (inherit=true while hovered) does not exist natively; hover previews are isolated offscreen renders. The compositing intent is asserted by crates/modv-app/src/compositor.rs:module_preview_composites_over_the_live_output."
+        },
+        {
+          "name": "the idle Gallery group canvas is not repainted every frame",
+          "status": "waived",
+          "notes": "Idle Gallery Group repaint avoidance is a worker-canvas optimisation; the native shell has no Gallery Group canvas to repaint. Preview caches are bounded/reset in the scene_preview tests."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/galleryItemPreviewRendersModule.spec.js",
+      "tests": [
+        {
+          "name": "a hovered gallery item renders its module preview",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/compositor.rs:module_preview_renders_a_two_d_module"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "an ISF gallery preview renders over the live composition",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/compositor.rs:module_preview_renders_an_isf_module",
+            "crates/modv-app/src/compositor.rs:module_preview_composites_over_the_live_output"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/galleryItemPreviewsInheritTheComposition.spec.js",
+      "tests": [
+        {
+          "name": "a gallery item preview renders over the inherited composition",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/compositor.rs:module_preview_composites_over_the_live_output"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/isfGalleryCategories.spec.js",
+      "tests": [
+        {
+          "name": "tunnel ISF modules are registered as 3D Scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/module_registry.rs:tunnel_isf_modules_are_registered_as_3d_scenes"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "NC-SA scene ISF modules are registered as 3D Scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/module_registry.rs:nc_sa_scene_isf_modules_are_registered_as_3d_scenes"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "NC-SA scene ISF modules compile and draw",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/compositor.rs:nc_sa_scene_isf_modules_compile_and_draw"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "tunnel ISF modules compile and draw",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/compositor.rs:tunnel_isf_modules_compile_and_draw"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "the Plexus CC0 scene module compiles and draws",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/compositor.rs:plexus_cc0_scene_module_compiles_and_draws"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "tunnel ISF modules render and animate",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/compositor.rs:tunnel_isf_modules_render_and_animate"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/moduleDataCommitsOnlyWhenChanged.spec.js",
+      "tests": [
+        {
+          "name": "module data commits are skipped when update returns the same object",
+          "status": "waived",
+          "notes": "Vuex commit de-duplication in the worker loop. Native module data is updated in-place in Rust with no per-frame commit or mirror message to suppress."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/renderersAreRegistered.spec.js",
+      "tests": [
+        {
+          "name": "renderers are registered",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/module_registry.rs:registered_modules_cover_every_kind_and_match_meta_fields",
+            "crates/modv-app/src/module_registry.rs:registry_knows_both_module_kinds"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/rendersTheMainWindow.spec.js",
+      "tests": [
+        {
+          "name": "renders the main window",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_process.rs:renders_the_main_window_at_the_requested_size",
+            "crates/modv-app/tests/e2e_harness.rs:dispatch_updates_state_and_screenshot_writes_a_png"
+          ],
+          "notes": "The native process test waits for readiness and a presented frame, then asserts the requested 640x360 (16:9) window and a decoded screenshot."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/general/searchGalleryAndAddModuleToGroup.spec.js",
+      "tests": [
+        {
+          "name": "search gallery and add module to group",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/gallery_filter.rs:search_narrows_within_all_and_respects_the_category",
+            "crates/modv-ui/tests/gallery_drag_drop.rs:double_clicking_a_gallery_tile_still_adds_to_the_selected_group"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/alphaStateCanBeSet.spec.js",
+      "tests": [
+        {
+          "name": "alpha state can be set",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:alpha_can_be_set"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/backspaceRemovesFocusedGroup.spec.js",
+      "tests": [
+        {
+          "name": "backspace removes focused group",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:backspace_removes_the_focused_group",
+            "crates/modv-ui/tests/e2e_groups.rs:backspace_is_ignored_while_a_text_field_has_focus"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/blendModeStateCanBeSet.spec.js",
+      "tests": [
+        {
+          "name": "blend mode state can be set",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:blend_mode_can_be_set"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/clearingStateCanBeToggledBetween0and1.spec.js",
+      "tests": [
+        {
+          "name": "clearing state can be toggled beween 0 and 1",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:clearing_state_can_be_toggled_between_0_and_1"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/createsADefaultGroup.spec.js",
+      "tests": [
+        {
+          "name": "creates a default group",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_process.rs:fresh_native_start_creates_exactly_one_default_group",
+            "crates/modv-app/tests/e2e_harness.rs:native_shell_serves_state_seeds_defaults_and_quits_cleanly"
+          ],
+          "notes": "A fresh native userData seeds the same single New Group (there is no Gallery Group canvas); the process test asserts exactly one Group."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/enabledStateCanBeToggledBetween01and2.spec.js",
+      "tests": [
+        {
+          "name": "enabled state can be toggled between 0, 1 and 2",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:enabled_state_can_be_toggled_between_0_1_and_2"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/groupNameCanBeChanged.spec.js",
+      "tests": [
+        {
+          "name": "group name can be changed",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:group_name_can_be_changed"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/groupsCanBeRearranged.spec.js",
+      "tests": [
+        {
+          "name": "groups can be rearranged",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:groups_can_be_rearranged"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/inheritAndInheritFromStateCanBeSet.spec.js",
+      "tests": [
+        {
+          "name": "inherit and inheritFrom state can be set",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:inherit_and_inherit_from_can_be_set"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/newGroupButtonCreatesANewGroup.spec.js",
+      "tests": [
+        {
+          "name": "new group button creates a new group",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:the_new_group_button_creates_a_group"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/groups/pipelineStateCanBeToggledBetween0and1.spec.js",
+      "tests": [
+        {
+          "name": "pipeline state can be toggled beween 0 and 1",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_groups.rs:pipeline_state_can_be_toggled_between_0_and_1"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/inputLinks/inputConfigUpdatesWhenControlIsFocused.spec.js",
+      "tests": [
+        {
+          "name": "input config updates when control is focused",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_input_config.rs:focusing_a_prop_opens_the_input_config_for_that_input",
+            "crates/modv-ui/tests/e2e_input_config.rs:the_focused_input_editor_follows_a_different_prop",
+            "crates/modv-app/src/store_ops.rs:focused_input_round_trips_and_clears"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/main/quitCleansUp.spec.js",
+      "tests": [
+        {
+          "name": "quitting the app leaves no orphaned process tree",
+          "status": "waived",
+          "notes": "Asserts Chromium's main/renderer/GPU/utility child tree is gone after app.quit(). The native shell is one process with no such child tree; tools/native-smoke.sh already asserts windowed runs exit cleanly. An orphan-tree test here would only test Electron's process model."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/main/windowState.spec.js",
+      "tests": [
+        {
+          "name": "remembers window screens and resolutions between restarts",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_process.rs:window_state_survives_a_restart",
+            "crates/modv-app/src/window_state.rs:write_and_read_round_trips_through_an_atomic_file",
+            "crates/modv-app/src/window_state.rs:bounds_clamp_into_the_display_area"
+          ],
+          "notes": "The process test writes a placement, restarts the native shell and compares the restored bounds; serialisation and clamping stay covered by the window_state unit tests."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/packaging/linuxBundleIsTrimmed.spec.js",
+      "tests": [
+        {
+          "name": "the Linux bundle omits macOS-only and build-only payloads",
+          "status": "waived",
+          "notes": "Asserts electron-builder bundle contents: app.asar.unpacked, hapticjs/grandiose native addons and Chromium locale .pak files. The native AppImage/.deb has separate packaging checks (tools/native-deb-check.sh, tools/native-smoke.sh) and contains none of these Electron payloads."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10BoxyTransparency.spec.js",
+      "tests": [
+        {
+          "name": "Point10 Boxy renders on a transparent background",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:boxy_keeps_the_background_transparent",
+            "crates/modv-render/src/graph_tests.rs:normal_source_over_alpha"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10ChromaticTransparency.spec.js",
+      "tests": [
+        {
+          "name": "Point10 Chromatic Line renders on a transparent background",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:chromatic_line_keeps_the_background_transparent"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Chromatic Wave renders on a transparent background",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:chromatic_wave_keeps_the_background_transparent"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10EffectsAreRegistered.spec.js",
+      "tests": [
+        {
+          "name": "Point10 effects and transitions are registered",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/module_registry.rs:module_registry_matches_the_legacy_manifest",
+            "crates/modv-app/src/module_registry.rs:registered_module_count_matches_the_parity_baseline",
+            "crates/modv-renderers/src/shader/modules/mod.rs:module_count_is_36"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10ImportedScenes.spec.js",
+      "tests": [
+        {
+          "name": "Point10 Mirror Cube draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:mirror_cube_renders"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Sound Cube draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:sound_cube_renders"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Hollow Cube draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:hollow_cube_renders",
+            "crates/modv-renderers/src/point10/scene_tests.rs:hollow_cube_keeps_the_background_transparent"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Color Cube draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:color_cube_renders"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Latent Backrooms draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:latent_backrooms_renders"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Glass Lens draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:glass_lens_renders"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Ultra HDR draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:ultra_hdr_renders"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Earth draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scenes/earth.rs:earth_renders_two_frames_through_its_composer"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Sun draws through the Point10 adapter",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scenes/sun.rs:renders_two_frames_and_keeps_the_corners_transparent"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10SpiralTransparency.spec.js",
+      "tests": [
+        {
+          "name": "Point10 Spiral Particles renders on a transparent background",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:spiral_particles_renders",
+            "crates/modv-renderers/src/point10/scenes/spiral_particles.rs:clear_alpha_is_transparent_and_update_without_spectrum_is_a_no_op"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10WaterRippleTransparency.spec.js",
+      "tests": [
+        {
+          "name": "Point10 Water Ripple renders on a transparent background",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:water_ripple_renders",
+            "crates/modv-renderers/src/point10/scene_tests.rs:water_ripple_keeps_the_corners_transparent"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10WebGPU.spec.js",
+      "tests": [
+        {
+          "name": "Point10 Rolling Fire presents through the WebGPU backend",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:rolling_fire_renders"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Point10 Smoke Room presents through the WebGPU backend",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:smoke_room_renders"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/point10/point10WormholeTransparency.spec.js",
+      "tests": [
+        {
+          "name": "Point10 Wormhole renders on a transparent background",
+          "status": "covered",
+          "rust": [
+            "crates/modv-renderers/src/point10/scene_tests.rs:wormhole_keeps_the_background_transparent"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/presets/generatesAPresetWithExpectedKeys.spec.js",
+      "tests": [
+        {
+          "name": "generates a preset with expected keys",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/preset.rs:create_preset_from_empty_state",
+            "crates/modv-app/src/fixtures.rs:snapshot_has_the_six_preset_keys_plus_bookkeeping"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/captureLiveState.spec.js",
+      "tests": [
+        {
+          "name": "capturing writes the live state back into the Scene document",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:capture_live_state_updates_the_scene_and_refuses_during_performance",
+            "crates/modv-engine/src/scene_capture.rs:capture_live_state_returns_row_indexed_groups"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "capturing does not write other Scenes' groups and refuses during performance mode",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_capture.rs:capture_live_state_refuses_while_performance_runs",
+            "crates/modv-engine/src/scene_capture.rs:build_captured_groups_captures_only_the_scenes_groups",
+            "crates/modv-app/src/scene_ops.rs:capture_of_an_unapplied_scene_is_refused"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/defaultScenes.spec.js",
+      "tests": [
+        {
+          "name": "ships at least 18 default scenes with unique names",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:ships_at_least_54_default_scenes_with_unique_names",
+            "crates/modv-engine/src/default_scenes.rs:bumps_the_defaults_version_to_18"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "every default scene references registered modules and valid groups",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:every_scene_has_a_name_version_and_groups",
+            "crates/modv-app/src/module_registry.rs:every_default_scene_module_resolves_in_the_registry"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "no default scene uses plain Waveform or Bar modules",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:does_not_use_any_removed_or_retired_module",
+            "crates/modv-engine/src/default_scenes.rs:leaves_rows_empty_rather_than_replacing_a_removed_waveform_or_bar"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "does not put the Mesmer 2D Scene in an Effects group",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_defaults.rs:does_not_put_the_mesmer_scene_in_an_effects_group"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "does not use the Bands module in any default scene",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:does_not_use_any_removed_or_retired_module"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "uses a spread of registered ISF filters in Effects groups",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_defaults.rs:default_scenes_use_a_spread_of_registered_isf_filters_in_effects_groups"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "ships a version 3 batch of glitch scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:adds_at_least_nine_scenes_in_the_version_3_batch",
+            "crates/modv-engine/src/default_scenes.rs:keeps_rgb_shift_and_digital_glitch_in_effects_groups",
+            "crates/modv-engine/src/default_scenes.rs:keeps_twirl_only_in_it_twirls_at_night",
+            "crates/modv-renderers/src/shader/modules/mod.rs:audio_features_match_js_meta"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "seeds the version 3 scenes with every module intact",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_defaults.rs:seeds_the_version_3_scenes_with_every_module_intact"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "version 4 scenes use the varied Point10 scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:adds_at_least_twelve_varied_point10_scenes_in_the_version_4_batch",
+            "crates/modv-engine/src/default_scenes.rs:uses_the_previously_unused_point10_scenes_in_the_version_4_batch"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "version 4 scenes pin foreground and background alpha to bass",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:pins_some_version_4_alpha_controls_to_bass"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "version 5 scenes use a varied filter batch with ASCII Art",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:adds_a_varied_version_5_filter_batch_with_ascii_art"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "version 6 ships the Digital Crystal Tunnel scene",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:adds_a_version_6_digital_crystal_tunnel_scene"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "version 6 ships the MBOX Light Tunnel scene with audio reactive layers",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:adds_a_version_6_mbox_light_tunnel_scene_with_audio_reactive_layers"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "version 7 replaces Cube Floor and ships Circular Mountain",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:adds_the_version_7_circular_mountain_scene",
+            "crates/modv-engine/src/default_scenes.rs:renames_cube_floor_drive_to_waveform_drive"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "version 9 adds single-Group and foreground-chained Scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:adds_the_version_9_sparse_scenes",
+            "crates/modv-engine/src/default_scenes.rs:chains_an_effect_inside_a_foreground_group"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "MBOX Light Tunnel fixes the hue at zero, scales with bass and keeps speed constant",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:keeps_the_mbox_hue_fixed_at_zero_and_scales_with_bass"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "no default scene uses the Kaleidoscope or Kaleidoscope Tile module",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:does_not_use_any_removed_or_retired_module"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "uses Circular Screen in an Effects group",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:uses_circular_screen_posterize_and_ascii_art_in_effects_groups"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "no default scene uses the Webcam module",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:does_not_use_any_removed_or_retired_module"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "default scenes chain controls to bass and a BPM tween",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_defaults.rs:default_scenes_chain_controls_to_bass_and_a_bpm_tween"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "seeds every default scene on a fresh install",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:default_seeding_seeds_the_full_set_once",
+            "crates/modv-engine/src/default_scenes.rs:does_not_offer_removed_scenes_to_fresh_installs"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "appends only missing new defaults without duplicating old or user scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:seeds_newer_batches_for_an_install_on_version_2",
+            "crates/modv-engine/src/default_scenes.rs:skips_scenes_already_seeded_or_present_by_name"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "does not resurrect deleted defaults or duplicate case-insensitive names",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/default_scenes.rs:skips_scenes_already_seeded_or_present_by_name",
+            "crates/modv-app/src/scene_ops.rs:default_seeding_seeds_the_full_set_once"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "hydrates legacy files that only have defaultsSeeded",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_defaults.rs:hydrates_legacy_files_that_only_have_defaults_seeded"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "ensureDefaultScenes appends a missing default once and keeps user scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:default_seeding_seeds_the_full_set_once",
+            "crates/modv-engine/src/default_scenes.rs:skips_scenes_already_seeded_or_present_by_name"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/gallerylessPerformance.spec.js",
+      "tests": [
+        {
+          "name": "performance rows keep applying without a Gallery Group",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:performance_rows_keep_applying_without_a_gallery_group"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/hoverPreviewIsolation.spec.js",
+      "tests": [
+        {
+          "name": "hovering an ISF grid cell keeps the live ISF layers rendering",
+          "status": "waived",
+          "notes": "Regression for deleting the shared WebGL unit-quad vertex buffer when a preview ISF renderer is disposed. Native previews use separate wgpu module instances; the isolation/cache behaviour is covered by scene_preview.rs:cache_keeps_the_other_cells_instances_while_a_hover_moves."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/hoverPreviewUsesGalleryContexts.spec.js",
+      "tests": [
+        {
+          "name": "hovering an ISF cell keeps the live ISF canvas at output size",
+          "status": "waived",
+          "notes": "Asserts the live worker's shared ISF OffscreenCanvas keeps its output size during a hover. Native previews never resize the live surface; scene_preview tests cover isolated preview instances and cache invalidation."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/performanceCellTiming.spec.js",
+      "tests": [
+        {
+          "name": "cells with different timing advance independently and only the advancing row fades",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:rows_with_different_dwell_targets_advance_independently"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "max cell time stays the upper bound of a cell's random dwell",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_rows.rs:advance_is_forced_at_the_maximum_dwell",
+            "crates/modv-engine/src/scene_timing.rs:pick_cell_dwell_stays_below_maximum_for_roll_just_under_one"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/performanceGrid.spec.js",
+      "tests": [
+        {
+          "name": "applying a row Scene only replaces that row",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:applying_a_row_scene_only_replaces_that_row"
+          ],
+          "notes": "Native row applies mint a fresh Group id instead of reusing the outgoing id; the test asserts the applied row gets the Scene modules while the other row keeps its id and module list."
+        },
+        {
+          "name": "a column Scene apply clears a row the Scene does not define",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:a_column_scene_apply_clears_a_row_the_scene_does_not_define"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a row Scene apply fades in and finishes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:row_crossfade_follows_the_smoothstep_and_removes_the_ghost"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a row fade keeps the outgoing visuals animating",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:a_row_fade_keeps_the_outgoing_module_animating"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a background row fade is visible through the rows that inherit it",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:a_background_row_fade_is_visible_through_inheriting_rows"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "the Scenes grid marks the applied row cell as active",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/scene_live_rows.rs:only_each_rows_live_cell_is_marked",
+            "crates/modv-ui/src/panels/scene_grid.rs:performance_off_keeps_the_applied_scene_as_a_whole_column"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "naming a row matches groups by name and reorders the layer stack",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:set_row_names_remaps_live_groups_and_persists",
+            "crates/modv-engine/src/scene_rows.rs:assign_row_indexes_pins_named_groups_to_their_rows"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "applying a Scene honours named rows instead of group positions",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_rows.rs:assign_row_indexes_pins_named_groups_to_their_rows",
+            "crates/modv-engine/src/scene_rows.rs:named_row_matches_group_case_insensitively"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "an Input Link with no audio data leaves the prop value alone",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/input_links.rs:unknown_feature_is_skipped",
+            "crates/modv-app/src/input_links.rs:missing_input_and_missing_module_are_skipped"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "Ctrl+drag copies a cell's group into an empty cell of another scene",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:copy_scene_cell_copies_a_row_between_scenes",
+            "crates/modv-engine/src/scene_cells.rs:copy_pads_missing_rows_with_holes_and_trims_trailing_holes",
+            "crates/modv-ui/src/panels/scene_grid.rs:copy_drag_emits_the_engine_payload"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "hovering a grid cell previews the saved group and leaves a still",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_scenes_grid.rs:hovering_a_cell_previews_the_saved_group_and_keeps_the_still"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "the Scenes grid adds a new empty Scene column",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_scenes_grid.rs:the_grid_adds_a_new_empty_scene_column"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "editing a grid cell saves added modules back into the Scene",
+          "status": "waived",
+          "rust": [
+            "crates/modv-ui/tests/e2e_scenes_grid.rs:capturing_the_live_row_saves_the_added_modules_into_the_cell",
+            "crates/modv-ui/tests/e2e_scenes_grid.rs:clearing_a_cell_asks_for_confirmation_first",
+            "crates/modv-app/src/scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows"
+          ],
+          "notes": "Deliberate waiver: native has no in-cell module-editor dialog. The same end state is reachable by double-clicking an empty cell (scenes/createSceneCellGroup), editing the live Group through the Gallery/Groups pane, then capturing the live row back into the cell (scenes/captureSceneRowToScene, asserted by capturing_the_live_row_saves_the_added_modules_into_the_cell) or clearing it (scenes/clearSceneCell, now confirmed). The store half is scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows."
+        },
+        {
+          "name": "clearing a grid cell removes its modules after confirmation",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_scenes_grid.rs:clearing_a_cell_asks_for_confirmation_first"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "renaming a Scene column updates the grid and the Scene",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_scenes_grid.rs:renaming_a_scene_column_updates_the_grid_and_the_scene"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "dragging a Scene column reorders the Scenes",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_columns.rs:moves_a_scene_later_in_the_list",
+            "crates/modv-ui/src/panels/scene_grid.rs:dropping_a_scene_column_emits_move_scene_with_the_target_index"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "editing an empty Scene cell creates a Group and saves its modules",
+          "status": "covered",
+          "rust": [
+            "crates/modv-ui/tests/e2e_scenes_grid.rs:editing_an_empty_cell_creates_a_group",
+            "crates/modv-app/src/scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows"
+          ],
+          "notes": "Native covers the create half with a double-click (scenes/createSceneCellGroup) and the save half through the live-row capture path; there is no editor dialog."
+        },
+        {
+          "name": "the cell editor can drag a module from its panel into the Group",
+          "status": "waived",
+          "rust": [
+            "crates/modv-ui/tests/gallery_drag_drop.rs:dragging_a_gallery_tile_onto_a_group_queues_the_add_action"
+          ],
+          "notes": "Deliberate waiver: there is no editor module panel to drag from. Native has the equivalent drag already: a Gallery tile dropped on a Group block queues ui/addModuleToGroup (gallery_drag_drop.rs:dragging_a_gallery_tile_onto_a_group_queues_the_add_action), and a Library asset can be dragged onto its texture prop."
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/performanceTiming.spec.js",
+      "tests": [
+        {
+          "name": "uses the global performance timing when a scene has no override",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_timing.rs:scene_timing_without_override_uses_global_timing"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "uses per-scene timing when the override flag is true",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_timing.rs:scene_timing_override_uses_scene_bounds"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "hydrates legacy scenes with scene-level times as global defaults",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_timing.rs:scene_timing_without_override_uses_global_timing",
+            "crates/modv-engine/src/scene_timing.rs:scene_timing_override_with_missing_bounds_falls_back_to_global"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "sanitises numeric values from the UI",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_timing.rs:to_finite_number_matches_js_number_coercion",
+            "crates/modv-engine/src/scene_timing.rs:performance_timing_defaults_from_missing_input",
+            "crates/modv-engine/src/scene_timing.rs:scene_timing_reads_numeric_strings"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "keeps minSeconds below maxSeconds",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scene_timing.rs:performance_timing_pushes_max_above_min",
+            "crates/modv-engine/src/scene_timing.rs:scene_timing_override_floors_and_orders_bounds"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/performanceTransitions.spec.js",
+      "tests": [
+        {
+          "name": "a native shader transition renders and completes on a manual scene change",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:manual_change_with_a_shader_transition_records_the_effect_and_capture",
+            "crates/modv-app/src/scene_transition.rs:each_effect_moves_from_red_to_blue_through_a_mix",
+            "crates/modv-app/src/compositor.rs:shader_transition_mixes_the_captured_frame_with_the_incoming_scene",
+            "crates/modv-app/src/performance.rs:tick_deltas_are_event_driven_not_per_frame"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "an unknown transition falls back to Fade",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:shader_transition_falls_back_to_fade_without_losing_the_change",
+            "crates/modv-app/src/performance.rs:unavailable_or_empty_allowed_lists_still_fade"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "an ISF transition renders and completes on a manual scene change",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:manual_change_with_an_isf_transition_uses_the_shader_path",
+            "crates/modv-app/src/compositor.rs:isf_transition_renders_the_captured_frame_through_the_incoming_scene",
+            "crates/modv-app/src/performance.rs:tick_deltas_are_event_driven_not_per_frame"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "an uncompilable transition falls back to Fade",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:shader_transition_falls_back_to_fade_without_losing_the_change",
+            "crates/modv-app/src/scene_transition.rs:an_uncompilable_isf_transition_fails_prepare_so_the_caller_can_fade"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "performance mode always crossfades, even with shader transitions allowed",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:performance_row_changes_always_fade_regardless_of_allowed_transitions",
+            "crates/modv-app/src/performance.rs:manual_change_during_performance_uses_a_fade_transition"
+          ],
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "file": "tests/e2e/spec/scenes/sceneSnapshotsAndPerformance.spec.js",
+      "tests": [
+        {
+          "name": "a saved Scene restores its Groups and Modules",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:apply_scene_builds_rows_with_fresh_ids_and_merged_props",
+            "crates/modv-app/src/scene_ops.rs:save_current_as_scene_snapshots_the_live_state"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a saved Scene restores its Input Links and Tween data",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:apply_scene_creates_the_saved_input_links",
+            "crates/modv-app/src/scene_ops.rs:re_applying_a_scene_keeps_tween_playheads_and_prunes_unknown_ids"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a saved Scene serialises the whole store like a preset",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:a_saved_scene_serialises_the_whole_store_like_a_preset",
+            "crates/modv-app/tests/e2e_scenes.rs:apply_scene_restores_the_saved_midi_state_and_focused_input",
+            "crates/modv-app/tests/e2e_scenes.rs:apply_scene_clears_the_focused_input_when_the_saved_id_is_missing",
+            "crates/modv-app/tests/e2e_scenes.rs:a_scoped_row_apply_leaves_midi_and_the_focused_input_untouched"
+          ],
+          "notes": "The native test round-trips groups/modules/inputs/expressions/tweens/MIDI/focusedInput and remaps ids; the companion tests pin full-state MIDI/focus restore, missing-focus clearing and the scoped row-apply early return."
+        },
+        {
+          "name": "exports all Scenes as a playlist and imports it",
+          "status": "covered",
+          "rust": [
+            "crates/modv-engine/src/scenes_playlist.rs:export_import_round_trip_preserves_the_playlist",
+            "crates/modv-engine/src/scenes_playlist.rs:export_excludes_runtime_performance_state",
+            "crates/modv-app/src/scene_ops.rs:export_import_playlist_round_trips"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a Scenes playlist JSON can be opened like a preset",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/media_dialogs.rs:opening_detects_and_loads_a_preset_scene_and_playlist"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a Scene JSON opened like a preset is applied as a Scene",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_process.rs:a_scene_json_opened_like_a_preset_is_applied_as_a_scene",
+            "crates/modv-app/src/media_dialogs.rs:opening_detects_and_loads_a_preset_scene_and_playlist"
+          ],
+          "notes": "The native media-dialog open now applies the Scene (apply=true on the open path), closing the earlier default-apply gap."
+        },
+        {
+          "name": "a legacy Scene with an object tweens map still applies",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:a_legacy_scene_with_an_object_tweens_map_still_applies"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a Scene JSON can be loaded directly",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:a_scene_json_can_be_loaded_directly"
+          ],
+          "notes": "loadSceneFromJson applies by default natively, matching the JS default apply=true."
+        },
+        {
+          "name": "Scenes saved from preset-style Groups apply without swap flags",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:scenes_saved_from_preset_style_groups_apply_without_swap_flags",
+            "crates/modv-engine/src/engine_state.rs:group_for_preset_save_drops_runtime_keys"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "performance mode exposes its configuration state",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:update_performance_normalises_timing_and_keeps_runtime_keys"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "setPerformanceEnabled toggles performance mode",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/scene_ops.rs:update_performance_normalises_timing_and_keeps_runtime_keys",
+            "crates/modv-app/src/performance.rs:stopping_mid_transition_finalises_without_ghosts_or_transitions"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "legacy autopilot settings hydrate into performance mode",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:legacy_autopilot_settings_hydrate_into_performance"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "performance mode starts, advances and stops",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:start_performance_applies_every_row_and_starts_dwells",
+            "crates/modv-app/src/performance.rs:manual_change_during_performance_uses_a_fade_transition",
+            "crates/modv-app/src/performance.rs:stopping_mid_transition_finalises_without_ghosts_or_transitions"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "global performance timing wins for scenes without an override",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:start_performance_applies_every_row_and_starts_dwells",
+            "crates/modv-engine/src/scene_timing.rs:scene_timing_without_override_uses_global_timing"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a per-scene timing override still switches early",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/tests/e2e_scenes.rs:a_per_scene_timing_override_still_switches_early"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "performance mode dwell advances in real time",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:tick_deltas_are_event_driven_not_per_frame",
+            "crates/modv-app/src/performance.rs:rows_with_different_dwell_targets_advance_independently"
+          ],
+          "notes": ""
+        },
+        {
+          "name": "a crossfade does not count towards the next scene's dwell",
+          "status": "covered",
+          "rust": [
+            "crates/modv-app/src/performance.rs:dwell_does_not_advance_during_a_row_transition_and_restarts_after"
+          ],
+          "notes": ""
+        }
+      ]
+    }
+  ]
+}
