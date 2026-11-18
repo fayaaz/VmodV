@@ -1175,6 +1175,26 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_needs_a_name_before_queueing() {
+        let mut state = UiState::new();
+        state.open_profile_dialog();
+        state.profile_name = "   ".to_string();
+        state.queue_create_profile();
+
+        assert!(state.commands.is_empty());
+        assert!(state.show_profile_dialog, "the modal stays open");
+        assert!(state.profile_error.is_some());
+
+        state.profile_name = " live ".to_string();
+        state.queue_create_profile();
+        assert_eq!(
+            state.commands,
+            vec![UiCommand::CreateProfile("live".to_string())]
+        );
+        assert!(!state.show_profile_dialog);
+    }
+
+    #[test]
     fn gallery_categories_match_the_legacy_fallbacks() {
         let effects = crate::ModuleMetaView {
             module_type: "isf".to_string(),

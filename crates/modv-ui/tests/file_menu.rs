@@ -114,6 +114,24 @@ fn new_project_profile_opens_the_name_dialog() {
 }
 
 #[test]
+fn the_profile_dialog_queues_the_typed_name() {
+    let mut harness = harness(EngineSnapshot::default(), UiState::new());
+    harness.run();
+    harness.state_mut().open_profile_dialog();
+    harness.state_mut().profile_name = " live ".to_string();
+    harness.run();
+
+    harness.get_by_label("Create").click();
+    harness.run();
+
+    assert_eq!(
+        harness.state().commands,
+        vec![UiCommand::CreateProfile("live".to_string())]
+    );
+    assert!(!harness.state().show_profile_dialog);
+}
+
+#[test]
 fn the_open_and_save_shortcuts_queue_the_same_commands_as_the_menu() {
     let mut harness = harness(EngineSnapshot::default(), UiState::new());
     harness.run();

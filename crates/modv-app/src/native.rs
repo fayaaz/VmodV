@@ -426,17 +426,25 @@ impl NativeApp {
         let ndi_view = ndi_snapshot(&store);
         let osc_view = osc_snapshot(&store, &osc_servers);
 
+        let mut preset_path = cli.preset.clone();
         if let Some(path) = crate::cli::startup_document_path(
             cli.preset.as_deref(),
             cli.scene.as_deref(),
             cli.playlist.as_deref(),
         ) {
             match media_dialogs::open_document(&mut store, path) {
-                Ok(kind) => eprintln!(
-                    "ui: INFO opened startup {} {}",
-                    kind.label(),
-                    path.display()
-                ),
+                Ok(kind) => {
+                    if kind != DocumentKind::Preset {
+                        // A Scene/playlist is not a preset document: saving a
+                        // preset over it would drop its metadata.
+                        preset_path = None;
+                    }
+                    eprintln!(
+                        "ui: INFO opened startup {} {}",
+                        kind.label(),
+                        path.display()
+                    );
+                }
                 Err(error) => eprintln!(
                     "ui: WARN could not open startup document {}: {error}",
                     path.display()
@@ -551,7 +559,7 @@ impl NativeApp {
 
         Self {
             bench_deadline: cli.bench_deadline(),
-            preset_path: cli.preset.clone(),
+            preset_path,
             cli,
             engine: Some(engine),
             adapter,
@@ -1556,7 +1564,14 @@ impl NativeApp {
                 }
                 UiCommand::OpenLogsFolder => {
                     let logs = media_dialogs::logs_dir(&self.user_data);
-                    self.open_folder(&logs);
+                    if let Err(error) = std::fs::create_dir_all(&logs) {
+                        self.record_error(format!(
+                            "could not create the logs folder {}: {error}",
+                            logs.display()
+                        ));
+                    } else {
+                        self.open_folder(&logs);
+                    }
                 }
                 UiCommand::SetAudioSource { source, device } => {
                     self.set_audio_source(&source, device.as_deref());
