@@ -49,6 +49,10 @@
 //! - [`expressions`] — a Boa-backed JavaScript evaluator for the expression
 //!   assignments (`store/modules/expressions.js` `compileExpression`,
 //!   `utils/apply-expression.js`).
+//! - [`plugins`] — the opt-in sandboxed Boa plugin host (D5/P7): CommonJS
+//!   plugin loading, the `props`/`modV`/`log` host API, deterministic
+//!   pre/post-frame hooks and downscaled RGBA capture, with per-plugin failure
+//!   isolation.
 
 pub mod blend;
 pub mod default_scene_migrations;
@@ -57,6 +61,7 @@ pub mod delta;
 pub mod engine_state;
 pub mod expressions;
 pub mod inputs;
+pub mod plugins;
 pub mod preset;
 pub mod props;
 pub mod scene_capture;
