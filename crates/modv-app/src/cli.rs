@@ -767,4 +767,118 @@ mod tests {
             "blank values are absent"
         );
     }
+
+    // --- portable-root environment contract -------------------------------
+    // These tests mutate process-global environment variables, so the suite
+    // must run serially (CI passes --test-threads=1). The guards below
+    // save/restore every variable they touch so ordering between tests is
+    // deterministic even when a test panics.
+
+    const PORTABLE_ROOT_ENV: &str = "MODV_PORTABLE_ROOT";
+    const ISF_DIR_ENV: &str = "MODV_ISF_DIR";
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "vmodv-portable-{}-{nanos}-{tag}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create temp portable root");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: these tests run serially (--test-threads=1) and no other
+            // thread in this test process reads the modified variables while
+            // the guard is alive.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: see EnvGuard::set.
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: see EnvGuard::set; the guard restores the exact value it
+            // observed before mutation.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_isf_dir_uses_the_portable_root_when_present() {
+        let root = TempDir::new("isf");
+        let isf = root.path().join("isf");
+        std::fs::create_dir_all(&isf).expect("create portable isf dir");
+        let _isf_env = EnvGuard::remove(ISF_DIR_ENV);
+        let _portable_env = EnvGuard::set(PORTABLE_ROOT_ENV, root.path());
+
+        assert_eq!(
+            resolve_isf_dir(None),
+            Some(isf.clone()),
+            "when MODV_ISF_DIR is unset and <portable-root>/isf exists, resolve_isf_dir \
+             must return that directory (got {:?})",
+            resolve_isf_dir(None)
+        );
+    }
+
+    #[test]
+    fn resolve_isf_dir_explicit_argument_wins_over_the_portable_root() {
+        let root = TempDir::new("explicit");
+        let isf = root.path().join("isf");
+        std::fs::create_dir_all(&isf).expect("create portable isf dir");
+        let _isf_env = EnvGuard::remove(ISF_DIR_ENV);
+        let _portable_env = EnvGuard::set(PORTABLE_ROOT_ENV, root.path());
+
+        let explicit = root.path().join("explicit-isf");
+        assert_eq!(resolve_isf_dir(Some(explicit.clone())), Some(explicit));
+    }
+
+    #[test]
+    fn resolve_isf_dir_environment_wins_over_the_portable_root() {
+        let root = TempDir::new("env");
+        let isf = root.path().join("isf");
+        std::fs::create_dir_all(&isf).expect("create portable isf dir");
+        let _portable_env = EnvGuard::set(PORTABLE_ROOT_ENV, root.path());
+
+        let env_isf = root.path().join("env-isf");
+        let _isf_env = EnvGuard::set(ISF_DIR_ENV, &env_isf);
+
+        assert_eq!(resolve_isf_dir(None), Some(env_isf));
+    }
 }
