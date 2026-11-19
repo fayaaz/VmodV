@@ -724,12 +724,12 @@ mod tests {
         let store = seeded_store();
         // Seeded Scenes carry a generated id; resolve it through the store
         // exactly like the window loop does for a request.
-        let id = scene_id(scene_by_name(&store, "Lone Chrome"));
+        let id = scene_id(scene_by_name(&store, "Geometric Tunnel"));
 
         for (width, height) in [(64_u32, 36_u32), (240, 135)] {
             let mut compositor = Compositor::new(&engine.device, &engine.queue);
             let pixels = render_scene_preview(&mut compositor, &store, &id, 0, width, height)
-                .expect("Lone Chrome preview renders");
+                .expect("Geometric Tunnel preview renders");
 
             assert_eq!(
                 pixels.len(),
@@ -738,7 +738,7 @@ mod tests {
             );
             assert!(
                 lit_pixels(&pixels) > 0,
-                "Lone Chrome drew nothing at {width}x{height}"
+                "Geometric Tunnel drew nothing at {width}x{height}"
             );
         }
     }
@@ -790,7 +790,7 @@ mod tests {
         };
         let mut compositor = Compositor::new(&engine.device, &engine.queue);
         let store = seeded_store();
-        let scene = scene_by_name(&store, "Lone Chrome");
+        let scene = scene_by_name(&store, "Geometric Tunnel");
         let id = scene_id(scene);
 
         assert!(matches!(
@@ -848,7 +848,7 @@ mod tests {
             return;
         };
         let mut store = seeded_store();
-        let scene = scene_by_name(&store, "Lone Chrome").clone();
+        let scene = scene_by_name(&store, "Geometric Tunnel").clone();
         let id = scene_id(&scene);
         let mut compositor = Compositor::new(&engine.device, &engine.queue);
 
@@ -1012,7 +1012,7 @@ mod tests {
             return;
         };
         let store = seeded_store();
-        let id = scene_id(scene_by_name(&store, "Lone Chrome"));
+        let id = scene_id(scene_by_name(&store, "Geometric Tunnel"));
         let mut compositor = Compositor::new(&engine.device, &engine.queue);
 
         // Cold: materialise + first Point10 init.

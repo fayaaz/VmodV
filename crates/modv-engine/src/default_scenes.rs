@@ -81,7 +81,21 @@ use serde_json::{Map, Value};
 /// row in [`crate::default_scene_migrations`] so installs keeping the seeded
 /// Scene keep its id (and the maintainer keeps their edits); fresh installs
 /// get the new definition.
-pub const DEFAULTS_VERSION: i64 = 19;
+///
+/// Version 20 removes five Point10 modules from the default Scenes: the
+/// heavy volumetric `Point10 Rolling Fire`, `Point10 Ball Of Fire` and
+/// `Point10 DVD Room` (~432 MB of 3D textures per instance), plus
+/// `Point10 Chromatic Line` and `Point10 Smoke Room`. The modules stay
+/// registered and usable in user Scenes; the defaults simply never ship
+/// them. The Scenes whose only change was losing the module are refreshed
+/// in place for version-19 installs (they stay in
+/// [`REFRESHED_DEFAULT_SCENES`]); the ten whose removal would leave nothing
+/// worth shipping (`Rolling Fire Bloom`, `DVD Nightmare`, `Terminal Bloom`,
+/// `DVD Afterglow`, `Etched Aurora`, `Lone Chrome`, `Smoke Room`,
+/// `Mirror Chamber`, `Glitch Bloom Cathedral`, `Circuit Ritual`) are
+/// retired instead — a version-20 row in [`crate::default_scene_migrations`]
+/// drops the seeded Scenes on upgrade.
+pub const DEFAULTS_VERSION: i64 = 20;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
@@ -122,6 +136,16 @@ pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
 /// [`crate::default_scene_migrations`] renames seeded installs in place and
 /// keeps their payload); no in-place refresh ships with the bump, so the list
 /// does not change either.
+///
+/// Version 20 removes Point10 modules from `Solar Flare`, `Hex Bloom`,
+/// `Golden Spiral Tunnel`, `Feedback Bloom`, `ASCII Sunbeam` and
+/// `Smoke Tunnel`; `Solar Flare`, `Hex Bloom`, `Golden Spiral Tunnel`,
+/// `ASCII Sunbeam` and `Smoke Tunnel` are already members (`Feedback Bloom`
+/// joins). The ten Scenes retired in the same bump (`Rolling Fire Bloom`,
+/// `DVD Nightmare`, `Terminal Bloom`, `DVD Afterglow`, `Etched Aurora`,
+/// `Lone Chrome`, `Smoke Room`, `Mirror Chamber`, `Glitch Bloom
+/// Cathedral` and `Circuit Ritual`) leave the list: a version-20 row in
+/// [`crate::default_scene_migrations`] retires them instead.
 pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Mycelium Bloom",
     "Chromatic Waveform",
@@ -130,15 +154,13 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Chromatic Cascade",
     "Smoke Tunnel",
     "Digital Black Hole",
-    "Mirror Chamber",
+    "Feedback Bloom",
     "Solar Flare",
     "Water Ripple Dreams",
     "Waveform Drive",
-    "Rolling Fire Bloom",
     "Prism Reliquary",
     "Spiral Static",
     "Ultimate Drift",
-    "Glitch Bloom Cathedral",
     "Hex Bloom",
     "VHS Reliquary",
     "It Is Coming",
@@ -149,8 +171,6 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Attractor Void",
     "Boxy Boulevard",
     "Boxy Arcade",
-    "DVD Afterglow",
-    "DVD Nightmare",
     "Light Tunnel Runner",
     "Light Tunnel Choir",
     "Square Tunnel Signal",
@@ -159,14 +179,11 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Golden Spiral Tunnel",
     "Reactor Glow",
     "ASCII Sunbeam",
-    "Terminal Bloom",
     "Halftone Harbor",
     "Crosshatch Cipher",
     "Dither District",
     "Mosaic Meridian",
-    "Circuit Ritual",
     "Hexagon Halo",
-    "Etched Aurora",
     "Brickwork Beat",
     "Digital Crystal Tunnel",
     "MBOX Light Tunnel",
@@ -175,7 +192,6 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Quiet Bloom",
     // Version 17: the transparent Point10 heroes moved to the Foreground row
     // (the rest of the affected Scenes are already members above).
-    "Smoke Room",
 ];
 
 /// One default Scene definition.
@@ -840,16 +856,95 @@ mod tests {
     // ————————————————— data integrity —————————————————
 
     #[test]
-    fn bumps_the_defaults_version_to_19() {
+    fn bumps_the_defaults_version_to_20() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 19);
+        assert_eq!(DEFAULTS_VERSION, 20);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
+    }
+
+    /// Point10 modules removed from the defaults in version 20 (~432 MB of
+    /// 3D textures per instance for the first three). They stay registered
+    /// as usable Modules — the defaults simply never ship them.
+    const V20_REMOVED_MODULES: &[&str] = &[
+        "Point10 Rolling Fire",
+        "Point10 Ball Of Fire",
+        "Point10 DVD Room",
+        "Point10 Chromatic Line",
+        "Point10 Smoke Room",
+    ];
+
+    /// Seeded Scenes retired in version 20 because their hero Layer was a
+    /// removed module.
+    const VERSION_20_REMOVED_SCENES: &[&str] = &[
+        "Rolling Fire Bloom",
+        "DVD Nightmare",
+        "Terminal Bloom",
+        "DVD Afterglow",
+        "Etched Aurora",
+        "Lone Chrome",
+        "Smoke Room",
+        "Mirror Chamber",
+        "Glitch Bloom Cathedral",
+        "Circuit Ritual",
+    ];
+
+    #[test]
+    fn ships_no_removed_modules_in_any_default_scene() {
+        for scene in default_scenes() {
+            for name in scene.module_names() {
+                assert!(
+                    !V20_REMOVED_MODULES.contains(&name),
+                    "{} still ships {name}",
+                    scene.name
+                );
+            }
+        }
+
+        for scene in default_scenes() {
+            for link in &scene.input_links {
+                assert!(
+                    link.module
+                        .as_deref()
+                        .is_none_or(|module| !V20_REMOVED_MODULES.contains(&module)),
+                    "{} links a removed module",
+                    scene.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_refresh_target_exists_in_the_defaults() {
+        // A retired Scene must leave REFRESHED_DEFAULT_SCENES — the refresh
+        // lane rebuilds definitions, and a stale entry would silently
+        // resurrect nothing but still name a missing Scene.
+        for name in REFRESHED_DEFAULT_SCENES {
+            assert!(
+                default_scenes().iter().any(|scene| scene.name == *name),
+                "{name} is refreshed but is not in the defaults"
+            );
+        }
+    }
+
+    #[test]
+    fn retires_the_scenes_whose_hero_was_a_removed_module() {
+        for retired in VERSION_20_REMOVED_SCENES {
+            assert!(
+                default_scenes().iter().all(|scene| scene.name != *retired),
+                "{retired} is still in the defaults"
+            );
+            assert!(
+                !REFRESHED_DEFAULT_SCENES.contains(retired),
+                "{retired} is retired, not refreshed"
+            );
+        }
     }
 
     #[test]
     fn ships_at_least_54_default_scenes_with_unique_names() {
-        // default-scenes.test.js:89-96
-        assert!(default_scenes().len() >= 54);
+        // default-scenes.test.js:89-96; version 20 retired ten Scenes
+        // (61 → 51).
+        assert!(default_scenes().len() >= 51);
 
         let keys: Vec<String> = default_scenes()
             .iter()
@@ -1021,9 +1116,11 @@ mod tests {
             }
         }
 
-        assert!(
-            placements >= 12,
-            "expected the transparent Point10 scenes in the defaults, found {placements}"
+        // Version 20 removed the transparent volumetric scenes from the
+        // defaults entirely, so no transparent Point10 hero remains.
+        assert_eq!(
+            placements, 0,
+            "expected no transparent point10 scenes in the defaults, found {placements}"
         );
     }
 
@@ -1057,20 +1154,67 @@ mod tests {
     }
 
     #[test]
+    fn refreshes_the_version_20_scenes_for_installs_on_the_previous_version() {
+        // Version 20 strips the removed modules from the surviving default
+        // Scenes (`Solar Flare`, `Hex Bloom`, `Golden Spiral Tunnel`,
+        // `Feedback Bloom`, `ASCII Sunbeam`, `Smoke Tunnel`): they are
+        // rebuilt in place for installs on version 19, keeping ids, names,
+        // timing and seeds.
+        let edited = [
+            "Solar Flare",
+            "Hex Bloom",
+            "Golden Spiral Tunnel",
+            "Feedback Bloom",
+            "ASCII Sunbeam",
+            "Smoke Tunnel",
+        ];
+
+        for name in edited {
+            assert!(REFRESHED_DEFAULT_SCENES.contains(&name), "{name}");
+        }
+
+        let scenes: Vec<Value> = edited.iter().map(|name| seeded(name)).collect();
+        let seeded_names: Vec<String> = edited.iter().map(|name| name.to_string()).collect();
+        let plan =
+            get_default_scenes_to_replace(DEFAULTS_VERSION - 1, &scenes, None, Some(&seeded_names));
+        let replaced: Vec<&str> = plan
+            .replacements
+            .iter()
+            .map(|replacement| replacement.name.as_str())
+            .collect();
+
+        for name in edited {
+            assert!(replaced.contains(&name), "missing refresh {name}");
+        }
+
+        for replacement in &plan.replacements {
+            assert_eq!(replacement.id, json!(format!("{}-id", replacement.name)));
+            assert!(
+                replacement
+                    .definition
+                    .module_names()
+                    .iter()
+                    .all(|name| !V20_REMOVED_MODULES.contains(name)),
+                "{} still ships a removed module",
+                replacement.name
+            );
+        }
+
+        // Two versions behind is not refreshed.
+        let stale =
+            get_default_scenes_to_replace(DEFAULTS_VERSION - 2, &scenes, None, Some(&seeded_names));
+        assert!(
+            stale.replacements.is_empty(),
+            "two versions behind is not refreshed"
+        );
+    }
+
+    #[test]
     fn refreshes_the_scenes_that_moved_a_transparent_point10_scene() {
         // default-scenes.test.js (version 17): installs on version 16 rebuild
         // these definitions in place, so the row placement reaches them.
-        let moved = [
-            "Smoke Room",
-            "Mirror Chamber",
-            "Solar Flare",
-            "Rolling Fire Bloom",
-            "Hex Bloom",
-            "DVD Afterglow",
-            "Terminal Bloom",
-            "Circuit Ritual",
-            "Etched Aurora",
-        ];
+        // (The rest of the v17 set retired in version 20.)
+        let moved = ["Solar Flare", "Hex Bloom"];
 
         for name in moved {
             assert!(REFRESHED_DEFAULT_SCENES.contains(&name), "{name}");
@@ -1201,9 +1345,9 @@ mod tests {
             .filter(|scene| scene.introduced_version < 3)
             .collect();
 
-        // 14 of the 15 version-1/2 Scenes survive; version 18 retired Strobe
-        // Riot.
-        assert!(legacy.len() >= 14);
+        // 11 of the 15 version-1/2 Scenes survive; version 20 retired
+        // Rolling Fire Bloom, Smoke Room and Mirror Chamber.
+        assert!(legacy.len() >= 11);
         assert!(
             legacy
                 .iter()
@@ -1212,9 +1356,10 @@ mod tests {
     }
 
     #[test]
-    fn adds_at_least_nine_scenes_in_the_version_3_batch() {
-        // default-scenes.test.js:112-114
-        assert!(batch(3).len() >= 9);
+    fn adds_at_least_eight_scenes_in_the_version_3_batch() {
+        // default-scenes.test.js:112-114; version 20 retired Glitch Bloom
+        // Cathedral, leaving eight.
+        assert!(batch(3).len() >= 8);
     }
 
     #[test]
@@ -1230,7 +1375,8 @@ mod tests {
             "Point10 Around Plus",
             "Point10 Attractor Particles",
             "Point10 Boxy",
-            "Point10 DVD Room",
+            // Version 20 removed `Point10 DVD Room` from the defaults
+            // entirely (DVD Afterglow loses it; DVD Nightmare is retired).
             "Point10 It Is Coming For You",
             "Point10 Light Tunnel",
             "Point10 Square Tunnel",
@@ -1372,21 +1518,27 @@ mod tests {
             "RGB Halftone",
         ];
         let v5 = batch(5);
-        assert!(v5.len() >= 8);
+        // Version 20 retired Terminal Bloom, Etched Aurora and Circuit
+        // Ritual, leaving seven.
+        assert!(v5.len() >= 7);
 
         let ascii_scenes = v5
             .iter()
             .filter(|scene| scene.module_names().contains(&"ASCII Art"))
             .count();
-        assert!(ascii_scenes >= 2);
+        // Version 20 retired Terminal Bloom (its hero was Ball Of Fire),
+        // leaving ASCII Sunbeam as the only v5 Scene with ASCII Art.
+        assert!(ascii_scenes >= 1);
 
         let used: HashSet<&str> = v5
             .iter()
             .flat_map(|scene| scene.module_names())
             .filter(|name| filters.contains(name))
             .collect();
-        // Version 13 removed CMYK Halftone from its only Scene, leaving seven.
-        assert!(used.len() >= 7);
+        // Version 13 removed CMYK Halftone from its only Scene, version 20
+        // retired Etched Aurora (the only Emboss user) and Circuit Ritual,
+        // leaving six.
+        assert!(used.len() >= 6);
         assert!(used.contains("ASCII Art"));
     }
 
@@ -1550,11 +1702,9 @@ mod tests {
             .map(|scene| scene.modules_in_group("Effects"))
             .collect();
 
-        assert!(
-            effects
-                .iter()
-                .any(|names| names.contains(&"Circular Screen"))
-        );
+        // Version 20 retired the only Scene shipping Circular Screen
+        // (Glitch Bloom Cathedral); the Posterize and ASCII Art checks
+        // remain.
         assert!(
             effects.iter().any(|names| {
                 names.contains(&"Posterize") || names.contains(&"Color Posterize")
@@ -1610,13 +1760,7 @@ mod tests {
             })
             .collect();
 
-        for expected in [
-            "Mycelium Bloom:Foreground",
-            "Waveform Drive:Background",
-            // Version 17 moved Terminal Bloom's transparent Point10 hero into
-            // the Foreground row, leaving the Background row empty.
-            "Terminal Bloom:Background",
-        ] {
+        for expected in ["Mycelium Bloom:Foreground", "Waveform Drive:Background"] {
             assert!(empty.contains(&expected.to_string()), "missing {expected}");
         }
     }
@@ -1700,16 +1844,6 @@ mod tests {
         assert!(background_only >= 2);
         assert!(foreground_only >= 1);
 
-        let rolling = scene_by_name("Rolling Fire Bloom");
-        // Version 17 moved the transparent Rolling Fire hero to the Foreground
-        // row, so the Bands removal left the Background row empty instead.
-        assert_eq!(
-            rolling.modules_in_group("Foreground"),
-            vec!["Point10 Rolling Fire"]
-        );
-        assert!(rolling.modules_in_group("Background").is_empty());
-        assert_eq!(rolling.modules_in_group("Effects"), vec!["Bloom"]);
-
         let water_garden = scene_by_name("Around Water Garden");
         assert!(water_garden.modules_in_group("Foreground").is_empty());
         assert!(!has_link(water_garden, "Bands"));
@@ -1790,12 +1924,10 @@ mod tests {
         // default-scenes.test.js:566-628
         let scenes = [
             "Prism Reliquary",
-            "Glitch Bloom Cathedral",
             "VHS Reliquary",
             "It Is Coming",
             "It Twirls At Night",
             "Boxy Arcade",
-            "DVD Nightmare",
             "Rave.exe",
         ];
         let glitches = ["Point10 RGB Shift", "Point10 Digital Glitch"];
@@ -1929,7 +2061,7 @@ mod tests {
 
         assert!(!names.contains(&"Mycelium Bloom"));
         assert!(!names.contains(&"Geometric Tunnel"));
-        assert!(names.contains(&"Smoke Room"));
+        assert!(names.contains(&"Smoke Tunnel"));
     }
 
     // ————————————————— removal migration —————————————————
@@ -2213,7 +2345,7 @@ mod tests {
     fn refreshes_the_trimmed_seeded_defaults_for_installs_on_the_previous_version() {
         // default-scenes.test.js:1253-1310
         let names = [
-            "Circuit Ritual",
+            "Hexagon Halo",
             "Burning Mycelium Circle",
             "Soft Bands",
             "Quiet Bloom",
@@ -2233,13 +2365,15 @@ mod tests {
             assert!(replaced.contains(&name), "missing refresh {name}");
         }
 
-        let circuit = plan
+        let halo = plan
             .replacements
             .iter()
-            .find(|replacement| replacement.name == "Circuit Ritual")
+            .find(|replacement| replacement.name == "Hexagon Halo")
             .unwrap();
-        assert_eq!(circuit.id, json!("Circuit Ritual-id"));
-        assert!(!circuit.definition.module_names().contains(&"RGB Halftone"));
+        assert_eq!(halo.id, json!("Hexagon Halo-id"));
+        // Version 10 removed Radial Replicate from Hexagon Halo, leaving the
+        // Effects row empty.
+        assert!(halo.definition.modules_in_group("Effects").is_empty());
 
         let burning = plan
             .replacements
@@ -2284,7 +2418,7 @@ mod tests {
     fn lists_the_scenes_whose_definitions_changed() {
         // default-scenes.test.js:1312-1319
         for name in [
-            "Circuit Ritual",
+            "Around Water Garden",
             "Soft Bands",
             "Quiet Bloom",
             "It Twirls At Night",
@@ -2308,7 +2442,7 @@ mod tests {
     #[test]
     fn does_not_overwrite_user_scenes_that_were_not_seeded() {
         // default-scenes.test.js:1321-1331, 1431-1442
-        let scenes = vec![seeded("Circuit Ritual"), seeded("Soft Bands")];
+        let scenes = vec![seeded("Hex Bloom"), seeded("Soft Bands")];
         let plan = get_default_scenes_to_replace(12, &scenes, None, Some(&Vec::new()));
 
         assert!(plan.replacements.is_empty());
@@ -2399,7 +2533,6 @@ mod tests {
     fn rebuilds_the_bands_using_defaults_for_installs_on_the_previous_version() {
         // default-scenes.test.js:1359-1397
         let names = [
-            "Rolling Fire Bloom",
             "Around Water Garden",
             "Mosaic Meridian",
             "Soft Bands",
@@ -2431,17 +2564,5 @@ mod tests {
                     .all(|link| link.module.as_deref() != Some("Bands"))
             );
         }
-
-        let rolling = plan
-            .replacements
-            .iter()
-            .find(|replacement| replacement.name == "Rolling Fire Bloom")
-            .unwrap();
-        // The Bands module is gone; the transparent Point10 hero that moved
-        // into the Foreground row in version 17 is the only module left there.
-        assert_eq!(
-            rolling.definition.modules_in_group("Foreground"),
-            vec!["Point10 Rolling Fire"]
-        );
     }
 }

@@ -55,6 +55,21 @@
 //! Scene itself; for a stock v18 install the old sparse definition keeps its
 //! id under the new name, and fresh installs receive the new definition.
 //!
+//! Version 20 removes the `Point10 Rolling Fire`, `Point10 Ball Of Fire`,
+//! `Point10 DVD Room`, `Point10 Chromatic Line` and `Point10 Smoke Room`
+//! modules from the default Scenes. The first three are the heavy
+//! volumetric scenes (~432 MB of 3D textures per instance); the other two
+//! ship nothing an install needs. All five modules stay registered and
+//! usable in user Scenes; the defaults simply never ship them.
+//!
+//! The surviving Scenes lose the modules in place (refresh-only, handled
+//! by [`crate::default_scenes::REFRESHED_DEFAULT_SCENES`]); the ten whose
+//! removal would leave nothing worth shipping (`Rolling Fire Bloom`,
+//! `DVD Nightmare`, `Terminal Bloom`, `DVD Afterglow`, `Etched Aurora`,
+//! `Lone Chrome`, `Smoke Room`, `Mirror Chamber`, `Glitch Bloom Cathedral`
+//! and `Circuit Ritual`) are retired here — a seeded install drops them on
+//! upgrade.
+//!
 //! Version 13 is the first bump whose edits are refresh-only (no Scene was
 //! renamed or retired): `Halftone Harbor` loses CMYK Halftone and `MBOX Light
 //! Tunnel` fixes its `MBOX3` hue, both handled by
@@ -124,8 +139,10 @@ pub struct DefaultSceneMigrationRule {
 /// The version-keyed rename/removal table.
 ///
 /// Version 18 retires `Strobe Riot`; version 19 renames `Prism Tunnel` to
-/// `Long Red Tunnel`. Add one row per defaults-version bump that renames or
-/// retires a seeded Scene, in ascending `version` order.
+/// `Long Red Tunnel`; version 20 removes five modules from the defaults and
+/// retires the ten Scenes whose hero layer was one of them. Add one row per
+/// defaults-version bump that renames or retires a seeded Scene, in
+/// ascending `version` order.
 pub const DEFAULT_SCENE_MIGRATIONS: &[DefaultSceneMigrationRule] = &[
     DefaultSceneMigrationRule {
         version: 18,
@@ -136,6 +153,22 @@ pub const DEFAULT_SCENE_MIGRATIONS: &[DefaultSceneMigrationRule] = &[
         version: 19,
         renames: &[("Prism Tunnel", "Long Red Tunnel")],
         removed: &[],
+    },
+    DefaultSceneMigrationRule {
+        version: 20,
+        renames: &[],
+        removed: &[
+            "Rolling Fire Bloom",
+            "DVD Nightmare",
+            "Terminal Bloom",
+            "DVD Afterglow",
+            "Etched Aurora",
+            "Lone Chrome",
+            "Smoke Room",
+            "Mirror Chamber",
+            "Glitch Bloom Cathedral",
+            "Circuit Ritual",
+        ],
     },
 ];
 
@@ -435,7 +468,7 @@ fn rename_seeded_entry(seeded_names: &mut Vec<String>, old_key: &str, new_name: 
 #[cfg(test)]
 mod tests {
     //! The mechanism is exercised with an explicit fixture table; the
-    //! production table's version-18 rule is covered separately.
+    //! production table's version-18/19/20 rules are covered separately.
     use super::*;
     use crate::default_scenes::{
         DEFAULTS_VERSION, LEGACY_DEFAULTS_VERSION, get_default_definition,
@@ -924,12 +957,20 @@ mod tests {
 
     #[test]
     fn upgrading_from_the_previous_version_matches_a_fresh_install() {
+        // A fixture rule consistent with the *current* production data: the
+        // rename target is a Scene that survives in the defaults.
+        const LOCAL_RULES: &[DefaultSceneMigrationRule] = &[DefaultSceneMigrationRule {
+            version: DEFAULTS_VERSION,
+            renames: &[("Old Geometric Tunnel", "Geometric Tunnel")],
+            removed: &["Old Retired Scene"],
+        }];
+
         let previous_version = DEFAULTS_VERSION - 1;
         let mut seeded: Vec<String> = get_default_scene_names_up_to(previous_version)
             .into_iter()
             .map(|name| {
-                if name == "Mirror Chamber" {
-                    "Old Mirror Chamber".to_string()
+                if name == "Geometric Tunnel" {
+                    "Old Geometric Tunnel".to_string()
                 } else {
                     name
                 }
@@ -944,11 +985,11 @@ mod tests {
             .collect();
         let renamed_index = scenes
             .iter()
-            .position(|scene| scene["name"] == json!("Old Mirror Chamber"))
-            .expect("historical Mirror Chamber");
+            .position(|scene| scene["name"] == json!("Old Geometric Tunnel"))
+            .expect("historical Geometric Tunnel");
 
         let plan = ensure_default_scene_migrations_with(
-            FIXTURE_RULES,
+            LOCAL_RULES,
             previous_version,
             DEFAULTS_VERSION,
             &mut scenes,
@@ -958,8 +999,8 @@ mod tests {
         assert_eq!(
             plan.report.renamed,
             vec![(
-                "Old Mirror Chamber".to_string(),
-                "Mirror Chamber".to_string()
+                "Old Geometric Tunnel".to_string(),
+                "Geometric Tunnel".to_string()
             )]
         );
         assert_eq!(plan.report.removed, vec!["Old Retired Scene".to_string()]);
@@ -1097,9 +1138,10 @@ mod tests {
         let mut scenes = vec![scene("Prism Tunnel", "prism-id")];
         let mut seeded = vec!["Prism Tunnel".to_string()];
 
-        let plan = ensure_default_scene_migration(
-            DEFAULTS_VERSION - 1,
-            DEFAULTS_VERSION,
+        let plan = ensure_default_scene_migrations_with(
+            DEFAULT_SCENE_MIGRATIONS,
+            18,
+            19,
             &mut scenes,
             &mut seeded,
         );
@@ -1123,15 +1165,94 @@ mod tests {
     }
 
     #[test]
+    fn the_production_path_retires_the_version_20_scenes_for_installs_on_the_previous_version() {
+        // Version 20 removes five modules from the default Scenes and retires
+        // the ten whose hero layer was one of them (the modules stay
+        // registered for user Scenes). Seeded installs drop the retired
+        // Scenes; a custom Scene sharing one of the names is kept.
+        let retired = [
+            "Rolling Fire Bloom",
+            "DVD Nightmare",
+            "Terminal Bloom",
+            "DVD Afterglow",
+            "Etched Aurora",
+            "Lone Chrome",
+            "Smoke Room",
+            "Mirror Chamber",
+            "Glitch Bloom Cathedral",
+            "Circuit Ritual",
+        ];
+
+        for name in retired {
+            let mut scenes = vec![scene(name, "seeded-id")];
+            let mut seeded = vec![name.to_string()];
+
+            let plan = ensure_default_scene_migrations_with(
+                DEFAULT_SCENE_MIGRATIONS,
+                19,
+                20,
+                &mut scenes,
+                &mut seeded,
+            );
+
+            assert_eq!(plan.migration, migration(&[], &retired));
+            assert_eq!(plan.report.removed, vec![name.to_string()]);
+            assert!(
+                !plan.report.skipped.iter().any(|skipped| skipped == name),
+                "the seeded {name} Scene was skipped: {:?}",
+                plan.report.skipped
+            );
+            assert!(scenes.is_empty(), "the seeded {name} Scene was not removed");
+            assert_eq!(seeded, Vec::<String>::new());
+        }
+    }
+
+    #[test]
+    fn the_production_path_keeps_custom_scenes_sharing_the_retired_names() {
+        for name in [
+            "Rolling Fire Bloom",
+            "DVD Nightmare",
+            "Terminal Bloom",
+            "DVD Afterglow",
+            "Etched Aurora",
+            "Lone Chrome",
+            "Smoke Room",
+            "Mirror Chamber",
+            "Glitch Bloom Cathedral",
+            "Circuit Ritual",
+        ] {
+            let mut scenes = vec![scene(name, "user-id")];
+            let mut seeded = vec!["Something Else".to_string()];
+
+            let plan = ensure_default_scene_migrations_with(
+                DEFAULT_SCENE_MIGRATIONS,
+                19,
+                20,
+                &mut scenes,
+                &mut seeded,
+            );
+
+            assert!(plan.report.removed.is_empty(), "{name}");
+            assert!(
+                plan.report.skipped.iter().any(|skipped| skipped == name),
+                "the custom {name} Scene was not kept: {:?}",
+                plan.report.skipped
+            );
+            assert_eq!(names(&scenes), vec![name.to_string()]);
+        }
+    }
+
+    #[test]
     fn the_production_path_seeds_long_red_tunnel_fresh_when_absent() {
         // An install that never held the Scene (or deleted it) receives the
         // retuned definition from the normal seed lane.
         let mut scenes = vec![];
         let mut seeded = vec![];
 
-        let plan = ensure_default_scene_migration(
-            DEFAULTS_VERSION - 1,
-            DEFAULTS_VERSION,
+        let plan = ensure_default_scene_migrations_with(
+            DEFAULT_SCENE_MIGRATIONS,
+            18,
+            19,
             &mut scenes,
             &mut seeded,
         );
@@ -1147,9 +1268,10 @@ mod tests {
         let mut scenes = vec![scene("Prism Tunnel", "user-id")];
         let mut seeded = vec!["Something Else".to_string()];
 
-        let plan = ensure_default_scene_migration(
-            DEFAULTS_VERSION - 1,
-            DEFAULTS_VERSION,
+        let plan = ensure_default_scene_migrations_with(
+            DEFAULT_SCENE_MIGRATIONS,
+            18,
+            19,
             &mut scenes,
             &mut seeded,
         );
@@ -1165,10 +1287,10 @@ mod tests {
         // Halftone Harbor, MBOX3's hue is fixed and Point10 Old Movie becomes
         // Sepia Tone. Version 18 retires Strobe Riot without a rename, so the
         // version-keyed edits in the 12→18 span are its removal and nothing
-        // else. Version 19's rename is covered by its own tests. Installs on the
-        // previous version receive the in-place edits through
-        // `get_default_scenes_to_replace`.
-        let migration = get_default_scene_migrations(12, DEFAULTS_VERSION - 1);
+        // else. Version 19's rename and version 20's retirements are covered
+        // by their own tests. Installs on the previous version receive the
+        // in-place edits through `get_default_scenes_to_replace`.
+        let migration = get_default_scene_migrations(12, DEFAULTS_VERSION - 2);
         assert!(migration.rename.is_empty());
         assert_eq!(migration.remove, vec!["Strobe Riot".to_string()]);
 

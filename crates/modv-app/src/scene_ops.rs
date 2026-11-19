@@ -5773,7 +5773,7 @@ mod tests {
             "expressions": { "assignments": {} },
             "tweens": [],
         })];
-        store.scenes.defaults_version = DEFAULTS_VERSION - 2;
+        store.scenes.defaults_version = 17;
         store.scenes.seeded_default_scenes = vec!["Strobe Riot".to_string()];
 
         store
@@ -5812,9 +5812,10 @@ mod tests {
             "expressions": { "assignments": {} },
             "tweens": [],
         })];
-        // An install two bumps behind the current defaults, jumping straight
-        // to them: both the v18 retirement and the v19 seed apply.
-        store.scenes.defaults_version = DEFAULTS_VERSION - 2;
+        // An install three bumps behind the current defaults, jumping straight
+        // to them: the v18 retirement, the v19 rename and the v20 retirements
+        // apply. A custom Scene sharing a retired name is kept.
+        store.scenes.defaults_version = 17;
 
         store
             .dispatch("scenes/ensureDefaultScenes", json!({}))

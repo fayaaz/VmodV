@@ -8,7 +8,7 @@ on branch `legacy-electron` and tag `v1.x-final`
 (see [legacy-electron.md](./legacy-electron.md)); it is not built or released
 from this repository any more.
 
-Last updated: 2026-11-18.
+Last updated: 2026-11-19.
 
 ## Current status
 
@@ -23,6 +23,29 @@ Last updated: 2026-11-18.
 | P6 — media manager | **Partial** | `MediaHub` is owned by the native shell: camera panel (ordered/remembered/restored inputs + resolution/FPS), test pattern and source status, with engine `media/start-file`/`start-screen` plumbing. User ISF folders are watched and hot-reloaded (`notify`, 500 ms debounce), and `--preset` load + File → Save preset round-trip. Native file/screen pickers, media-manager file dialogs, project profiles and the full media-tree watch remain. |
 | P7 — MIDI/plugins | **Partial** | Expressions run in-engine (Boa AST allowlist), native MIDI input is live (`midir`, hot-plug, Note/CC/latches, clock→BPM), and the MIDI panel edits the four device flags. The opt-in Boa plugin host (D5) remains; the Plugins panel is deliberately disabled until it lands. |
 | P8/P9 — parity/packaging | **Complete (Rust-only)** | `docs/native-parity-map.md` records the native coverage. `make build` produces the native AppImage and `.deb` (ISF corpus + textures bundled; host GStreamer/PipeWire/Vulkan declared by the `.deb`), `make native-deb-check` verifies the archive, `make test-e2e-native` runs the real-binary harness, and `.github/workflows/native.yml` runs Rust lint/tests plus both packages. `NATIVE_VERSION` defaults to the git-tag version via `tools/version.sh` (there is no version literal in the tree); `release.yml` tags the released commit and passes the computed version to the build (see `docs/releasing.md`); the rolling `nightly` was removed in favour of that. Electron/Node and the JS suites are gone; the archived tree lives on `legacy-electron`/`v1.x-final`. Flatpak remains. |
+
+## Default-Scenes overhaul, first slice (2026-11-19)
+
+Five Point10 modules no longer ship in any default Scene; the modules stay
+registered and usable in user Scenes. `DEFAULTS_VERSION` is now **20**
+(51 Scenes, 57 distinct module names).
+
+- Removed from every default Scene: the heavy volumetric
+  `Point10 Rolling Fire`, `Point10 Ball Of Fire`, `Point10 DVD Room`
+  (~432 MB of 3D textures per instance), plus `Point10 Chromatic Line` and
+  `Point10 Smoke Room`.
+- Edited in place and refreshed for v19 installs: `Solar Flare`,
+  `Hex Bloom` (heavy), `Golden Spiral Tunnel`, `Feedback Bloom`,
+  `ASCII Sunbeam`, `Smoke Tunnel`.
+- Retired (hero removal would leave nothing worth shipping; a version-20
+  migration row drops the seeded Scenes on upgrade, keeping custom Scenes
+  that share the names): `Rolling Fire Bloom`, `DVD Nightmare`,
+  `Terminal Bloom`, `DVD Afterglow`, `Etched Aurora`, `Lone Chrome`,
+  `Smoke Room`, `Mirror Chamber`, `Glitch Bloom Cathedral`,
+  `Circuit Ritual`.
+- No transparent Point10 hero remains in the defaults; `Smoke Tunnel`,
+  `Golden Spiral Tunnel` and `ASCII Sunbeam` survive with their non-removed
+  content (their hero rows are now empty, effects rows untouched).
 
 ## Rust-only cleanup (2026-11-18)
 

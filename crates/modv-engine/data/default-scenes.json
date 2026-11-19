@@ -101,67 +101,6 @@
     ]
   },
   {
-    "name": "Smoke Room",
-    "introducedVersion": 1,
-    "minSeconds": 14,
-    "maxSeconds": 30,
-    "groups": [
-      {
-        "name": "Background",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": []
-      },
-      {
-        "name": "Foreground",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Smoke Room",
-            "props": {
-              "gain": 1.15,
-              "bassGain": 1.35,
-              "midGain": 1.1,
-              "smoothing": 0.15
-            }
-          },
-          {
-            "name": "Point10 Chromatic Line",
-            "props": {
-              "gain": 1.25,
-              "midGain": 1.4
-            },
-            "meta": {
-              "alpha": 0.8,
-              "compositeOperation": "screen"
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Vignette",
-            "props": {
-              "intensity": 20,
-              "extension": 0.35
-            }
-          }
-        ]
-      }
-    ]
-  },
-  {
     "name": "Geometric Tunnel",
     "introducedVersion": 1,
     "minSeconds": 8,
@@ -361,25 +300,7 @@
         "clearing": true,
         "alpha": 1,
         "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Smoke Room",
-            "props": {
-              "gain": 1,
-              "smoothing": 0,
-              "bassGain": 1,
-              "midGain": 1,
-              "trebleGain": 1,
-              "useAgc": true,
-              "smokeDensity": 28,
-              "fireIntensity": 40,
-              "smokeLifespan": 4.05,
-              "fireLifespan": 1.3,
-              "simulationSpeed": 1.2,
-              "boxScale": 0.9
-            }
-          }
-        ]
+        "modules": []
       },
       {
         "name": "Effects",
@@ -569,56 +490,6 @@
     ]
   },
   {
-    "name": "Mirror Chamber",
-    "introducedVersion": 2,
-    "minSeconds": 12,
-    "maxSeconds": 27,
-    "groups": [
-      {
-        "name": "Background",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": []
-      },
-      {
-        "name": "Foreground",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Smoke Room",
-            "props": {
-              "gain": 1.2,
-              "bassGain": 1.4,
-              "midGain": 1.15,
-              "smoothing": 0.12
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Mirror",
-            "props": {
-              "horizontal": true,
-              "vertical": true
-            }
-          }
-        ]
-      }
-    ]
-  },
-  {
     "name": "Solar Flare",
     "introducedVersion": 2,
     "minSeconds": 9,
@@ -639,15 +510,6 @@
         "alpha": 1,
         "compositeOperation": "screen",
         "modules": [
-          {
-            "name": "Point10 Ball Of Fire",
-            "props": {
-              "gain": 1.15,
-              "bassGain": 1.6,
-              "midGain": 1.1,
-              "smoothing": 0.1
-            }
-          },
           {
             "name": "Concentrics",
             "props": {
@@ -796,56 +658,6 @@
     ]
   },
   {
-    "name": "Rolling Fire Bloom",
-    "introducedVersion": 2,
-    "minSeconds": 10,
-    "maxSeconds": 25,
-    "groups": [
-      {
-        "name": "Background",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": []
-      },
-      {
-        "name": "Foreground",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Rolling Fire",
-            "props": {
-              "gain": 1.2,
-              "bassGain": 1.5,
-              "midGain": 1.05,
-              "smoothing": 0.08
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Bloom",
-            "props": {
-              "blurAmount": 10,
-              "intensity": 0.7
-            }
-          }
-        ]
-      }
-    ]
-  },
-  {
     "name": "Golden Spiral Tunnel",
     "introducedVersion": 2,
     "minSeconds": 9,
@@ -877,20 +689,7 @@
         "clearing": true,
         "alpha": 1,
         "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Chromatic Line",
-            "props": {
-              "gain": 1.2,
-              "midGain": 1.35,
-              "smoothing": 0.04
-            },
-            "meta": {
-              "alpha": 0.8,
-              "compositeOperation": "screen"
-            }
-          }
-        ]
+        "modules": []
       },
       {
         "name": "Effects",
@@ -1173,62 +972,6 @@
     ]
   },
   {
-    "name": "Glitch Bloom Cathedral",
-    "introducedVersion": 3,
-    "minSeconds": 9,
-    "maxSeconds": 23,
-    "groups": [
-      {
-        "name": "Foreground",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Point10 Smoke Room",
-            "props": {
-              "gain": 1.15,
-              "bassGain": 1.35,
-              "midGain": 1.1,
-              "smoothing": 0.15
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Circular Screen",
-            "props": {
-              "sharpness": 4,
-              "offset": 0.15,
-              "scale": 1.25,
-              "colorize": 0.55,
-              "center": [
-                0.5,
-                0.5
-              ]
-            }
-          },
-          {
-            "name": "Point10 RGB Shift",
-            "props": {},
-            "meta": {
-              "alpha": 0.7,
-              "compositeOperation": "screen"
-            }
-          }
-        ]
-      }
-    ]
-  },
-  {
     "name": "Polygon Grid",
     "introducedVersion": 3,
     "minSeconds": 8,
@@ -1312,15 +1055,6 @@
         "alpha": 1,
         "compositeOperation": "screen",
         "modules": [
-          {
-            "name": "Point10 Rolling Fire",
-            "props": {
-              "gain": 1.2,
-              "bassGain": 1.5,
-              "midGain": 1.05,
-              "smoothing": 0.08
-            }
-          },
           {
             "name": "Concentrics",
             "props": {
@@ -1418,16 +1152,7 @@
         "clearing": true,
         "alpha": 1,
         "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Point10 Chromatic Line",
-            "props": {
-              "gain": 1.2,
-              "midGain": 1.35,
-              "smoothing": 0.04
-            }
-          }
-        ]
+        "modules": []
       },
       {
         "name": "Foreground",
@@ -2006,156 +1731,6 @@
     ]
   },
   {
-    "name": "DVD Afterglow",
-    "introducedVersion": 4,
-    "minSeconds": 12,
-    "maxSeconds": 28,
-    "groups": [
-      {
-        "name": "Background",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": []
-      },
-      {
-        "name": "Foreground",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 DVD Room",
-            "props": {
-              "smokeDensity": 20,
-              "fireIntensity": 20,
-              "smokeLifespan": 3,
-              "fireLifespan": 1.2,
-              "simulationSpeed": 1.1,
-              "gain": 1.15,
-              "bassGain": 1.3,
-              "midGain": 1.1
-            }
-          },
-          {
-            "name": "Point10 Chromatic Line",
-            "props": {
-              "distortion": 0.08,
-              "amplitude": 1.2,
-              "glow": 1.2,
-              "gain": 1.2,
-              "midGain": 1.35
-            },
-            "meta": {
-              "alpha": 0.7,
-              "compositeOperation": "screen"
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Bloom",
-            "props": {
-              "blurAmount": 8,
-              "intensity": 0.6
-            }
-          }
-        ]
-      }
-    ],
-    "inputLinks": [
-      {
-        "group": "Foreground",
-        "module": "Point10 Chromatic Line",
-        "control": "alpha",
-        "feature": "bass",
-        "min": 0.15,
-        "max": 0.8
-      }
-    ]
-  },
-  {
-    "name": "DVD Nightmare",
-    "introducedVersion": 4,
-    "minSeconds": 9,
-    "maxSeconds": 24,
-    "groups": [
-      {
-        "name": "Foreground",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Point10 DVD Room",
-            "props": {
-              "smokeDensity": 26,
-              "fireIntensity": 32,
-              "smokeLifespan": 4,
-              "fireLifespan": 1.5,
-              "simulationSpeed": 1.3,
-              "gain": 1.2,
-              "bassGain": 1.45
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "VHS Glitch",
-            "props": {
-              "autoScan": true,
-              "xScanline": 0.45,
-              "xScanline2": 0.55,
-              "yScanline": 0.1,
-              "xScanlineSize": 0.5,
-              "xScanlineSize2": 0.2,
-              "yScanlineAmount": 0.2,
-              "grainLevel": 0.2,
-              "scanFollow": true,
-              "analogDistort": 1.6,
-              "bleedAmount": 1
-            }
-          },
-          {
-            "name": "Point10 RGB Shift",
-            "props": {},
-            "meta": {
-              "alpha": 0.65,
-              "compositeOperation": "screen"
-            }
-          }
-        ]
-      }
-    ],
-    "inputLinks": [
-      {
-        "group": "Effects",
-        "module": "Point10 RGB Shift",
-        "control": "alpha",
-        "feature": "bass",
-        "min": 0.1,
-        "max": 0.7
-      }
-    ]
-  },
-  {
     "name": "Light Tunnel Runner",
     "introducedVersion": 4,
     "minSeconds": 8,
@@ -2522,21 +2097,7 @@
         "clearing": true,
         "alpha": 1,
         "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Chromatic Line",
-            "props": {
-              "amplitude": 1.2,
-              "glow": 1.2,
-              "gain": 1.15,
-              "bassGain": 1.35
-            },
-            "meta": {
-              "alpha": 0.7,
-              "compositeOperation": "screen"
-            }
-          }
-        ]
+        "modules": []
       },
       {
         "name": "Effects",
@@ -2552,74 +2113,6 @@
             }
           }
         ]
-      }
-    ],
-    "inputLinks": [
-      {
-        "group": "Foreground",
-        "module": "Point10 Chromatic Line",
-        "control": "alpha",
-        "feature": "bass",
-        "min": 0.15,
-        "max": 0.75
-      }
-    ]
-  },
-  {
-    "name": "Terminal Bloom",
-    "introducedVersion": 5,
-    "minSeconds": 10,
-    "maxSeconds": 26,
-    "groups": [
-      {
-        "name": "Background",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": []
-      },
-      {
-        "name": "Foreground",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Ball Of Fire",
-            "props": {
-              "fireIntensity": 26,
-              "simulationSpeed": 1,
-              "gain": 1.2,
-              "bassGain": 1.45
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "ASCII Art",
-            "props": {
-              "amount": 0.5
-            }
-          }
-        ]
-      }
-    ],
-    "inputLinks": [
-      {
-        "group": "Background",
-        "control": "alpha",
-        "feature": "bass",
-        "min": 0.3,
-        "max": 1
       }
     ]
   },
@@ -2940,131 +2433,6 @@
         "feature": "bass",
         "min": 0.25,
         "max": 1
-      }
-    ]
-  },
-  {
-    "name": "Circuit Ritual",
-    "introducedVersion": 5,
-    "minSeconds": 9,
-    "maxSeconds": 24,
-    "groups": [
-      {
-        "name": "Background",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": []
-      },
-      {
-        "name": "Foreground",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Smoke Room",
-            "props": {
-              "smokeDensity": 24,
-              "smokeLifespan": 4,
-              "simulationSpeed": 1.2,
-              "gain": 1.15,
-              "bassGain": 1.4
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Bloom",
-            "props": {
-              "blurAmount": 7,
-              "intensity": 0.5
-            }
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "name": "Etched Aurora",
-    "introducedVersion": 5,
-    "minSeconds": 10,
-    "maxSeconds": 26,
-    "groups": [
-      {
-        "name": "Background",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": []
-      },
-      {
-        "name": "Foreground",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "screen",
-        "modules": [
-          {
-            "name": "Point10 Rolling Fire",
-            "props": {
-              "fireIntensity": 24,
-              "simulationSpeed": 0.9,
-              "gain": 1.2,
-              "bassGain": 1.4
-            }
-          },
-          {
-            "name": "Point10 Chromatic Line",
-            "props": {
-              "amplitude": 1.1,
-              "glow": 1.3,
-              "gain": 1.2,
-              "midGain": 1.3
-            },
-            "meta": {
-              "alpha": 0.7,
-              "compositeOperation": "screen"
-            }
-          }
-        ]
-      },
-      {
-        "name": "Effects",
-        "inherit": true,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Emboss",
-            "props": {
-              "intensity": 2,
-              "colorize": 0.5,
-              "brightness": 0.5
-            }
-          }
-        ]
-      }
-    ],
-    "inputLinks": [
-      {
-        "group": "Foreground",
-        "module": "Point10 Chromatic Line",
-        "control": "alpha",
-        "feature": "bass",
-        "min": 0.15,
-        "max": 0.8
       }
     ]
   },
@@ -3583,33 +2951,6 @@
     ]
   },
   {
-    "name": "Lone Chrome",
-    "introducedVersion": 9,
-    "minSeconds": 14,
-    "maxSeconds": 30,
-    "groups": [
-      {
-        "name": "Foreground",
-        "inherit": false,
-        "clearing": true,
-        "alpha": 1,
-        "compositeOperation": "normal",
-        "modules": [
-          {
-            "name": "Point10 Chromatic Line",
-            "props": {
-              "gain": 1.05,
-              "bassGain": 1.05,
-              "midGain": 1.1,
-              "trebleGain": 1,
-              "smoothing": 0.22
-            }
-          }
-        ]
-      }
-    ]
-  },
-  {
     "name": "Silk Ribbon",
     "introducedVersion": 9,
     "minSeconds": 14,
@@ -3801,7 +3142,23 @@
         "min": 0,
         "max": 1,
         "tween": {
-          "data": [[0], [0.3369140625], [0], [0.3605911135673523], [0]],
+          "data": [
+            [
+              0
+            ],
+            [
+              0.3369140625
+            ],
+            [
+              0
+            ],
+            [
+              0.3605911135673523
+            ],
+            [
+              0
+            ]
+          ],
           "duration": 2790.697674418605,
           "direction": "normal",
           "easing": "linear",
@@ -3810,7 +3167,13 @@
           "bpmDivision": 133.33333333333334,
           "durationAsTotalTime": true,
           "steps": 0,
-          "keyframeTimes": [0, 0.2538490891456604, 0.5013814568519592, 0.7567644715309143, 1]
+          "keyframeTimes": [
+            0,
+            0.2538490891456604,
+            0.5013814568519592,
+            0.7567644715309143,
+            1
+          ]
         }
       },
       {

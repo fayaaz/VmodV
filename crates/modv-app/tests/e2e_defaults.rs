@@ -342,7 +342,7 @@ fn hydrates_legacy_files_that_only_have_defaults_seeded() {
             .contains(&"Burning Mycelium Circle".to_string()),
         "the version-2 batch must not be claimed as seeded"
     );
-    assert_eq!(DEFAULTS_VERSION, 19);
+    assert_eq!(DEFAULTS_VERSION, 20);
 
     let _ = fs::remove_dir_all(&dir);
 }

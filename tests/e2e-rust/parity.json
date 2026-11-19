@@ -800,7 +800,7 @@
           "status": "covered",
           "rust": [
             "crates/modv-engine/src/default_scenes.rs:ships_at_least_54_default_scenes_with_unique_names",
-            "crates/modv-engine/src/default_scenes.rs:bumps_the_defaults_version_to_18"
+            "crates/modv-engine/src/default_scenes.rs:bumps_the_defaults_version_to_20"
           ],
           "notes": ""
         },
@@ -850,7 +850,7 @@
           "name": "ships a version 3 batch of glitch scenes",
           "status": "covered",
           "rust": [
-            "crates/modv-engine/src/default_scenes.rs:adds_at_least_nine_scenes_in_the_version_3_batch",
+            "crates/modv-engine/src/default_scenes.rs:adds_at_least_eight_scenes_in_the_version_3_batch",
             "crates/modv-engine/src/default_scenes.rs:keeps_rgb_shift_and_digital_glitch_in_effects_groups",
             "crates/modv-engine/src/default_scenes.rs:keeps_twirl_only_in_it_twirls_at_night",
             "crates/modv-renderers/src/shader/modules/mod.rs:audio_features_match_js_meta"
