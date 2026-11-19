@@ -528,13 +528,19 @@ fn exit_with_audio_error(error: AudioSourceError) -> ! {
     clap::Error::raw(ErrorKind::InvalidValue, message).exit()
 }
 
+/// Environment variable naming an extracted portable bundle's root directory.
+/// The launcher sets this to the directory the portable ZIP was extracted into.
+pub const PORTABLE_ROOT_ENV: &str = "MODV_PORTABLE_ROOT";
+
 /// Resolve the ISF corpus directory the engine should scan.
 ///
 /// Order (first match wins):
 ///
 /// 1. `--isf-dir <PATH>` (the Electron supervisor always passes this);
 /// 2. `$MODV_ISF_DIR`;
-/// 3. a development default relative to the executable. The canonical Docker
+/// 3. `<$MODV_PORTABLE_ROOT>/isf`, when the portable root is set and that
+///    directory exists (the portable ZIP ships its corpus there);
+/// 4. a development default relative to the executable. The canonical Docker
 ///    build writes `crates/target/release/modv-engine`, so the repository root
 ///    is three levels above the binary directory and the corpus is at
 ///    `resources/isf`. A Cargo `target/` at the repository root and the
@@ -546,6 +552,17 @@ pub fn resolve_isf_dir(explicit: Option<PathBuf>) -> Option<PathBuf> {
     }
     if let Some(path) = std::env::var_os("MODV_ISF_DIR") {
         return Some(PathBuf::from(path));
+    }
+    // Portable bundle: when the launcher set a root and the corpus shipped
+    // inside it, prefer that over the dev lookup. A set root with no `isf`
+    // directory simply falls through to the development lookup.
+    if let Some(root) = std::env::var_os(PORTABLE_ROOT_ENV)
+        && !root.is_empty()
+    {
+        let isf = PathBuf::from(root).join("isf");
+        if isf.is_dir() {
+            return Some(isf);
+        }
     }
     development_isf_dir()
 }

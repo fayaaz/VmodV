@@ -14,7 +14,8 @@
 //! 1. `$MODV_ASSETS_DIR` (the packaged app's asset directory);
 //! 2. the `assets_dir` the engine passes in [`SceneContext::assets_dir`]
 //!    (the planned `--assets-dir` switch — `modv-app` does not pass one yet);
-//! 3. the dev fallback, the repo's own `resources/point10/textures` (via
+//! 3. `<$MODV_PORTABLE_ROOT>/textures` (the extracted portable ZIP's corpus);
+//! 4. the dev fallback, the repo's own `resources/point10/textures` (via
 //!    `CARGO_MANIFEST_DIR`, so it only resolves inside a checkout).
 //!
 //! A missing file never fails a scene: [`load_texture`] builds a procedural
@@ -48,6 +49,11 @@ use std::path::{Path, PathBuf};
 
 /// Environment variable holding the packaged asset directory.
 pub const ASSETS_DIR_ENV: &str = "MODV_ASSETS_DIR";
+
+/// Environment variable naming an extracted portable bundle's root directory.
+/// The launcher sets this to the directory the portable ZIP was extracted into;
+/// textures ship in its `textures/` subdirectory.
+pub const PORTABLE_ROOT_ENV: &str = "MODV_PORTABLE_ROOT";
 
 /// The repo's texture directory, relative to this crate. Only resolves inside
 /// a checkout (dev and the Docker toolchain); a packaged build uses
@@ -111,10 +117,10 @@ impl AssetLoader {
     }
 
     /// The loader for a [`SceneContext`](crate::point10::SceneContext):
-    /// `$MODV_ASSETS_DIR` first, then the context's directory, then the dev
-    /// fallback.
+    /// `$MODV_ASSETS_DIR` first, then the context's directory, then
+    /// `<$MODV_PORTABLE_ROOT>/textures`, then the dev fallback.
     pub fn for_assets_dir(assets_dir: Option<&Path>) -> Self {
-        let mut dirs = Vec::with_capacity(3);
+        let mut dirs = Vec::with_capacity(4);
         if let Some(from_env) = std::env::var_os(ASSETS_DIR_ENV)
             && !from_env.is_empty()
         {
@@ -122,6 +128,14 @@ impl AssetLoader {
         }
         if let Some(dir) = assets_dir {
             dirs.push(dir.to_path_buf());
+        }
+        // Portable bundle: textures ship inside the extracted root. Lower
+        // priority than an explicit asset directory, ahead of the dev fallback
+        // (which only resolves inside a checkout).
+        if let Some(root) = std::env::var_os(PORTABLE_ROOT_ENV)
+            && !root.is_empty()
+        {
+            dirs.push(PathBuf::from(root).join("textures"));
         }
         dirs.push(dev_fallback_dir());
         Self { dirs }

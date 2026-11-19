@@ -54,7 +54,6 @@ impl EnvGuard {
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
-
 }
 
 impl Drop for EnvGuard {
