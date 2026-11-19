@@ -1751,6 +1751,23 @@ impl NativeApp {
             &requests,
             now,
         );
+
+        // Collect the owned map before touching the hub/sources so the store
+        // borrow ends first and only Video modules with a progress prop drive
+        // seeking.
+        let progress_by_module: std::collections::BTreeMap<String, f64> = self
+            .store
+            .state()
+            .modules
+            .values()
+            .filter(|module| module.module_name == "Video")
+            .filter_map(|module| {
+                let value = module.props.get("progress")?.as_f64()?;
+                Some((module.id.clone(), value))
+            })
+            .collect();
+        self.video_sources
+            .sync_progress(&mut self.media_hub, &progress_by_module);
     }
 
     /// Apply one UI transport command and persist its option on every prop

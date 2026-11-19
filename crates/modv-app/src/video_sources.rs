@@ -250,6 +250,19 @@ pub fn video_source_id(path: &Path) -> String {
     format!("video:{}", path.to_string_lossy())
 }
 
+/// Map a 0..1 progress input to a seek position in milliseconds.
+///
+/// `0.0` maps to the start of the clip and `1.0` to the end; values outside
+/// that range are clamped. Returns `None` when the clip's duration is unknown
+/// or zero (there is no meaningful position to seek to).
+pub fn progress_seek_ms(progress: f64, duration_ms: Option<u64>) -> Option<u64> {
+    let duration = duration_ms?;
+    if duration == 0 {
+        return None;
+    }
+    Some((progress.clamp(0.0, 1.0) * duration as f64).round() as u64)
+}
+
 /// Plan the starts/stops/transport updates that reconcile `existing` with the
 /// resolved prop references.
 pub fn plan(
@@ -356,6 +369,10 @@ pub struct VideoSources {
     failed: BTreeSet<PathBuf>,
     /// Set by [`Self::note_media_change`]: retry the failed paths once.
     retry_failures: bool,
+    /// Last observed progress per source id. A source's first observation is
+    /// recorded without seeking so a static/default prop never fights normal
+    /// playback; only subsequent changes drive the playhead.
+    last_progress: BTreeMap<String, f64>,
     last_requests: Vec<VideoPropRequest>,
     last_scan: Option<Instant>,
     force: bool,
@@ -409,6 +426,7 @@ impl VideoSources {
         self.suppressed.clear();
         self.failed.clear();
         self.problems.clear();
+        self.last_progress.clear();
         self.last_requests.clear();
         self.last_scan = None;
         self.force = false;
@@ -713,6 +731,7 @@ impl VideoSources {
 
         hub.stop_file(&entry.id);
         self.suppressed.insert(path);
+        self.last_progress.remove(&entry.id);
         eprintln!(
             "ui: INFO video texture source {:?} stopped by the user",
             entry.id
@@ -754,6 +773,66 @@ impl VideoSources {
         }
 
         Ok(transport)
+    }
+
+    /// Drive progress-linked sources: for each running video source referenced
+    /// by a module with a `progress` value, map that value to a seek position.
+    ///
+    /// The first observation of a source is recorded without seeking, so a
+    /// static/default prop never fights normal playback; only later changes
+    /// (e.g. from audio input) move the playhead. A value that fails to seek
+    /// is left unrecorded so the next call may retry it.
+    pub fn sync_progress(
+        &mut self,
+        hub: &mut impl VideoFileHub,
+        progress_by_module: &BTreeMap<String, f64>,
+    ) {
+        // Collect owned decisions first so we never mutate `last_progress`
+        // while it is borrowed during the scan, and never borrow `self`
+        // wholesale while calling out to the hub.
+        let mut initial_values: Vec<(String, f64)> = Vec::new();
+        let mut seeks: Vec<(String, u64, f64)> = Vec::new();
+
+        for source in self.sources.values() {
+            // `references` is an ordered BTreeSet: the first matching module
+            // makes the choice deterministic when several props share a clip.
+            let Some(progress) = source
+                .references
+                .iter()
+                .find_map(|reference| progress_by_module.get(&reference.module_id).copied())
+            else {
+                continue;
+            };
+            // We need the clip duration to map progress to a position.
+            let Some(transport) = hub.transport(&source.id) else {
+                continue;
+            };
+
+            match self.last_progress.get(&source.id) {
+                None => initial_values.push((source.id.clone(), progress)),
+                Some(&last) if (last - progress).abs() > 0.001 => {
+                    if let Some(position_ms) = progress_seek_ms(progress, transport.duration_ms) {
+                        seeks.push((source.id.clone(), position_ms, progress));
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+
+        for (id, progress) in initial_values {
+            self.last_progress.insert(id, progress);
+        }
+
+        for (id, position_ms, progress) in seeks {
+            match hub.seek_file(&id, Duration::from_millis(position_ms)) {
+                Ok(_) => {
+                    self.last_progress.insert(id, progress);
+                }
+                Err(error) => {
+                    eprintln!("ui: WARN video source {id:?} progress seek failed: {error}");
+                }
+            }
+        }
     }
 
     /// The props referencing `source` (for option persistence).
@@ -2084,6 +2163,106 @@ mod tests {
 
         sources.stop_all(&mut hub);
         assert!(hub.ids().is_empty(), "stop_all releases the pipeline");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn progress_seek_ms_maps_start_end_and_clamps() {
+        assert_eq!(
+            progress_seek_ms(0.0, Some(10_000)),
+            Some(0),
+            "0 is the start"
+        );
+        assert_eq!(
+            progress_seek_ms(1.0, Some(10_000)),
+            Some(10_000),
+            "1 is the end"
+        );
+        assert_eq!(
+            progress_seek_ms(0.5, Some(10_000)),
+            Some(5_000),
+            "0.5 is halfway"
+        );
+        assert_eq!(
+            progress_seek_ms(-3.0, Some(10_000)),
+            Some(0),
+            "below range clamps to start"
+        );
+        assert_eq!(
+            progress_seek_ms(3.0, Some(10_000)),
+            Some(10_000),
+            "above range clamps to end"
+        );
+        assert_eq!(
+            progress_seek_ms(0.5, None),
+            None,
+            "unknown duration has no seek target"
+        );
+    }
+
+    #[test]
+    fn audio_driven_progress_changes_seek_the_video_source() {
+        let root = temp_dir("progress-seek");
+        std::fs::create_dir_all(root.join("default/video")).expect("video folder");
+        let clip = root.join("default/video/clip.mp4");
+        std::fs::write(&clip, b"fake").expect("clip");
+
+        let mut hub = FakeHub {
+            transport: Some(VideoTransport {
+                duration_ms: Some(10_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut sources = VideoSources::new();
+
+        let requests = vec![request("module-a", "texture", "default/video/clip.mp4")];
+        sources.reconcile_now(&mut hub, Some(&root), &requests, Instant::now());
+        hub.calls.clear();
+
+        // A first/default observation must not seek: it would fight playback.
+        let mut progress = BTreeMap::new();
+        progress.insert("module-a".to_string(), 0.0);
+        sources.sync_progress(&mut hub, &progress);
+        assert!(
+            !hub.calls.iter().any(|c| c.starts_with("seek ")),
+            "an unchanged/default progress must not fight playback: {:?}",
+            hub.calls
+        );
+
+        // Driving it from audio to 0.5 must seek to the midpoint of the clip.
+        progress.insert("module-a".to_string(), 0.5);
+        hub.calls.clear();
+        sources.sync_progress(&mut hub, &progress);
+        assert!(
+            hub.calls
+                .iter()
+                .any(|c| c == &format!("seek {} 5000", video_source_id(&clip))),
+            "progress 0.5 of a 10s clip must seek to 5000ms: {:?}",
+            hub.calls
+        );
+
+        // An unchanged value must not seek again.
+        hub.calls.clear();
+        sources.sync_progress(&mut hub, &progress);
+        assert!(
+            !hub.calls.iter().any(|c| c.starts_with("seek ")),
+            "unchanged progress must not re-seek: {:?}",
+            hub.calls
+        );
+
+        // A value of 1 must seek to the end of the clip.
+        progress.insert("module-a".to_string(), 1.0);
+        hub.calls.clear();
+        sources.sync_progress(&mut hub, &progress);
+        assert!(
+            hub.calls
+                .iter()
+                .any(|c| c == &format!("seek {} 10000", video_source_id(&clip))),
+            "progress 1 must seek to the end: {:?}",
+            hub.calls
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
