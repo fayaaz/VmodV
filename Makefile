@@ -83,12 +83,19 @@ disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
 	if [ "$$free" -lt "$(MIN_FREE_GB)" ]; then \
 		echo "error: only $${free} GB free on the build filesystem (need $(MIN_FREE_GB) GB)."; \
-		echo "       run 'make disk-clean' (docker builder prune) and retry."; \
+		echo "       free host space first — e.g. crates/target/incremental or crates/target/*/incremental,"; \
+		echo "       then 'make docker-reset' (clears the cargo cache volume)."; \
+		echo "       'make disk-clean' only drops cache unused for a week; avoid 'docker builder prune -af'."; \
 		exit 1; \
 	fi
 
+# Keeps the BuildKit cache (image layers only need rebuilding when the
+# Dockerfile changes); pruning it forces every `make engine*` to rebuild the
+# toolchain image from apt up. Only cache unused for a week is dropped, plus
+# dangling images/containers. For a truly cold cache run
+# `docker builder prune -af` by hand.
 disk-clean:
-	-$(DOCKER) builder prune -af
+	-$(DOCKER) builder prune -f --filter until=168h
 	-$(DOCKER) image prune -f
 	-$(DOCKER) container prune -f
 

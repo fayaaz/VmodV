@@ -5,6 +5,9 @@
 docs
 dist
 tmp
+node_modules
+out
+test-results
 *.log
 **/core
 **/core.*
