@@ -17,7 +17,11 @@
 #   make shell            interactive shell in the Rust toolchain
 #   make docker-package   build both installers via Dockerfile `artifacts`
 
-NATIVE_VERSION ?= 2.2.0
+# The version baked into the installers is not kept in the tree. It comes
+# from $NATIVE_VERSION when set, otherwise from the git tags via
+# tools/version.sh: the tag on HEAD when this checkout is tagged, else the
+# highest vX.Y.Z tag. `make version` prints the value in effect.
+NATIVE_VERSION ?= $(shell "$(CURDIR)/tools/version.sh")
 # Dev-only asset tooling: the wordcodec is a small Node script run in a
 # throwaway container (no Node is needed for the app build/tests).
 NODE_IMAGE ?= node:24-slim
@@ -77,7 +81,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-native native-deb native-deb-check clean dev native native-debug lint format test-e2e test-e2e-native engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean
+.PHONY: build appimage appimage-native native-deb native-deb-check clean dev native native-debug lint format test-e2e test-e2e-native engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean version
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -101,6 +105,10 @@ disk-clean:
 
 clean:
 	rm -rf "$(DIST_DIR)"
+
+# Print the version the installers would be built with.
+version:
+	@"$(CURDIR)/tools/version.sh"
 
 # Build the native AppImage and Debian package. This is the release entry
 # point; there is no Electron fallback build.

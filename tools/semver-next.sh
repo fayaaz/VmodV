@@ -8,10 +8,10 @@
 #   patch      subject matches `fix(<scope>)?:`
 #   otherwise  no release is warranted
 #
-# The base version is the highest `v*. *.*`-style tag (see below); when no such
-# tag exists (e.g. the 2.0.0 seed), `NATIVE_VERSION ?= X.Y.Z` from the Makefile
-# is used instead. The bare next version is printed on stdout — no output
-# means no release. Diagnostics go to stderr.
+# The base version is the highest `v*.*.*`-style tag; if none exists the
+# script errors out (the tree keeps no version literal, so the tags are the
+# only source of truth). The bare next version is printed on stdout — no
+# output means no release. Diagnostics go to stderr.
 #
 # Usage:
 #   tools/semver-next.sh              compute the next version for the repo
@@ -36,17 +36,16 @@ latest_semver_tag() { # repo root is $1
 compute() { # repo root is $1; prints bare version or nothing
   local repo=$1 latest base range
   latest=$(latest_semver_tag "$repo")
-  if [ -n "$latest" ]; then
-    base=${latest#v}
-    range="$latest..HEAD"
-  else
-    base=$(sed -n 's/^NATIVE_VERSION ?= *//p' "$repo/Makefile" 2>/dev/null | head -n1 | tr -d '[:space:]')
-    range=HEAD
-  fi
-  if ! [[ $base =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "error: no usable base version (latest tag: ${latest:-none}, Makefile NATIVE_VERSION: ${base:-empty})" >&2
+  if [ -z "$latest" ]; then
+    echo "error: no vX.Y.Z tag found; tag an initial release (e.g. v2.0.0) first" >&2
     exit 2
   fi
+  base=${latest#v}
+  if ! [[ $base =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: tag $latest is not a bare vX.Y.Z version" >&2
+    exit 2
+  fi
+  range="$latest..HEAD"
 
   local breaking=0 feat=0 fix=0 count=0 body subject
   while IFS= read -r -d '' body; do
@@ -65,7 +64,7 @@ compute() { # repo root is $1; prints bare version or nothing
   elif [ "$fix" -eq 1 ]; then
     bump=patch
   else
-    echo "scanned $count commit(s) since ${latest:-the Makefile base}: nothing releaseable (need feat:/fix:/breaking)" >&2
+    echo "scanned $count commit(s) since ${latest}: nothing releaseable (need feat:/fix:/breaking)" >&2
     exit 0
   fi
 
@@ -76,7 +75,7 @@ compute() { # repo root is $1; prints bare version or nothing
     minor) min=$((min + 1)); pat=0 ;;
     patch) pat=$((pat + 1)) ;;
   esac
-  echo "scanned $count commit(s) since ${latest:-Makefile base $base}; bump=$bump base=$base" >&2
+  echo "scanned $count commit(s) since ${latest}; bump=$bump base=$base" >&2
   echo "$maj.$min.$pat"
 }
 
@@ -133,21 +132,18 @@ selftest() {
   # mixed case scope-less breaking with bodies before the !: marker
   check "3.0.0" $'feat(engine): subject\n\nBREAKING CHANGE: footer wins over type'
 
-  # no tags at all -> base comes from Makefile NATIVE_VERSION
+  # no tags at all -> error out (the tree keeps no version literal)
   total=$((total + 1))
   rm -rf "$tmp/repo"; mkdir -p "$tmp/repo"; cd "$tmp/repo"
   git init -q
   git config user.email selftest@example.com
   git config user.name selftest
-  printf 'NATIVE_VERSION ?= 1.4.5\n' > Makefile
-  git add Makefile; git commit -q -m "chore: base"
-  git commit -q --allow-empty -m "feat: from makefile base"
-  got=$("$SCRIPT" --repo "$tmp/repo" 2>/dev/null)
-  if [ "$got" = "1.5.0" ]; then
-    echo "ok   - Makefile base '1.4.5' -> '1.5.0'"
-  else
-    echo "FAIL - Makefile base expected '1.5.0', got '${got:-<no release>}'" >&2
+  git commit -q --allow-empty -m "feat: untagged repo"
+  if "$SCRIPT" --repo "$tmp/repo" >/dev/null 2>&1; then
+    echo "FAIL - no tags: expected non-zero exit" >&2
     fails=$((fails + 1))
+  else
+    echo "ok   - no tags: exits with an error"
   fi
 
   echo "selftest: $((total - fails))/$total checks passed"

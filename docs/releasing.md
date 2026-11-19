@@ -26,16 +26,17 @@ Merge commits are ignored.
    conventional commits since it and prints the next version (or nothing
    when no release is warranted).
 2. If a bump is warranted, the `release` job:
-   - bumps `NATIVE_VERSION ?=` in the `Makefile`,
-   - commits it on `main` as `chore(release): vX.Y.Z` (as `github-actions[bot]`),
-   - tags that commit `vX.Y.Z` (annotated),
+   - tags the pushed commit `vX.Y.Z` (annotated, as `github-actions[bot]`) —
+     no version-bump commit is created; the tree contains no version
+     literal,
+   - pushes the tag,
    - builds the AppImage and `.deb` via `make build` with
      `NATIVE_VERSION=vX.Y.Z` (same artifacts as `make build` locally),
    - publishes a GitHub release titled `vX.Y.Z` with the changelog since the
      previous tag and the two installers attached.
-3. Pushes made with `GITHUB_TOKEN` do not trigger workflows, so the release
-   commit does not re-trigger the workflow (a `chore(release):` subject
-   guard in the workflow double-checks this).
+3. The tag step is idempotent: re-running a failed workflow leaves an
+   existing `vX.Y.Z` tag in place and re-pushes it, so re-runs after a
+   build failure do not die on the tag already existing.
 
 This is the only release channel: the old rolling `nightly` prerelease was
 removed — download the latest `vX.Y.Z` release for current artifacts.
@@ -46,23 +47,34 @@ removed — download the latest `vX.Y.Z` release for current artifacts.
   tags matching `v[0-9]*.[0-9]*.[0-9]*`; the legacy `3.x` tags (no `v`
   prefix, unreachable from the rewritten history) and `v1.x-final` are
   ignored.
-- The `v2.0.0` tag was placed on the commit that set `NATIVE_VERSION` to
-  `2.0.0` (`8b9c40ed`) to seed the automation base. Everything before it is
-  accounted for as 2.0.0, so the first automated release computed from it
-  is **v2.1.0**. Commit `NATIVE_VERSION` is the single source of truth for
-  the binary version baked into installers; `git tag` is the source of
-  truth for the release history.
+- The `v2.0.0` tag was placed on the commit that set the installer version
+  to `2.0.0` (`8b9c40ed`) to seed the automation base. Everything before it
+  is accounted for as 2.0.0, so the first automated release computed from it
+  was **v2.1.0**; the tag pushes made by the workflow point at the exact
+  commit being released rather than at a bot-made version-bump commit.
+- `git tag` is the single source of truth for the version. The Makefile
+  keeps no `NATIVE_VERSION` literal; `NATIVE_VERSION` is a make variable
+  whose default comes from `tools/version.sh`:
+  1. `$NATIVE_VERSION` when set in the environment,
+  2. the `vX.Y.Z` tag on HEAD when building a tagged checkout,
+  3. the highest `vX.Y.Z` tag otherwise (the latest released version),
+  4. `0.0.0-dev` when no tag exists or git is unavailable (also the
+     fallback for container builds, whose `.git`-less context is fed the
+     version by the host instead).
 
-## Verifying locally
+## Building locally with a version
 
 ```bash
-tools/semver-next.sh             # print what the next release would be
-tools/semver-next.sh selftest    # run the fixture tests (18 checks)
+make version                  # print the version tools/version.sh resolves
+make build                    # installers named after the resolved version
+NATIVE_VERSION=2.2.0 make build   # explicit override
+tools/semver-next.sh          # print what the next release would be
+tools/semver-next.sh selftest # run the fixture tests (18 checks)
 ```
 
 The selftest builds scratch git repos in a temp dir and asserts bump
 behaviour for feat/fix/breaking/no-op combinations, precedence rules and the
-Makefile fallback used before any tag exists.
+untagged-repository error path.
 
 ## Making a release manually
 
@@ -74,7 +86,6 @@ Makefile fallback used before any tag exists.
 - To skip releasing a given change: use a non-feat/fix type (`chore:`,
   `docs:`, `perf:`…). Those never cut a release.
 - The release workflow does not run the test suite; `native.yml` gates
-  `main`. If the installer build fails, the tag and version-bump commit
-  remain pushed — re-run the failed job to rebuild and publish (the
-  `gh release create` step is safe to re-run when the release does not
-  exist yet).
+  `main`. If the installer build fails, the tag remains pushed — re-run the
+  failed job to rebuild and publish (the `gh release create` step is safe
+  to re-run when the release does not exist yet).

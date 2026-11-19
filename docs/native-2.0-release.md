@@ -30,10 +30,14 @@ binary and assets.
 
 Versions:
 
-- `NATIVE_VERSION ?= 2.0.0` in the `Makefile` names the installers. Override it
-  with `NATIVE_VERSION=...` for local builds; `release.yml` bumps it and
-  passes the computed version automatically for stable releases (see
-  `docs/releasing.md`).
+- The installer version is not kept in the tree. `NATIVE_VERSION` (a
+  make/environment variable, not a checked-in literal) names the installers;
+  its default comes from the git tags via `tools/version.sh` — the tag on
+  HEAD when building a tagged checkout, else the highest `vX.Y.Z` tag.
+  Override it with `NATIVE_VERSION=...` for local builds. `release.yml`
+  passes the computed version automatically for stable releases and tags the
+  released commit instead of committing a version bump (see
+  `docs/releasing.md`). `make version` prints the resolved value.
 - The Cargo workspace stays at its internal `0.1.0` metadata. The package
   version, not `modv --version`, is the release version.
 
@@ -94,9 +98,10 @@ and logging).
   (`modv-app` serial), the native e2e harness and both package builds on
   changes, uploading workflow artifacts.
 - `.github/workflows/release.yml` runs on every push to `main` that contains
-  qualifying conventional commits and publishes the versioned AppImage/deb to
-  a `vX.Y.Z` GitHub release (see `docs/releasing.md`). There is no Electron
-  job and no rolling nightly.
+  qualifying conventional commits, tags the released commit `vX.Y.Z` (no
+  version-bump commit; the version comes from the tags) and publishes the
+  versioned AppImage/deb to a `vX.Y.Z` GitHub release (see
+  `docs/releasing.md`). There is no Electron job and no rolling nightly.
 - Stable 2.0.0 artifacts are built with `make build` (or `NATIVE_VERSION`
   overridden) from a green commit.
 

@@ -83,7 +83,11 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 # Makefile runs with a cargo volume cache; this stage exists for reproducible
 # `docker buildx` release artifacts and does not use Node.
 FROM rust AS native-package
-ARG NATIVE_VERSION=2.0.0
+# No version literal lives in the tree; the host passes the git-tag-derived
+# version via `docker buildx build --build-arg NATIVE_VERSION=...` (make
+# docker-package does this via tools/version.sh). The fallback only marks a
+# build made without the argument. .git is not in the context.
+ARG NATIVE_VERSION=0.0.0-dev
 ENV APP_VERSION=${NATIVE_VERSION}
 COPY . .
 RUN bash tools/native-appimage.sh \

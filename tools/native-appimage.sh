@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT="${ROOT:-/app}"
-VERSION="${APP_VERSION:-${NATIVE_VERSION:-2.0.0}}"
+VERSION="${APP_VERSION:-${NATIVE_VERSION:-$(bash "$ROOT/tools/version.sh")}}"
 OUT="$ROOT/dist"
 APPDIR="$OUT/VmodV-Native.AppDir"
 IMAGE="$OUT/VmodV-Native-$VERSION-x86_64.AppImage"

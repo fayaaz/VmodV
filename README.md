@@ -97,9 +97,12 @@ make native-deb       # .deb only (runs native-deb-check.sh)
 make native-deb-check # re-check an existing .deb
 ```
 
-`NATIVE_VERSION` names the installers (default `2.0.0`):
+`NATIVE_VERSION` names the installers. Its default comes from the git tags
+(`vX.Y.Z` on HEAD, else the latest tag) via `tools/version.sh`; override it
+with the environment variable (`make version` prints the resolved value):
 
 ```bash
+make version
 NATIVE_VERSION=2.0.0 make build
 ```
 
