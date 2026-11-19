@@ -241,6 +241,35 @@ impl SceneGridState {
         hovered || self.still_cells.contains_key(cell)
     }
 
+    /// Pick the texture a Scene-grid cell paints this frame.
+    ///
+    /// A hovered cell may fall back to the live composited main output until
+    /// its own isolated preview arrives, so the hover feedback is immediate.
+    /// A non-hovered "still" cell, however, must paint ONLY its cached preview:
+    /// stills are kept for every cell ever hovered, so falling back to the live
+    /// output here would leak the main output into those cells whenever their
+    /// cached preview was evicted from the shared cache. An evicted still
+    /// therefore paints nothing. Cells that never paint a preview get nothing.
+    pub fn preview_texture_for(
+        &self,
+        cell: &CellRef,
+        hovered: bool,
+        snapshot: &EngineSnapshot,
+        live_preview: Option<egui::TextureId>,
+    ) -> Option<egui::TextureId> {
+        let cached = snapshot
+            .scene_previews
+            .get(&scene_preview_key(&cell.scene_id, cell.row))
+            .map(|p| p.id);
+        if hovered {
+            cached.or(live_preview)
+        } else if self.still_cells.contains_key(cell) {
+            cached
+        } else {
+            None
+        }
+    }
+
     /// Remember `cell` as a still so its cached preview keeps painting once
     /// the pointer moves on. `module_names` is the saved content the preview
     /// shows; a later edit drops the still rather than painting stale pixels.
@@ -1621,17 +1650,13 @@ fn draw_scene_cell(
         StrokeKind::Inside,
     );
 
-    // Hover preview: the engine's isolated Scene-cell render, falling back to
-    // the live composited frame until the first preview arrives. Once a cell
-    // has been hovered its cached preview keeps painting as a still, matching
-    // `performanceGrid`'s "leaves a still".
+    // Hover preview: the engine's isolated Scene-cell render. Only the hovered
+    // cell falls back to the live composited frame until its preview arrives;
+    // a non-hovered still paints ONLY its cached preview, never the live output
+    // (which would leak the main scene into cells whose cache was evicted),
+    // matching `performanceGrid`'s "leaves a still".
     if !cell.is_empty() && grid.paints_preview(&target, hovered) {
-        let key = scene_preview_key(&scene.id, row);
-        let texture = snapshot
-            .scene_previews
-            .get(&key)
-            .map(|preview| preview.id)
-            .or(live_preview);
+        let texture = grid.preview_texture_for(&target, hovered, snapshot, live_preview);
         if let Some(texture_id) = texture {
             let inner = rect.shrink(2.0);
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
