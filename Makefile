@@ -17,7 +17,7 @@
 #   make shell            interactive shell in the Rust toolchain
 #   make docker-package   build both installers via Dockerfile `artifacts`
 
-NATIVE_VERSION ?= 2.1.1
+NATIVE_VERSION ?= 2.2.0
 # Dev-only asset tooling: the wordcodec is a small Node script run in a
 # throwaway container (no Node is needed for the app build/tests).
 NODE_IMAGE ?= node:24-slim
