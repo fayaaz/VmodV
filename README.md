@@ -1,13 +1,13 @@
-# VmodV Native
+# VmodV
 
 <p align="center">
-  <a href="https://github.com/fayaaz/modV/releases/latest">
-    <img alt="GitHub release (latest by date including pre-releases)" src="https://img.shields.io/github/v/release/fayaaz/modV?color=blue&include_prereleases" />
+  <a href="https://github.com/fayaaz/VmodV/releases/latest">
+    <img alt="GitHub release (latest by date including pre-releases)" src="https://img.shields.io/github/v/release/fayaaz/VmodV?color=blue&include_prereleases" />
   </a>
-  <a href="https://github.com/fayaaz/modV/blob/main/LICENSE" target="_blank">
+  <a href="https://github.com/fayaaz/VmodV/blob/main/LICENSE" target="_blank">
     <img alt="License: MIT (VmodV code)" src="https://img.shields.io/badge/license-MIT%20(VmodV%20code)-blue" />
   </a>
-  <a href="https://github.com/fayaaz/modV/blob/main/THIRD_PARTY_NOTICES.md" target="_blank">
+  <a href="https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md" target="_blank">
     <img alt="Bundled third-party modules: see notices (some CC BY-NC-SA)" src="https://img.shields.io/badge/bundled%20modules-see%20notices-orange" />
   </a>
 </p>
@@ -46,7 +46,7 @@ egui UI in-process.
 ## Install (Linux)
 
 Grab the latest build from the
-[Releases page](https://github.com/fayaaz/modV/releases). Stable releases
+[Releases page](https://github.com/fayaaz/VmodV/releases). Stable releases
 (tags `vX.Y.Z`) are cut automatically from `main` by SemVer rules
 (`feat:` → minor, `fix:` → patch, breaking → major) — see
 [docs/releasing.md](docs/releasing.md). Linux is the only supported
