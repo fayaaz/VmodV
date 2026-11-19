@@ -1,9 +1,9 @@
 //! Kittest coverage for the native video-file transport.
 //!
-//! The Inspector's texture control and the Media tab's Sources list drive the
-//! same commands: Play/Pause, Restart, Speed 0.1–10 and Loop, with the
-//! Inspector also persisting pause/loop/speed into the texture prop so presets
-//! and Scenes keep them.
+//! The Inspector's texture control and the Media tab's Sources list share
+//! Play/Pause, Restart and Loop. Speed 0.1–10 lives only on the Inspector's
+//! texture control (the single source of truth), which also persists
+//! pause/loop/speed into the texture prop so presets and Scenes keep them.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -309,6 +309,22 @@ fn the_media_tab_transport_dispatches_the_same_commands() {
             source: SOURCE_ID.to_string(),
             action: VideoTransportAction::Restart,
         }]
+    );
+}
+
+#[test]
+fn the_media_tab_has_no_speed_slider() {
+    let mut state = UiState::new();
+    state.side_panel_tab = SidePanelTab::Media;
+    let mut harness = build(snapshot(video_prop(), vec![file_source()]), state);
+    harness.run();
+
+    harness.get_by_label_contains(SOURCE_ID);
+    assert!(
+        harness
+            .query_by_role_and_label(accesskit::Role::Slider, "Speed")
+            .is_none(),
+        "playback speed is changed from the module's Inspector control, not the Media tab"
     );
 }
 

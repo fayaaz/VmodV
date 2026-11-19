@@ -3748,9 +3748,12 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
 
 /// The Media panel's transport for one running file source.
 ///
-/// The shell persists pause/loop/speed into every prop that references the
-/// source, so a change here survives a preset/Scene reload just like the
-/// Inspector's transport row.
+/// Playback speed is deliberately *not* offered here — it lives only on the
+/// module's Inspector texture control so there is a single source of truth.
+///
+/// The shell persists pause/loop into every prop that references the source,
+/// so a change here survives a preset/Scene reload just like the Inspector's
+/// transport row.
 fn media_transport_row(
     ui: &mut egui::Ui,
     source: &MediaSourceView,
@@ -3778,22 +3781,6 @@ fn media_transport_row(
     });
 
     ui.horizontal(|ui| {
-        ui.spacing_mut().slider_width = 60.0;
-        let mut speed = transport.playback_rate;
-        if ui
-            .add(
-                egui::Slider::new(&mut speed, 0.1..=10.0)
-                    .step_by(0.05)
-                    .text("Speed"),
-            )
-            .changed()
-        {
-            state.push_media_action(MediaAction::VideoTransport {
-                source: source.source_id.clone(),
-                action: VideoTransportAction::SetPlaybackRate { rate: speed },
-            });
-        }
-
         let mut looping = transport.looping;
         if ui.checkbox(&mut looping, "Loop").changed() {
             state.push_media_action(MediaAction::VideoTransport {

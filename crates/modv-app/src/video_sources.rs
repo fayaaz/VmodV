@@ -1440,6 +1440,51 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_speed_option_change_issues_a_rate_command_without_restarting() {
+        let root = temp_dir("speed-option");
+        std::fs::create_dir_all(root.join("default/video")).expect("video folder");
+        std::fs::write(root.join("default/video/clip.mp4"), b"fake").expect("clip");
+
+        let mut hub = FakeHub::default();
+        let mut sources = VideoSources::new();
+        let now = Instant::now();
+        let id = video_source_id(&root.join("default/video/clip.mp4"));
+
+        let at_real_time = VideoPropRequest::from_prop(
+            "module-a",
+            "texture",
+            &json!({"type": "video", "options": {"path": "default/video/clip.mp4"}}),
+        )
+        .expect("a video prop");
+        sources.reconcile_now(&mut hub, Some(&root), &[at_real_time], now);
+        hub.calls.clear();
+
+        // The Inspector slider writes options.playbackrate back into the prop.
+        let sped_up = VideoPropRequest::from_prop(
+            "module-a",
+            "texture",
+            &json!({"type": "video", "options": {
+                "path": "default/video/clip.mp4", "loop": true, "playbackrate": 2.0
+            }}),
+        )
+        .expect("a video prop");
+        sources.reconcile_now(&mut hub, Some(&root), &[sped_up], now);
+
+        assert!(
+            hub.calls.iter().any(|call| call == &format!("rate {id} 2")),
+            "a speed option change drives the transport: {:?}",
+            hub.calls
+        );
+        assert!(
+            hub.calls.iter().all(|call| !call.starts_with("start")),
+            "the clip is not restarted to change speed: {:?}",
+            hub.calls
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn a_missing_file_is_kept_unresolved_and_retried_after_a_media_change() {
         let root = temp_dir("missing");
         std::fs::create_dir_all(root.join("default/video")).expect("video folder");

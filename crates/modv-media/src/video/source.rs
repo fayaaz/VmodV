@@ -451,8 +451,10 @@ impl VideoSource {
     /// The target is clamped to the clip duration (when known). Seeking while
     /// paused keeps the pipeline paused on the new frame; seeking while playing
     /// (including out of end-of-stream) continues playback from there. The
-    /// returned snapshot's position may still be the pre-seek value for a poll
-    /// or two while the flush propagates.
+    /// current playback rate is carried into the new segment, so a seek never
+    /// silently drops a sped-up file back to 1x. The returned snapshot's
+    /// position may still be the pre-seek value for a poll or two while the
+    /// flush propagates.
     pub fn seek(&self, position: Duration) -> Result<VideoTransport, VideoError> {
         self.ensure_controllable()?;
 
@@ -469,8 +471,10 @@ impl VideoSource {
             VideoError::Unsupported(format!("seek position {target:?} is out of range"))
         })?;
 
-        self.pipeline
-            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, clock)
+        // Carry the current rate into the new segment. `seek_simple` always
+        // builds a rate-1.0 segment, which silently drops a file playing at
+        // 2x back to real time while `self.playback_rate` still reports 2x.
+        self.seek_with_rate(self.playback_rate(), clock)
             .map_err(|error| {
                 VideoError::State(format!(
                     "could not seek to {} ms: {error}",
@@ -528,20 +532,11 @@ impl VideoSource {
                 .map(gst::ClockTime::from_mseconds)
                 .unwrap_or(gst::ClockTime::ZERO);
 
-            self.pipeline
-                .seek(
-                    rate,
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                    gst::SeekType::Set,
-                    position,
-                    gst::SeekType::None,
-                    gst::ClockTime::NONE,
-                )
-                .map_err(|error| {
-                    VideoError::State(format!(
-                        "could not set the playback rate to {rate}: {error}"
-                    ))
-                })?;
+            self.seek_with_rate(rate, position).map_err(|error| {
+                VideoError::State(format!(
+                    "could not set the playback rate to {rate}: {error}"
+                ))
+            })?;
 
             self.last_position_ms
                 .store(duration_millis(Duration::from(position)), Ordering::Relaxed);
@@ -606,12 +601,12 @@ impl VideoSource {
     }
 
     /// Seek back to the first frame and clear the end-of-stream latch.
+    ///
+    /// The current rate is carried into the new segment so a looping file
+    /// keeps playing at the speed the user set instead of snapping to 1x on
+    /// every replay.
     fn restart_from_start(&self) -> Result<(), VideoError> {
-        self.pipeline
-            .seek_simple(
-                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::ClockTime::ZERO,
-            )
+        self.seek_with_rate(self.playback_rate(), gst::ClockTime::ZERO)
             .map_err(|error| {
                 VideoError::State(format!("could not restart the video file: {error}"))
             })?;
@@ -620,6 +615,26 @@ impl VideoSource {
         self.ended.store(false, Ordering::SeqCst);
 
         Ok(())
+    }
+
+    /// A flushing, accurate seek at `position` whose segment carries `rate`.
+    ///
+    /// GStreamer's `seek_simple` always uses rate 1.0; every seek in this
+    /// source goes through here so a stored playback rate survives restarts,
+    /// looping and transport seeks.
+    fn seek_with_rate(
+        &self,
+        rate: f64,
+        position: gst::ClockTime,
+    ) -> Result<(), gst::glib::BoolError> {
+        self.pipeline.seek(
+            rate,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            gst::SeekType::Set,
+            position,
+            gst::SeekType::None,
+            gst::ClockTime::NONE,
+        )
     }
 
     /// Move the pipeline, mapping a refused state change to [`VideoError`].
@@ -1787,6 +1802,120 @@ mod tests {
             "0.25x should advance slower than real time: {before} -> {after}"
         );
         assert!(!source.transport().eos, "the clip must not have ended");
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_rate_change_delivers_frames_faster_than_real_time() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+        source.set_looping(false);
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+
+        let window = std::time::Duration::from_millis(500);
+        source.seek(std::time::Duration::ZERO).expect("rewind");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let frames_1x = source.status().frames;
+        std::thread::sleep(window);
+        let frames_1x = source.status().frames - frames_1x;
+
+        source
+            .seek(std::time::Duration::ZERO)
+            .expect("rewind before the rate change");
+        source.set_playback_rate(2.0).expect("2x");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let frames_2x = source.status().frames;
+        std::thread::sleep(window);
+        let frames_2x = source.status().frames - frames_2x;
+
+        assert!(
+            frames_2x > (frames_1x * 3) / 2,
+            "2x must deliver visibly more frames than 1x ({frames_1x} -> {frames_2x})"
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn seeking_keeps_the_current_playback_rate() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+        source.set_looping(false);
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+
+        let window = std::time::Duration::from_millis(500);
+
+        // Baseline at 1x.
+        source.seek(std::time::Duration::ZERO).expect("rewind");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let frames_1x = source.status().frames;
+        std::thread::sleep(window);
+        let frames_1x = source.status().frames - frames_1x;
+
+        // Set 2x, then seek (Restart / position change / a loop replay all do
+        // this). The seek must not silently restore a rate-1.0 segment.
+        source.set_playback_rate(2.0).expect("2x");
+        source
+            .seek(std::time::Duration::ZERO)
+            .expect("rewind at 2x");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let frames_2x = source.status().frames;
+        std::thread::sleep(window);
+        let frames_2x = source.status().frames - frames_2x;
+
+        assert_eq!(source.transport().playback_rate, 2.0);
+        assert!(
+            frames_2x > (frames_1x * 3) / 2,
+            "a seek must keep the 2x rate ({frames_1x} -> {frames_2x})"
+        );
+
+        source.stop();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn looping_a_sped_up_file_keeps_the_rate() {
+        let Some(path) = test_support::transport_video_fixture() else {
+            return;
+        };
+        let mut source = VideoSource::start(VideoSourceConfig::file(&path).with_mode(160, 120, 30))
+            .unwrap_or_else(|error| panic!("decode {path:?}: {error}"));
+        test_support::wait_for_frame(&mut source, test_support::FRAME_TIMEOUT)
+            .expect("a first decoded frame");
+
+        let window = std::time::Duration::from_millis(500);
+        let frames_1x = source.status().frames;
+        std::thread::sleep(window);
+        let frames_1x = source.status().frames - frames_1x;
+
+        source.set_playback_rate(2.0).expect("2x");
+        // The 2s fixture replays after ~1s at 2x. `restart_from_start` must
+        // carry the rate into the new segment, not fall back to rate 1.0.
+        let before_loop = source.status().frames;
+        wait_until("a loop at 2x", std::time::Duration::from_secs(6), || {
+            source.status().frames > before_loop + 65
+        });
+
+        let frames_2x = source.status().frames;
+        std::thread::sleep(window);
+        let frames_2x = source.status().frames - frames_2x;
+
+        assert_eq!(source.transport().playback_rate, 2.0);
+        assert!(
+            frames_2x > (frames_1x * 3) / 2,
+            "a replay must keep the 2x rate ({frames_1x} -> {frames_2x})"
+        );
 
         source.stop();
         let _ = std::fs::remove_file(&path);
