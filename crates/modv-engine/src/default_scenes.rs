@@ -71,7 +71,17 @@ use serde_json::{Map, Value};
 ///
 /// Version 18 retires `Strobe Riot` (see [`REMOVED_DEFAULT_SCENES`]). Existing
 /// installs drop the seeded Scene; a custom Scene with the same name is kept.
-pub const DEFAULTS_VERSION: i64 = 18;
+///
+/// Version 19 retires the v15 `Prism Tunnel` and re-seeds its retuned
+/// replacement, `Long Red Tunnel` (the Scene the maintainer rebuilt in their
+/// personal library: a `Background` row with Traced Tunnel → Bloom →
+/// Auto Levels, an empty `Effects` row, `minSeconds 8` / `maxSeconds 24`, a
+/// bass→`dof` link, a mid→`mid_point` link on Auto Levels and `swing` driven
+/// by an embedded freehand draw curve). The rename ships as a version-19
+/// row in [`crate::default_scene_migrations`] so installs keeping the seeded
+/// Scene keep its id (and the maintainer keeps their edits); fresh installs
+/// get the new definition.
+pub const DEFAULTS_VERSION: i64 = 19;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
@@ -107,6 +117,11 @@ pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
 ///
 /// Version 18 retires `Strobe Riot` instead of refreshing it, so the list does
 /// not change with the bump.
+///
+/// Version 19 renames `Prism Tunnel` to `Long Red Tunnel` (a version-19 row in
+/// [`crate::default_scene_migrations`] renames seeded installs in place and
+/// keeps their payload); no in-place refresh ships with the bump, so the list
+/// does not change either.
 pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Mycelium Bloom",
     "Chromatic Waveform",
@@ -292,6 +307,14 @@ pub struct SceneInputLink {
         skip_serializing_if = "Option::is_none"
     )]
     pub bpm_division: Option<i64>,
+    /// A verbatim tween/draw curve for `source: "tween" | "draw"` links.
+    ///
+    /// Absent on every other link. When present, the store builds the tween
+    /// with the linked input's control id instead of the default 0→1
+    /// alternate pulse (`default_link_tween`); every other key is kept
+    /// verbatim (curve, keyframe times, BPM subdivision, duration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tween: Option<Value>,
     /// Unknown keys, kept verbatim.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -817,9 +840,9 @@ mod tests {
     // ————————————————— data integrity —————————————————
 
     #[test]
-    fn bumps_the_defaults_version_to_18() {
+    fn bumps_the_defaults_version_to_19() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 18);
+        assert_eq!(DEFAULTS_VERSION, 19);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
     }
 
@@ -835,6 +858,133 @@ mod tests {
 
         assert_eq!(keys.iter().collect::<HashSet<_>>().len(), keys.len());
         assert!(keys.iter().all(|key| !key.is_empty()));
+    }
+
+    #[test]
+    fn replaces_prism_tunnel_with_long_red_tunnel() {
+        // Version 19 renames the Scene the user retuned in their personal
+        // library (Traced Tunnel + Bloom + Auto Levels in a Background row).
+        assert!(
+            default_scenes()
+                .iter()
+                .all(|scene| scene.name != "Prism Tunnel"),
+            "Prism Tunnel is still in the defaults"
+        );
+
+        let scene = scene_by_name("Long Red Tunnel");
+        assert_eq!(scene.introduced_version, 19);
+        assert_eq!(scene.min_seconds, Some(8.0));
+        assert_eq!(scene.max_seconds, Some(24.0));
+    }
+
+    #[test]
+    fn long_red_tunnel_ships_the_retuned_personal_scene() {
+        let scene = scene_by_name("Long Red Tunnel");
+
+        let background = scene.group("Background").expect("Background row");
+        assert_eq!(background.inherit, Some(false));
+        assert_eq!(background.clearing, Some(true));
+        assert_eq!(
+            scene.modules_in_group("Background"),
+            vec!["Traced Tunnel", "Bloom", "Auto Levels"]
+        );
+
+        let tunnel = background
+            .modules
+            .iter()
+            .find(|module| module.name == "Traced Tunnel")
+            .expect("Traced Tunnel");
+        let props = tunnel.props.as_ref().expect("Traced Tunnel props");
+        assert_eq!(props["gridScale"], json!(8.2));
+        assert_eq!(props["fogDensity"], json!(1.45));
+        assert!(!props.contains_key("speed"), "speed keeps its ISF default");
+        let meta = tunnel.meta.as_ref().expect("Traced Tunnel meta");
+        assert_eq!(meta["alpha"], json!(0.48));
+
+        let bloom = background
+            .modules
+            .iter()
+            .find(|module| module.name == "Bloom")
+            .expect("Bloom");
+        let bloom_props = bloom.props.as_ref().expect("Bloom props");
+        assert_eq!(bloom_props["blurAmount"], json!(5));
+        assert_eq!(bloom_props["intensity"], json!(0.35));
+
+        let levels = background
+            .modules
+            .iter()
+            .find(|module| module.name == "Auto Levels")
+            .expect("Auto Levels");
+        let level_props = levels.props.as_ref().expect("Auto Levels props");
+        assert_eq!(level_props["adapt_rate"], json!(0.33));
+        assert_eq!(level_props["min_threshold"], json!(0.06));
+
+        // The empty Effects row stays, carrying nothing.
+        let effects = scene.group("Effects").expect("empty Effects row");
+        assert!(effects.modules.is_empty());
+        assert_eq!(effects.inherit, Some(true));
+
+        // dof swells on bass; the mid link lands on Auto Levels; the speed
+        // pin is gone.
+        let dof = scene.link("Traced Tunnel", "dof").expect("dof link");
+        assert_eq!(dof.group, "Background");
+        assert_eq!(dof.feature.as_deref(), Some("bass"));
+        assert_eq!(dof.min, Some(0.0));
+        assert_eq!(dof.max, Some(0.3));
+        assert!(dof.smoothing.is_none(), "raw bass, no smoothing");
+
+        let mid = scene
+            .link("Auto Levels", "mid_point")
+            .expect("mid_point link");
+        assert_eq!(mid.feature.as_deref(), Some("mid"));
+        assert_eq!(mid.min, Some(0.358));
+        assert_eq!(mid.max, Some(0.55));
+
+        assert!(
+            scene.link("Traced Tunnel", "speed").is_none(),
+            "the old bass-thump speed pin is gone"
+        );
+    }
+
+    #[test]
+    fn long_red_tunnel_swings_on_the_embedded_draw_curve() {
+        // The user drives `swing` with a freehand double-thump curve, not a
+        // default 0..1 alternate pulse. The definition carries the curve
+        // verbatim; the store builds the tween with the linked input's id.
+        let scene = scene_by_name("Long Red Tunnel");
+        let swing = scene.link("Traced Tunnel", "swing").expect("swing link");
+
+        assert_eq!(swing.group, "Background");
+        assert_eq!(swing.source.as_deref(), Some("draw"));
+        assert_eq!(swing.min, Some(0.0));
+        assert_eq!(swing.max, Some(1.0));
+        assert!(
+            swing.bpm_division.is_none(),
+            "the curve carries its own bpmDivision"
+        );
+
+        let tween = swing.tween.as_ref().expect("embedded draw curve");
+        assert_eq!(
+            tween["data"],
+            json!([[0], [0.3369140625], [0], [0.3605911135673523], [0]])
+        );
+        assert_eq!(
+            tween["keyframeTimes"],
+            json!([
+                0,
+                0.2538490891456604,
+                0.5013814568519592,
+                0.7567644715309143,
+                1
+            ])
+        );
+        assert_eq!(tween["duration"], json!(2790.697674418605));
+        assert_eq!(tween["direction"], json!("normal"));
+        assert_eq!(tween["easing"], json!("linear"));
+        assert_eq!(tween["loop"], json!(true));
+        assert_eq!(tween["useBpm"], json!(true));
+        assert_eq!(tween["durationAsTotalTime"], json!(true));
+        assert!(tween.get("id").is_none(), "the store assigns the id");
     }
 
     /// The Point10 hero scenes that render without a background: composited in

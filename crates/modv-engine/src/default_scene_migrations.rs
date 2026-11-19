@@ -48,6 +48,13 @@
 //! Scene on upgrade. Re-running the rule is inert because the name is gone
 //! from both the Scene list and `seeded_names`.
 //!
+//! Version 19 renames `Prism Tunnel` to `Long Red Tunnel`: the Scene was
+//! retuned in the maintainer's personal library and is replaced in the data
+//! (the Background row, Auto Levels, embedded draw curve). The rename keeps
+//! the seeded Scene's id and payload — for the maintainer that is the retuned
+//! Scene itself; for a stock v18 install the old sparse definition keeps its
+//! id under the new name, and fresh installs receive the new definition.
+//!
 //! Version 13 is the first bump whose edits are refresh-only (no Scene was
 //! renamed or retired): `Halftone Harbor` loses CMYK Halftone and `MBOX Light
 //! Tunnel` fixes its `MBOX3` hue, both handled by
@@ -55,6 +62,11 @@
 //! [`crate::default_scenes::REFRESHED_DEFAULT_SCENES`]. It adds no row here.
 //! The `the_previous_version_bump_refreshes_the_edited_scenes_without_a_rename_rule`
 //! test pins that split.
+//!
+//! Version 19 is the first bump that both refreshes **nothing** in place and
+//! ships a version-keyed rename: `Prism Tunnel` becomes `Long Red Tunnel`. The
+//! seeded Scene keeps its id and payload; only the name (and the seeded
+//! marker) changes.
 //!
 //! ## Semantics
 //!
@@ -111,13 +123,21 @@ pub struct DefaultSceneMigrationRule {
 
 /// The version-keyed rename/removal table.
 ///
-/// Version 18 retires `Strobe Riot`. Add one row per defaults-version bump that
-/// renames or retires a seeded Scene, in ascending `version` order.
-pub const DEFAULT_SCENE_MIGRATIONS: &[DefaultSceneMigrationRule] = &[DefaultSceneMigrationRule {
-    version: 18,
-    renames: &[],
-    removed: &["Strobe Riot"],
-}];
+/// Version 18 retires `Strobe Riot`; version 19 renames `Prism Tunnel` to
+/// `Long Red Tunnel`. Add one row per defaults-version bump that renames or
+/// retires a seeded Scene, in ascending `version` order.
+pub const DEFAULT_SCENE_MIGRATIONS: &[DefaultSceneMigrationRule] = &[
+    DefaultSceneMigrationRule {
+        version: 18,
+        renames: &[],
+        removed: &["Strobe Riot"],
+    },
+    DefaultSceneMigrationRule {
+        version: 19,
+        renames: &[("Prism Tunnel", "Long Red Tunnel")],
+        removed: &[],
+    },
+];
 
 /// The aggregated edits for a version span.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1027,9 +1047,11 @@ mod tests {
         let mut scenes = vec![scene("Strobe Riot", "strobe-id")];
         let mut seeded = vec!["Strobe Riot".to_string()];
 
-        let plan = ensure_default_scene_migration(
-            DEFAULTS_VERSION - 1,
-            DEFAULTS_VERSION,
+        // The v18 bump, pinned to its historical span.
+        let plan = ensure_default_scene_migrations_with(
+            DEFAULT_SCENE_MIGRATIONS,
+            17,
+            18,
             &mut scenes,
             &mut seeded,
         );
@@ -1052,9 +1074,10 @@ mod tests {
         let mut scenes = vec![scene("Strobe Riot", "user-id")];
         let mut seeded = vec!["Something Else".to_string()];
 
-        let plan = ensure_default_scene_migration(
-            DEFAULTS_VERSION - 1,
-            DEFAULTS_VERSION,
+        let plan = ensure_default_scene_migrations_with(
+            DEFAULT_SCENE_MIGRATIONS,
+            17,
+            18,
             &mut scenes,
             &mut seeded,
         );
@@ -1066,14 +1089,86 @@ mod tests {
     }
 
     #[test]
+    fn the_production_path_renames_prism_tunnel_for_installs_on_the_previous_version() {
+        // Version 19 renames the seeded Scene in place (keeping its id, so the
+        // active Scene and playlist references survive) and rewrites the
+        // seeded marker; the definition change reaches fresh installs and the
+        // rename audit in `the_production_table_is_consistent`.
+        let mut scenes = vec![scene("Prism Tunnel", "prism-id")];
+        let mut seeded = vec!["Prism Tunnel".to_string()];
+
+        let plan = ensure_default_scene_migration(
+            DEFAULTS_VERSION - 1,
+            DEFAULTS_VERSION,
+            &mut scenes,
+            &mut seeded,
+        );
+
+        assert_eq!(
+            plan.migration,
+            migration(&[("Prism Tunnel", "Long Red Tunnel")], &[])
+        );
+        assert_eq!(
+            plan.report.renamed,
+            vec![("Prism Tunnel".to_string(), "Long Red Tunnel".to_string())]
+        );
+        assert!(plan.report.removed.is_empty());
+        assert!(plan.report.skipped.is_empty());
+        assert_eq!(scenes[0]["name"], json!("Long Red Tunnel"));
+        assert_eq!(scenes[0]["id"], json!("prism-id"));
+        assert_eq!(seeded, vec!["Long Red Tunnel".to_string()]);
+        // The renamed Scene is already present and marked seeded, so the
+        // bump seeds nothing new for this install.
+        assert!(plan.seeds.is_empty());
+    }
+
+    #[test]
+    fn the_production_path_seeds_long_red_tunnel_fresh_when_absent() {
+        // An install that never held the Scene (or deleted it) receives the
+        // retuned definition from the normal seed lane.
+        let mut scenes = vec![];
+        let mut seeded = vec![];
+
+        let plan = ensure_default_scene_migration(
+            DEFAULTS_VERSION - 1,
+            DEFAULTS_VERSION,
+            &mut scenes,
+            &mut seeded,
+        );
+
+        assert_eq!(plan.seeds.len(), 1);
+        assert_eq!(plan.seeds[0].name, "Long Red Tunnel");
+        assert_eq!(plan.seeds[0].introduced_version, 19);
+    }
+
+    #[test]
+    fn the_production_path_keeps_a_custom_prism_tunnel_scene() {
+        // A user Scene that shares the old name is never renamed.
+        let mut scenes = vec![scene("Prism Tunnel", "user-id")];
+        let mut seeded = vec!["Something Else".to_string()];
+
+        let plan = ensure_default_scene_migration(
+            DEFAULTS_VERSION - 1,
+            DEFAULTS_VERSION,
+            &mut scenes,
+            &mut seeded,
+        );
+
+        assert!(plan.report.renamed.is_empty());
+        assert_eq!(plan.report.skipped, vec!["Prism Tunnel".to_string()]);
+        assert_eq!(names(&scenes), vec!["Prism Tunnel".to_string()]);
+    }
+
+    #[test]
     fn the_previous_version_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
         // Versions 13/14 only edit definitions in place — CMYK Halftone leaves
         // Halftone Harbor, MBOX3's hue is fixed and Point10 Old Movie becomes
         // Sepia Tone. Version 18 retires Strobe Riot without a rename, so the
-        // only version-keyed edit in this span is its removal. Installs on the
+        // version-keyed edits in the 12→18 span are its removal and nothing
+        // else. Version 19's rename is covered by its own tests. Installs on the
         // previous version receive the in-place edits through
         // `get_default_scenes_to_replace`.
-        let migration = get_default_scene_migrations(12, DEFAULTS_VERSION);
+        let migration = get_default_scene_migrations(12, DEFAULTS_VERSION - 1);
         assert!(migration.rename.is_empty());
         assert_eq!(migration.remove, vec!["Strobe Riot".to_string()]);
 

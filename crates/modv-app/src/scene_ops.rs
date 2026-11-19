@@ -3427,12 +3427,14 @@ fn apply_default_scene_input_links(definition: &SceneDocument, build: &mut Scene
             min: link.min.unwrap_or(target.fallback_range.min),
             max: link.max.unwrap_or(target.fallback_range.max),
         };
-        if link.source.as_deref() == Some("tween") {
+        if matches!(link.source.as_deref(), Some("tween" | "draw")) {
             create_bpm_tween_link(
                 build,
                 &target,
                 range,
+                link.source.as_deref().unwrap_or("tween"),
                 link.bpm_division.map(|value| json!(value)),
+                link.tween.as_ref(),
             );
         } else {
             create_bass_link(
@@ -3486,10 +3488,10 @@ fn apply_default_scene_input_links(definition: &SceneDocument, build: &mut Scene
             .as_ref()
             .map(|module| get_bpm_link_range(module, &target.prop_name))
             .unwrap_or(modv_engine::scene_link_defaults::LinkRange { min: 0.4, max: 1.0 });
-        create_bpm_tween_link(build, &target, range, None);
+        create_bpm_tween_link(build, &target, range, "tween", None, None);
     } else if let Some(target) = find_group_alpha_target(build, BPM_GROUP_PRIORITY, &excluded) {
         let range = modv_engine::scene_link_defaults::LinkRange { min: 0.4, max: 1.0 };
-        create_bpm_tween_link(build, &target, range, None);
+        create_bpm_tween_link(build, &target, range, "tween", None, None);
     }
 }
 
@@ -3741,21 +3743,45 @@ fn create_bass_link(
     build.input_links.insert(target.input_id.clone(), value);
 }
 
+/// Build the tween descriptor for a `tween`/`draw` link.
+///
+/// A definition may embed the curve verbatim (`link.tween`, e.g. a freehand
+/// double-thump); every key is kept as authored, only the `id` becomes the
+/// linked input's control id (the store indexes state tweens by input id).
+/// Anything else falls back to the default 0→1 alternate pulse, honouring the
+/// definition's `bpmDivision` when one is pinned.
 fn create_bpm_tween_link(
     build: &mut SceneBuild<'_>,
     target: &LinkTarget,
     range: modv_engine::scene_link_defaults::LinkRange,
+    source: &str,
     bpm_division: Option<Value>,
+    tween: Option<&Value>,
 ) {
     let link = default_link_for_input(LinkMode::Bpm, &target.input_id, None, Some(range));
-    build
-        .tweens
-        .push(default_link_tween(&target.input_id, bpm_division.as_ref()));
+    let descriptor = match tween {
+        Some(payload) => match payload.as_object() {
+            Some(object) => {
+                let mut descriptor = object.clone();
+                descriptor.insert("id".to_string(), json!(target.input_id));
+                Value::Object(descriptor)
+            }
+            None => {
+                eprintln!(
+                    "engine: WARN default Scene link \"{}\" embeds a tween payload that is not an object; using the default tween",
+                    target.prop_name
+                );
+                default_link_tween(&target.input_id, bpm_division.as_ref())
+            }
+        },
+        None => default_link_tween(&target.input_id, bpm_division.as_ref()),
+    };
+    build.tweens.push(descriptor);
     let value = json!({
         "id": target.input_id,
         "type": link.r#type,
         "location": link.location,
-        "source": link.source,
+        "source": source,
         "min": json_number(link.range.min),
         "max": json_number(link.range.max),
     });
@@ -5307,6 +5333,118 @@ mod tests {
     }
 
     #[test]
+    fn long_red_tunnel_seeds_with_the_embedded_draw_curve() {
+        // The v19 default: a Background row (tunnel, Bloom, Auto Levels) and
+        // an empty Effects row; `swing` is driven by the embedded freehand
+        // curve, not a default 0→1 pulse.
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/isf");
+        if !corpus.is_dir() {
+            eprintln!(
+                "skipping long-red-tunnel seed test: ISF corpus missing at {}",
+                corpus.display()
+            );
+            return;
+        }
+        let mut store = Store::with_state_path_and_isf(None, Some(&corpus));
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("seeding");
+
+        let scene = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .find(|scene| scene["name"] == json!("Long Red Tunnel"))
+            .expect("Long Red Tunnel is seeded");
+
+        // Structure: Background row (three modules) then the empty Effects row.
+        let groups = scene["groups"].as_array().expect("groups");
+        assert_eq!(
+            groups.len(),
+            2,
+            "one Background row and the empty Effects row"
+        );
+        assert_eq!(groups[0]["name"], json!("Background"));
+        assert_eq!(groups[0]["inherit"], json!(false));
+        assert_eq!(
+            groups[0]["modules"].as_array().map(Vec::len),
+            Some(3),
+            "tunnel, Bloom, Auto Levels"
+        );
+        assert_eq!(groups[1]["name"], json!("Effects"));
+        assert_eq!(groups[1]["inherit"], json!(true));
+        assert!(groups[1]["modules"].as_array().is_some_and(Vec::is_empty));
+
+        // The draw link targets the swing control and reads the tween at the
+        // linked input's id.
+        let links = scene["inputs"]["inputLinks"].as_object().expect("links");
+        let draw = links
+            .values()
+            .find(|link| link["source"] == json!("draw"))
+            .expect("draw link");
+        let draw_id = draw["id"].as_str().expect("draw id");
+        assert_eq!(draw["type"], json!("state"));
+        assert_eq!(draw["min"], json!(0));
+        assert_eq!(draw["max"], json!(1));
+        assert_eq!(
+            draw["location"],
+            json!(format!("tweens.tweens['{draw_id}'].value[0]"))
+        );
+
+        // The document carries the embedded curve, re-id'd to the link.
+        let tweens = scene["tweens"].as_array().expect("tweens");
+        let tween = tweens
+            .iter()
+            .find(|tween| tween["id"] == json!(draw_id))
+            .expect("the draw tween is in the document");
+        assert_eq!(
+            tween["data"],
+            json!([[0], [0.3369140625], [0], [0.3605911135673523], [0]])
+        );
+        assert_eq!(tween["duration"], json!(2790.697674418605));
+        assert_eq!(tween["easing"], json!("linear"));
+        assert_eq!(tween["direction"], json!("normal"));
+        assert_eq!(tween["durationAsTotalTime"], json!(true));
+        assert_eq!(tween["bpmDivision"], json!(133.33333333333334));
+        assert_eq!(tween["steps"], json!(0));
+        assert_eq!(
+            tween["keyframeTimes"],
+            json!([
+                0,
+                0.2538490891456604,
+                0.5013814568519592,
+                0.7567644715309143,
+                1
+            ])
+        );
+
+        // The audio-linked controls: dof on raw bass 0..0.3, mid_point on
+        // mid 0.358..0.55.
+        let bass = links
+            .values()
+            .find(|link| {
+                link["location"] == json!("meyda/getFeature")
+                    && link["args"].as_array().is_some_and(|args| args.len() == 1)
+                    && link["args"][0] == json!("bass")
+                    && link["max"] == json!(0.3)
+            })
+            .expect("dof link on raw bass");
+        assert_eq!(bass["min"], json!(0));
+        let mid = links
+            .values()
+            .find(|link| link["args"][0] == json!("mid"))
+            .expect("mid link");
+        assert_eq!(mid["min"], json!(0.358));
+        assert_eq!(mid["max"], json!(0.55));
+
+        // The v15 speed pin (bass 0.8..1.15 with smoothing) is gone.
+        assert!(
+            !links.values().any(|link| link["max"] == json!(1.15)),
+            "the old smoothed speed pin is not seeded"
+        );
+    }
+
+    #[test]
     fn re_applying_a_scene_keeps_tween_playheads_and_prunes_unknown_ids() {
         let mut store = Store::new();
         let definition = modv_engine::default_scenes::get_default_definition("Polygon Grid")
@@ -5635,7 +5773,7 @@ mod tests {
             "expressions": { "assignments": {} },
             "tweens": [],
         })];
-        store.scenes.defaults_version = DEFAULTS_VERSION - 1;
+        store.scenes.defaults_version = DEFAULTS_VERSION - 2;
         store.scenes.seeded_default_scenes = vec!["Strobe Riot".to_string()];
 
         store
@@ -5643,7 +5781,11 @@ mod tests {
             .expect("seeding");
 
         assert!(
-            store.scenes_state().scenes.is_empty(),
+            !store
+                .scenes_state()
+                .scenes
+                .iter()
+                .any(|scene| scene["name"] == json!("Strobe Riot")),
             "the seeded Strobe Riot Scene was not retired"
         );
         assert!(
@@ -5670,20 +5812,23 @@ mod tests {
             "expressions": { "assignments": {} },
             "tweens": [],
         })];
-        store.scenes.defaults_version = DEFAULTS_VERSION - 1;
+        // An install two bumps behind the current defaults, jumping straight
+        // to them: both the v18 retirement and the v19 seed apply.
+        store.scenes.defaults_version = DEFAULTS_VERSION - 2;
 
         store
             .dispatch("scenes/ensureDefaultScenes", json!({}))
             .expect("seeding");
 
-        assert_eq!(
-            store.scenes_state().scenes.len(),
-            1,
-            "a custom Scene must survive the retirement"
-        );
-        assert_eq!(
-            store.scenes_state().scenes[0]["id"],
-            json!("scene-user-strobe")
+        let custom = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .find(|scene| scene["id"] == json!("scene-user-strobe"));
+        assert!(
+            custom.is_some(),
+            "a custom Scene must survive the retirement: {}",
+            store.scenes_state().scenes.len()
         );
     }
 

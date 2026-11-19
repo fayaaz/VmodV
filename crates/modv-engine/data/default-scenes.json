@@ -3737,13 +3737,13 @@
     ]
   },
   {
-    "name": "Prism Tunnel",
-    "introducedVersion": 15,
-    "minSeconds": 10,
-    "maxSeconds": 26,
+    "name": "Long Red Tunnel",
+    "introducedVersion": 19,
+    "minSeconds": 8,
+    "maxSeconds": 24,
     "groups": [
       {
-        "name": "Effects",
+        "name": "Background",
         "inherit": false,
         "clearing": true,
         "alpha": 1,
@@ -3752,8 +3752,11 @@
           {
             "name": "Traced Tunnel",
             "props": {
-              "gridScale": 12,
-              "fogDensity": 1.1
+              "gridScale": 8.2,
+              "fogDensity": 1.45
+            },
+            "meta": {
+              "alpha": 0.48
             }
           },
           {
@@ -3762,19 +3765,61 @@
               "blurAmount": 5,
               "intensity": 0.35
             }
+          },
+          {
+            "name": "Auto Levels",
+            "props": {
+              "adapt_rate": 0.33,
+              "min_threshold": 0.06
+            }
           }
         ]
+      },
+      {
+        "name": "Effects",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": []
       }
     ],
     "inputLinks": [
       {
-        "group": "Effects",
+        "group": "Background",
         "module": "Traced Tunnel",
-        "control": "speed",
+        "control": "dof",
         "feature": "bass",
-        "min": 0.8,
-        "max": 1.15,
-        "smoothing": 0.6
+        "min": 0,
+        "max": 0.3
+      },
+      {
+        "group": "Background",
+        "module": "Traced Tunnel",
+        "control": "swing",
+        "source": "draw",
+        "min": 0,
+        "max": 1,
+        "tween": {
+          "data": [[0], [0.3369140625], [0], [0.3605911135673523], [0]],
+          "duration": 2790.697674418605,
+          "direction": "normal",
+          "easing": "linear",
+          "loop": true,
+          "useBpm": true,
+          "bpmDivision": 133.33333333333334,
+          "durationAsTotalTime": true,
+          "steps": 0,
+          "keyframeTimes": [0, 0.2538490891456604, 0.5013814568519592, 0.7567644715309143, 1]
+        }
+      },
+      {
+        "group": "Background",
+        "module": "Auto Levels",
+        "control": "mid_point",
+        "feature": "mid",
+        "min": 0.358,
+        "max": 0.55
       }
     ]
   },
