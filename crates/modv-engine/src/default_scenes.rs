@@ -56,14 +56,14 @@ use serde_json::{Map, Value};
 /// (`Hot Shower`, `Traced Tunnel`, `Helix Eye`) — a single Effects Group with
 /// the effects chained inline, so there is no Background or Foreground row.
 ///
-/// Version 16 removes the Geometric Tunnel hero module and retunes the five default
-/// Scenes whose hero was it (the names stay; Square Tunnel / Light Tunnel /
-/// Color Cube / Wormhole / Spiral Particles replace it). The Background heroes
-/// gain a bass-driven alpha swell, and the two renamed Scenes the old refresh
-/// list did not cover (`Golden Spiral Tunnel`, `Reactor Glow`) are members now,
-/// like `Geometric Tunnel`, `Crosshatch Cipher` and `Digital Crystal Tunnel`.
+/// Version 16 removes the Geometric Tunnel module and retunes the five default
+/// Scenes that were built around it (the names stay; Square Tunnel / Light Tunnel /
+/// Color Cube / Wormhole / Spiral Particles take its place). The Background rows
+/// that only held it gain a bass-driven alpha swell, and the two renamed Scenes
+/// the old refresh list did not cover (`Golden Spiral Tunnel`, `Reactor Glow`) are
+/// members now, like `Geometric Tunnel`, `Crosshatch Cipher` and `Digital Crystal Tunnel`.
 ///
-/// Version 17 moves the deliberately background-free Point10 Scenes (`Point10
+/// Version 17 moves the deliberately background-free Point10 modules (`Point10
 /// Rolling Fire`, `Point10 Ball Of Fire`, `Point10 DVD Room`, `Point10 Smoke
 /// Room`) into the `Foreground` row of every default Scene that placed them in
 /// `Background`, keeping the emptied source row in place. The changed Scenes
@@ -127,7 +127,7 @@ pub const REMOVED_DEFAULT_SCENES: &[&str] = &[
 /// not change with the bump.
 ///
 /// Version 17 only adds `Smoke Room`: the other Scenes whose transparent
-/// Point10 hero moved to the Foreground row are already members.
+/// Point10 modules moved to the Foreground row are already members.
 ///
 /// Version 18 retires `Strobe Riot` instead of refreshing it, so the list does
 /// not change with the bump.
@@ -190,7 +190,7 @@ pub const REFRESHED_DEFAULT_SCENES: &[&str] = &[
     "Rave.exe",
     "Soft Bands",
     "Quiet Bloom",
-    // Version 17: the transparent Point10 heroes moved to the Foreground row
+    // Version 17: the transparent Point10 modules moved to the Foreground row
     // (the rest of the affected Scenes are already members above).
 ];
 
@@ -873,8 +873,8 @@ mod tests {
         "Point10 Smoke Room",
     ];
 
-    /// Seeded Scenes retired in version 20 because their hero Layer was a
-    /// removed module.
+    /// Seeded Scenes retired in version 20: the module they were built
+    /// around is removed from the defaults.
     const VERSION_20_REMOVED_SCENES: &[&str] = &[
         "Rolling Fire Bloom",
         "DVD Nightmare",
@@ -927,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn retires_the_scenes_whose_hero_was_a_removed_module() {
+    fn retires_the_scenes_built_around_a_removed_module() {
         for retired in VERSION_20_REMOVED_SCENES {
             assert!(
                 default_scenes().iter().all(|scene| scene.name != *retired),
@@ -1082,7 +1082,7 @@ mod tests {
         assert!(tween.get("id").is_none(), "the store assigns the id");
     }
 
-    /// The Point10 hero scenes that render without a background: composited in
+    /// The Point10 modules that render without a background: composited in
     /// a Background (or Effects) row they hide the layer below, so they must
     /// only ever live in a Foreground row.
     const TRANSPARENT_POINT10_MODULES: &[&str] = &[
@@ -1116,8 +1116,8 @@ mod tests {
             }
         }
 
-        // Version 20 removed the transparent volumetric scenes from the
-        // defaults entirely, so no transparent Point10 hero remains.
+        // Version 20 removed the transparent volumetric modules from the
+        // defaults entirely, so no background-free Point10 module remains.
         assert_eq!(
             placements, 0,
             "expected no transparent point10 scenes in the defaults, found {placements}"
@@ -1126,8 +1126,9 @@ mod tests {
 
     #[test]
     fn draws_the_transparent_point10_scenes_first_in_their_foreground_row() {
-        // A transparent hero is the base of the Foreground row: the overlays
-        // that follow (Chromatic Line, Concentrics, ...) draw on top of it.
+        // A transparent background-free module is the base of the Foreground
+        // row: the overlays that follow (Chromatic Line, Concentrics, ...) draw
+        // on top of it.
         for scene in default_scenes() {
             let Some(foreground) = scene
                 .groups
@@ -1526,7 +1527,8 @@ mod tests {
             .iter()
             .filter(|scene| scene.module_names().contains(&"ASCII Art"))
             .count();
-        // Version 20 retired Terminal Bloom (its hero was Ball Of Fire),
+        // Version 20 retired Terminal Bloom (the module it was built
+        // around was Ball Of Fire),
         // leaving ASCII Sunbeam as the only v5 Scene with ASCII Art.
         assert!(ascii_scenes >= 1);
 

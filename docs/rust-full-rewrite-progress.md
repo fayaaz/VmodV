@@ -37,15 +37,16 @@ registered and usable in user Scenes. `DEFAULTS_VERSION` is now **20**
 - Edited in place and refreshed for v19 installs: `Solar Flare`,
   `Hex Bloom` (heavy), `Golden Spiral Tunnel`, `Feedback Bloom`,
   `ASCII Sunbeam`, `Smoke Tunnel`.
-- Retired (hero removal would leave nothing worth shipping; a version-20
+- Retired (removing the module they were built around would leave nothing
+  worth shipping; a version-20
   migration row drops the seeded Scenes on upgrade, keeping custom Scenes
   that share the names): `Rolling Fire Bloom`, `DVD Nightmare`,
   `Terminal Bloom`, `DVD Afterglow`, `Etched Aurora`, `Lone Chrome`,
   `Smoke Room`, `Mirror Chamber`, `Glitch Bloom Cathedral`,
   `Circuit Ritual`.
-- No transparent Point10 hero remains in the defaults; `Smoke Tunnel`,
+- No background-free Point10 module remains in the defaults; `Smoke Tunnel`,
   `Golden Spiral Tunnel` and `ASCII Sunbeam` survive with their non-removed
-  content (their hero rows are now empty, effects rows untouched).
+  content (their background rows are now empty, effects rows untouched).
 
 ## Rust-only cleanup (2026-11-18)
 

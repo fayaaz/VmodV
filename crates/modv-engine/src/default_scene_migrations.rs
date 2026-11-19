@@ -140,7 +140,7 @@ pub struct DefaultSceneMigrationRule {
 ///
 /// Version 18 retires `Strobe Riot`; version 19 renames `Prism Tunnel` to
 /// `Long Red Tunnel`; version 20 removes five modules from the defaults and
-/// retires the ten Scenes whose hero layer was one of them. Add one row per
+/// retires the ten Scenes that were built around one of them. Add one row per
 /// defaults-version bump that renames or retires a seeded Scene, in
 /// ascending `version` order.
 pub const DEFAULT_SCENE_MIGRATIONS: &[DefaultSceneMigrationRule] = &[
@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn the_production_path_retires_the_version_20_scenes_for_installs_on_the_previous_version() {
         // Version 20 removes five modules from the default Scenes and retires
-        // the ten whose hero layer was one of them (the modules stay
+        // the ten that were built around one of them (the modules stay
         // registered for user Scenes). Seeded installs drop the retired
         // Scenes; a custom Scene sharing one of the names is kept.
         let retired = [
