@@ -10,6 +10,8 @@
 //! Xvfb when the environment has no display. See `tests/e2e/mod.rs` for the
 //! harness and `docs/native-e2e.md` for the protocol/mapping notes.
 
+#![cfg(unix)] // the control harness uses Unix-domain sockets
+
 mod e2e;
 
 use serde_json::{Value, json};

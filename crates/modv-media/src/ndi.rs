@@ -118,8 +118,16 @@ pub const COLOR_FORMAT_RGBX_RGBA: c_int = 2;
 /// `NDIlib_recv_bandwidth_highest` (`Processing.NDI.Recv.h:39`).
 pub const BANDWIDTH_HIGHEST: c_int = 100;
 
-/// The soname installed by the NDI SDK (`/usr/local/lib/libndi.so.5` is the
-/// usual SDK install location).
+/// The library name installed by the NDI SDK.
+///
+/// The SDK ships `libndi.so.5` on Linux, `ndi.dll` on Windows (installed into
+/// `System32`) and `libndi.dylib` on macOS. Optional NDI stays optional: if the
+/// library is absent every entry point degrades to [`NdiError::Unavailable`].
+#[cfg(target_os = "windows")]
+pub const NDI_SONAME: &str = "ndi.dll";
+#[cfg(target_os = "macos")]
+pub const NDI_SONAME: &str = "libndi.dylib";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub const NDI_SONAME: &str = "libndi.so.5";
 
 // ---------------------------------------------------------------------------
@@ -504,15 +512,31 @@ pub fn ndi_library_search_path() -> Vec<PathBuf> {
 /// `env_override` is `$MODV_NDI_LIB`; `exe_dir` is the directory containing the
 /// running engine binary.
 pub fn ndi_library_candidates_with_env(env_override: Option<&str>, exe_dir: &Path) -> Vec<PathBuf> {
-    let mut candidates = Vec::with_capacity(5);
+    let mut candidates = Vec::with_capacity(6);
 
     if let Some(path) = env_override.filter(|path| !path.is_empty()) {
         candidates.push(PathBuf::from(path));
     }
 
-    // The two install locations the NDI SDK uses.
-    candidates.push(PathBuf::from("/usr/lib").join(NDI_SONAME));
-    candidates.push(PathBuf::from("/usr/local/lib").join(NDI_SONAME));
+    // Platform install locations the NDI SDK uses. Linux candidates are kept
+    // exactly as they were (the resolution-order tests pin their indices).
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(PathBuf::from(r"C:\Windows\System32").join(NDI_SONAME));
+        if let Ok(system_root) = std::env::var("SystemRoot") {
+            candidates.push(PathBuf::from(system_root).join("System32").join(NDI_SONAME));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/usr/local/lib").join(NDI_SONAME));
+        candidates.push(PathBuf::from("/usr/lib").join(NDI_SONAME));
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        candidates.push(PathBuf::from("/usr/lib").join(NDI_SONAME));
+        candidates.push(PathBuf::from("/usr/local/lib").join(NDI_SONAME));
+    }
 
     // Optional side-by-side copies for an AppImage or an unpacked build. The
     // native packages do not bundle libndi.

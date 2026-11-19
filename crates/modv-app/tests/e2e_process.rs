@@ -13,6 +13,8 @@
 //! Supervisor parity and the deliberate differences are described in
 //! `docs/native-e2e.md`.
 
+#![cfg(unix)] // the control harness uses Unix-domain sockets
+
 mod e2e;
 
 use std::fs;

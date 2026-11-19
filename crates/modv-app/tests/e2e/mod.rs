@@ -23,6 +23,7 @@
 //! and the frame PNG behind for diagnosis. `MODV_E2E_KEEP=1` keeps artifacts
 //! on success too.
 
+#![cfg(unix)] // this harness drives the Unix-domain control socket
 #![allow(dead_code)] // Each integration-test crate uses a different subset.
 
 use std::fs;

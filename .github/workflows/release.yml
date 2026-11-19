@@ -60,10 +60,79 @@ jobs:
           echo "should_release=true" >> "$GITHUB_OUTPUT"
           echo "Next release: v$VERSION (previous tag: ${PREV:-none})"
 
+  # Builds the portable Windows ZIP for the release. Kept separate from the
+  # Linux publish job so a Windows toolchain/MSI failure cannot block tagging.
+  # The `release` job below waits for this artifact and attaches it to the
+  # GitHub release (no gh release upload race).
+  windows-portable:
+    name: Build portable Windows ZIP
+    runs-on: windows-latest
+    needs: version
+    if: ${{ needs.version.outputs.should_release == 'true' }}
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install x86_64-pc-windows-msvc target
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Install GStreamer 1.24 (MSVC, runtime + devel)
+        shell: pwsh
+        run: |
+          $base = 'https://gstreamer.freedesktop.org/data/pkg/windows/1.24.0/msvc'
+          $runtime = "$base/gstreamer-1.0-msvc-x86_64-1.24.0.msi"
+          $devel = "$base/gstreamer-1.0-devel-msvc-x86_64-1.24.0.msi"
+          Invoke-WebRequest -Uri $runtime -OutFile gst-runtime.msi
+          Invoke-WebRequest -Uri $devel -OutFile gst-devel.msi
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', "$pwd\gst-runtime.msi", '/quiet', '/norestart'
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', "$pwd\gst-devel.msi", '/quiet', '/norestart'
+          choco install pkgconfiglite -y --no-progress
+
+      - name: Configure GStreamer build environment
+        shell: bash
+        run: |
+          echo "C:/gstreamer/1.0/msvc_x86_64/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=C:/gstreamer/1.0/msvc_x86_64/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build modv (x86_64-pc-windows-msvc, release)
+        shell: bash
+        run: |
+          cargo build --release --manifest-path crates/Cargo.toml \
+            -p modv-app --bin modv --target x86_64-pc-windows-msvc
+
+      - name: Stage portable layout
+        shell: bash
+        run: |
+          bash tools/windows-portable.sh \
+            --root "$PWD/dist/windows-portable" \
+            --binary "$PWD/crates/target/x86_64-pc-windows-msvc/release/modv.exe" \
+            --gstreamer-root "C:/gstreamer/1.0/msvc_x86_64" \
+            --project-root "$PWD"
+
+      - name: Zip portable layout
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:GITHUB_WORKSPACE 'dist\windows-portable'
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist\VmodV-Native-Windows-x86_64-portable-$env:VERSION.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $out -CompressionLevel Optimal
+          Get-Item $out | Select-Object FullName, Length
+
+      - name: Upload portable Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmodv-native-windows-x86_64-portable
+          path: dist/VmodV-Native-Windows-x86_64-portable-*.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   release:
     name: Tag, build and publish
     runs-on: ubuntu-latest
-    needs: version
+    needs: [version, windows-portable]
     if: ${{ needs.version.outputs.should_release == 'true' }}
     timeout-minutes: 90
     env:
@@ -129,9 +198,15 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
+      - name: Download portable Windows ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: vmodv-native-windows-x86_64-portable
+          path: dist-windows
+
       - name: Publish GitHub release
         run: |
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes-file release-notes.md \
-            dist/VmodV-Native-*.AppImage dist/VmodV-Native-*.deb
+            dist/VmodV-Native-*.AppImage dist/VmodV-Native-*.deb dist-windows/*.zip

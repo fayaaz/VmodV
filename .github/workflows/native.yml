@@ -13,6 +13,7 @@ on:
       - 'resources/**'
       - 'packaging/native/**'
       - 'tools/native-*'
+      - 'tools/windows-portable.sh'
       - 'tests/**'
       - 'Dockerfile'
       - 'Makefile'
@@ -28,6 +29,7 @@ on:
       - 'resources/**'
       - 'packaging/native/**'
       - 'tools/native-*'
+      - 'tools/windows-portable.sh'
       - 'tests/**'
       - 'Dockerfile'
       - 'Makefile'
@@ -114,6 +116,12 @@ jobs:
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
 
+      # Integration test: the Windows portable ZIP layout is staged by
+      # tools/windows-portable.sh --dry-run inside Linux Docker. Not covered by
+      # the --lib step above, so it is run explicitly here.
+      - name: Portable Windows ZIP layout test (Linux dry-run)
+        run: make engine-test ARGS="-p modv-app --test windows_portable_layout -- --test-threads=1"
+
       # Launches the real `modv` binary under Xvfb; lavapipe provides the
       # Vulkan adapter. One worker only because a process owns a virtual
       # display and the software GPU is shared.
@@ -164,6 +172,79 @@ jobs:
           path: |
             dist/VmodV-Native-*.AppImage
             dist/VmodV-Native-*.deb
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # Portable Windows ZIP. Linux is the release target; this job verifies that
+  # the codebase cross-builds for x86_64-pc-windows-msvc and that the staging
+  # script produces a self-contained layout. Camera/screen capture (v4l2src /
+  # pipewiresrc) remains Linux-only at runtime and is not ported here.
+  windows-portable:
+    name: Portable Windows ZIP (x86_64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tools/version.sh derives the version from git tags
+
+      - name: Install x86_64-pc-windows-msvc target
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Install GStreamer 1.24 (MSVC, runtime + devel)
+        shell: pwsh
+        run: |
+          $base = 'https://gstreamer.freedesktop.org/data/pkg/windows/1.24.0/msvc'
+          $runtime = "$base/gstreamer-1.0-msvc-x86_64-1.24.0.msi"
+          $devel = "$base/gstreamer-1.0-devel-msvc-x86_64-1.24.0.msi"
+          Invoke-WebRequest -Uri $runtime -OutFile gst-runtime.msi
+          Invoke-WebRequest -Uri $devel -OutFile gst-devel.msi
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', "$pwd\gst-runtime.msi", '/quiet', '/norestart'
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', "$pwd\gst-devel.msi", '/quiet', '/norestart'
+          # pkg-config-lite supplies the pkg-config.exe the `gstreamer` crate's
+          # build script needs to read the devel .pc files.
+          choco install pkgconfiglite -y --no-progress
+
+      - name: Configure GStreamer build environment
+        shell: bash
+        run: |
+          echo "C:/gstreamer/1.0/msvc_x86_64/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=C:/gstreamer/1.0/msvc_x86_64/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build modv (x86_64-pc-windows-msvc, release)
+        shell: bash
+        run: |
+          cargo build --release --manifest-path crates/Cargo.toml \
+            -p modv-app --bin modv --target x86_64-pc-windows-msvc
+
+      - name: Resolve version
+        shell: bash
+        run: echo "PORTABLE_VERSION=$(bash tools/version.sh)" >> "$GITHUB_ENV"
+
+      - name: Stage portable layout
+        shell: bash
+        run: |
+          bash tools/windows-portable.sh \
+            --root "$PWD/dist/windows-portable" \
+            --binary "$PWD/crates/target/x86_64-pc-windows-msvc/release/modv.exe" \
+            --gstreamer-root "C:/gstreamer/1.0/msvc_x86_64" \
+            --project-root "$PWD"
+
+      - name: Zip portable layout
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:GITHUB_WORKSPACE 'dist\windows-portable'
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist\VmodV-Native-Windows-x86_64-portable-$env:PORTABLE_VERSION.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $out -CompressionLevel Optimal
+          Get-Item $out | Select-Object FullName, Length
+
+      - name: Upload portable Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmodv-native-windows-x86_64-portable
+          path: dist/VmodV-Native-Windows-x86_64-portable-*.zip
           if-no-files-found: error
           retention-days: 7
           compression-level: 0

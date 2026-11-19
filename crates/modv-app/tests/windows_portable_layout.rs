@@ -81,10 +81,8 @@ fn dry_run_stages_the_portable_windows_layout() {
     // Fake GStreamer root with the two subtrees the launcher needs.
     let fake_gst = input.join("gstreamer");
     fs::create_dir_all(fake_gst.join("bin")).expect("create the fake gst bin dir");
-    fs::create_dir_all(fake_gst.join("lib/gstreamer-1.0"))
-        .expect("create the fake gst plugin dir");
-    fs::write(fake_gst.join("bin/gstreamer-1.0.dll"), b"stub")
-        .expect("write the fake gst dll");
+    fs::create_dir_all(fake_gst.join("lib/gstreamer-1.0")).expect("create the fake gst plugin dir");
+    fs::write(fake_gst.join("bin/gstreamer-1.0.dll"), b"stub").expect("write the fake gst dll");
     fs::write(fake_gst.join("lib/gstreamer-1.0/libstub.dll"), b"stub")
         .expect("write the fake gst plugin");
 
@@ -118,11 +116,19 @@ fn dry_run_stages_the_portable_windows_layout() {
 
     // Staged binary.
     let staged_exe = staging.join("modv.exe");
-    assert!(staged_exe.is_file(), "{} is not a file", staged_exe.display());
+    assert!(
+        staged_exe.is_file(),
+        "{} is not a file",
+        staged_exe.display()
+    );
 
     // ISF corpus is copied from <project-root>/resources/isf.
     let staged_isf = staging.join("isf/Bloom.fs");
-    assert!(staged_isf.is_file(), "{} is not a file", staged_isf.display());
+    assert!(
+        staged_isf.is_file(),
+        "{} is not a file",
+        staged_isf.display()
+    );
 
     // Point10 textures are copied from <project-root>/resources/point10/textures.
     let staged_textures = staging.join("textures");

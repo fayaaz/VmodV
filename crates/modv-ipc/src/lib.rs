@@ -13,5 +13,19 @@
 
 pub mod frame;
 pub mod message;
+
+// The VMP1 preview ring and the control-channel socket are Unix-only (they use
+// `/dev/shm`, `pwrite`/`pread` and Unix-domain sockets). On non-Unix targets,
+// compile API-compatible stubs so the rest of the workspace still builds; the
+// headless engine path reports these as unsupported there.
+#[cfg(unix)]
 pub mod preview;
+#[cfg(not(unix))]
+#[path = "preview_stub.rs"]
+pub mod preview;
+
+#[cfg(unix)]
+pub mod socket;
+#[cfg(not(unix))]
+#[path = "socket_stub.rs"]
 pub mod socket;

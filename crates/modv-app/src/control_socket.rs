@@ -32,15 +32,25 @@
 //! a client that stops reading can never block the render loop: writes are
 //! buffered on the socket thread with a bounded backlog.
 
+#[cfg(unix)]
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::mpsc::Sender;
+#[cfg(unix)]
+use std::sync::mpsc::{self, Receiver, SyncSender};
+#[cfg(unix)]
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -60,6 +70,7 @@ pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 pub const MAX_PENDING_OUT_BYTES: usize = 64 * 1024 * 1024;
 
 /// How often the socket thread polls for requests/replies when idle.
+#[cfg(unix)]
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 /// One parsed request.
@@ -250,6 +261,9 @@ impl QueuedRequest {
     }
 }
 
+// Fields are read by the Unix socket thread; the type itself is shared with
+// `QueuedRequest`'s reply channel on every platform.
+#[allow(dead_code)]
 struct Reply {
     client: u64,
     line: String,
@@ -292,6 +306,7 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<u6
 }
 
 /// Owns the socket path, listener thread and request queue.
+#[cfg(unix)]
 #[derive(Debug)]
 pub struct ControlServer {
     path: PathBuf,
@@ -302,6 +317,7 @@ pub struct ControlServer {
     thread: Option<JoinHandle<()>>,
 }
 
+#[cfg(unix)]
 impl ControlServer {
     /// Bind `path`, replacing a stale socket file that nobody is listening on.
     pub fn bind(path: impl Into<PathBuf>) -> io::Result<Self> {
@@ -369,6 +385,45 @@ impl ControlServer {
     }
 }
 
+#[cfg(not(unix))]
+/// Non-Unix stand-in for the JSON-lines control server.
+///
+/// The native shell's `--socket` e2e protocol uses a Unix-domain socket and is
+/// supported on Linux only. This stub keeps the shell compiling on Windows and
+/// returns an explicit "unsupported" error from `bind` so `--socket` fails
+/// clearly rather than silently doing nothing.
+#[derive(Debug)]
+pub struct ControlServer {
+    path: PathBuf,
+}
+
+#[cfg(not(unix))]
+impl ControlServer {
+    pub fn bind(path: impl Into<PathBuf>) -> io::Result<Self> {
+        let path = path.into();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "--socket control protocol is only supported on Unix (requested {})",
+                path.display()
+            ),
+        ))
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn try_recv(&self) -> Option<QueuedRequest> {
+        None
+    }
+
+    pub fn flush(&self, _timeout: Duration) -> bool {
+        false
+    }
+}
+
+#[cfg(unix)]
 impl Drop for ControlServer {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
@@ -381,6 +436,7 @@ impl Drop for ControlServer {
     }
 }
 
+#[cfg(unix)]
 fn prepare_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -400,6 +456,7 @@ fn prepare_path(path: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(unix)]
 fn socket_identity(path: &Path) -> Option<(u64, u64)> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_socket() {
@@ -408,6 +465,7 @@ fn socket_identity(path: &Path) -> Option<(u64, u64)> {
     Some((metadata.dev(), metadata.ino()))
 }
 
+#[cfg(unix)]
 fn is_stale_socket(path: &Path) -> bool {
     match UnixStream::connect(path) {
         Ok(_) => false,
@@ -417,6 +475,7 @@ fn is_stale_socket(path: &Path) -> bool {
     }
 }
 
+#[cfg(unix)]
 struct Client {
     id: u64,
     stream: UnixStream,
@@ -429,6 +488,7 @@ struct Client {
     closed: bool,
 }
 
+#[cfg(unix)]
 impl Client {
     fn expect_response(&mut self) {
         self.responses.push_back(None);
@@ -488,6 +548,7 @@ impl Client {
     }
 }
 
+#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 fn serve(
     listener: UnixListener,
@@ -763,6 +824,7 @@ mod tests {
         assert!(error.contains("expected 16"), "{error}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn server_replaces_a_stale_socket_and_round_trips_a_request() {
         let dir = temp_dir("server");
@@ -830,6 +892,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn server_refuses_to_replace_a_live_socket_or_regular_file() {
         let dir = temp_dir("refuse");

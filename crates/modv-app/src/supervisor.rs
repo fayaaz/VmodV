@@ -1123,7 +1123,7 @@ fn load_snapshot_frames(path: &Path) -> Option<u64> {
     frames_presented_in(&value)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))] // the test harness connects over a Unix-domain socket
 mod tests {
     use super::*;
     use std::io::{Read, Write};
