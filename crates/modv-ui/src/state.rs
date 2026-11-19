@@ -120,6 +120,15 @@ pub enum UiCommand {
     },
     /// Set the internal rendering resolution scale (linear, 0.25..=1.0).
     SetRenderScale(f32),
+    /// Resize the output window to the requested logical size (in pixels).
+    SetOutputSize {
+        /// Target width in pixels.
+        width: u32,
+        /// Target height in pixels.
+        height: u32,
+    },
+    /// Set the output window fullscreen state absolutely (`true` = on).
+    SetOutputFullscreen(bool),
     /// Create `<userData>/media/<name>` with the Electron profile folders.
     CreateProfile(String),
     /// Switch the active media profile and rescan the user ISF folders.
@@ -325,6 +334,7 @@ pub enum SidePanelTab {
     Media,
     Library,
     Quality,
+    Output,
     Audio,
     Info,
     Plugins,
@@ -335,11 +345,12 @@ pub enum SidePanelTab {
 
 impl SidePanelTab {
     /// Every right-panel tab, in strip order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Inspector,
         Self::Media,
         Self::Library,
         Self::Quality,
+        Self::Output,
         Self::Audio,
         Self::Info,
         Self::Plugins,
@@ -357,12 +368,13 @@ impl SidePanelTab {
             Self::Media => 1,
             Self::Library => 2,
             Self::Quality => 3,
-            Self::Audio => 4,
-            Self::Info => 5,
-            Self::Plugins => 6,
-            Self::Midi => 7,
-            Self::Ndi => 8,
-            Self::Osc => 9,
+            Self::Output => 4,
+            Self::Audio => 5,
+            Self::Info => 6,
+            Self::Plugins => 7,
+            Self::Midi => 8,
+            Self::Ndi => 9,
+            Self::Osc => 10,
         }
     }
 
@@ -373,6 +385,7 @@ impl SidePanelTab {
             Self::Media => "media",
             Self::Library => "library",
             Self::Quality => "quality",
+            Self::Output => "output",
             Self::Audio => "audio",
             Self::Info => "info",
             Self::Plugins => "plugins",
@@ -389,6 +402,7 @@ impl SidePanelTab {
             Self::Media => "Media",
             Self::Library => "Library",
             Self::Quality => "Quality",
+            Self::Output => "Output",
             Self::Audio => "Audio",
             Self::Info => "Info",
             Self::Plugins => "Plugins",
@@ -1303,6 +1317,21 @@ impl UiState {
         self.commands.push(UiCommand::SetRenderScale(scale));
     }
 
+    /// Queue the output window at the requested size (clamped to the
+    /// compositor's supported range). The shell resizes the window and
+    /// the surface/compositor follows on the next `Resized` event.
+    pub fn set_output_size(&mut self, width: u32, height: u32) {
+        let width = width.clamp(64, 7680);
+        let height = height.clamp(64, 7680);
+        self.commands
+            .push(UiCommand::SetOutputSize { width, height });
+    }
+
+    /// Queue the output window's fullscreen state (absolute, not toggle).
+    pub fn set_output_fullscreen(&mut self, on: bool) {
+        self.commands.push(UiCommand::SetOutputFullscreen(on));
+    }
+
     /// Accept the consent notice **and** turn the host on.
     ///
     /// The two commands are queued in order (`SetPluginConsent(true)` first),
@@ -1703,7 +1732,7 @@ mod tests {
             &SidePanelTab::ALL[SidePanelTab::COUNT - 2..],
             &[SidePanelTab::Ndi, SidePanelTab::Osc]
         );
-        for (index, tab) in [(8, SidePanelTab::Ndi), (9, SidePanelTab::Osc)] {
+        for (index, tab) in [(9, SidePanelTab::Ndi), (10, SidePanelTab::Osc)] {
             assert_eq!(tab.index(), index);
             assert_eq!(SidePanelTab::from_key(tab.key()), Some(tab));
         }
@@ -1730,15 +1759,20 @@ mod tests {
             Some(SidePanelTab::Quality)
         );
         assert_eq!(
-            &SidePanelTab::ALL[1..5],
+            &SidePanelTab::ALL[1..6],
             &[
                 SidePanelTab::Media,
                 SidePanelTab::Library,
                 SidePanelTab::Quality,
+                SidePanelTab::Output,
                 SidePanelTab::Audio
             ]
         );
-        assert_eq!(SidePanelTab::ALL.len(), 10);
+        assert_eq!(SidePanelTab::Output.index(), 4);
+        assert_eq!(SidePanelTab::Output.key(), "output");
+        assert_eq!(SidePanelTab::Output.title(), "Output");
+        assert_eq!(SidePanelTab::from_key("output"), Some(SidePanelTab::Output));
+        assert_eq!(SidePanelTab::ALL.len(), 11);
     }
 
     #[test]

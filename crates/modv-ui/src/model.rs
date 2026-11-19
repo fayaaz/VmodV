@@ -2521,6 +2521,7 @@ pub struct EngineHealth {
     pub last_error: Option<String>,
     pub frames_presented: u64,
     pub output_open: bool,
+    pub output_fullscreen: bool,
     pub audio_active: bool,
 }
 

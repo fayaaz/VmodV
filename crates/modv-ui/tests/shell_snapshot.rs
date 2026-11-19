@@ -170,6 +170,7 @@ fn demo_snapshot() -> EngineSnapshot {
             last_error: None,
             frames_presented: 120,
             output_open: true,
+            output_fullscreen: false,
             audio_active: true,
         },
         audio_devices: vec![AudioDeviceView {

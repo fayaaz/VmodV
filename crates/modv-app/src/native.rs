@@ -1078,6 +1078,50 @@ impl NativeApp {
         }
     }
 
+    /// Set the output window to the requested logical size (clamped to the
+    /// compositor's supported range). A fullscreen window is taken out of
+    /// fullscreen first, since a fullscreen window ignores requested
+    /// sizes. The `Resized` event resizes the surface and the compositor.
+    fn set_output_size(&mut self, width: u32, height: u32) {
+        let width = width.clamp(64, 7680);
+        let height = height.clamp(64, 7680);
+        let Some(output) = &self.output else {
+            eprintln!("ui: WARN set_output_size with no output window open");
+            return;
+        };
+        if output.window.fullscreen().is_some() {
+            output.window.set_fullscreen(None);
+        }
+        let _ = output
+            .window
+            .request_inner_size(LogicalSize::new(f64::from(width), f64::from(height)));
+        self.remember_output_window();
+        eprintln!("ui: INFO output size set to {width}x{height}");
+    }
+
+    /// Set the output window's fullscreen state absolutely (the `F` key and
+    /// the menu button toggle instead).
+    fn set_output_fullscreen(&mut self, on: bool) {
+        let Some(output) = &self.output else {
+            eprintln!("ui: WARN set_output_fullscreen with no output window open");
+            return;
+        };
+        let is_fullscreen = output.window.fullscreen().is_some();
+        if is_fullscreen == on {
+            return;
+        }
+        output.window.set_fullscreen(if on {
+            Some(Fullscreen::Borderless(None))
+        } else {
+            None
+        });
+        self.remember_output_window();
+        eprintln!(
+            "ui: INFO output fullscreen {}",
+            if on { "on" } else { "off" }
+        );
+    }
+
     fn toggle_output_fullscreen(&mut self) {
         let Some(output) = &self.output else {
             return;
@@ -2301,6 +2345,12 @@ impl NativeApp {
                 }
                 UiCommand::CloseOutputWindow => self.close_output(),
                 UiCommand::ToggleOutputFullscreen => self.toggle_output_fullscreen(),
+                UiCommand::SetOutputSize { width, height } => {
+                    self.set_output_size(width, height);
+                }
+                UiCommand::SetOutputFullscreen(on) => {
+                    self.set_output_fullscreen(on);
+                }
                 UiCommand::SaveSnapshot => self.save_snapshot(),
                 UiCommand::SavePreset => self.save_preset(),
                 UiCommand::FlushLogs => {}
@@ -3308,6 +3358,10 @@ impl NativeApp {
             last_error: self.last_error.clone(),
             frames_presented: self.frames,
             output_open: self.output.is_some(),
+            output_fullscreen: self
+                .output
+                .as_ref()
+                .is_some_and(|output| output.window.fullscreen().is_some()),
             audio_active: self.store.engine_audio_active(),
         };
         let audio_selection = audio_selection_view(

@@ -1679,6 +1679,7 @@ fn tab_content(
         SidePanelTab::Media => media_panel(ui, snapshot, state),
         SidePanelTab::Library => library_panel(ui, snapshot, state),
         SidePanelTab::Quality => quality_panel(ui, snapshot, state),
+        SidePanelTab::Output => output_panel(ui, snapshot, state),
         SidePanelTab::Audio => audio_panel(ui, snapshot, state),
         SidePanelTab::Info => info_panel(ui, snapshot),
         SidePanelTab::Plugins => plugins_panel(ui, snapshot, state),
@@ -2064,6 +2065,93 @@ fn quality_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         ))
         .size(11.0)
         .color(theme::MUTED),
+    );
+}
+
+/// The Output tab: the output window's resolution and fullscreen state.
+///
+/// The compositor renders at the output window's size; picking a size
+/// resizes the window (the surface/compositor follow on the `Resized`
+/// event), and persists with the window state. Fullscreen reuses the
+/// `F` key path. Choosing a resolution while fullscreen exits fullscreen
+/// so the picked size applies.
+fn output_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
+    let open = snapshot.health.output_open;
+
+    if !open {
+        ui.label(
+            egui::RichText::new("The output window is closed.")
+                .size(12.0)
+                .color(theme::MUTED),
+        );
+        if ui.button("Open output window").clicked() {
+            state.queue(UiCommand::OpenOutputWindow);
+        }
+        return;
+    }
+
+    ui.label(egui::RichText::new("Output window").strong());
+    ui.label(
+        egui::RichText::new(
+            "The output window is where the performance output renders. Resolution applies live; pick one or type exact dimensions.",
+        )
+        .size(11.0)
+        .color(theme::MUTED),
+    );
+    ui.add_space(6.0);
+
+    let (width, height) = (snapshot.resolution[0], snapshot.resolution[1]);
+
+    ui.label(egui::RichText::new("Resolution").strong().size(11.0));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        const PRESETS: [(u32, u32); 5] = [
+            (960, 540),
+            (1280, 720),
+            (1920, 1080),
+            (2560, 1440),
+            (3840, 2160),
+        ];
+        for (w, h) in PRESETS {
+            let selected = width == w && height == h;
+            if ui.radio(selected, format!("{w}x{h}")).clicked() {
+                state.set_output_size(w, h);
+            }
+        }
+    });
+
+    let mut custom_width = width;
+    let mut custom_height = height;
+    ui.horizontal(|ui| {
+        ui.label("Custom");
+        let w = ui.add(
+            egui::DragValue::new(&mut custom_width)
+                .range(64..=7680)
+                .speed(1.0),
+        );
+        ui.label("x");
+        let h = ui.add(
+            egui::DragValue::new(&mut custom_height)
+                .range(64..=7680)
+                .speed(1.0),
+        );
+        if w.changed() || h.changed() {
+            state.set_output_size(custom_width, custom_height);
+        }
+    });
+
+    ui.add_space(6.0);
+    let mut fullscreen = snapshot.health.output_fullscreen;
+    if ui.checkbox(&mut fullscreen, "Fullscreen (F)").changed() {
+        state.set_output_fullscreen(fullscreen);
+    }
+
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(format!("Current: {width}x{height}"))
+            .monospace()
+            .size(11.0)
+            .color(theme::MUTED),
     );
 }
 

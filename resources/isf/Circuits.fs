@@ -1,7 +1,9 @@
 /*{
   "CREDIT": "by thedantheman",
-  "DESCRIPTION": "",
+  "DESCRIPTION": "Circuit board voronoi with drifting electrons.",
   "CATEGORIES": [
+    "generator",
+    "pattern"
   ],
   "INPUTS": [
    {
@@ -9,7 +11,7 @@
  "TYPE": "float",
  "MAX" : 10.0,
  "MIN" : 0.0,
- "DEFAULT":0.002
+ "DEFAULT":0.35
  },
  {
  "NAME": "inputF",
@@ -183,7 +185,7 @@ void main(void)
 	vec3 cexp = vec3(3.0, 2.0, 4.0);
 		cexp *= 1.3;
 
-	vec3 col = vec3(pow(v, cexp.x), pow(v, cexp.y), pow(v, cexp.z)) * 1.0;
+	vec3 col = vec3(pow(v, cexp.x) * 0.75, pow(v, cexp.y) * 1.05, pow(v, cexp.z) * 0.75);
 	
 	gl_FragColor = vec4(col, 1.0);
 }
