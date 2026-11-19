@@ -3226,5 +3226,427 @@
         "smoothing": 0.6
       }
     ]
+  },
+  {
+    "name": "Open Sea",
+    "introducedVersion": 21,
+    "minSeconds": 10,
+    "maxSeconds": 26,
+    "groups": [
+      {
+        "name": "Background",
+        "inherit": false,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "st_Ms2SD1.fs",
+            "props": {
+              "SEA_HEIGHT": 1.0,
+              "SEA_FREQ": 0.16,
+              "SEA_CHOPPY": 4.5,
+              "SEA_SPEED": 0.85
+            }
+          }
+        ]
+      },
+      {
+        "name": "Foreground",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "screen",
+        "modules": []
+      },
+      {
+        "name": "Effects",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "Auto Levels",
+            "props": {
+              "adapt_rate": 0.35,
+              "min_threshold": 0.04
+            }
+          },
+          {
+            "name": "film-grain",
+            "props": {
+              "strength": 5.0
+            }
+          }
+        ]
+      }
+    ],
+    "inputLinks": [
+      {
+        "group": "Background",
+        "control": "SEA_HEIGHT",
+        "module": "st_Ms2SD1.fs",
+        "feature": "bass",
+        "min": 0.75,
+        "max": 1.15,
+        "smoothing": 0.6
+      },
+      {
+        "group": "Background",
+        "control": "SEA_FREQ",
+        "module": "st_Ms2SD1.fs",
+        "feature": "treble",
+        "min": 0.12,
+        "max": 0.22,
+        "smoothing": 0.4
+      }
+    ]
+  },
+  {
+    "name": "Corona",
+    "introducedVersion": 21,
+    "minSeconds": 8,
+    "maxSeconds": 22,
+    "groups": [
+      {
+        "name": "Background",
+        "inherit": false,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "Point10 Sun",
+            "props": {
+              "corona": 1.15,
+              "rays": 1.1,
+              "brightness": 1.05,
+              "surfaceSpeed": 0.6
+            }
+          }
+        ]
+      },
+      {
+        "name": "Foreground",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "screen",
+        "modules": []
+      },
+      {
+        "name": "Effects",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "Bloom",
+            "props": {
+              "blurAmount": 7,
+              "intensity": 0.45
+            }
+          }
+        ]
+      }
+    ],
+    "inputLinks": [
+      {
+        "group": "Background",
+        "control": "corona",
+        "module": "Point10 Sun",
+        "feature": "bass",
+        "min": 0.8,
+        "max": 1.9
+      },
+      {
+        "group": "Background",
+        "control": "rays",
+        "module": "Point10 Sun",
+        "feature": "treble",
+        "min": 0.7,
+        "max": 1.6
+      }
+    ]
+  },
+  {
+    "name": "Backbeat Garden",
+    "introducedVersion": 21,
+    "minSeconds": 9,
+    "maxSeconds": 24,
+    "groups": [
+      {
+        "name": "Background",
+        "inherit": false,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "Point10 Mycelium",
+            "props": {
+              "growthSpeed": 1.0,
+              "glow": 1.15,
+              "gain": 1.1
+            }
+          }
+        ]
+      },
+      {
+        "name": "Foreground",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "screen",
+        "modules": [
+          {
+            "name": "Polygon",
+            "props": {
+              "intensity": 10,
+              "shapeSize": 110,
+              "strokeWeight": 2,
+              "rotateToggle": true,
+              "rotateSpeed": 2.0
+            },
+            "meta": {
+              "alpha": 0.75,
+              "compositeOperation": "screen"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Effects",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "Glow-Fast",
+            "props": {
+              "intensity": 0.35,
+              "blurAmount": 8
+            }
+          }
+        ]
+      }
+    ],
+    "inputLinks": [
+      {
+        "group": "Foreground",
+        "control": "alpha",
+        "source": "draw",
+        "min": 0,
+        "max": 1,
+        "tween": {
+          "data": [
+            [
+              1
+            ],
+            [
+              0
+            ],
+            [
+              1
+            ],
+            [
+              0
+            ],
+            [
+              1
+            ]
+          ],
+          "duration": 3000,
+          "direction": "normal",
+          "easing": "linear",
+          "loop": true,
+          "useBpm": true,
+          "bpmDivision": 66.66666666666667,
+          "durationAsTotalTime": true,
+          "steps": 1,
+          "keyframeTimes": [
+            0.0,
+            0.25,
+            0.5,
+            0.75,
+            1.0
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "Alternate Tides",
+    "introducedVersion": 21,
+    "minSeconds": 12,
+    "maxSeconds": 28,
+    "groups": [
+      {
+        "name": "Background",
+        "inherit": false,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "st_Ms2SD1.fs",
+            "props": {
+              "SEA_HEIGHT": 0.85,
+              "SEA_SPEED": 0.7,
+              "SEA_CHOPPY": 3.6
+            }
+          }
+        ]
+      },
+      {
+        "name": "Foreground",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 0.7,
+        "compositeOperation": "screen",
+        "modules": [
+          {
+            "name": "Concentrics",
+            "props": {
+              "intensity": 9,
+              "spacing": 3,
+              "objectDistance": 55,
+              "strokeWeight": 2
+            },
+            "meta": {
+              "alpha": 0.55,
+              "compositeOperation": "screen"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Effects",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "Auto Levels",
+            "props": {
+              "adapt_rate": 0.35,
+              "min_threshold": 0.03
+            }
+          },
+          {
+            "name": "Vignette",
+            "props": {
+              "intensity": 18,
+              "extension": 0.35
+            }
+          }
+        ]
+      }
+    ],
+    "inputLinks": [
+      {
+        "group": "Foreground",
+        "control": "alpha",
+        "source": "draw",
+        "min": 0,
+        "max": 1,
+        "tween": {
+          "data": [
+            [
+              1
+            ],
+            [
+              1
+            ],
+            [
+              0
+            ]
+          ],
+          "duration": 3000,
+          "direction": "normal",
+          "easing": "linear",
+          "loop": true,
+          "useBpm": true,
+          "bpmDivision": 133.33333333333334,
+          "durationAsTotalTime": true,
+          "steps": 1,
+          "keyframeTimes": [
+            0.0,
+            0.5,
+            1.0
+          ]
+        }
+      },
+      {
+        "group": "Background",
+        "control": "SEA_CHOPPY",
+        "module": "st_Ms2SD1.fs",
+        "feature": "mid",
+        "min": 2.5,
+        "max": 4.5
+      }
+    ]
+  },
+  {
+    "name": "Circuits",
+    "introducedVersion": 21,
+    "minSeconds": 10,
+    "maxSeconds": 24,
+    "groups": [
+      {
+        "name": "Background",
+        "inherit": false,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "Circuits",
+            "props": {
+              "timeScale": 1.1,
+              "inputF": 1.0,
+              "timeOffset": 0.4
+            }
+          }
+        ]
+      },
+      {
+        "name": "Foreground",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "screen",
+        "modules": []
+      },
+      {
+        "name": "Effects",
+        "inherit": true,
+        "clearing": true,
+        "alpha": 1,
+        "compositeOperation": "normal",
+        "modules": [
+          {
+            "name": "film-grain",
+            "props": {
+              "strength": 5.0
+            }
+          }
+        ]
+      }
+    ],
+    "inputLinks": [
+      {
+        "group": "Background",
+        "control": "timeScale",
+        "module": "Circuits",
+        "feature": "bass",
+        "min": 0.5,
+        "max": 1.8
+      }
+    ]
   }
 ]

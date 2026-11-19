@@ -800,7 +800,7 @@
           "status": "covered",
           "rust": [
             "crates/modv-engine/src/default_scenes.rs:ships_at_least_54_default_scenes_with_unique_names",
-            "crates/modv-engine/src/default_scenes.rs:bumps_the_defaults_version_to_20"
+            "crates/modv-engine/src/default_scenes.rs:bumps_the_defaults_version_to_21"
           ],
           "notes": ""
         },

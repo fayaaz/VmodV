@@ -1159,9 +1159,19 @@ mod tests {
         assert_eq!(scenes[0]["name"], json!("Long Red Tunnel"));
         assert_eq!(scenes[0]["id"], json!("prism-id"));
         assert_eq!(seeded, vec!["Long Red Tunnel".to_string()]);
-        // The renamed Scene is already present and marked seeded, so the
-        // bump seeds nothing new for this install.
-        assert!(plan.seeds.is_empty());
+        // The renamed Scene is already present and marked seeded, so no
+        // duplicate is offered for the rename itself.
+        assert!(
+            !plan
+                .seeds
+                .iter()
+                .any(|definition| definition.name == "Long Red Tunnel"),
+            "a renamed Scene must not be seeded twice: {:?}",
+            plan.seeds
+                .iter()
+                .map(|d| d.name.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1243,9 +1253,13 @@ mod tests {
     }
 
     #[test]
-    fn the_production_path_seeds_long_red_tunnel_fresh_when_absent() {
-        // An install that never held the Scene (or deleted it) receives the
-        // retuned definition from the normal seed lane.
+    fn the_production_path_seeds_everything_introduced_since_the_from_version() {
+        // The seed lane offers every Scene introduced after the install's
+        // version, so an install on 18 that jumps straight to the current
+        // defaults receives both the v19 batch (Long Red Tunnel) and the
+        // v21 batch. (This used to pin exactly one seed because v19 was the
+        // current bump — the contract is "everything introduced since
+        // `from_version`", not "the v19 batch alone".)
         let mut scenes = vec![];
         let mut seeded = vec![];
 
@@ -1257,9 +1271,18 @@ mod tests {
             &mut seeded,
         );
 
-        assert_eq!(plan.seeds.len(), 1);
-        assert_eq!(plan.seeds[0].name, "Long Red Tunnel");
-        assert_eq!(plan.seeds[0].introduced_version, 19);
+        let expected: Vec<&str> = crate::default_scenes::default_scenes()
+            .iter()
+            .filter(|scene| scene.introduced_version > 18)
+            .map(|scene| scene.name.as_str())
+            .collect();
+        let got: Vec<&str> = plan
+            .seeds
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect();
+        assert_eq!(got, expected, "the seed lane must offer every later batch");
+        assert!(expected.contains(&"Long Red Tunnel"));
     }
 
     #[test]
@@ -1285,12 +1308,18 @@ mod tests {
     fn the_previous_version_bump_refreshes_the_edited_scenes_without_a_rename_rule() {
         // Versions 13/14 only edit definitions in place — CMYK Halftone leaves
         // Halftone Harbor, MBOX3's hue is fixed and Point10 Old Movie becomes
-        // Sepia Tone. Version 18 retires Strobe Riot without a rename, so the
-        // version-keyed edits in the 12→18 span are its removal and nothing
-        // else. Version 19's rename and version 20's retirements are covered
-        // by their own tests. Installs on the previous version receive the
-        // in-place edits through `get_default_scenes_to_replace`.
-        let migration = get_default_scene_migrations(12, DEFAULTS_VERSION - 2);
+        // Sepia Tone, and nothing in those bumps is version-keyed at all; the
+        // 12→17 span proves it. Version 18 retires Strobe Riot without a
+        // rename, so the version-keyed edits in the 12→18 span are its
+        // removal and nothing else. Version 19's rename and version 20's
+        // retirements are covered by their own tests. Installs on the
+        // previous version receive the in-place edits through
+        // `get_default_scenes_to_replace`.
+        let migration = get_default_scene_migrations(12, 17);
+        assert!(migration.rename.is_empty());
+        assert!(migration.remove.is_empty());
+
+        let migration = get_default_scene_migrations(12, 18);
         assert!(migration.rename.is_empty());
         assert_eq!(migration.remove, vec!["Strobe Riot".to_string()]);
 

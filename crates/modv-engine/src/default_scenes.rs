@@ -95,7 +95,19 @@ use serde_json::{Map, Value};
 /// `Mirror Chamber`, `Glitch Bloom Cathedral`, `Circuit Ritual`) are
 /// retired instead — a version-20 row in [`crate::default_scene_migrations`]
 /// drops the seeded Scenes on upgrade.
-pub const DEFAULTS_VERSION: i64 = 20;
+///
+/// Version 21 adds the overhaul's first batch of new Scenes built around
+/// unused modules: `Open Sea`, `Corona`, `Backbeat Garden`, `Alternate
+/// Tides` and `Circuits`. The three heavy raymarched ISF drafts (`Back
+/// Office`, `Pool Rooms`, `Augur`) were dropped after visual/performance
+/// review at true 1920x1080 on an iGPU (3–4 fps each). Two of them gate
+/// their Foreground row from a BPM-synced embedded draw
+/// curve (`Backbeat Garden` appears on beats 2 and 4; `Alternate Tides`
+/// alternates bars on and off). The rest swell — bass into a depth-ish
+/// or gain-ish control, treble into a detail-ish one — instead of
+/// strobing. No renames, no retirements, no refresh; the new batch reaches
+/// existing installs through the normal seed lane.
+pub const DEFAULTS_VERSION: i64 = 21;
 
 /// The version of the original six Scenes (`default-scenes.js:38`).
 pub const LEGACY_DEFAULTS_VERSION: i64 = 1;
@@ -856,9 +868,9 @@ mod tests {
     // ————————————————— data integrity —————————————————
 
     #[test]
-    fn bumps_the_defaults_version_to_20() {
+    fn bumps_the_defaults_version_to_21() {
         // default-scenes.test.js:85-87
-        assert_eq!(DEFAULTS_VERSION, 20);
+        assert_eq!(DEFAULTS_VERSION, 21);
         assert_eq!(LEGACY_DEFAULTS_VERSION, 1);
     }
 
@@ -887,6 +899,105 @@ mod tests {
         "Glitch Bloom Cathedral",
         "Circuit Ritual",
     ];
+
+    #[test]
+    fn adds_the_version_21_batch_of_new_scenes() {
+        // The overhaul's first batch: all unused modules, sparse musical
+        // links. Two of them gate their Foreground row from an embedded
+        // draw curve on the beat grid.
+        let v21: Vec<&SceneDocument> = default_scenes()
+            .iter()
+            .filter(|scene| scene.introduced_version == 21)
+            .collect();
+        let names: Vec<&str> = v21.iter().map(|scene| scene.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Open Sea",
+                "Corona",
+                "Backbeat Garden",
+                "Alternate Tides",
+                "Circuits",
+            ]
+        );
+
+        // Every new Scene references only modules that resolve in the
+        // registry (the global resolution guard covers the whole set; this
+        // just pins the new batch by name).
+        for scene in &v21 {
+            for name in scene.module_names() {
+                assert!(
+                    !V20_REMOVED_MODULES.contains(&name),
+                    "{} ships {}",
+                    scene.name,
+                    name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gates_the_foreground_rows_on_the_beat_grid() {
+        // Backbeat Garden appears on beats 2 and 4 only; Alternate Tides
+        // alternates bars on and off. Both are BPM-synced embedded draw
+        // curves with hard steps on the group's `alpha`.
+        let garden = scene_by_name("Backbeat Garden");
+        let garden_gate = garden
+            .input_links
+            .iter()
+            .find(|link| link.group == "Foreground" && link.control == "alpha")
+            .expect("Backbeat Garden gates its Foreground on alpha");
+        assert_eq!(garden_gate.source.as_deref(), Some("draw"));
+        let curve = garden_gate.tween.as_ref().expect("the gate embeds a curve");
+        assert_eq!(curve["steps"], json!(1));
+        assert_eq!(curve["keyframeTimes"], json!([0.0, 0.25, 0.5, 0.75, 1.0]));
+        let data: Vec<i64> = curve["data"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row[0].as_i64().expect("single value"))
+            .collect();
+        assert_eq!(data, vec![1, 0, 1, 0, 1], "on beats 2 and 4");
+
+        let tides = scene_by_name("Alternate Tides");
+        let tides_gate = tides
+            .input_links
+            .iter()
+            .find(|link| link.group == "Foreground" && link.control == "alpha")
+            .expect("Alternate Tides gates its Foreground on alpha");
+        assert_eq!(tides_gate.source.as_deref(), Some("draw"));
+        let curve = tides_gate.tween.as_ref().expect("the gate embeds a curve");
+        assert_eq!(curve["steps"], json!(1));
+        let data: Vec<i64> = curve["data"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row[0].as_i64().expect("single value"))
+            .collect();
+        assert_eq!(data, vec![1, 1, 0], "one bar on, one bar off");
+    }
+
+    #[test]
+    fn seeds_the_version_21_batch_for_installs_on_the_previous_version() {
+        let seeds = get_scenes_to_seed(
+            DEFAULTS_VERSION - 1,
+            &get_default_scene_names_up_to(DEFAULTS_VERSION - 1),
+            &Vec::new(),
+        );
+        let names: Vec<&str> = seeds.iter().map(|scene| scene.name.as_str()).collect();
+        for name in [
+            "Open Sea",
+            "Corona",
+            "Backbeat Garden",
+            "Alternate Tides",
+            "Circuits",
+        ] {
+            assert!(
+                names.contains(&name),
+                "{name} was not offered to an install on version 20"
+            );
+        }
+    }
 
     #[test]
     fn ships_no_removed_modules_in_any_default_scene() {

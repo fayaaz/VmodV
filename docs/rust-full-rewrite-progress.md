@@ -27,8 +27,8 @@ Last updated: 2026-11-19.
 ## Default-Scenes overhaul, first slice (2026-11-19)
 
 Five Point10 modules no longer ship in any default Scene; the modules stay
-registered and usable in user Scenes. `DEFAULTS_VERSION` is now **20**
-(51 Scenes, 57 distinct module names).
+registered and usable in user Scenes. `DEFAULTS_VERSION` was **20**
+(51 Scenes, 57 distinct module names); the v21 slice below moves it to **21**.
 
 - Removed from every default Scene: the heavy volumetric
   `Point10 Rolling Fire`, `Point10 Ball Of Fire`, `Point10 DVD Room`
@@ -47,6 +47,27 @@ registered and usable in user Scenes. `DEFAULTS_VERSION` is now **20**
 - No background-free Point10 module remains in the defaults; `Smoke Tunnel`,
   `Golden Spiral Tunnel` and `ASCII Sunbeam` survive with their non-removed
   content (their background rows are now empty, effects rows untouched).
+
+## Default-Scenes overhaul, second slice (2026-11-19)
+
+The v21 batch of new musical Scenes landed, and the three heavy raymarched
+ISF drafts were dropped from it after the visual/performance bench:
+
+- Added `DEFAULTS_VERSION` **21**: a first batch of new musical Scenes built
+  around previously-unused modules — `Open Sea`, `Corona`, `Backbeat Garden`,
+  `Alternate Tides` and `Circuits`. The first two swell with the audio spectrum
+  (bass into a depth/gain-ish control, treble into a detail-ish one); the last
+  two gate their Foreground row from a BPM-synced embedded draw curve
+  (`Backbeat Garden` appears on beats 2 and 4; `Alternate Tides` alternates bars
+  on and off).
+- The initial eight-scene batch also carried three heavy raymarched ISF
+  drafts (`Back Office`, `Pool Rooms`, `Augur`). After the true-1920x1080 bench
+  they all ran at ~3–4 fps on the iGPU (against the ~30 fps bar the kept Scenes
+  clear), so they were dropped from the batch; the released batch stands at the
+  five survivors.
+- `DEFAULTS_VERSION` is now **21**: the seeded set is back to 56 Scenes (51 at
+  v20 plus the five-scapter batch net-out) referencing the surviving module
+  names. The new batch reaches existing installs through the normal seed lane.
 
 ## Rust-only cleanup (2026-11-18)
 

@@ -60,7 +60,7 @@ The two JS guards that still described native content moved into Rust:
 | `packaging/linuxBundleIsTrimmed.spec.js` | `tools/native-deb-check.sh` verifies the native package contents; `native.yml` builds the AppImage/.deb. This is the only bundle now: the Electron build is archived | C |
 | packaged native smoke | `tools/native-smoke.sh`: headless `--frames --bench`, windowed apply-scene, state round-trip, AppRun log, SIGKILL recovery, optional bounded soak | C (native AppImage run) |
 | `presets/generatesAPresetWithExpectedKeys.spec.js` | Rust preset round-trip tests (existing) | C |
-| `scenes/defaultScenes.spec.js` | `default_scenes` Rust tests + native 61-Scene seed | C |
+| `scenes/defaultScenes.spec.js` | `default_scenes` Rust tests + native 56-Scene seed | C |
 | `scenes/captureLiveState.spec.js` | engine `scenes/captureLiveStateToScene` tests + native Scene menu action | C |
 | `scenes/sceneSnapshotsAndPerformance.spec.js` | `scene_ops`/performance tests + native Scenes panel | P (kittest automation pending) |
 | `scenes/performanceGrid.spec.js` | `scene_rows`/`scene_columns` tests + native grid | P |
@@ -114,7 +114,7 @@ from the actual `dist/VmodV-Native-2.0.0-x86_64.AppImage` (launched with
 | bounded soak | 60 s windowed: 3498 frames, 58.30 fps, peak process-group RSS 335 MB |
 | display backends | forced Wayland-only and X11-only `--frames 5` runs both exit 0 on RADV RX 9070 XT |
 | OSC | `modv-media` real-UDP loopback test + `store_ops::osc_datagrams_apply_to_state_and_mirror` pass; a live native run bound `0.0.0.0:3333` |
-| module parity | committed manifest guard: 432 = 15 2D + 27 Point10 + 36 shader + 354 ISF; 51 default Scenes reference 57 distinct names, all resolve on both sides |
+| module parity | committed manifest guard: 432 = 15 2D + 27 Point10 + 36 shader + 354 ISF; 56 default Scenes reference 62 distinct module names, all resolve on both sides |
 
 The app snapshot deliberately excludes `osc` runtime data (it is not a preset
 key), so OSC is covered at the socket/store boundary rather than by asserting a
