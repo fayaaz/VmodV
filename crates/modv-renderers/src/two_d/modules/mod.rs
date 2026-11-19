@@ -1,5 +1,6 @@
-//! The 15 hand-written 2D modules, ported from
-//! `src/renderer/src/application/renderers/2d/modules/*.js`.
+//! The 16 built-in 2D modules: 15 ported from
+//! `src/renderer/src/application/renderers/2d/modules/*.js`, plus the
+//! native-only `Video` module (Texture 2D + an audio-linkable `progress` prop).
 //!
 //! Each JS default export becomes a struct implementing [`TwoDModule`]:
 //!
@@ -9,6 +10,7 @@
 //! | `Text.js` | `text.rs` | `canvas-text-wrapper` behaviour inlined (no scratch canvas) |
 //! | `Polygon.js` | `polygon.rs` | rotating n-gon |
 //! | `Texture2d.js` | `texture_2d.rs` | needs `DrawContext::input_texture` |
+//! | (native only) | `video.rs` | `Video`: Texture 2D + 0..1 `progress` input |
 //! | `Buffer.js` | `buffer.rs` | owns a scratch [`Canvas`] as its buffer output |
 //! | `Concentrics.js` | `concentrics.rs` | HSL rings |
 //! | `X-Drips.js` | `x_drips.rs` | pattern of drips + circular clip |
@@ -58,6 +60,7 @@ mod polygon;
 mod smear;
 mod text;
 mod texture_2d;
+mod video;
 mod waveform;
 mod webcam;
 mod x_drips;
@@ -74,6 +77,7 @@ pub use polygon::Polygon;
 pub use smear::Smear;
 pub use text::Text;
 pub use texture_2d::Texture2d;
+pub use video::Video;
 pub use waveform::Waveform;
 pub use webcam::Webcam;
 pub use x_drips::XDrips;
@@ -377,6 +381,7 @@ pub fn all_modules() -> Vec<Box<dyn TwoDModule>> {
         Box::new(Text),
         Box::new(Polygon::default()),
         Box::new(Texture2d),
+        Box::new(Video),
         Box::new(Buffer::default()),
         Box::new(Concentrics::default()),
         Box::new(XDrips::default()),

@@ -1,4 +1,4 @@
-//! Tests for the 2D canvas facade, its path/text helpers and the 15 modules.
+//! Tests for the 2D canvas facade, its path/text helpers and the 16 modules.
 //!
 //! GPU tests render on the fallback (software / lavapipe) adapter and read the
 //! canvas texture back — the same pattern as
@@ -807,9 +807,9 @@ fn all_prop_descriptors() -> Vec<(&'static str, Vec<TwoDProp>)> {
 }
 
 #[test]
-fn registry_has_the_fifteen_plan_modules() {
+fn registry_has_the_sixteen_plan_modules() {
     let modules = all_modules();
-    assert_eq!(modules.len(), 15);
+    assert_eq!(modules.len(), 16);
     let names: Vec<&'static str> = modules.iter().map(|module| module.meta().name).collect();
     assert_eq!(
         names,
@@ -818,6 +818,7 @@ fn registry_has_the_fifteen_plan_modules() {
             "Text",
             "Polygon",
             "Texture 2D",
+            "Video",
             "Buffer",
             "Concentrics",
             "X Drips",

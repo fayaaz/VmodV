@@ -103,8 +103,8 @@
 //!   ([`Compositor::sync_media`]); the `Webcam` module samples the source its
 //!   1-based `camera` prop selects (the start order, like
 //!   `selectWebcamSource`). Every other 2D module keeps
-//!   `input_texture: None`: `Texture2D` resolves its own `texture` prop (an
-//!   image asset the engine has no registry for yet) and the rest draw from
+//!   `input_texture: None`: `Texture2D`/`Video` resolves its own `texture` prop
+//!   (an image asset the engine has no registry for yet) and the rest draw from
 //!   their props alone. With no running source the Webcam module draws
 //!   nothing, exactly like the JS with an unset `video`.
 //! * **ISF image inputs bind a resolved texture, else the group canvas.** A
@@ -1239,7 +1239,7 @@ impl Compositor {
     /// receiver is uploaded into an `Rgba8Unorm` `InputFrame` texture keyed
     /// `ndi:<receiverId>`, and only when its sequence is newer than the last
     /// uploaded one (one upload per new frame). A disabled or removed receiver
-    /// loses its texture, so ISF/Texture2D props fall back exactly like a
+    /// loses its texture, so ISF/Texture2D/Video props fall back exactly like a
     /// stopped camera.
     ///
     /// NDI receiver frames are user-level like media sources: they survive
@@ -1518,7 +1518,7 @@ impl Compositor {
         self.image_input(raw, max_size).map(|image| image.view)
     }
 
-    /// Resolve `Texture 2D`'s `texture` prop to an input texture.
+    /// Resolve `Texture 2D`/`Video`'s `texture` prop to an input texture.
     ///
     /// The legacy module draws `props.texture.value` (`Texture2d.js:92`); the
     /// engine has no JS texture object, so the saved prop is parsed by
@@ -2027,8 +2027,8 @@ impl Compositor {
     /// Media inputs (WS-10): only `Webcam` samples the engine's video capture —
     /// it resolves its 1-based `camera` prop against the running sources
     /// ([`Self::media_input`]). Every other 2D module keeps
-    /// `input_texture: None`: `Texture2D` draws the texture its own `texture`
-    /// prop resolves (an image asset, not a live source), and the remaining
+    /// `input_texture: None`: `Texture2D`/`Video` draws the texture its own
+    /// `texture` prop resolves (an image asset, not a live source), and the remaining
     /// modules draw from their props alone. A module without a source draws
     /// nothing, which is what the JS did with an unset `video`.
     fn render_two_d_module(
@@ -2072,11 +2072,11 @@ impl Compositor {
         // not a frame delta; `Bar.js:62` and `Concentrics.js:78` integrate it.
         let delta_ms = frame.time_seconds * 1000.0;
 
-        // WS-11: `Texture 2D` samples the texture its `texture` prop names
-        // (an image asset, a module/group canvas, or an NDI receiver). Resolve
-        // it before the module instance borrow: image decoding needs the
-        // image cache mutably.
-        let texture_input = (module.module_name == "Texture 2D")
+        // WS-11: `Texture 2D`/`Video` sample the texture their `texture` prop
+        // names (an image asset, a module/group canvas, or an NDI receiver).
+        // Resolve it before the module instance borrow: image decoding needs
+        // the image cache mutably.
+        let texture_input = matches!(module.module_name.as_str(), "Texture 2D" | "Video")
             .then(|| self.two_d_texture_input(props))
             .flatten();
 

@@ -61,9 +61,10 @@
 //!
 //! ## Registry parity
 //!
-//! The built-in registry is the exact legacy Gallery set: 15 hand-written 2D
-//! modules, 27 Point10 scenes and 36 shader modules, plus the 354 `.fs`
-//! shaders of the ISF corpus (432 total). Names match the JS registrations
+//! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
+//! 27 Point10 scenes and 36 shader modules, plus the native-only `Video` 2D
+//! module and the 354 `.fs` shaders of the ISF corpus (433 total). Names match
+//! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
 //! registry against the committed snapshot generated from the legacy worker's
@@ -677,6 +678,7 @@ const TWO_D_PROP_FLAGS: &[(&str, &str, bool, bool)] = &[
     ("Text", "strokeSize", false, true),          // Text.js:55
     ("Waveform", "strokeWeight", false, true),    // Waveform.js:19
     ("X Drips", "maxDripHeight", false, true),    // X-Drips.js:28
+    ("Video", "progress", true, false),           // Video progress clamps to 0..1
 ];
 
 /// The JS 2D modules whose `meta` sets `previewWithOutput: true`.
@@ -695,8 +697,8 @@ pub struct ModuleRegistry {
 }
 
 impl ModuleRegistry {
-    /// The 36 built-in shader modules, the 15 ported 2D modules and the ported
-    /// Point10 scenes, with no ISF corpus.
+    /// The 36 built-in shader modules, the 16 2D modules (15 ported plus the
+    /// native-only `Video`) and the ported Point10 scenes, with no ISF corpus.
     ///
     /// Used by unit tests and the headless benchmark, which must not depend on
     /// files outside the process. The engine path calls [`Self::build`].
@@ -1117,7 +1119,7 @@ impl ModuleRegistry {
     ///
     /// `TwoDModule` is not `Clone` and its state is per instance, so the
     /// compositor asks for a new one when a module first draws. `all_modules()`
-    /// constructs the 15 default structs (no GPU work) and the match is
+    /// constructs the 16 default structs (no GPU work) and the match is
     /// returned; activation/first draw is rare enough that this does not
     /// matter.
     pub fn create_two_d(&self, name: &str) -> Option<Box<dyn TwoDModule>> {
@@ -1725,7 +1727,46 @@ mod tests {
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Not A Module"), None);
         assert_eq!(registry.shader_modules().len(), 36);
-        assert_eq!(registry.two_d_definitions().len(), 15);
+        assert_eq!(registry.two_d_definitions().len(), 16);
+    }
+
+    #[test]
+    fn video_module_is_registered_as_texture_2d_with_a_progress_input() {
+        let registry = ModuleRegistry::builtin();
+        assert_eq!(
+            registry.kind("Video"),
+            Some(ModuleKind::TwoD),
+            "Video must be a registered 2D module type"
+        );
+
+        let defaults = registry
+            .default_props("Video")
+            .expect("Video has prop defaults");
+        // "basically texture2d": all of Texture 2D's props are present.
+        for key in [
+            "texture",
+            "cropTop",
+            "cropRight",
+            "cropBottom",
+            "cropLeft",
+            "scale",
+            "offsetX",
+            "offsetY",
+            "constrain",
+        ] {
+            assert!(
+                defaults.get(key).is_some(),
+                "Video is missing Texture 2D's `{key}` prop"
+            );
+        }
+        // The extra: a 0..1 progress input.
+        assert_eq!(defaults["progress"], json!(0.0));
+        let schema = registry
+            .prop_schema("Video", "progress")
+            .expect("progress prop schema");
+        assert_eq!(schema.type_, "float");
+        assert_eq!(schema.min, Some(0.0));
+        assert_eq!(schema.max, Some(1.0));
     }
 
     #[test]
@@ -1839,7 +1880,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 36 + 15 + 27, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 36 + 16 + 27, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2650,7 +2691,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            432,
+            433,
             "registered module total (module-parity guard)"
         );
     }
@@ -2697,12 +2738,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            432,
+            433,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(432),
+            Some(433),
             "manifest total"
         );
     }

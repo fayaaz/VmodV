@@ -1,11 +1,11 @@
 {
-  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final).",
+  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a native-only 2D module added for the audio-controllable video-progress feature (not present in the legacy registrations).",
   "counts": {
-    "twoD": 15,
+    "twoD": 16,
     "point10": 27,
     "shader": 36,
     "isf": 354,
-    "total": 432
+    "total": 433
   },
   "twoD": [
     "Ball",
@@ -20,6 +20,7 @@
     "Smear",
     "Text",
     "Texture 2D",
+    "Video",
     "Waveform",
     "Webcam",
     "X Drips"

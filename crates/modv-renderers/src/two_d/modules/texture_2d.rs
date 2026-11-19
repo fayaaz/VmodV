@@ -12,6 +12,53 @@ use crate::two_d::modules::{
     DrawContext, TwoDModule, TwoDModuleMeta, TwoDProp, prop_f64, prop_i64, prop_str,
 };
 
+/// The nine prop descriptors declared by `Texture2d.js`, in JS order.
+///
+/// [`super::Video`] reuses these verbatim (appending its own `progress` prop),
+/// so keeping them in one place stops the two modules' props from drifting.
+pub(super) fn texture_props() -> Vec<TwoDProp> {
+    vec![
+        TwoDProp::texture("texture"),
+        TwoDProp::int("cropTop", 0)
+            .label("Crop Top (px)")
+            .range(0.0, 4096.0)
+            .step(1.0),
+        TwoDProp::int("cropRight", 0)
+            .label("Crop Right (px)")
+            .range(0.0, 4096.0)
+            .step(1.0),
+        TwoDProp::int("cropBottom", 0)
+            .label("Crop Bottom (px)")
+            .range(0.0, 4096.0)
+            .step(1.0),
+        TwoDProp::int("cropLeft", 0)
+            .label("Crop Left (px)")
+            .range(0.0, 4096.0)
+            .step(1.0),
+        TwoDProp::float("scale", 1.0)
+            .label("Scale")
+            .range(0.0, 5.0)
+            .step(0.001),
+        TwoDProp::float("offsetX", 0.0)
+            .label("Offset X in %")
+            .range(-100.0, 100.0)
+            .step(1.0),
+        TwoDProp::float("offsetY", 0.0)
+            .label("Offset Y in %")
+            .range(-100.0, 100.0)
+            .step(1.0),
+        TwoDProp::enum_prop(
+            "constrain",
+            "none",
+            &[
+                ("None (Scale)", "none"),
+                ("Contain", "contain"),
+                ("Cover", "cover"),
+            ],
+        ),
+    ]
+}
+
 /// The `Texture 2D` module.
 #[derive(Default)]
 pub struct Texture2d;
@@ -28,46 +75,7 @@ impl TwoDModule for Texture2d {
     }
 
     fn props(&self) -> Vec<TwoDProp> {
-        vec![
-            TwoDProp::texture("texture"),
-            TwoDProp::int("cropTop", 0)
-                .label("Crop Top (px)")
-                .range(0.0, 4096.0)
-                .step(1.0),
-            TwoDProp::int("cropRight", 0)
-                .label("Crop Right (px)")
-                .range(0.0, 4096.0)
-                .step(1.0),
-            TwoDProp::int("cropBottom", 0)
-                .label("Crop Bottom (px)")
-                .range(0.0, 4096.0)
-                .step(1.0),
-            TwoDProp::int("cropLeft", 0)
-                .label("Crop Left (px)")
-                .range(0.0, 4096.0)
-                .step(1.0),
-            TwoDProp::float("scale", 1.0)
-                .label("Scale")
-                .range(0.0, 5.0)
-                .step(0.001),
-            TwoDProp::float("offsetX", 0.0)
-                .label("Offset X in %")
-                .range(-100.0, 100.0)
-                .step(1.0),
-            TwoDProp::float("offsetY", 0.0)
-                .label("Offset Y in %")
-                .range(-100.0, 100.0)
-                .step(1.0),
-            TwoDProp::enum_prop(
-                "constrain",
-                "none",
-                &[
-                    ("None (Scale)", "none"),
-                    ("Contain", "contain"),
-                    ("Cover", "cover"),
-                ],
-            ),
-        ]
+        texture_props()
     }
 
     fn draw(&mut self, ctx: &mut DrawContext) {
