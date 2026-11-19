@@ -59,7 +59,11 @@ impl AudioSettings {
             }
             (Some(AudioSourceSelection::Pipewire), None) => "system audio (pipewire)".to_string(),
             (Some(AudioSourceSelection::Input), Some(device)) => {
-                format!("input device {device}")
+                // `pw:<node.name>` ids are PipeWire source captures.
+                match device.strip_prefix(modv_media::audio::capture::PIPEWIRE_SOURCE_PREFIX) {
+                    Some(node) if !node.is_empty() => format!("PipeWire source {node}"),
+                    _ => format!("input device {device}"),
+                }
             }
             (Some(AudioSourceSelection::Input), None) => "default input".to_string(),
             _ => self.source.clone(),
@@ -283,6 +287,36 @@ pub fn device_views(devices: &[InputDeviceInfo]) -> Vec<AudioDeviceView> {
     }
 
     views
+}
+
+/// Convert enumerated PipeWire `Audio/Source` nodes into picker rows.
+///
+/// On PipeWire desktops the daemon holds the hardware, so a direct cpal open
+/// of any card PipeWire owns fails `DeviceNotAvailable` ("unplugged"). These
+/// rows are the working alternative: capture is routed through PipeWire with
+/// the node as `target.object` (see `pw:<node.name>` in
+/// `modv_media::audio::capture::PIPEWIRE_SOURCE_PREFIX`). The id carries the
+/// `pw:` prefix so [`crate::audio::open_feed`] can tell a PipeWire node from a
+/// cpal id; the channels/rate are what capture requests — the live feed
+/// reports the negotiated values once it is running.
+///
+/// The `pipewire` module is Linux-only; non-Linux builds keep the
+/// cpal-only list.
+#[cfg(target_os = "linux")]
+pub fn pipewire_views(sources: &[modv_media::audio::pipewire::SourceInfo]) -> Vec<AudioDeviceView> {
+    sources
+        .iter()
+        .map(|source| AudioDeviceView {
+            id: format!(
+                "{}{}",
+                modv_media::audio::capture::PIPEWIRE_SOURCE_PREFIX,
+                source.name
+            ),
+            name: source.description.clone(),
+            channels: modv_media::audio::capture::DEFAULT_CHANNELS,
+            capture_sample_rate: modv_media::audio::capture::DEFAULT_SAMPLE_RATE,
+        })
+        .collect()
 }
 
 /// What to do after opening the requested replacement feed.
@@ -526,6 +560,41 @@ mod tests {
             views[0].detail(),
             "2 ch · 48 kHz",
             "the cpal default never reaches the picker"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pipewire_views_carry_the_pw_prefix_and_the_node_description() {
+        use modv_media::audio::pipewire::SourceInfo;
+
+        let views = pipewire_views(&[SourceInfo {
+            name: "alsa_input.usb-thing".to_string(),
+            description: "USB CODEC Analog Stereo".to_string(),
+        }]);
+
+        assert_eq!(
+            views,
+            vec![AudioDeviceView {
+                id: "pw:alsa_input.usb-thing".to_string(),
+                name: "USB CODEC Analog Stereo".to_string(),
+                channels: 2,
+                capture_sample_rate: 48_000,
+            }],
+        );
+        assert_eq!(views[0].detail(), "2 ch · 48 kHz");
+        assert!(pipewire_views(&[]).is_empty());
+    }
+
+    #[test]
+    fn settings_describe_a_pipewire_source() {
+        let saved = settings("input", Some("pw:alsa_input.usb-thing"));
+
+        assert_eq!(saved.describe(), "PipeWire source alsa_input.usb-thing");
+        // A bare prefix is not a usable target and reads as a plain device id.
+        assert_eq!(
+            settings("input", Some("pw:")).describe(),
+            "input device pw:",
         );
     }
 

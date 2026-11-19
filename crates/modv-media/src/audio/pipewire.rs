@@ -76,7 +76,8 @@ use super::capture::{CaptureConfig, CaptureError, ChunkAssembler, ChunkQueue};
 pub const START_TIMEOUT: Duration = Duration::from_secs(5);
 /// Stream name shown in `pw-top` / `wpctl`.
 pub const STREAM_NAME: &str = "modv-system-audio";
-
+/// Stream name for a targeted `Audio/Source` capture (input devices).
+pub const SOURCE_STREAM_NAME: &str = "modv-input";
 /// Lowest sample rate the monitor decodes (anything below is a broken server
 /// negotiation, not a usable stream).
 pub const MIN_SUPPORTED_RATE: u32 = 8_000;
@@ -85,6 +86,123 @@ pub const MAX_SUPPORTED_RATE: u32 = 192_000;
 /// Highest channel count the monitor decodes (surround monitors are downmixed
 /// to their front L/R by [`super::capture::downmix_mono`]).
 pub const MAX_SUPPORTED_CHANNELS: u32 = 8;
+
+/// One PipeWire `Audio/Source` node (a microphone or audio interface) that
+/// [`sources`] enumerated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceInfo {
+    /// `node.name`; the value the capture target is set to.
+    pub name: String,
+    /// `node.description` (falling back to `name`) — what the Audio panel
+    /// shows for the row.
+    pub description: String,
+}
+
+/// Decide whether a registry global is a capturable audio source, and build
+/// its [`SourceInfo`]. `None` for sinks, nodes of any other media class, and
+/// nodes without a `node.name`. Pure, so the registry roundtrip in
+/// [`sources`] stays the only untestable part.
+pub fn source_from_props(
+    name: Option<&str>,
+    media_class: Option<&str>,
+    description: Option<&str>,
+) -> Option<SourceInfo> {
+    if media_class != Some("Audio/Source") {
+        return None;
+    }
+
+    let name = name?.trim().to_string();
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(SourceInfo {
+        description: description
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .unwrap_or(&name)
+            .to_string(),
+        name,
+    })
+}
+
+/// Enumerate the server's `Audio/Source` nodes. Returns an empty list when no
+/// PipeWire daemon answers (the caller then shows cpal devices only).
+///
+/// One-shot registry roundtrip: register a listener, sync once, and return
+/// when the server has delivered every global, so this never blocks past the
+/// server's answer.
+pub fn sources() -> Vec<SourceInfo> {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    pw::init();
+
+    let mainloop = match pw::main_loop::MainLoopRc::new(None) {
+        Ok(mainloop) => mainloop,
+        Err(_) => return Vec::new(),
+    };
+    let context = match pw::context::ContextRc::new(&mainloop, None) {
+        Ok(context) => context,
+        Err(_) => return Vec::new(),
+    };
+    let core = match context.connect_rc(None) {
+        Ok(core) => core,
+        Err(_) => return Vec::new(),
+    };
+    let registry = match core.get_registry() {
+        Ok(registry) => registry,
+        Err(_) => return Vec::new(),
+    };
+
+    let found = Rc::new(RefCell::new(Vec::new()));
+    let found_clone = found.clone();
+    let _registry_listener = registry
+        .add_listener_local()
+        .global(move |global| {
+            if global.type_ != pw::types::ObjectType::Node {
+                return;
+            }
+
+            let props = global.props.as_ref();
+            let info = source_from_props(
+                props.and_then(|props| props.get("node.name")),
+                props.and_then(|props| props.get("media.class")),
+                props.and_then(|props| props.get("node.description")),
+            );
+
+            if let Some(info) = info {
+                found_clone.borrow_mut().push(info);
+            }
+        })
+        .register();
+
+    let done = Rc::new(Cell::new(false));
+    let done_clone = done.clone();
+    let loop_clone = mainloop.clone();
+    let pending = match core.sync(0) {
+        Ok(pending) => pending,
+        Err(_) => return Vec::new(),
+    };
+    let _core_listener = core
+        .add_listener_local()
+        .done(move |id, seq| {
+            if id == pw::core::PW_ID_CORE && seq == pending {
+                done_clone.set(true);
+                loop_clone.quit();
+            }
+        })
+        .register();
+
+    while !done.get() {
+        mainloop.run();
+    }
+
+    Rc::try_unwrap(found)
+        .map(|found| found.into_inner())
+        .unwrap_or_else(|found| found.borrow().clone())
+}
 
 /// Sample layout of a negotiated raw-audio stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,11 +423,18 @@ pub struct PipeWireMonitor {
 }
 
 impl PipeWireMonitor {
-    /// Connect to the default PipeWire server and start capturing the default
-    /// sink's monitor.
+    /// Connect to the default PipeWire server and start capturing.
     ///
-    /// `config.device` is an optional target sink `node.name` / object id
-    /// (`target.object`); `None` follows the default sink.
+    /// `config.capture_sink` selects the shape: `true` (the default)
+    /// captures the default sink's monitor (`stream.capture.sink=true`);
+    /// `false` captures an `Audio/Source` node. On PipeWire desktops the
+    /// daemon holds the hardware, so a direct cpal/ALSA open of an input
+    /// device fails `DeviceNotAvailable`; targeting the source node through
+    /// PipeWire is the reliable route for an input device instead.
+    ///
+    /// `config.device` is an optional `target.object`: a sink `node.name`
+    /// for a monitor capture, or a source `node.name` for a source capture.
+    /// `None` follows the default sink (or the default source).
     ///
     /// Returns only once the server has negotiated a decodable stream format
     /// (or with an error explaining why it did not).
@@ -439,10 +564,13 @@ fn monitor_thread(
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Capture",
         *pw::keys::MEDIA_ROLE => "Music",
+    };
+
+    if config.capture_sink {
         // Capture the sink monitor instead of a microphone (the property
         // `pw-record` received through `-P '{"stream.capture.sink":true}'`).
-        *pw::keys::STREAM_CAPTURE_SINK => "true",
-    };
+        props.insert(*pw::keys::STREAM_CAPTURE_SINK, "true");
+    }
 
     if let Some(target) = &config.device {
         // `TARGET_OBJECT` lives behind the crate's `v0_3_44` feature; the
@@ -450,7 +578,13 @@ fn monitor_thread(
         props.insert("target.object", target.clone());
     }
 
-    let stream = match pw::stream::StreamBox::new(&core, STREAM_NAME, props) {
+    let stream_name = if config.capture_sink {
+        STREAM_NAME
+    } else {
+        SOURCE_STREAM_NAME
+    };
+
+    let stream = match pw::stream::StreamBox::new(&core, stream_name, props) {
         Ok(stream) => stream,
         Err(error) => {
             let _ = ready.send(Err(CaptureError::ServerUnavailable(error.to_string())));
@@ -627,6 +761,87 @@ fn monitor_thread(
 mod tests {
     use super::*;
     use spa::param::audio::AudioFormat;
+
+    #[test]
+    fn source_props_keep_only_named_audio_sources() {
+        assert_eq!(
+            source_from_props(
+                Some("alsa_input.usb-mic"),
+                Some("Audio/Source"),
+                Some("USB Mic")
+            ),
+            Some(SourceInfo {
+                name: "alsa_input.usb-mic".to_string(),
+                description: "USB Mic".to_string(),
+            }),
+        );
+        // Sinks are not capturable inputs.
+        assert_eq!(
+            source_from_props(Some("sink.node"), Some("Audio/Sink"), None),
+            None
+        );
+        assert_eq!(
+            source_from_props(Some("stream.node"), Some("Stream/Output/Audio"), None),
+            None,
+        );
+        // A source without a node.name is unusable as a target.
+        assert_eq!(
+            source_from_props(None, Some("Audio/Source"), Some("Mic")),
+            None
+        );
+        assert_eq!(
+            source_from_props(Some("  "), Some("Audio/Source"), None),
+            None
+        );
+        // The description falls back to the node name.
+        assert_eq!(
+            source_from_props(Some("node.b"), Some("Audio/Source"), None),
+            Some(SourceInfo {
+                name: "node.b".to_string(),
+                description: "node.b".to_string(),
+            }),
+        );
+        // A blank description falls back too.
+        assert_eq!(
+            source_from_props(Some("node.c"), Some("Audio/Source"), Some("  ")),
+            Some(SourceInfo {
+                name: "node.c".to_string(),
+                description: "node.c".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn sources_enumeration_smoke_test_or_skip() {
+        // Either no PipeWire daemon answered (empty) or every enumerated row
+        // is a named source node — a smoke check, not an assertion of
+        // hardware.
+        let found = sources();
+
+        for info in &found {
+            assert!(!info.name.is_empty());
+            assert!(!info.description.is_empty());
+        }
+
+        println!("pipewire sources: {}", found.len());
+
+        for info in &found {
+            println!("  {} [{}]", info.description, info.name);
+        }
+    }
+
+    #[test]
+    fn source_device_ids_carry_the_pw_prefix() {
+        assert_eq!(super::super::capture::PIPEWIRE_SOURCE_PREFIX, "pw:");
+        assert_eq!(
+            format!(
+                "{}{}",
+                super::super::capture::PIPEWIRE_SOURCE_PREFIX,
+                "node"
+            ),
+            "pw:node",
+        );
+    }
 
     /// Decode through the buffered path (the one the RT callback uses).
     fn decode(formats: &FormatState, bytes: &[u8]) -> Option<Vec<f32>> {

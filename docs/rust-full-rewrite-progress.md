@@ -190,6 +190,13 @@ with a temporary userData directory.
 - **Scenes grid** (`56745632`, `4c3af40f`, `578b802a`, `6c5f3687`): per-row
   live layer monitors, in-order/random performance order, native-only per-cell
   disable flags and named-row cell mapping.
+- **Audio picker on PipeWire hosts**: the Audio tab now lists
+  PipeWire `Audio/Source` nodes (`pw:<node.name>` rows, captured via
+  `target.object` with `stream.capture.sink` off) alongside the cpal/ALSA
+  devices. Direct ALSA opens of any card PipeWire holds exclusively fail
+  `DeviceNotAvailable`, which previously surfaced as "The requested device is
+  no longer available. For example, it has been unplugged." — that error now
+  names the busy/PipeWire case and points at the new rows instead.
 - **Media/tween/rate** (`b6ae28a0`, `c211457e`, `006c9704`, `e8f02b08`,
   `4e57f81b`): ordered/remembered/restored cameras, advertised resolution/FPS
   pickers, the keyframe curve editor, and the live capture rate in the Audio

@@ -23,7 +23,9 @@
 //! rules and the 10 Hz mirror publish).
 
 use modv_media::audio::analyser::AudioSnapshot;
-use modv_media::audio::capture::{CaptureConfig, InputDeviceInfo, input_devices};
+use modv_media::audio::capture::{
+    CaptureConfig, InputDeviceInfo, PIPEWIRE_SOURCE_PREFIX, input_devices,
+};
 use modv_media::audio::engine::AudioFeed;
 use modv_renderers::two_d::{AudioFeatures, AudioFrame};
 
@@ -41,6 +43,9 @@ pub const FALLBACK_SAMPLE_RATE: f32 = 44_100.0;
 ///   through [`resolve_input_device`]; `None` is the host default input).
 /// * `Renderer` has no engine feed; it is a programming error and reported as
 ///   such rather than silently starting a silent feed.
+/// * `Input` device ids of the form `pw:<node.name>` open the PipeWire
+///   `Audio/Source` node through PipeWire itself (`stream.capture.sink` off,
+///   `target.object` set); anything else resolves through cpal/ALSA.
 ///
 /// Errors are strings because every caller logs them and falls back to the
 /// renderer's pump; the engine must keep running without audio.
@@ -56,12 +61,18 @@ pub fn open_feed(
         AudioSourceSelection::Input => {
             let devices = input_devices();
             let device = match device {
-                Some(wanted) => Some(resolve_input_device(wanted, &devices).ok_or_else(|| {
-                    format!(
-                        "no input device matches {wanted:?}\n{}",
-                        describe_devices(&devices)
-                    )
-                })?),
+                Some(wanted) => {
+                    if let Some(node) = pipewire_source_node(wanted) {
+                        return open_pipewire_source(node);
+                    }
+
+                    Some(resolve_input_device(wanted, &devices).ok_or_else(|| {
+                        format!(
+                            "no input device matches {wanted:?}\n{}",
+                            describe_devices(&devices)
+                        )
+                    })?)
+                }
                 None => None,
             };
 
@@ -89,6 +100,36 @@ fn open_monitor(device: Option<&str>) -> Result<AudioFeed, String> {
 #[cfg(not(target_os = "linux"))]
 fn open_monitor(_device: Option<&str>) -> Result<AudioFeed, String> {
     Err("the pipewire source is Linux only; use --audio-source input".to_string())
+}
+
+/// Start a PipeWire `Audio/Source` capture targeted at `node` — the only
+/// reliable route for an input device when the PipeWire daemon holds the
+/// hardware (cpal's direct ALSA open then fails `DeviceNotAvailable`).
+#[cfg(target_os = "linux")]
+fn open_pipewire_source(node: &str) -> Result<AudioFeed, String> {
+    AudioFeed::with_monitor(CaptureConfig {
+        device: Some(node.to_string()),
+        capture_sink: false,
+        ..CaptureConfig::default()
+    })
+    .map_err(|error| error.to_string())
+}
+
+/// The native PipeWire source capture is Linux only.
+#[cfg(not(target_os = "linux"))]
+fn open_pipewire_source(_node: &str) -> Result<AudioFeed, String> {
+    Err("the pipewire source is Linux only; use --audio-source input".to_string())
+}
+
+/// The `pw:` source-node target carried by a device id, when it is one.
+///
+/// The Audio panel lists PipeWire `Audio/Source` nodes as `pw:<node.name>`
+/// so a card PipeWire owns (which a direct cpal open cannot reach) stays
+/// selectable. A bare `pw:` is not a usable target.
+pub fn pipewire_source_node(device: &str) -> Option<&str> {
+    let node = device.strip_prefix(PIPEWIRE_SOURCE_PREFIX)?.trim();
+
+    if node.is_empty() { None } else { Some(node) }
 }
 
 /// Resolve a user-provided device name or id against the enumerated inputs.
@@ -367,6 +408,23 @@ mod tests {
     }
 
     #[test]
+    fn pipewire_device_ids_are_recognised() {
+        assert_eq!(
+            pipewire_source_node("pw:alsa_input.usb-thing"),
+            Some("alsa_input.usb-thing"),
+        );
+        // The node name is trimmed, and a bare prefix or a plain cpal id is
+        // not a PipeWire target.
+        assert_eq!(
+            pipewire_source_node("pw: alsa_input.node "),
+            Some("alsa_input.node")
+        );
+        assert_eq!(pipewire_source_node("pw:"), None);
+        assert_eq!(pipewire_source_node("pw:   "), None);
+        assert_eq!(pipewire_source_node("alsa:hw:CARD=CODEC,DEV=0"), None);
+    }
+
+    #[test]
     fn device_resolution_prefers_the_id_then_the_name() {
         let devices = [
             device("Built-in Audio Analog Stereo", "alsa:builtin"),
@@ -473,6 +531,36 @@ mod tests {
                 feed.stop();
             }
             Err(error) => println!("skipping live input feed smoke test (no device): {error}"),
+        }
+    }
+
+    /// End-to-end: an `Input` selection carrying a `pw:<node>` device id
+    /// must open a real PipeWire source capture — the route the picker
+    /// offers on hosts where the daemon owns the hardware.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn live_pipewire_source_feed_smoke_test_or_skip() {
+        let Some(source) = modv_media::audio::pipewire::sources().into_iter().next() else {
+            println!("skipping live pipewire source feed smoke test (no server/source nodes)");
+            return;
+        };
+
+        let id = format!("pw:{}", source.name);
+
+        match open_feed(AudioSourceSelection::Input, Some(&id)) {
+            Ok(mut feed) => {
+                feed.frame(1.0 / 60.0);
+
+                println!(
+                    "live pipewire source feed: {} Hz ({})",
+                    feed.sample_rate(),
+                    source.description
+                );
+                feed.stop();
+            }
+            Err(error) => {
+                println!("skipping live pipewire source feed smoke test ({error})")
+            }
         }
     }
 

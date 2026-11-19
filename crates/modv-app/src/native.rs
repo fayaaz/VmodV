@@ -688,8 +688,7 @@ impl NativeApp {
         if let Some(feed) = &audio_feed {
             audio_capture_rate.opened(feed.sample_rate());
         }
-        let audio_devices =
-            crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
+        let audio_devices = audio_device_views();
 
         // Internal rendering resolution: the persisted choice (Full by
         // default). Missing/invalid documents fall back to full resolution;
@@ -2657,15 +2656,15 @@ impl NativeApp {
         }
     }
 
-    /// Re-enumerate cpal inputs for the Audio panel.
+    /// Re-enumerate the audio inputs for the Audio panel.
     ///
+    /// (Rows are built by [`audio_device_views`]; PipeWire sources first.)
     /// Enumeration probes every ALSA/JACK/OSS backend and is both slow and
     /// noisy on hosts without a configured server, so it runs on demand (the
     /// panel's Refresh button) rather than once a second. A periodic poll
     /// flooded stderr with backend errors and exhausted pthread keys.
     fn refresh_audio_devices(&mut self) {
-        self.audio_devices =
-            crate::audio_settings::device_views(&modv_media::audio::capture::input_devices());
+        self.audio_devices = audio_device_views();
     }
 
     /// Answer at most one queued Gallery/Scene hover preview.
@@ -3809,6 +3808,26 @@ fn audio_view(bpm: f64, kick: bool, audio: &AudioFrame, capture_rate: Option<u32
         treble: audio.treble,
         sample_rate: capture_rate,
     }
+}
+
+/// The picker rows for the Audio panel: PipeWire `Audio/Source` rows first
+/// (on hosts where the daemon owns the hardware they are the rows that can
+/// actually open the card), then the cpal/ALSA devices. On hosts without a
+/// PipeWire daemon the source scan yields nothing and the order is cpal's.
+#[cfg(target_os = "linux")]
+fn audio_device_views() -> Vec<AudioDeviceView> {
+    let mut devices =
+        crate::audio_settings::pipewire_views(&modv_media::audio::pipewire::sources());
+    devices.extend(crate::audio_settings::device_views(
+        &modv_media::audio::capture::input_devices(),
+    ));
+    devices
+}
+
+/// The picker rows for the Audio panel: the host's cpal/ALSA devices.
+#[cfg(not(target_os = "linux"))]
+fn audio_device_views() -> Vec<AudioDeviceView> {
+    crate::audio_settings::device_views(&modv_media::audio::capture::input_devices())
 }
 
 /// The Audio panel's live selection, including the running feed's rate.

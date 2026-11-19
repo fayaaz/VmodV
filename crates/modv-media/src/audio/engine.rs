@@ -13,8 +13,9 @@
 //!   and by the engine's offline/oscilloscope fixtures).
 //! * [`AudioFeed::with_capture`] wraps an input device
 //!   ([`super::capture::AudioCapture`]).
-//! * [`AudioFeed::with_monitor`] wraps the native PipeWire monitor
-//!   ([`super::pipewire::PipeWireMonitor`], Linux only).
+//! * [`AudioFeed::with_monitor`] wraps the native PipeWire capture (the
+//!   default sink's monitor, or a targeted `Audio/Source` node when the
+//!   config sets `capture_sink = false`) — Linux only.
 //!
 //! Capture errors never abort a frame: they are stored and surfaced through
 //! [`AudioFeed::take_error`] so the engine can log/restart the capture without
@@ -70,8 +71,13 @@ impl AudioFeed {
         })
     }
 
-    /// Start capturing the system audio monitor and analyse at the
-    /// **negotiated** PipeWire stream rate.
+    /// Start capturing through PipeWire and analyse at the **negotiated**
+    /// stream rate.
+    ///
+    /// With `capture_sink` set (the default) this captures the default
+    /// sink's monitor — the system-audio loopback. With `capture_sink` off,
+    /// `config.device` names an `Audio/Source` `node.name` to capture (the
+    /// working route for an input device when PipeWire owns the hardware).
     ///
     /// [`PipeWireMonitor::start`] returns only after the server negotiated a
     /// decodable format, so the analyser is built for the rate the monitor

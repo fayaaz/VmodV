@@ -32,6 +32,12 @@ use cpal::{SampleFormat, StreamConfig};
 
 /// Engine capture sample rate (the band-analyser constants assume it).
 pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
+/// Id prefix marking a picker-row device as a PipeWire `Audio/Source` node
+/// rather than a cpal/ALSA device (`pw:<node.name>`); the PipeWire capture
+/// path opens such a target with `target.object` and without
+/// `stream.capture.sink`. Cross-platform so the picker and the opener can
+/// share it.
+pub const PIPEWIRE_SOURCE_PREFIX: &str = "pw:";
 /// Engine capture channel count.
 pub const DEFAULT_CHANNELS: u16 = 2;
 /// Frames per chunk (`pw-record` transport constant).
@@ -39,8 +45,9 @@ pub const DEFAULT_BLOCK_FRAMES: usize = 480;
 /// Chunks queued before the oldest is dropped.
 pub const QUEUE_CAPACITY: usize = 64;
 
-/// Capture request. `device` is a [`InputDeviceInfo::id`]; `None` selects the
-/// default input device.
+/// Capture request. `device` is either a [`InputDeviceInfo::id`] (cpal/ALSA)
+/// or a PipeWire `pw:` node target (see [`PIPEWIRE_SOURCE_PREFIX`]);
+/// `None` selects the host default input device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureConfig {
     /// Device id, or `None` for the host default input device.
@@ -51,6 +58,10 @@ pub struct CaptureConfig {
     pub channels: u16,
     /// Frames per emitted chunk.
     pub block_frames: usize,
+    /// Whether the PipeWire stream captures the default sink's monitor
+    /// (`stream.capture.sink=true`, the system-audio loopback) or a `Source`
+    /// node. Ignored by the cpal/ALSA path. Defaults to `true`.
+    pub capture_sink: bool,
 }
 
 impl Default for CaptureConfig {
@@ -60,6 +71,7 @@ impl Default for CaptureConfig {
             sample_rate: DEFAULT_SAMPLE_RATE,
             channels: DEFAULT_CHANNELS,
             block_frames: DEFAULT_BLOCK_FRAMES,
+            capture_sink: true,
         }
     }
 }
@@ -393,6 +405,23 @@ impl From<cpal::SupportedStreamConfigRange> for ConfigRange {
     }
 }
 
+/// Map a `supported_input_configs()` failure to a [`CaptureError`].
+///
+/// cpal reports `DeviceNotAvailable` both for a genuinely unplugged device
+/// **and** for one that is busy — the common case on PipeWire desktops,
+/// where the daemon holds the hardware open. The old `to_string()` surfaced
+/// cpal's "it has been unplugged" text, which sent users looking for an
+/// unplugged card that was in fact fine, just owned by PipeWire. The
+/// replacement names the busy case and the PipeWire way out.
+pub fn supported_configs_error(error: cpal::SupportedStreamConfigsError) -> CaptureError {
+    match error {
+        cpal::SupportedStreamConfigsError::DeviceNotAvailable => CaptureError::ConfigUnsupported(
+            "the device is busy or no longer available (PipeWire usually owns hardware on this host; pick a PipeWire source row in the Audio panel)".to_string(),
+        ),
+        other => CaptureError::ConfigUnsupported(other.to_string()),
+    }
+}
+
 /// The device's advertised input configurations; enumeration failures yield an
 /// empty list so a single unusable device never empties the whole table.
 fn advertised_ranges(device: &cpal::Device) -> Vec<ConfigRange> {
@@ -655,7 +684,7 @@ impl AudioCapture {
 
         let ranges: Vec<ConfigRange> = device
             .supported_input_configs()
-            .map_err(|error| CaptureError::ConfigUnsupported(error.to_string()))?
+            .map_err(supported_configs_error)?
             .map(ConfigRange::from)
             .collect();
 
@@ -783,6 +812,31 @@ mod tests {
         assert_eq!(config.channels, 2);
         assert_eq!(config.block_frames, 480);
         assert_eq!(config.device, None);
+        assert!(
+            config.capture_sink,
+            "the PipeWire path defaults to capturing the default sink's monitor"
+        );
+    }
+
+    #[test]
+    fn a_busy_device_gets_an_actionable_error_not_unplugged_speak() {
+        // cpal reports DeviceNotAvailable both for an unplugged device and for
+        // one PipeWire holds exclusively (the usual case on PipeWire desktops).
+        let error = supported_configs_error(cpal::SupportedStreamConfigsError::DeviceNotAvailable);
+        let message = error.to_string();
+
+        assert!(message.contains("busy"), "{message}");
+        assert!(message.contains("PipeWire"), "{message}");
+        assert!(!message.contains("unplugged"), "{message}");
+        assert!(matches!(error, CaptureError::ConfigUnsupported(_)));
+    }
+
+    #[test]
+    fn other_supported_config_errors_keep_their_cpal_message() {
+        let error = supported_configs_error(cpal::SupportedStreamConfigsError::InvalidArgument);
+
+        assert!(matches!(error, CaptureError::ConfigUnsupported(_)));
+        assert!(error.to_string().contains("Invalid argument"), "{error}");
     }
 
     #[test]
