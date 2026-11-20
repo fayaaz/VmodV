@@ -229,7 +229,10 @@ fn ci_gstreamer_msi_urls_point_at_the_verified_release() {
 
     let workflows = [
         ("native.yml", repo_root.join(".github/workflows/native.yml")),
-        ("release.yml", repo_root.join(".github/workflows/release.yml")),
+        (
+            "release.yml",
+            repo_root.join(".github/workflows/release.yml"),
+        ),
     ];
 
     for (name, path) in workflows {
