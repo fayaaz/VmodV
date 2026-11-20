@@ -172,3 +172,82 @@ fn dry_run_stages_the_portable_windows_layout() {
         );
     }
 }
+
+/// Expand the PowerShell `$base` interpolation used by the Windows CI steps
+/// and return every effective GStreamer MSI download URL as a plain string.
+///
+/// The workflows currently write:
+///   $base = 'https://gstreamer.freedesktop.org/data/pkg/windows/<ver>/msvc'
+///   $runtime = "$base/gstreamer-1.0-msvc-x86_64-<ver>.msi"
+///   $devel = "$base/gstreamer-1.0-devel-msvc-x86_64-<ver>.msi"
+/// so the absolute URLs only exist once `$base` is substituted. If a workflow
+/// ever inlines full URLs instead, the substitution is a no-op and the scan
+/// still works. No YAML crate, no network — deterministic string scanning.
+fn extract_gstreamer_msi_urls(text: &str) -> Vec<String> {
+    const MARKER: &str = "https://gstreamer.freedesktop.org/data/pkg/windows/";
+
+    let base = text.find(MARKER).map(|start| {
+        let rest = &text[start..];
+        let end = rest
+            .find(|c: char| c == '\'' || c == '"' || c.is_whitespace())
+            .unwrap_or(rest.len());
+        rest[..end].to_string()
+    });
+    let expanded = match &base {
+        Some(base) => text.replace("$base", base.as_str()),
+        None => text.to_string(),
+    };
+
+    let is_url_char =
+        |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '/' | ':');
+    let mut urls = Vec::new();
+    let mut from = 0;
+    while let Some(offset) = expanded[from..].find(MARKER) {
+        let start = from + offset;
+        let rest = &expanded[start..];
+        let end = rest.find(|c: char| !is_url_char(c)).unwrap_or(rest.len());
+        let token = &rest[..end];
+        if token.ends_with(".msi") {
+            urls.push(token.to_string());
+        }
+        from = start + std::cmp::max(end, 1);
+    }
+    urls
+}
+
+/// Both `windows-portable` jobs pin GStreamer MSI downloads. The 1.24.0
+/// release was removed from the GStreamer index (HTTP 404), so the pin drifted
+/// and broke CI. This guard keeps both workflows on the verified 1.24.13
+/// artifacts and catches any future drift between them.
+#[test]
+fn ci_gstreamer_msi_urls_point_at_the_verified_release() {
+    const EXPECTED_RUNTIME: &str = "https://gstreamer.freedesktop.org/data/pkg/windows/1.24.13/msvc/gstreamer-1.0-msvc-x86_64-1.24.13.msi";
+    const EXPECTED_DEVEL: &str = "https://gstreamer.freedesktop.org/data/pkg/windows/1.24.13/msvc/gstreamer-1.0-devel-msvc-x86_64-1.24.13.msi";
+
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
+
+    let workflows = [
+        ("native.yml", repo_root.join(".github/workflows/native.yml")),
+        ("release.yml", repo_root.join(".github/workflows/release.yml")),
+    ];
+
+    for (name, path) in workflows {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+        let urls = extract_gstreamer_msi_urls(&text);
+
+        assert!(
+            urls.iter().any(|url| url == EXPECTED_RUNTIME),
+            "{name}: missing verified runtime MSI URL {EXPECTED_RUNTIME}; found: {urls:#?}"
+        );
+        assert!(
+            urls.iter().any(|url| url == EXPECTED_DEVEL),
+            "{name}: missing verified devel MSI URL {EXPECTED_DEVEL}; found: {urls:#?}"
+        );
+        assert!(
+            !urls.iter().any(|url| url.contains("/1.24.0/")),
+            "{name}: stale /1.24.0/ GStreamer MSI URL(s) still present; found: {urls:#?}"
+        );
+    }
+}
