@@ -114,9 +114,12 @@
 //! * **`vWnormal` stays object-space**, as in the JS (`vWnormal =
 //!   normalize(normal)`), and is used as world-space because the model is
 //!   identity — kept verbatim rather than re-derived.
-//! * **`p9audio.band(-1, 1, 1, 1)`** maps onto [`P10Audio::band`]'s
-//!   `(channel, damping, bandnr, nomusic)` signature unchanged: damping lane 1
-//!   of the mid band, nomusic fallback 1.0 (only reachable without audio).
+//! * **`p9audio.band(-1, 1, 1, 1)`** (`Earth.js:603-606`) maps onto
+//!   [`P10Audio::band`]'s `(channel, damping, bandnr, nomusic)` signature:
+//!   damping lane 1 of the mid band. The JS fourth argument (`nomusic = 1`) is
+//!   inert in Plane9: `P9Audio.band()` returns zeroed bands without music, so
+//!   the port passes `nomusic = 0.0` — silence reads zero and
+//!   [`earth_light_level`] sits at its 0.2 dim floor, as in Plane9.
 //! * **`renderOrder`** is applied by draw order in the single render pass
 //!   (planet, sun, sky, atmosphere) instead of three's object sort.
 //! * **GPU disposal** frees the composer targets, textures, buffers,
@@ -144,9 +147,7 @@
 
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::postfx::{Composer, ToneMapping};
-use crate::point10::scenes::cube_mesh::{
-    self, Mat4, Vertex, create_depth, look_at, mat4_mul, perspective,
-};
+use crate::point10::scenes::cube_mesh::{self, Mat4, Vertex, look_at, mat4_mul, perspective};
 use crate::point10::shared::assets::{ColourSpace, Wrap, load_texture};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
@@ -227,6 +228,12 @@ pub const SUN_SEGMENTS: usize = 32;
 /// `gColor1` from the preset (`:469`), as linear-space rgb floats plus the
 /// `1.0` alpha the JS carries in the `Vector4`.
 pub const G_COLOR1: [f32; 4] = [0.051, 0.133, 0.337, 1.0];
+
+/// MSAA sample count for all four Earth pipelines and their offscreen colour
+/// and depth attachments. The render pass resolves this multisampled colour
+/// into the single-sampled composer scene view, smoothing the planet and
+/// atmosphere silhouette edges.
+pub const EARTH_SAMPLE_COUNT: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Pure driver math (`Earth.js:5-25`, `:58-93`)
@@ -522,6 +529,11 @@ struct EarthGpu {
     sun_vertices: wgpu::Buffer,
     sun_indices: wgpu::Buffer,
     sun_index_count: u32,
+    /// Multisampled HDR colour buffer the four pipelines draw into.
+    msaa_color: wgpu::Texture,
+    msaa_color_view: wgpu::TextureView,
+    /// Multisampled depth buffer matching `msaa_color` (single-sampled
+    /// `cube_mesh::create_depth` cannot be used with a 4x colour target).
     depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     _earth: wgpu::Texture,
@@ -940,7 +952,11 @@ impl Point10Scene for Earth {
                     ..Default::default()
                 },
                 depth_stencil: Some(depth_stencil),
-                multisample: wgpu::MultisampleState::default(),
+                multisample: wgpu::MultisampleState {
+                    count: EARTH_SAMPLE_COUNT,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some(fs_entry),
@@ -1000,8 +1016,20 @@ impl Point10Scene for Earth {
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
 
-        let (depth, depth_view) =
-            create_depth(&device, "point10-earth-depth", self.size.0, self.size.1);
+        let (msaa_color, msaa_color_view) = create_msaa_attachment(
+            &device,
+            "point10-earth-msaa-color",
+            self.size.0,
+            self.size.1,
+            Composer::scene_format(),
+        );
+        let (depth, depth_view) = create_msaa_attachment(
+            &device,
+            "point10-earth-depth",
+            self.size.0,
+            self.size.1,
+            cube_mesh::DEPTH_FORMAT,
+        );
 
         // `RenderPass → UnrealBloomPass(0.2, 0.85, 0) → OutputPass` with ACES
         // (`Earth.js:530/547-553`) and no sRGB transfer
@@ -1043,6 +1071,8 @@ impl Point10Scene for Earth {
             sun_vertices: sun_vertices_buf,
             sun_indices: sun_indices_buf,
             sun_index_count,
+            msaa_color,
+            msaa_color_view,
             depth,
             depth_view,
             _earth: earth.texture,
@@ -1059,8 +1089,22 @@ impl Point10Scene for Earth {
         self.size = (width.max(1), height.max(1));
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.composer.resize(self.size.0, self.size.1);
-            let (depth, depth_view) =
-                create_depth(&gpu.device, "point10-earth-depth", self.size.0, self.size.1);
+            let (msaa_color, msaa_color_view) = create_msaa_attachment(
+                &gpu.device,
+                "point10-earth-msaa-color",
+                self.size.0,
+                self.size.1,
+                Composer::scene_format(),
+            );
+            let (depth, depth_view) = create_msaa_attachment(
+                &gpu.device,
+                "point10-earth-depth",
+                self.size.0,
+                self.size.1,
+                cube_mesh::DEPTH_FORMAT,
+            );
+            gpu.msaa_color = msaa_color;
+            gpu.msaa_color_view = msaa_color_view;
             gpu.depth = depth;
             gpu.depth_view = depth_view;
         }
@@ -1076,7 +1120,11 @@ impl Point10Scene for Earth {
         let sun = earth_sun_position(self.time, f64::from(self.sun_scale));
         self.phase = earth_texture_phase(self.time, f64::from(self.spin_scale)) as f32;
         // `earthLightLevel(p9audio.band(-1, 1, 1, 1), lightsScale)` (`:603-606`).
-        let mid = self.audio.band(-1, 1, 1, 1.0);
+        // Plane9's `P9Audio.band()` ignores the `nomusic` floor: in silence it
+        // returns zeroed bands, so `earthLightLevel(0)` sits at the 0.2 dim
+        // floor. Pass `nomusic = 0.0` to mirror that; a real payload still
+        // drives the lights from the mid band as in the JS port.
+        let mid = self.audio.band(-1, 1, 1, 0.0);
         self.lights = earth_light_level(f64::from(mid), f64::from(self.lights_scale)) as f32;
 
         let cam = [
@@ -1121,9 +1169,9 @@ impl Point10Scene for Earth {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("point10-earth"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: gpu.composer.scene_view(),
+                    view: &gpu.msaa_color_view,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: Some(gpu.composer.scene_view()),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
@@ -1206,6 +1254,38 @@ fn vertex_and_index_buffers(
         usage: wgpu::BufferUsages::INDEX,
     });
     (vertex_buffer, index_buffer)
+}
+
+/// Create a multisampled (MSAA) offscreen attachment for Earth's render pass.
+///
+/// Pass [`Composer::scene_format`] for colour (resolved into the
+/// single-sampled composer scene view) or [`cube_mesh::DEPTH_FORMAT`] for
+/// depth. Both use [`EARTH_SAMPLE_COUNT`] so they pair correctly — the
+/// single-sampled `cube_mesh::create_depth` cannot accompany a 4x colour
+/// target.
+fn create_msaa_attachment(
+    device: &wgpu::Device,
+    label: &str,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: EARTH_SAMPLE_COUNT,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 // ---------------------------------------------------------------------------
@@ -1969,6 +2049,46 @@ mod tests {
         assert_eq!(std::mem::size_of::<SunUniforms>(), 128);
     }
 
+    // Source/config invariant: wgpu does not expose a pipeline's sample count
+    // at runtime, and the silhouette blends over the sky/atmosphere, so a
+    // pixel snapshot would be flaky. Assert the MSAA wiring directly instead
+    // (same style as `shader_keeps_the_ported_maths`).
+    #[test]
+    fn earth_uses_four_times_msaa_for_edges() {
+        // `include_str!` pulls in this whole file, including the literal
+        // needles in this test — so inspect only the production portion,
+        // before the test module, or the assertions would match themselves.
+        const SOURCE: &str = include_str!("earth.rs");
+        let source = SOURCE
+            .split("#[cfg(test)]")
+            .next()
+            .expect("earth.rs has a #[cfg(test)] module");
+
+        // A single constant must drive every MSAA decision for Earth.
+        assert!(
+            source.contains("EARTH_SAMPLE_COUNT: u32 = 4"),
+            "Earth must declare a single EARTH_SAMPLE_COUNT: u32 = 4 constant"
+        );
+        // All four pipelines share the `make_pipeline` closure; its
+        // multisample state must use that constant (not the 1-sample default).
+        assert!(
+            source.contains("count: EARTH_SAMPLE_COUNT"),
+            "Earth's pipelines must set multisample count from EARTH_SAMPLE_COUNT"
+        );
+        // The offscreen colour/depth attachments must be created with the
+        // same sample count.
+        assert!(
+            source.contains("sample_count: EARTH_SAMPLE_COUNT"),
+            "Earth's MSAA colour/depth textures must use EARTH_SAMPLE_COUNT"
+        );
+        // The pass must resolve the multisampled colour into the
+        // single-sampled composer scene view (never resolve_target: None).
+        assert!(
+            source.contains("resolve_target: Some("),
+            "Earth's render pass must resolve MSAA into composer.scene_view()"
+        );
+    }
+
     #[test]
     fn time_advances_and_caps_at_a_tenth_of_a_second() {
         let mut scene = Earth::new();
@@ -2007,6 +2127,56 @@ mod tests {
         let sun = scene.sun_position();
         assert_eq!(sun[1], 0.0);
         assert!((sun[0].hypot(sun[2]) - EARTH.sun_distance as f32).abs() < 1e-3);
+    }
+
+    #[test]
+    fn night_lights_use_the_plane9_dim_floor_in_silence() {
+        // Guard: a real (but silent) audio payload goes through the music path
+        // and lands on the dim floor. Unchanged by the fix.
+        {
+            let mut scene = Earth::new();
+            let payload = BandPayload::silent(44_100.0);
+            let mut bridge = AudioBridge::new();
+            for _ in 0..8 {
+                bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+                scene.update(1.0 / 60.0, &bridge);
+            }
+            assert!(
+                (scene.lights() - 0.2_f32).abs() < 1e-6,
+                "a silent payload must sit at the 0.2 dim floor, got {}",
+                scene.lights()
+            );
+        }
+
+        // Guard: music still brightens the lights clearly above the dim floor
+        // (the loud band read is unchanged by the fix).
+        {
+            let mut scene = Earth::new();
+            let payload = loud_payload();
+            let mut bridge = AudioBridge::new();
+            for _ in 0..8 {
+                bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+                scene.update(1.0 / 60.0, &bridge);
+            }
+            assert!(
+                scene.lights() > 0.2_f32 + 1e-3,
+                "music must brighten the lights clearly above the dim floor, got {}",
+                scene.lights()
+            );
+        }
+
+        // Regression: with no audio bridge payload at all (silence), the mid
+        // band read must sit at the Plane9 dim floor (nomusic = 0), not the
+        // full-brightness fallback the old `nomusic = 1.0` produced.
+        let mut scene = Earth::new();
+        let mut bridge = AudioBridge::new();
+        bridge.update(1.0 / 60.0, None, &Default::default());
+        scene.update(1.0 / 60.0, &bridge);
+        assert!(
+            (scene.lights() - 0.2_f32).abs() < 1e-6,
+            "night lights must sit at the Plane9 0.2 dim floor in silence, got {}",
+            scene.lights()
+        );
     }
 
     // ————— shaders —————

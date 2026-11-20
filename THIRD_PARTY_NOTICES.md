@@ -69,7 +69,7 @@ part of the same Plane9/Point10 port and are covered by these terms.
 | Square Tunnel | `crates/modv-renderers/src/point10/scenes/square_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Sun | `crates/modv-renderers/src/point10/scenes/sun.rs` | CC BY-NC-SA 3.0 (stated in file) |
 | Wormhole | `crates/modv-renderers/src/point10/scenes/wormhole.rs` | CC BY-NC-SA 4.0 (stated in file) |
-| Around Plus | `crates/modv-renderers/src/point10/scenes/around_plus.rs` | port of the Plane9 "Around And Around" preset; the vendored headers state no license, so it is treated as **CC BY-NC-SA** (Plane9 preset terms; variant unverified) |
+| Around Plus | `crates/modv-renderers/src/point10/scenes/around_plus.rs` | Rust/wgpu port by this repository's author of the Plane9 "Around And Around" preset by Joakim Dahl; the original **CC BY-NC-SA** licence and attribution still bind the derivative |
 
 ## Bundled assets
 

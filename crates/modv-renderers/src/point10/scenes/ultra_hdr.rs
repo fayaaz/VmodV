@@ -2,12 +2,11 @@
 //! `src/renderer/src/application/point10/scenes/UltraHDR.js`.
 //!
 //! The three.js "Ultra HDR" example rebuilt as a standalone scene: a mirror
-//! torus knot (`metalness: 1`, `roughness: 0`) reflecting an Ultra HDR
-//! equirectangular environment, with ACES filmic tone mapping. Music drives
-//! it three ways — kick attacks fire a quick scale swell, the smoothed band
-//! mean sets the spin rate, and busy music morphs the knot toward a figure-8
-//! (each kick flexes it further along the morph, calm music lets it fall
-//! back).
+//! torus knot (`metalness: 1`, `roughness: 0`) lit by a hemisphere fill, with
+//! ACES filmic tone mapping. Music drives it three ways — kick attacks fire a
+//! quick scale swell, the smoothed band mean sets the spin rate, and busy music
+//! morphs the knot toward a figure-8 (each kick flexes it further along the
+//! morph, calm music lets it fall back).
 //!
 //! # Ported exactly
 //!
@@ -26,37 +25,35 @@
 //!   the adapter's `PerspectiveCamera(60, aspect, 0.1, 1000)`);
 //! * the prop binder (`sceneProps.js:333-337`): `spinScale = spinSpeed`,
 //!   `pulseScale = pulse`, `brightnessScale = brightness`;
-//! * the transparency: the HDR map is the *environment*, never the
-//!   background, so empty pixels stay alpha 0 (`:14-17`).
+//! * the transparency: the knot is drawn opaque over a transparent clear, so
+//!   empty pixels stay alpha 0 and the engine's inherited layer below the
+//!   module is the background (`:14-17`; BUGS.md item 9).
 //!
 //! # Replaced three.js machinery
 //!
 //! | three.js | Rust |
 //! |----------|------|
 //! | `TorusKnotGeometry` + `morphAttributes.position/normal` | [`build_torus_knot`] + a second vertex buffer mixed in WGSL |
-//! | `MeshStandardMaterial({ metalness: 1, roughness: 0 })` | a mirror BRDF: `env(reflect(-viewDir, normal))` |
-//! | `scene.environment` (PMREM-cubeuv prefiltered) | one equirect sample at roughness 0 (see below) |
-//! | `HemisphereLight(0xffffff, 0x202020, 0.6)` | a `mix(ground, sky, n.y)` fill |
+//! | `MeshStandardMaterial({ metalness: 1, roughness: 0 })` | a `mix(ground, sky, n.y)` hemisphere fill as the knot's sole radiance |
+//! | `scene.environment` (PMREM-cubeuv prefiltered) | omitted: no embedded picture is loaded; the inherited layer is the background |
+//! | `HemisphereLight(0xffffff, 0x202020, 0.6)` | the same `mix(ground, sky, n.y)` fill, scaled by brightness |
 //! | `renderer.toneMapping = ACESFilmicToneMapping` + alpha-0 clear | [`Composer`] with bloom off and [`ToneMapping::AcesFilmic`], scene clear = transparent |
-//! | `UltraHDRLoader` (DOMParser + gain-map canvas) | the SDR base rendition, the JS's own worker fallback (`:266-277`) |
+//! | `UltraHDRLoader` (DOMParser + gain-map canvas) | omitted: the JS's own pre-environment fallback radiance is used instead (`:266-277`) |
 //!
 //! # Deviations
 //!
-//! * **Environment prefiltering.** three turns an equirect `scene.environment`
-//!   into a PMREM cubeUV map and samples the mip that matches the roughness.
-//!   This material has `roughness: 0`, i.e. a pure mirror, so the port samples
-//!   the equirect directly — same reflection direction, sharper mirror line,
-//!   no PMREM pass. The environment *intensity* is the JS's
-//!   `scene.environmentIntensity`.
+//! * **No embedded environment picture.** The JS mirrors an equirectangular
+//!   Ultra HDR image, but that picture is deliberately not shipped with this
+//!   scene: loading it would paint the image where the inherited layer beneath
+//!   the module should show through. The knot's radiance is the hemisphere
+//!   fill — exactly the JS's pre-environment fallback (`UltraHDR.js:59-62`) —
+//!   and the transparent clear leaves the inherited layer as the background
+//!   (BUGS.md item 9). No PMREM pass, environment lookup or gain-map decode is
+//!   needed.
 //! * **The hemisphere light.** In three a `HemisphereLight` only feeds the
 //!   diffuse BRDF, which is identically zero at `metalness: 1`, so the JS knot
 //!   is black until the environment lands. The port keeps the light as the
-//!   stand-in radiance for exactly that case (the asset loader's procedural
-//!   fallback), which is what `UltraHDR.js:59-62` intends the light for.
-//! * **The gain map.** `UltraHDRLoader` needs `DOMParser` and a DOM canvas, so
-//!   the worker never uses it either: the JS decodes the JPEG's SDR base with
-//!   `createImageBitmap` and so does the port (`image` + `Rgba8UnormSrgb`).
-//!   The HDR headroom is lost in both.
+//!   stand-in radiance for exactly that case, with brightness scaling it.
 //! * **`P9Audio`.** `UltraHDR.js` imports `plane9/P9Audio.js`, which re-derives
 //!   the 16-cell grid from the raw FFT and low-passes its own lanes. Like
 //!   every other ported scene the port reads [`P10Audio`] over the shared
@@ -69,9 +66,7 @@
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::postfx::{Composer, ToneMapping};
 use crate::point10::scenes::cube_mesh::normalise;
-use crate::point10::shared::assets::{ColourSpace, Wrap, load_texture};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
-use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::{
     Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
     scene_props_with_levers,
@@ -137,9 +132,6 @@ pub const HEMI_SKY: [f32; 3] = [1.0, 1.0, 1.0];
 pub const HEMI_GROUND: [f32; 3] = [0.014_443_844, 0.014_443_844, 0.014_443_844];
 /// `HEMI.intensity`.
 pub const HEMI_INTENSITY: f32 = 0.6;
-
-/// The Ultra HDR JPEG the JS imports as `?url` (`:24`).
-pub const ENV_ASSET: &str = "spruit_sunrise_2k.hdr.jpg";
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -532,14 +524,18 @@ const ULTRA_HDR_PROPS: &[SceneProp] = &[
 ];
 
 /// Uniform block (`UltraHdrUniforms` in the shader, 160 bytes).
+///
+/// `camera_pos` and `params.y`/`params.w` are reserved lanes kept so the
+/// 160-byte layout stays stable; the shader only reads `params.x` (morph) and
+/// `params.z` (hemisphere intensity).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct UltraHdrUniforms {
     view_proj: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
+    /// Unused by the shader; kept for a stable 160-byte layout.
     camera_pos: [f32; 4],
-    /// x morph, y environment intensity, z hemisphere intensity, w
-    /// environment available.
+    /// x morph, z hemisphere intensity; y/w unused (reserved).
     params: [f32; 4],
 }
 
@@ -556,7 +552,6 @@ struct UltraHdrGpu {
     index_count: u32,
     depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    _env_texture: wgpu::Texture,
     composer: Composer,
 }
 
@@ -574,9 +569,6 @@ pub struct UltraHdr {
     spin_scale: f32,
     pulse_scale: f32,
     brightness_scale: f32,
-    /// Whether the environment texture is the real asset (not the loader's
-    /// procedural stand-in).
-    env_available: bool,
     size: (u32, u32),
     gpu: Option<UltraHdrGpu>,
 }
@@ -600,7 +592,6 @@ impl UltraHdr {
             spin_scale: 1.0,
             pulse_scale: 1.0,
             brightness_scale: 1.0,
-            env_available: false,
             size: (1, 1),
             gpu: None,
         }
@@ -641,11 +632,6 @@ impl UltraHdr {
     /// The drive state (kick/pulse/cooldown).
     pub fn drive_state(&self) -> UltraHdrState {
         self.state
-    }
-
-    /// Whether the environment asset loaded.
-    pub fn env_available(&self) -> bool {
-        self.env_available
     }
 
     /// The camera's view-projection for the current pose.
@@ -689,12 +675,7 @@ impl UltraHdr {
                     CAMERA_POSITION[2],
                     1.0,
                 ],
-                params: [
-                    self.morph,
-                    self.brightness_scale,
-                    HEMI_INTENSITY * self.brightness_scale,
-                    if self.env_available { 1.0 } else { 0.0 },
-                ],
+                params: [self.morph, 0.0, HEMI_INTENSITY * self.brightness_scale, 0.0],
             }),
         );
     }
@@ -729,19 +710,6 @@ impl Point10Scene for UltraHdr {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let loader = ctx.asset_loader();
-        let env = load_texture(
-            &device,
-            &queue,
-            &loader,
-            ENV_ASSET,
-            // `texture.colorSpace = SRGBColorSpace` in `loadBaseImageTexture`.
-            ColourSpace::Srgb,
-            // A panorama wraps in longitude (three's default is clamp).
-            Wrap::Repeat,
-        );
-        self.env_available = !env.fallback;
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("point10-ultra-hdr-shader"),
             source: wgpu::ShaderSource::Wgsl(ultra_hdr_wgsl().into()),
@@ -749,34 +717,16 @@ impl Point10Scene for UltraHdr {
 
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("point10-ultra-hdr-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+                count: None,
+            }],
         });
 
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -789,20 +739,10 @@ impl Point10Scene for UltraHdr {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("point10-ultra-hdr-bind-group"),
             layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&env.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&env.sampler),
-                },
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            }],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -868,7 +808,6 @@ impl Point10Scene for UltraHdr {
             index_count: mesh.indices.len() as u32,
             depth,
             depth_view,
-            _env_texture: env.texture,
             composer,
         });
         self.upload_uniforms();
@@ -972,10 +911,11 @@ impl Point10Scene for UltraHdr {
     }
 }
 
-/// `vec3 _palette` etc. are not needed here; the knot only needs the panorama
-/// lookup.
+/// No palette or shading helpers are needed: the knot's sole radiance is the
+/// hemisphere fill, and the inherited layer is the background (so no picture
+/// is sampled). Only the common WGSL preamble is prepended.
 fn ultra_hdr_wgsl() -> String {
-    format!("{P9_COMMON_WGSL}\n{P9_SHADING_WGSL}\n{ULTRA_HDR_WGSL}")
+    format!("{P9_COMMON_WGSL}\n{ULTRA_HDR_WGSL}")
 }
 
 const ULTRA_HDR_WGSL: &str = r#"
@@ -983,12 +923,10 @@ struct UltraHdrUniforms {
   view_proj: mat4x4<f32>,
   model: mat4x4<f32>,
   camera_pos: vec4<f32>,
-  // x morph, y environment intensity, z hemisphere intensity, w had env
+  // x morph, z hemisphere intensity; y/w unused
   params: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> u: UltraHdrUniforms;
-@group(0) @binding(1) var env_map: texture_2d<f32>;
-@group(0) @binding(2) var env_sampler: sampler;
 
 // `HEMI.sky` / `HEMI.ground` through three's sRGB decode.
 const HEMI_SKY: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
@@ -1023,18 +961,10 @@ fn vs_main(
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   let normal = normalize(in.normal);
-  let view_dir = normalize(u.camera_pos.xyz - in.world);
-
-  // metalness 1 / roughness 0: a pure mirror. The environment radiance is the
-  // only diffuse-free term three leaves for this material.
-  let reflected = reflect(-view_dir, normal);
-  let env = p9_texture_panoramic_lod(env_map, env_sampler, reflected, 0.0).rgb;
-
-  // HemisphereLight(HEMI.sky, HEMI.ground, HEMI.intensity): the fill the JS
-  // keeps for the frame before the environment lands.
-  let hemi = mix(HEMI_GROUND, HEMI_SKY, normal.y * 0.5 + 0.5) * u.params.z;
-
-  let radiance = mix(hemi, env * u.params.y, u.params.w);
+  // HemisphereLight(HEMI.sky, HEMI.ground, HEMI.intensity): the JS's
+  // pre-environment fallback is the knot's sole radiance. The inherited layer
+  // below the module is the background, so no picture is sampled here.
+  let radiance = mix(HEMI_GROUND, HEMI_SKY, normal.y * 0.5 + 0.5) * u.params.z;
   return vec4<f32>(radiance, 1.0);
 }
 "#;
@@ -1362,7 +1292,7 @@ mod tests {
     }
 
     #[test]
-    fn brightness_scales_the_environment_and_hemisphere() {
+    fn brightness_scales_the_hemisphere() {
         let mut scene = UltraHdr::new();
         scene.apply_props(|key| (key == "brightness").then_some(2.0));
         assert_eq!(scene.brightness_scale, 2.0);
@@ -1398,18 +1328,44 @@ mod tests {
     }
 
     #[test]
-    fn shader_keeps_the_ported_maths() {
+    fn shader_keeps_the_morph_and_hemisphere_maths() {
         let program = ultra_hdr_wgsl();
         for needle in [
             "let morphed_position = mix(position, morph_position, u.params.x);",
             "normalize((u.model * vec4<f32>(morphed_normal, 0.0)).xyz)",
-            "let reflected = reflect(-view_dir, normal);",
-            "p9_texture_panoramic_lod(env_map, env_sampler, reflected, 0.0)",
+            // BUGS.md item 9: the hemisphere fill is the knot's sole radiance.
             "mix(HEMI_GROUND, HEMI_SKY, normal.y * 0.5 + 0.5) * u.params.z",
-            "mix(hemi, env * u.params.y, u.params.w)",
         ] {
             assert!(program.contains(needle), "shader lost {needle}");
         }
+    }
+
+    /// BUGS.md item 9: UltraHDR must use the inherited layer (the engine's
+    /// transparent composite) as its background, not the embedded HDR picture.
+    /// The picture is removed entirely — no asset load, no texture/sampler
+    /// binding, no panoramic sample — leaving only the hemisphere fill as the
+    /// knot's radiance.
+    #[test]
+    fn shader_does_not_sample_the_embedded_picture() {
+        let program = ultra_hdr_wgsl();
+        assert!(
+            !program.contains("env_map"),
+            "UltraHDR must not declare or sample the embedded picture texture"
+        );
+        assert!(
+            !program.contains("p9_texture_panoramic_lod"),
+            "UltraHDR must not sample a panoramic environment lookup"
+        );
+
+        // The embedded asset must not be referenced anywhere in the scene.
+        // `concat!` keeps the contiguous literal out of this source file so the
+        // check cannot match its own test code.
+        let asset = concat!("spruit_sunrise_2k", ".hdr.jpg");
+        let source = include_str!("ultra_hdr.rs");
+        assert!(
+            !source.contains(asset),
+            "UltraHDR must not load or reference the embedded picture asset"
+        );
     }
 
     #[test]

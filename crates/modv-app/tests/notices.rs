@@ -608,6 +608,37 @@ fn specific_attribution_corrections_are_pinned() {
 }
 
 #[test]
+fn around_plus_derivative_attribution_is_pinned() {
+    // AroundPlus is the repo author's Rust/wgpu port of the Plane9 "Around And
+    // Around" preset by Joakim Dahl. The original CC BY-NC-SA licence and
+    // attribution still bind the derivative, so both must be stated in the
+    // source header and in the notices table row.
+    const SOURCE: &str = include_str!("../../modv-renderers/src/point10/scenes/around_plus.rs");
+
+    assert!(
+        SOURCE.contains("CC BY-NC-SA"),
+        "AroundPlus source must carry the CC BY-NC-SA licence"
+    );
+    assert!(
+        SOURCE.contains("Joakim Dahl"),
+        "AroundPlus source must credit Joakim Dahl as the original preset author"
+    );
+
+    let row = NOTICES
+        .lines()
+        .find(|line| line.starts_with("| Around Plus |"))
+        .expect("THIRD_PARTY_NOTICES.md must have an Around Plus row");
+    assert!(
+        row.contains("Joakim Dahl"),
+        "the Around Plus notice must credit Joakim Dahl, not claim the headers state no license"
+    );
+    assert!(
+        row.contains("CC BY-NC-SA"),
+        "the Around Plus notice must state CC BY-NC-SA"
+    );
+}
+
+#[test]
 fn notices_no_longer_reference_the_deleted_electron_tree() {
     assert!(
         !NOTICES.contains("src/renderer/"),

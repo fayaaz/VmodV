@@ -1,12 +1,17 @@
 //! Around Plus — Rust/wgpu port of
 //! `src/renderer/src/application/point10/scenes/AroundPlus.js`.
 //!
-//! The Plane9 "Around And Around" preset (Cell) as a standalone scene: one
-//! inverted torus (the tube the camera sits inside), textured with ambientCG
-//! Concrete044C, eight glow rings every 45°, water in the tube's bottom eighth,
-//! and the preset's camera wander (a MinMax pitch plus a noise roll on top of a
-//! fixed lookAt). The torus spins with the mid band; the water is driven by the
-//! WaveSim height field the kick attacks disturb.
+//! The Plane9 "Around And Around" preset (author Joakim Dahl, CC BY-NC-SA)
+//! rebuilt as a standalone scene: one inverted torus (the tube the camera sits
+//! inside), textured with ambientCG Concrete044C, eight glow rings every 45°,
+//! water in the tube's bottom eighth, and the preset's camera wander (a MinMax
+//! pitch plus a noise roll on top of a fixed lookAt). The torus spins with the
+//! mid band; the water is driven by the WaveSim height field the kick attacks
+//! disturb.
+//!
+//! This Rust/wgpu port was written by this repository's author, but the
+//! original CC BY-NC-SA licence and Joakim Dahl's attribution still bind this
+//! derivative.
 //!
 //! # Ported exactly
 //!

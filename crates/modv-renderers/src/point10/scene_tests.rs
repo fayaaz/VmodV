@@ -604,6 +604,10 @@ fn ultra_hdr_renders() {
         any_lit(&pixels),
         "UltraHDR produced an empty frame at {SIZE}x{SIZE}"
     );
+    // The inherited layer below the module is the background: the knot is
+    // drawn opaque but the pixels it does not cover must stay alpha 0 so the
+    // layer underneath shows through (BUGS.md item 9).
+    assert_transparency(&pixels);
 }
 
 #[test]
