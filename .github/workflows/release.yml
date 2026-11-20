@@ -89,13 +89,16 @@ jobs:
           Invoke-WebRequest -Uri $devel -OutFile gst-devel.msi
           Start-Process msiexec.exe -Wait -ArgumentList '/i', "$pwd\gst-runtime.msi", '/quiet', '/norestart'
           Start-Process msiexec.exe -Wait -ArgumentList '/i', "$pwd\gst-devel.msi", '/quiet', '/norestart'
-          choco install pkgconfiglite -y --no-progress
+          # Windows-native pkgconf uses ';' as its path separator, so a drive-letter
+          # path like C:/gstreamer/... survives intact (pkg-config-lite splits on ':').
+          choco install pkgconf -y --no-progress
 
       - name: Configure GStreamer build environment
         shell: bash
         run: |
           echo "C:/gstreamer/1.0/msvc_x86_64/bin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=C:/gstreamer/1.0/msvc_x86_64/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG=pkgconf" >> "$GITHUB_ENV"
 
       - name: Build modv (x86_64-pc-windows-msvc, release)
         shell: bash
