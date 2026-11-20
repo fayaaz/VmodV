@@ -731,12 +731,16 @@ impl Point10Scene for Earth {
             ColourSpace::Srgb,
             Wrap::Repeat,
         );
+        // The JS reference creates this texture with no `colorSpace` set
+        // (three r187 `NoColorSpace`): the raw sRGB bytes are treated as
+        // linear. Loading it as `Srgb` would let hardware sRGB decode darken
+        // the sparse city-light map ~3-6x, so keep it `Linear`.
         let lights = load_texture(
             &device,
             &queue,
             &loader,
             "earthlights.jpg",
-            ColourSpace::Srgb,
+            ColourSpace::Linear,
             Wrap::Repeat,
         );
         let clouds = load_texture(
@@ -2268,11 +2272,23 @@ mod tests {
         payload
     }
 
-    /// [`render_owned_chain_two_frames`] — Earth owns its
-    /// `RenderPass → UnrealBloomPass → OutputPass` chain, so the target is the
-    /// destination the engine would hand over (`Rgba8Unorm` here).
-    fn render_owned_chain_two_frames(scene: &mut Earth, size: u32) -> Option<Vec<u8>> {
+    /// Render `frames` frames through Earth's owned
+    /// `RenderPass → UnrealBloomPass → OutputPass` chain into the destination
+    /// the engine would hand over (`Rgba8Unorm` here). `night_lights`, when
+    /// set, is applied as a prop before `init`.
+    fn render_owned_chain(
+        scene: &mut Earth,
+        size: u32,
+        payload: &BandPayload,
+        frames: usize,
+        night_lights: Option<f32>,
+        label: &'static str,
+    ) -> Option<Vec<u8>> {
         let (device, queue) = gpu()?;
+
+        if let Some(night_lights) = night_lights {
+            scene.apply_props(|key| (key == "nightLights").then_some(night_lights));
+        }
 
         let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         ctx.resize(size, size);
@@ -2280,22 +2296,30 @@ mod tests {
         scene.resize(size, size);
 
         let mut bridge = AudioBridge::new();
-        let payload = loud_payload();
         let target = TestTarget::new(&device, size, size);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("point10-earth-owned-chain-smoke"),
-        });
-
-        // Two frames: the second proves per-frame state (uniforms, uploads)
-        // survives the first render.
-        for _ in 0..2 {
-            bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        for _ in 0..frames {
+            bridge.update(1.0 / 60.0, Some(payload), &Default::default());
             scene.update(1.0 / 60.0, &bridge);
             scene.render(&mut encoder, &target.view);
         }
         queue.submit(Some(encoder.finish()));
 
         Some(target.read(&device, &queue))
+    }
+
+    /// Two frames prove per-frame state (uniforms, uploads) survives the
+    /// first render.
+    fn render_owned_chain_two_frames(scene: &mut Earth, size: u32) -> Option<Vec<u8>> {
+        render_owned_chain(
+            scene,
+            size,
+            &loud_payload(),
+            2,
+            None,
+            "point10-earth-owned-chain-smoke",
+        )
     }
 
     #[test]
@@ -2339,6 +2363,101 @@ mod tests {
                 "pixel ({x}, {y}) outside the planet must not be fully opaque"
             );
         }
+    }
+
+    // ————— default night-lights visibility (silent audio) —————
+
+    /// Render three frames with the `nightLights` prop set and a **silent**
+    /// band payload. The compositor always hands `Some(&payload)` to the
+    /// bridge in the running app, so silence is the default-audio case.
+    fn render_night_lights_frames(
+        scene: &mut Earth,
+        size: u32,
+        night_lights: f32,
+    ) -> Option<Vec<u8>> {
+        render_owned_chain(
+            scene,
+            size,
+            &BandPayload::silent(44_100.0),
+            3,
+            Some(night_lights),
+            "point10-earth-night-lights-visibility",
+        )
+    }
+
+    /// Opaque planet-disc pixels that read as a lit city: warm-tinted and
+    /// bright enough to see against the black night side. Also returns the
+    /// most strongly tinted warm pixel for diagnostics.
+    fn visible_city_light_stats(pixels: &[u8], size: u32) -> (usize, (u8, u8, u8)) {
+        let s = size as usize;
+        let centre = s as f32 / 2.0;
+        let radius = s as f32 * 0.42; // comfortably inside the planet silhouette
+        let mut count = 0;
+        let mut brightest = (0u8, 0u8, 0u8);
+        let mut strongest_tint = -1i32;
+        for y in 0..s {
+            for x in 0..s {
+                let dx = x as f32 + 0.5 - centre;
+                let dy = y as f32 + 0.5 - centre;
+                if dx * dx + dy * dy > radius * radius {
+                    continue;
+                }
+                let i = (y * s + x) * 4;
+                if pixels[i + 3] < 250 {
+                    continue;
+                }
+                let r = pixels[i] as i32;
+                let g = pixels[i + 1] as i32;
+                let b = pixels[i + 2] as i32;
+                if r >= 20 && r - b > 8 {
+                    count += 1;
+                    if r - b > strongest_tint {
+                        strongest_tint = r - b;
+                        brightest = (r as u8, g as u8, b as u8);
+                    }
+                }
+            }
+        }
+        (count, brightest)
+    }
+
+    #[test]
+    fn night_side_city_lights_are_visible_by_default() {
+        // 512² resolves individual city clusters. At the module's shared
+        // `SIZE` (64²) the whole lights map collapses into one mip and no
+        // individual city survives averaging with either colour space.
+        const NIGHT_SIZE: u32 = 512;
+
+        let mut scene = Earth::new(); // default nightLights = 1.0
+        let Some(default_pixels) = render_night_lights_frames(&mut scene, NIGHT_SIZE, 1.0) else {
+            return; // no software adapter: GPU tests skip as a group
+        };
+        assert!(
+            (0.19..=0.21).contains(&scene.lights()),
+            "silence must hold the dim-floor light level, got {}",
+            scene.lights()
+        );
+        let (default_count, brightest) = visible_city_light_stats(&default_pixels, NIGHT_SIZE);
+
+        // Control: with the light map switched off the same screen region has
+        // no warm pixels at all — the metric measures the city lights rather
+        // than the atmosphere or day-side ground.
+        let mut dark = Earth::new();
+        let Some(off_pixels) = render_night_lights_frames(&mut dark, NIGHT_SIZE, 0.0) else {
+            return;
+        };
+        let (off_count, _) = visible_city_light_stats(&off_pixels, NIGHT_SIZE);
+
+        assert!(
+            default_count >= 10,
+            "default night lights are not clearly visible: only {default_count} warm city pixels \
+             (red >= 20, red - blue > 8) on the planet disc, strongest = {brightest:?}; \
+             with nightLights = 0 there are {off_count}"
+        );
+        assert!(
+            off_count == 0,
+            "control with nightLights = 0 should have no warm city pixels, got {off_count}"
+        );
     }
 
     fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
