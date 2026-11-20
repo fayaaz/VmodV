@@ -60,9 +60,11 @@
 //!
 //! # Formats
 //!
-//! Camera, file and test-pattern pipelines end in
-//! `video/x-raw,format=RGBA,width=W,height=H,framerate=F/1`; screen pipelines
-//! keep the PipeWire node's native size/rate and only force RGBA (see
+//! Camera and test-pattern pipelines end in
+//! `video/x-raw,format=RGBA,width=W,height=H,framerate=F/1`; file pipelines use
+//! the same RGBA/size caps but omit `framerate` so the seek segment rate
+//! governs playback speed, and screen pipelines keep the PipeWire node's
+//! native size/rate and only force RGBA (see
 //! [`pipeline::VideoSourceKind::Screen`]). Either way
 //! [`VideoFrame::rgba`] is always tightly packed row-major RGBA8 with
 //! `width * height * 4` bytes and [`VideoFrame::width`]/[`VideoFrame::height`]

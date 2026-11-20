@@ -7,13 +7,24 @@
 //! pure function of the config so the tests can check device/property escaping
 //! and the caps without a GPU, a camera or a plugin registry.
 //!
-//! Cameras, files and test patterns funnel through the same tail:
+//! Cameras and test patterns funnel through the same tail:
 //!
 //! ```text
 //! v4l2src device=/dev/video0
 //!   ! videoconvert ! videoscale ! videorate
 //!   ! video/x-raw,format=RGBA,width=1280,height=720,framerate=30/1
 //!   ! appsink name=modv_video_sink max-buffers=2 drop=true sync=false
+//! ```
+//!
+//! File sources deliberately omit `videorate` and the fixed `framerate` so a
+//! seek segment's rate governs playback speed (the clock-synced sink consumes
+//! buffers faster/slower as the segment dictates):
+//!
+//! ```text
+//! uridecodebin uri=file:///videos/clip.mp4
+//!   ! videoconvert ! videoscale
+//!   ! video/x-raw,format=RGBA,width=1280,height=720
+//!   ! appsink name=modv_video_sink max-buffers=2 drop=true sync=true
 //! ```
 //!
 //! Screen sources use a shorter tail that keeps the PipeWire node's native
@@ -30,8 +41,10 @@
 //!   always meet*, so a 1080p-only camera still produces the configured
 //!   texture size instead of failing to negotiate (the legacy
 //!   `getUserMedia({ width: { ideal } })` did the same by scaling).
-//! * `videorate` holds the requested frame rate (files at 24 fps become 30 fps
-//!   textures, cameras that ignore `framerate` get corrected).
+//! * `videorate` holds the requested frame rate for live sources (cameras that
+//!   ignore `framerate` get corrected). File sources omit it, along with the
+//!   fixed `framerate` caps, so the seek segment rate — not a normalised frame
+//!   rate — controls playback speed.
 //! * `appsink max-buffers=2 drop=true` is the in-element half of
 //!   "newest frame wins": at most two samples are queued, older ones are
 //!   replaced before they reach the callback.
@@ -299,15 +312,36 @@ impl VideoSourceConfig {
         }
     }
 
-    /// The negotiated output caps (`video/x-raw,format=RGBA,…`).
+    /// The negotiated output caps for live sources
+    /// (`video/x-raw,format=RGBA,…`): the base RGBA/size caps plus a fixed
+    /// `framerate` for `videorate` to hold.
     pub fn caps_string(&self) -> String {
         let config = self.normalised();
 
         format!(
-            "video/x-raw,format=RGBA,width={},height={},framerate={}/1",
-            config.width, config.height, config.fps
+            "{},framerate={}/1",
+            rgba_caps(config.width, config.height),
+            config.fps
         )
     }
+
+    /// The negotiated output caps for a file source, without a `framerate`.
+    ///
+    /// A file's clock-synced `appsink` must consume buffers at whatever rate
+    /// the seek segment dictates; fixing a framerate here would make
+    /// `videorate` re-time the stream back to 1x and defeat accelerated
+    /// playback.
+    fn file_caps_string(&self) -> String {
+        let config = self.normalised();
+
+        rgba_caps(config.width, config.height)
+    }
+}
+
+/// The `video/x-raw,format=RGBA,width=…,height=…` caps shared by every sized
+/// pipeline, before a `framerate` is optionally appended.
+fn rgba_caps(width: u32, height: u32) -> String {
+    format!("video/x-raw,format=RGBA,width={},height={}", width, height)
 }
 
 fn normalise_dimension(value: u32, fallback: u32) -> u32 {
@@ -370,6 +404,16 @@ pub fn pipeline_description(config: &VideoSourceConfig) -> Result<String, VideoE
     if matches!(config.kind, VideoSourceKind::Screen { .. }) {
         return Ok(format!(
             "{source} ! videoconvert ! video/x-raw,format=RGBA ! appsink name={SINK_NAME} max-buffers=2 drop=true sync={sync}"
+        ));
+    }
+
+    // Files deliberately omit `videorate` and the fixed `framerate` caps: the
+    // seek segment's rate is the single authority for playback speed, and the
+    // clock-synced sink consumes buffers faster/slower exactly as it dictates.
+    if matches!(config.kind, VideoSourceKind::File { .. }) {
+        return Ok(format!(
+            "{source} ! videoconvert ! videoscale ! {} ! appsink name={SINK_NAME} max-buffers=2 drop=true sync={sync}",
+            config.file_caps_string()
         ));
     }
 
@@ -780,6 +824,40 @@ mod tests {
         assert!(
             text.ends_with("sync=true"),
             "a file must play at real time, not as fast as it decodes: {text}"
+        );
+    }
+
+    #[test]
+    fn file_pipeline_does_not_normalise_away_the_segment_rate() {
+        let config = VideoSourceConfig::file("/videos/clip.mp4").with_mode(320, 240, 30);
+        let text = description(&config);
+
+        assert!(
+            !text.contains("videorate"),
+            "videorate re-times the accelerated stream back to its fixed framerate, capping speed at 1x: {text}"
+        );
+        assert!(
+            !text.contains("framerate="),
+            "a fixed framerate would normalise the rate segment: {text}"
+        );
+        assert!(
+            text.ends_with("sync=true"),
+            "the sink must still honour the segment rate against the clock: {text}"
+        );
+    }
+
+    #[test]
+    fn file_pipeline_keeps_the_clock_synced_sink_and_rgba_caps() {
+        let config = VideoSourceConfig::file("/videos/clip.mp4").with_mode(320, 240, 30);
+        let text = description(&config);
+
+        assert!(
+            text.contains("video/x-raw,format=RGBA,width=320,height=240"),
+            "the negotiated RGBA caps must be preserved: {text}"
+        );
+        assert!(
+            text.ends_with("sync=true"),
+            "the sink must still honour the segment rate against the clock: {text}"
         );
     }
 
