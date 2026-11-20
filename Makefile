@@ -175,7 +175,10 @@ docker-rust: disk-guard
 	$(DOCKER) build --target rust -t "$(RUST_IMAGE)" .
 
 docker-cargo-volume: docker-rust
-	@$(DOCKER) volume inspect "$(CARGO_VOLUME)" >/dev/null 2>&1 || $(DOCKER) volume create "$(CARGO_VOLUME)" >/dev/null
+	@case "$(CARGO_VOLUME)" in \
+		/*) mkdir -p "$(CARGO_VOLUME)" ;; \
+		*) $(DOCKER) volume inspect "$(CARGO_VOLUME)" >/dev/null 2>&1 || $(DOCKER) volume create "$(CARGO_VOLUME)" >/dev/null ;; \
+	esac
 	$(DOCKER) run --rm -v "$(CARGO_VOLUME)":/cargo "$(RUST_IMAGE)" chown -R "$(HOST_UID):$(HOST_GID)" /cargo
 
 docker-reset:
