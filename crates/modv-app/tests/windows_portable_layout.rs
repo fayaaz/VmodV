@@ -62,6 +62,23 @@ impl Drop for TempDirGuard {
     }
 }
 
+/// Recursively collect every regular file under `dir` (std-only, no walkdir).
+fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("cannot read directory {}: {error}", dir.display()));
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => panic!("cannot read an entry in {}: {error}", dir.display()),
+        };
+        if path.is_dir() {
+            collect_files(&path, files);
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+}
+
 #[test]
 fn dry_run_stages_the_portable_windows_layout() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -85,6 +102,17 @@ fn dry_run_stages_the_portable_windows_layout() {
     fs::write(fake_gst.join("bin/gstreamer-1.0.dll"), b"stub").expect("write the fake gst dll");
     fs::write(fake_gst.join("lib/gstreamer-1.0/libstub.dll"), b"stub")
         .expect("write the fake gst plugin");
+
+    // Development-only decoys in BOTH copied trees. A real GStreamer devel MSI
+    // installs thousands of these (static libs, PDBs, libtool archives and
+    // pkg-config files) alongside the runtime DLLs; plain text is enough here.
+    for dir in [fake_gst.join("bin"), fake_gst.join("lib/gstreamer-1.0")] {
+        for name in ["stub.a", "stub.pdb", "stub.la", "stub.pc"] {
+            let decoy = dir.join(name);
+            fs::write(&decoy, b"decoy development-only file\n")
+                .unwrap_or_else(|error| panic!("cannot write {}: {error}", decoy.display()));
+        }
+    }
 
     // The portable root is a distinct directory inside the holder.
     let staging = base.join("portable-root");
@@ -169,6 +197,40 @@ fn dry_run_stages_the_portable_windows_layout() {
             launcher_text.contains(token),
             "{} does not mention {token}:\n{launcher_text}",
             launcher.display()
+        );
+    }
+
+    // Only runtime files belong in the ZIP. Development-only files (*.a,
+    // *.pdb, *.la, *.pc) make up ~84% of the produced archive and are useless
+    // at runtime, so both copied GStreamer trees must be trimmed of them while
+    // keeping every DLL.
+    let staged_gst = staging.join("gstreamer");
+    let mut staged_files = Vec::new();
+    collect_files(&staged_gst, &mut staged_files);
+
+    for dll in [
+        "gstreamer/bin/gstreamer-1.0.dll",
+        "gstreamer/lib/gstreamer-1.0/libstub.dll",
+    ] {
+        let path = staging.join(dll);
+        assert!(
+            staged_files.contains(&path),
+            "runtime DLL was dropped from the staged tree: {} (staged files: {staged_files:#?})",
+            path.display()
+        );
+    }
+
+    for path in &staged_files {
+        let is_development_only = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| matches!(extension, "a" | "pdb" | "la" | "pc"))
+            .unwrap_or(false);
+        assert!(
+            !is_development_only,
+            "development-only file was staged into the portable ZIP: {}; \
+             exclude *.a, *.pdb, *.la and *.pc from both copied GStreamer trees",
+            path.display()
         );
     }
 }

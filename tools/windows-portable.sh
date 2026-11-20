@@ -10,6 +10,11 @@
 #   <root>/gstreamer/lib/gstreamer-1.0/ GStreamer plugins
 #   <root>/VmodV.cmd                    launcher that exports the env vars
 #
+# Only runtime files are staged from the GStreamer trees. Development-only
+# artifacts (*.a static libs, *.pdb debug files, *.la libtool archives and
+# *.pc pkg-config files) are excluded: they make up most of the SDK but have
+# no runtime value.
+#
 # `VmodV.cmd` sets MODV_PORTABLE_ROOT to its own directory, then points
 # MODV_ISF_DIR, MODV_ASSETS_DIR and GST_PLUGIN_PATH inside it before launching
 # modv.exe. Nothing is hard-coded to an install location.
@@ -111,10 +116,24 @@ cp -f "$BINARY" "$ROOT/modv.exe"
 cp -a "$PROJECT_ROOT/resources/isf" "$ROOT/isf"
 cp -a "$PROJECT_ROOT/resources/point10/textures" "$ROOT/textures"
 
-# GStreamer runtime + plugins.
-mkdir -p "$ROOT/gstreamer/lib"
-cp -a "$GST_ROOT/bin" "$ROOT/gstreamer/bin"
-cp -a "$GST_ROOT/lib/gstreamer-1.0" "$ROOT/gstreamer/lib/gstreamer-1.0"
+# GStreamer runtime + plugins (excluded artifacts are listed in the header).
+# find -print0 + `read -d ''` keeps filenames with spaces intact and works in
+# both the Linux toolchain and Git Bash on Windows.
+copy_gst_runtime() {
+    local src="$1" dst="$2"
+    mkdir -p "$dst"
+    ( cd "$src" && find . -type f \
+        ! -name '*.a' \
+        ! -name '*.pdb' \
+        ! -name '*.la' \
+        ! -name '*.pc' \
+        -print0 ) | while IFS= read -r -d '' file; do
+            mkdir -p "$dst/$(dirname "$file")"
+            cp -p "$src/$file" "$dst/$file"
+        done
+}
+copy_gst_runtime "$GST_ROOT/bin" "$ROOT/gstreamer/bin"
+copy_gst_runtime "$GST_ROOT/lib/gstreamer-1.0" "$ROOT/gstreamer/lib/gstreamer-1.0"
 
 # The launcher. `%~dp0` is the launcher's own directory with a trailing
 # backslash, so every path stays relative to wherever the ZIP was extracted.
