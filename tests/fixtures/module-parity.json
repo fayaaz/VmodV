@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a native-only 2D module added for the audio-controllable video-progress feature (not present in the legacy registrations).",
+  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a native-only 2D module added with start/finish playback trims (not present in the legacy registrations).",
   "counts": {
     "twoD": 16,
     "point10": 27,

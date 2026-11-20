@@ -14,8 +14,9 @@ use crate::two_d::modules::{
 
 /// The nine prop descriptors declared by `Texture2d.js`, in JS order.
 ///
-/// [`super::Video`] reuses these verbatim (appending its own `progress` prop),
-/// so keeping them in one place stops the two modules' props from drifting.
+/// [`super::Video`] reuses these verbatim (appending its own `start`/`finish`
+/// trim props), so keeping them in one place stops the two modules' props
+/// from drifting.
 pub(super) fn texture_props() -> Vec<TwoDProp> {
     vec![
         TwoDProp::texture("texture"),

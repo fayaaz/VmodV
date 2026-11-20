@@ -1752,22 +1752,33 @@ impl NativeApp {
             now,
         );
 
-        // Collect the owned map before touching the hub/sources so the store
-        // borrow ends first and only Video modules with a progress prop drive
-        // seeking.
-        let progress_by_module: std::collections::BTreeMap<String, f64> = self
+        // Collect owned maps before touching the hub/sources so the store
+        // borrow ends first; only Video modules carrying start/finish trims
+        // take part in trim wrapping.
+        let start_by_module: std::collections::BTreeMap<String, f64> = self
             .store
             .state()
             .modules
             .values()
             .filter(|module| module.module_name == "Video")
             .filter_map(|module| {
-                let value = module.props.get("progress")?.as_f64()?;
+                let value = module.props.get("start")?.as_f64()?;
+                Some((module.id.clone(), value))
+            })
+            .collect();
+        let finish_by_module: std::collections::BTreeMap<String, f64> = self
+            .store
+            .state()
+            .modules
+            .values()
+            .filter(|module| module.module_name == "Video")
+            .filter_map(|module| {
+                let value = module.props.get("finish")?.as_f64()?;
                 Some((module.id.clone(), value))
             })
             .collect();
         self.video_sources
-            .sync_progress(&mut self.media_hub, &progress_by_module);
+            .sync_trim(&mut self.media_hub, &start_by_module, &finish_by_module);
     }
 
     /// Apply one UI transport command and persist its option on every prop

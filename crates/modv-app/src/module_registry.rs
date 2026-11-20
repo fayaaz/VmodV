@@ -678,7 +678,8 @@ const TWO_D_PROP_FLAGS: &[(&str, &str, bool, bool)] = &[
     ("Text", "strokeSize", false, true),          // Text.js:55
     ("Waveform", "strokeWeight", false, true),    // Waveform.js:19
     ("X Drips", "maxDripHeight", false, true),    // X-Drips.js:28
-    ("Video", "progress", true, false),           // Video progress clamps to 0..1
+    ("Video", "start", true, false),              // Video start trim clamps to 0..1
+    ("Video", "finish", true, false),             // Video finish trim clamps to 0..1
 ];
 
 /// The JS 2D modules whose `meta` sets `previewWithOutput: true`.
@@ -1731,18 +1732,12 @@ mod tests {
     }
 
     #[test]
-    fn video_module_is_registered_as_texture_2d_with_a_progress_input() {
+    fn video_module_is_registered_with_start_and_finish_trims() {
         let registry = ModuleRegistry::builtin();
-        assert_eq!(
-            registry.kind("Video"),
-            Some(ModuleKind::TwoD),
-            "Video must be a registered 2D module type"
-        );
-
+        assert_eq!(registry.kind("Video"), Some(ModuleKind::TwoD));
         let defaults = registry
             .default_props("Video")
             .expect("Video has prop defaults");
-        // "basically texture2d": all of Texture 2D's props are present.
         for key in [
             "texture",
             "cropTop",
@@ -1759,14 +1754,24 @@ mod tests {
                 "Video is missing Texture 2D's `{key}` prop"
             );
         }
-        // The extra: a 0..1 progress input.
-        assert_eq!(defaults["progress"], json!(0.0));
-        let schema = registry
-            .prop_schema("Video", "progress")
-            .expect("progress prop schema");
-        assert_eq!(schema.type_, "float");
-        assert_eq!(schema.min, Some(0.0));
-        assert_eq!(schema.max, Some(1.0));
+        assert_eq!(
+            defaults["start"],
+            json!(0.0),
+            "start defaults to the beginning"
+        );
+        assert_eq!(defaults["finish"], json!(1.0), "finish defaults to the end");
+        assert!(
+            defaults.get("progress").is_none(),
+            "the progress input must be removed"
+        );
+        for prop in ["start", "finish"] {
+            let schema = registry
+                .prop_schema("Video", prop)
+                .unwrap_or_else(|| panic!("{prop} schema"));
+            assert_eq!(schema.type_, "float");
+            assert_eq!(schema.min, Some(0.0));
+            assert_eq!(schema.max, Some(1.0));
+        }
     }
 
     #[test]

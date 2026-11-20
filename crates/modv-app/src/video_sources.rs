@@ -250,17 +250,36 @@ pub fn video_source_id(path: &Path) -> String {
     format!("video:{}", path.to_string_lossy())
 }
 
-/// Map a 0..1 progress input to a seek position in milliseconds.
+/// Seek target (in milliseconds) for a video trimmed to `[start, finish]`,
+/// where both trims are fractions of the clip in `0..1`.
 ///
-/// `0.0` maps to the start of the clip and `1.0` to the end; values outside
-/// that range are clamped. Returns `None` when the clip's duration is unknown
-/// or zero (there is no meaningful position to seek to).
-pub fn progress_seek_ms(progress: f64, duration_ms: Option<u64>) -> Option<u64> {
+/// When the reported playhead has reached (or passed) `finish`, playback is
+/// wrapped back to `start` so the clip loops between the two points. Returns
+/// `None` — "leave the playhead alone" — when the playhead is inside the trim,
+/// when `start == finish` (an empty trim), and when the trims are the
+/// full-clip defaults `0..1`: the default must be a complete no-op so the
+/// native end-of-stream/loop handling stays authoritative. Both trims are
+/// clamped to `0..1`; when `start` exceeds `finish` the two values are used
+/// as given (no swap). Non-finite trims or an unknown/zero duration also
+/// yield `None`.
+pub fn trim_seek_target(
+    position_ms: u64,
+    start: f64,
+    finish: f64,
+    duration_ms: Option<u64>,
+) -> Option<u64> {
     let duration = duration_ms?;
-    if duration == 0 {
+    if duration == 0 || !start.is_finite() || !finish.is_finite() {
         return None;
     }
-    Some((progress.clamp(0.0, 1.0) * duration as f64).round() as u64)
+    let start = start.clamp(0.0, 1.0);
+    let finish = finish.clamp(0.0, 1.0);
+    if start == finish || (start == 0.0 && finish == 1.0) {
+        return None;
+    }
+    let start_ms = (start * duration as f64).round() as u64;
+    let finish_ms = (finish * duration as f64).round() as u64;
+    (position_ms >= finish_ms).then_some(start_ms)
 }
 
 /// Plan the starts/stops/transport updates that reconcile `existing` with the
@@ -369,10 +388,6 @@ pub struct VideoSources {
     failed: BTreeSet<PathBuf>,
     /// Set by [`Self::note_media_change`]: retry the failed paths once.
     retry_failures: bool,
-    /// Last observed progress per source id. A source's first observation is
-    /// recorded without seeking so a static/default prop never fights normal
-    /// playback; only subsequent changes drive the playhead.
-    last_progress: BTreeMap<String, f64>,
     last_requests: Vec<VideoPropRequest>,
     last_scan: Option<Instant>,
     force: bool,
@@ -426,7 +441,6 @@ impl VideoSources {
         self.suppressed.clear();
         self.failed.clear();
         self.problems.clear();
-        self.last_progress.clear();
         self.last_requests.clear();
         self.last_scan = None;
         self.force = false;
@@ -731,7 +745,6 @@ impl VideoSources {
 
         hub.stop_file(&entry.id);
         self.suppressed.insert(path);
-        self.last_progress.remove(&entry.id);
         eprintln!(
             "ui: INFO video texture source {:?} stopped by the user",
             entry.id
@@ -775,62 +788,49 @@ impl VideoSources {
         Ok(transport)
     }
 
-    /// Drive progress-linked sources: for each running video source referenced
-    /// by a module with a `progress` value, map that value to a seek position.
+    /// Wrap playing video sources back to their trim start once they pass the
+    /// finish. For each running source referenced by a module carrying both a
+    /// `start` and a `finish` trim, the first such reference (in the ordered
+    /// `references` set) picks the trim values when several props share a clip.
     ///
-    /// The first observation of a source is recorded without seeking, so a
-    /// static/default prop never fights normal playback; only later changes
-    /// (e.g. from audio input) move the playhead. A value that fails to seek
-    /// is left unrecorded so the next call may retry it.
-    pub fn sync_progress(
+    /// A successful seek moves the reported playhead inside the trim, so the
+    /// next tick produces no target and no per-source latch is needed. A seek
+    /// failure is logged and may be retried on a later tick. Sources without a
+    /// transport (not running) or without a usable duration are left alone.
+    pub fn sync_trim(
         &mut self,
         hub: &mut impl VideoFileHub,
-        progress_by_module: &BTreeMap<String, f64>,
+        start_by_module: &BTreeMap<String, f64>,
+        finish_by_module: &BTreeMap<String, f64>,
     ) {
-        // Collect owned decisions first so we never mutate `last_progress`
-        // while it is borrowed during the scan, and never borrow `self`
-        // wholesale while calling out to the hub.
-        let mut initial_values: Vec<(String, f64)> = Vec::new();
-        let mut seeks: Vec<(String, u64, f64)> = Vec::new();
+        // Collect owned decisions first so no reference into `self.sources`
+        // is alive while we call out to the hub.
+        let mut seeks: Vec<(String, u64)> = Vec::new();
 
         for source in self.sources.values() {
-            // `references` is an ordered BTreeSet: the first matching module
-            // makes the choice deterministic when several props share a clip.
-            let Some(progress) = source
-                .references
-                .iter()
-                .find_map(|reference| progress_by_module.get(&reference.module_id).copied())
-            else {
+            // `references` is an ordered BTreeSet: the first module carrying
+            // both trims makes the choice deterministic when several props
+            // share a clip.
+            let Some((start, finish)) = source.references.iter().find_map(|reference| {
+                let start = *start_by_module.get(&reference.module_id)?;
+                let finish = *finish_by_module.get(&reference.module_id)?;
+                Some((start, finish))
+            }) else {
                 continue;
             };
-            // We need the clip duration to map progress to a position.
             let Some(transport) = hub.transport(&source.id) else {
                 continue;
             };
-
-            match self.last_progress.get(&source.id) {
-                None => initial_values.push((source.id.clone(), progress)),
-                Some(&last) if (last - progress).abs() > 0.001 => {
-                    if let Some(position_ms) = progress_seek_ms(progress, transport.duration_ms) {
-                        seeks.push((source.id.clone(), position_ms, progress));
-                    }
-                }
-                Some(_) => {}
+            if let Some(target_ms) =
+                trim_seek_target(transport.position_ms, start, finish, transport.duration_ms)
+            {
+                seeks.push((source.id.clone(), target_ms));
             }
         }
 
-        for (id, progress) in initial_values {
-            self.last_progress.insert(id, progress);
-        }
-
-        for (id, position_ms, progress) in seeks {
-            match hub.seek_file(&id, Duration::from_millis(position_ms)) {
-                Ok(_) => {
-                    self.last_progress.insert(id, progress);
-                }
-                Err(error) => {
-                    eprintln!("ui: WARN video source {id:?} progress seek failed: {error}");
-                }
+        for (id, target_ms) in seeks {
+            if let Err(error) = hub.seek_file(&id, Duration::from_millis(target_ms)) {
+                eprintln!("ui: WARN video source {id:?} trim seek failed: {error}");
             }
         }
     }
@@ -2168,42 +2168,52 @@ mod tests {
     }
 
     #[test]
-    fn progress_seek_ms_maps_start_end_and_clamps() {
+    fn trim_seek_target_wraps_past_finish_and_is_a_no_op_by_default() {
         assert_eq!(
-            progress_seek_ms(0.0, Some(10_000)),
-            Some(0),
-            "0 is the start"
+            trim_seek_target(7_500, 0.25, 0.75, Some(10_000)),
+            Some(2_500),
+            "past finish wraps to the trim start"
         );
         assert_eq!(
-            progress_seek_ms(1.0, Some(10_000)),
-            Some(10_000),
-            "1 is the end"
-        );
-        assert_eq!(
-            progress_seek_ms(0.5, Some(10_000)),
-            Some(5_000),
-            "0.5 is halfway"
-        );
-        assert_eq!(
-            progress_seek_ms(-3.0, Some(10_000)),
-            Some(0),
-            "below range clamps to start"
-        );
-        assert_eq!(
-            progress_seek_ms(3.0, Some(10_000)),
-            Some(10_000),
-            "above range clamps to end"
-        );
-        assert_eq!(
-            progress_seek_ms(0.5, None),
+            trim_seek_target(1_000, 0.25, 0.75, Some(10_000)),
             None,
-            "unknown duration has no seek target"
+            "inside the trim plays untouched"
+        );
+        assert_eq!(
+            trim_seek_target(5_000, 0.0, 1.0, Some(10_000)),
+            None,
+            "default 0..1 must never seek"
+        );
+        assert_eq!(
+            trim_seek_target(5_000, 0.5, 0.5, Some(10_000)),
+            None,
+            "empty trim has no target"
+        );
+        assert_eq!(
+            trim_seek_target(1_000, 0.75, 0.25, Some(10_000)),
+            None,
+            "start>finish is used as-is (no swap), so 1000 is below finish"
+        );
+        assert_eq!(
+            trim_seek_target(9_000, 0.75, 0.25, Some(10_000)),
+            Some(7_500),
+            "start>finish wraps to the given (unswapped) start"
+        );
+        assert_eq!(
+            trim_seek_target(5_000, 0.25, 0.75, None),
+            None,
+            "unknown duration has no target"
+        );
+        assert_eq!(
+            trim_seek_target(5_000, f64::NAN, 0.75, Some(10_000)),
+            None,
+            "non-finite trims are ignored"
         );
     }
 
     #[test]
-    fn audio_driven_progress_changes_seek_the_video_source() {
-        let root = temp_dir("progress-seek");
+    fn trim_settings_wrap_a_playing_clip_to_the_start() {
+        let root = temp_dir("trim-wrap");
         std::fs::create_dir_all(root.join("default/video")).expect("video folder");
         let clip = root.join("default/video/clip.mp4");
         std::fs::write(&clip, b"fake").expect("clip");
@@ -2211,56 +2221,46 @@ mod tests {
         let mut hub = FakeHub {
             transport: Some(VideoTransport {
                 duration_ms: Some(10_000),
+                position_ms: 9_500,
                 ..Default::default()
             }),
             ..Default::default()
         };
         let mut sources = VideoSources::new();
-
         let requests = vec![request("module-a", "texture", "default/video/clip.mp4")];
         sources.reconcile_now(&mut hub, Some(&root), &requests, Instant::now());
         hub.calls.clear();
 
-        // A first/default observation must not seek: it would fight playback.
-        let mut progress = BTreeMap::new();
-        progress.insert("module-a".to_string(), 0.0);
-        sources.sync_progress(&mut hub, &progress);
-        assert!(
-            !hub.calls.iter().any(|c| c.starts_with("seek ")),
-            "an unchanged/default progress must not fight playback: {:?}",
-            hub.calls
-        );
+        let mut start = BTreeMap::new();
+        start.insert("module-a".to_string(), 0.25);
+        let mut finish = BTreeMap::new();
+        finish.insert("module-a".to_string(), 0.75);
 
-        // Driving it from audio to 0.5 must seek to the midpoint of the clip.
-        progress.insert("module-a".to_string(), 0.5);
-        hub.calls.clear();
-        sources.sync_progress(&mut hub, &progress);
+        sources.sync_trim(&mut hub, &start, &finish);
         assert!(
             hub.calls
                 .iter()
-                .any(|c| c == &format!("seek {} 5000", video_source_id(&clip))),
-            "progress 0.5 of a 10s clip must seek to 5000ms: {:?}",
+                .any(|c| c == &format!("seek {} 2500", video_source_id(&clip))),
+            "past finish must seek to 25% of the clip: {:?}",
             hub.calls
         );
 
-        // An unchanged value must not seek again.
         hub.calls.clear();
-        sources.sync_progress(&mut hub, &progress);
+        sources.sync_trim(&mut hub, &start, &finish);
         assert!(
             !hub.calls.iter().any(|c| c.starts_with("seek ")),
-            "unchanged progress must not re-seek: {:?}",
+            "once back inside the trim there must be no further seek: {:?}",
             hub.calls
         );
 
-        // A value of 1 must seek to the end of the clip.
-        progress.insert("module-a".to_string(), 1.0);
+        hub.transport.as_mut().unwrap().position_ms = 7_600;
         hub.calls.clear();
-        sources.sync_progress(&mut hub, &progress);
+        sources.sync_trim(&mut hub, &start, &finish);
         assert!(
             hub.calls
                 .iter()
-                .any(|c| c == &format!("seek {} 10000", video_source_id(&clip))),
-            "progress 1 must seek to the end: {:?}",
+                .any(|c| c == &format!("seek {} 2500", video_source_id(&clip))),
+            "reaching finish again must seek back to the trim start: {:?}",
             hub.calls
         );
 
