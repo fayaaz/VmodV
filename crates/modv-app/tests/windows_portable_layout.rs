@@ -254,3 +254,54 @@ fn ci_gstreamer_msi_urls_point_at_the_verified_release() {
         );
     }
 }
+
+/// Both `windows-portable` jobs must use a Windows-native pkg-config to read
+/// the GStreamer devel `.pc` files. `pkg-config-lite` splits its search path on
+/// `:` (POSIX semantics), so the drive letter in
+/// `C:/gstreamer/1.0/msvc_x86_64/lib/pkgconfig` is misread as two separate
+/// paths (`C` and `/gstreamer/...`) and `glib-2.0` is never found — the release
+/// Windows build then fails at the cargo build step with a pkg-config error.
+/// Windows-native `pkgconf` uses `;` and handles drive letters correctly, and
+/// cargo's pkg-config crate is pointed at it explicitly with
+/// `PKG_CONFIG=pkgconf`. The single GStreamer pkgconfig directory must remain.
+#[test]
+fn ci_windows_uses_native_pkgconf_for_drive_letter_paths() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
+
+    let workflows = [
+        ("native.yml", repo_root.join(".github/workflows/native.yml")),
+        (
+            "release.yml",
+            repo_root.join(".github/workflows/release.yml"),
+        ),
+    ];
+
+    const BROKEN_TOOL: &str = "pkgconfiglite";
+    const NATIVE_INSTALL: &str = "choco install pkgconf";
+    const EXPLICIT_SELECTION: &str = "PKG_CONFIG=pkgconf";
+    const GST_PKGCONFIG_PATH: &str = "PKG_CONFIG_PATH=C:/gstreamer/1.0/msvc_x86_64/lib/pkgconfig";
+
+    for (name, path) in workflows {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+
+        assert!(
+            !text.contains(BROKEN_TOOL),
+            "{name}: forbidden broken tool `{BROKEN_TOOL}` is still present; \
+             Windows drive-letter pkg-config paths require Windows-native pkgconf"
+        );
+        assert!(
+            text.contains(NATIVE_INSTALL),
+            "{name}: missing Windows-native pkgconf install command `{NATIVE_INSTALL}`"
+        );
+        assert!(
+            text.contains(EXPLICIT_SELECTION),
+            "{name}: missing explicit pkg-config executable selection `{EXPLICIT_SELECTION}`"
+        );
+        assert!(
+            text.contains(GST_PKGCONFIG_PATH),
+            "{name}: missing the single GStreamer pkgconfig directory `{GST_PKGCONFIG_PATH}`"
+        );
+    }
+}
