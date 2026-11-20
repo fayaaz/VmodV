@@ -1974,9 +1974,10 @@ mod tests {
             );
         }
 
-        // The three cheap full-quality scenes are filed under 2D Scenes;
-        // the other full-quality scenes (Particle Field, Spiral Particles,
-        // Sun, Earth) stay under 3D Scenes, as do the heavy ones.
+        // Categories mirror the legacy JS metadata and are independent of
+        // render scale: Chromatic Line, Chromatic Wave and Waveform are filed
+        // under 2D Scenes, while Particle Field, Spiral Particles, Sun and
+        // Earth stay under 3D Scenes, as do the heavy ones.
         let category = |name: &str| {
             registry
                 .point10_definition(name)

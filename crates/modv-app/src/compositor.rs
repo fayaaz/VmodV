@@ -317,7 +317,7 @@ use modv_renderers::two_d::{AudioFrame, Canvas, DrawContext, ModuleContext, TwoD
 use crate::media::{MediaHub, padded_rows};
 use crate::module_preview::{ModulePreviews, PreviewError};
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
-use crate::quality::{full_quality_point10, module_render_size};
+use crate::quality::module_render_size;
 use crate::scene_preview::ScenePreviews;
 use crate::scene_transition::{SceneTransitionInfo, SceneTransitionPass};
 use crate::texture_sources::{ImageTextures, TextureRequest};
@@ -1311,8 +1311,8 @@ impl Compositor {
     /// `performance` pin the scale).
     fn module_target_size(&self, module: &ModuleInstance) -> (u32, u32) {
         let meta = module.meta.as_object().cloned().unwrap_or_default();
-        let point10_heavy = (self.registry.kind(&module.module_name) == Some(ModuleKind::Point10))
-            .then(|| !full_quality_point10(&module.module_name));
+        let point10_heavy =
+            (self.registry.kind(&module.module_name) == Some(ModuleKind::Point10)).then_some(true);
         module_render_size(
             self.size,
             self.render_size(),
@@ -4488,7 +4488,7 @@ mod tests {
             ("Point10 Smoke Room", "global", SIZE / 2),
             ("Point10 Smoke Room", "full", SIZE),
             ("Point10 Smoke Room", "balanced", (SIZE * 3) / 4),
-            ("Point10 Waveform", "global", SIZE),
+            ("Point10 Waveform", "global", SIZE / 2),
             ("Point10 Waveform", "performance", SIZE / 2),
         ] {
             let module = point10_module("module-a", name, json!({ "quality": quality }));
@@ -4496,6 +4496,39 @@ mod tests {
                 compositor.module_target_size(&module),
                 (expected, expected),
                 "{name} at quality {quality}"
+            );
+        }
+    }
+
+    /// At the default `quality: "global"` prop, every Point10 scene must
+    /// follow the compositor's global render scale — including the scenes
+    /// historically whitelisted as "full quality". Only an explicit
+    /// per-module override may pin a different resolution.
+    #[test]
+    fn point10_scenes_follow_global_quality_at_the_default_prop() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+        compositor.set_render_scale(0.5);
+
+        for name in [
+            "Point10 Earth",
+            "Point10 Sun",
+            "Point10 Waveform",
+            "Point10 Particle Field",
+            "Point10 Spiral Particles",
+            "Point10 Chromatic Line",
+            "Point10 Chromatic Wave",
+            // Heavy control: already followed the global setting before the fix.
+            "Point10 Smoke Room",
+        ] {
+            let module = point10_module("module-a", name, json!({ "quality": "global" }));
+            assert_eq!(
+                compositor.module_target_size(&module),
+                (SIZE / 2, SIZE / 2),
+                "{name} at the default quality must render at the global half scale"
             );
         }
     }

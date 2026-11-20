@@ -8,8 +8,7 @@
 //! Classification at the `global` default:
 //!
 //! * **Heavy** — follows the global setting: ISF shaders whose resolved
-//!   category is `3d-scenes`, and the Point10 scenes except the small
-//!   `full_quality_point10` set.
+//!   category is `3d-scenes`, and every Point10 scene.
 //! * **Light** — always full resolution: every built-in 2D module, every
 //!   built-in WGSL shader module, and ISF shaders whose category is
 //!   anything else (effects, 2D Scenes, uncategorised).
@@ -40,27 +39,11 @@ pub fn module_quality(props: &Value) -> &str {
         .unwrap_or(QUALITY_GLOBAL)
 }
 
-/// The Point10 scenes that are considered light enough to render at full
-/// quality regardless of the global setting.
-pub fn full_quality_point10(name: &str) -> bool {
-    matches!(
-        name,
-        "Point10 Chromatic Line"
-            | "Point10 Chromatic Wave"
-            | "Point10 Particle Field"
-            | "Point10 Spiral Particles"
-            | "Point10 Waveform"
-            | "Point10 Sun"
-            | "Point10 Earth"
-    )
-}
-
 /// Whether the module is heavy enough that the global render scale applies
 /// at the `global` default.
 ///
-/// `point10_heavy` is `Some(true)`/`Some(false)` for modules whose point10
-/// kind the registry knows (full-quality set vs the rest), or `None` for
-/// non-point10 modules.
+/// `point10_heavy` is `Some(true)` for Point10 modules (all of which follow
+/// the global setting), or `None` for non-point10 modules.
 pub fn is_heavy(meta: &Map<String, Value>, point10_heavy: Option<bool>) -> bool {
     if let Some(heavy) = point10_heavy {
         return heavy;
@@ -73,8 +56,8 @@ pub fn is_heavy(meta: &Map<String, Value>, point10_heavy: Option<bool>) -> bool 
 /// The target size `module` renders at, in pixels.
 ///
 /// `full_size` is the output resolution; `render_size` the global internal
-/// rendering resolution. `point10_heavy` carries the registry's point10
-/// classification (`None` for anything else).
+/// rendering resolution. `point10_heavy` is `Some(true)` for Point10 modules
+/// and `None` for anything else.
 pub fn module_render_size(
     full_size: (u32, u32),
     render_size: (u32, u32),
@@ -142,29 +125,19 @@ mod tests {
     }
 
     #[test]
-    fn the_full_quality_point10_set_ignores_the_global_setting() {
+    fn point10_scenes_follow_the_global_setting_by_default() {
         let props = json!({});
-        for name in [
-            "Point10 Chromatic Line",
-            "Point10 Chromatic Wave",
-            "Point10 Particle Field",
-            "Point10 Spiral Particles",
-            "Point10 Waveform",
-            "Point10 Sun",
-            "Point10 Earth",
-        ] {
-            assert!(full_quality_point10(name));
-        }
+        // The compositor classifies every Point10 module as heavy, whatever its
+        // name, so the `global` default resolves to the global render size.
         assert_eq!(
-            module_render_size(FULL, HALF, &props, &meta(None), Some(false)),
-            FULL
+            module_render_size(FULL, HALF, &props, &meta(None), Some(true)),
+            HALF
         );
     }
 
     #[test]
     fn other_point10_scenes_follow_the_global_setting() {
         let props = json!({});
-        assert!(!full_quality_point10("Point10 Smoke Room"));
         assert_eq!(
             module_render_size(FULL, HALF, &props, &meta(None), Some(true)),
             HALF
