@@ -11,6 +11,7 @@ use egui::{
 
 use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_window};
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
+use crate::group_drag::GroupDrag;
 use crate::layout::{
     LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
     WINDOW_TEMPO,
@@ -773,10 +774,24 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                                     }),
                                 );
                             }
-                            let response = ui.selectable_label(
-                                selected,
-                                egui::RichText::new(&group.name).size(13.0),
+                            let response = ui.add(
+                                egui::Button::selectable(
+                                    selected,
+                                    egui::RichText::new(&group.name).size(13.0),
+                                )
+                                .sense(Sense::click_and_drag()),
                             );
+                            // A Group header is a drag source: its payload
+                            // resolves into `scenes/setSceneCellGroup` when
+                            // released over a Scene cell. Attaching on drag
+                            // start leaves the existing click/double-click
+                            // select/rename behaviour untouched.
+                            if response.drag_started() {
+                                response.dnd_set_drag_payload(GroupDrag::new(
+                                    group.id.clone(),
+                                    group.name.clone(),
+                                ));
+                            }
                             if response.clicked() {
                                 state.selected_group = Some(group.id.clone());
                                 state.selected_module = None;

@@ -22,6 +22,7 @@
 pub mod file_dialog;
 pub mod fonts;
 pub mod gallery_drag;
+pub mod group_drag;
 pub mod layout;
 pub mod library_drag;
 pub mod model;

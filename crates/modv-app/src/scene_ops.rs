@@ -1317,6 +1317,81 @@ impl Store {
         Ok(json!({ "groupId": group["id"] }))
     }
 
+    /// Drag a Module onto a Scene cell, whether the cell is empty or occupied.
+    ///
+    /// An empty cell (no live Group stamped for this Scene + row) first gets a
+    /// backing Group through `scenes/createSceneCellGroup`; an occupied cell
+    /// reuses its stamped live Group. The new Module is appended to that Group
+    /// and the row is captured back into the saved Scene, so the cell holds
+    /// the Module while existing cell Modules are preserved.
+    pub fn add_module_to_cell(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        if self.performance_enabled() {
+            return Ok(Value::Null);
+        }
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(row) = params
+            .get("rowIndex")
+            .and_then(Value::as_i64)
+            .filter(|row| *row >= 0)
+            .map(|row| row as usize)
+        else {
+            return Ok(Value::Null);
+        };
+        let module_name = params
+            .get("moduleName")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if module_name.is_empty()
+            || !self
+                .scenes
+                .scenes
+                .iter()
+                .any(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str()))
+        {
+            return Ok(Value::Null);
+        }
+
+        self.complete_whole_scene_transition();
+        self.complete_row_transition(row);
+
+        let cell_json = json!({ "sceneId": scene_id, "rowIndex": row });
+        let cell_params = cell_json.as_object().expect("cell params are an object");
+
+        let group_id = if let Some(group) = self.state.groups.iter().find(|group| {
+            group.scene_id.as_deref() == Some(scene_id.as_str())
+                && group.scene_row == Some(row)
+                && group.transition_ghost != Some(true)
+        }) {
+            group.id.clone()
+        } else {
+            let created = self.create_scene_cell_group(cell_params)?;
+            let Some(id) = created["groupId"].as_str().map(str::to_string) else {
+                return Ok(Value::Null);
+            };
+            id
+        };
+
+        let module = self.dispatch(
+            "modules/makeActiveModule",
+            json!({ "moduleName": module_name }),
+        )?;
+        let Some(module_id) = module["$id"].as_str().map(str::to_string) else {
+            return Ok(Value::Null);
+        };
+        self.dispatch(
+            "groups/ADD_MODULE_TO_GROUP",
+            json!({ "groupId": group_id, "moduleId": module_id }),
+        )?;
+
+        self.capture_scene_row_to_scene(cell_params)
+    }
+
     /// `scenes/copySceneCellToScene` (`scenes.js:3568-3735`).
     ///
     /// Ctrl+drag a grid cell onto another Scene: copies the Group and Module
@@ -1446,6 +1521,72 @@ impl Store {
             return Ok(Value::Null);
         };
 
+        self.stamp_group_into_cell(index, row, &group)
+    }
+
+    /// Drag a live Group onto a Scene cell and stamp it over the cell contents.
+    ///
+    /// Unlike `scenes/captureSceneRowToScene` (which captures the Group stamped
+    /// for a given Scene + row), this action takes an arbitrary live Group by
+    /// `groupId` and writes its Module snapshots into the target Scene cell,
+    /// overwriting whatever the cell held — empty or occupied. Mirrors the
+    /// sibling cell actions' guards: performance mode, a negative row or an
+    /// unknown Scene/Group returns `null`.
+    pub fn set_scene_cell_group(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<Value, StoreError> {
+        if self.performance_enabled() {
+            return Ok(Value::Null);
+        }
+        let scene_id = params
+            .get("sceneId")
+            .or_else(|| params.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some(row) = params
+            .get("rowIndex")
+            .and_then(Value::as_i64)
+            .filter(|row| *row >= 0)
+            .map(|row| row as usize)
+        else {
+            return Ok(Value::Null);
+        };
+        let group_id = params
+            .get("groupId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Some(index) =
+            self.scenes.scenes.iter().position(|scene| {
+                scene.get("id").and_then(Value::as_str) == Some(scene_id.as_str())
+            })
+        else {
+            return Ok(Value::Null);
+        };
+
+        self.complete_whole_scene_transition();
+        self.complete_row_transition(row);
+
+        let Some(group) = self.state.find_group(group_id).cloned() else {
+            return Ok(Value::Null);
+        };
+
+        self.stamp_group_into_cell(index, row, &group)
+    }
+
+    /// Merge a live Group's snapshots into one Scene cell and write it back.
+    ///
+    /// Shared by `capture_scene_row_to_scene` (which finds the non-ghost Group
+    /// stamped for a Scene and row) and `set_scene_cell_group` (which takes an
+    /// arbitrary Group by id). Both return the updated Scene, or `null` when
+    /// the cell cannot be merged.
+    fn stamp_group_into_cell(
+        &mut self,
+        index: usize,
+        row: usize,
+        group: &Group,
+    ) -> Result<Value, StoreError> {
         let group_value = group.for_preset_save();
         let mut modules = Map::new();
         for module_id in &group.modules {
@@ -6619,6 +6760,138 @@ mod tests {
     }
 
     #[test]
+    fn add_module_to_cell_fills_an_empty_cell() {
+        // Dragging a module onto an EMPTY Scene cell must create the cell's
+        // backing Group (stamped for the Scene + row like createSceneCellGroup),
+        // add the module to it, then capture the row so the saved cell holds
+        // the module. "Empty" means no live Group is stamped for this scene +
+        // row: seed without applying, then clear the saved row to empty it.
+        let mut store = Store::new();
+        seed_scene(&mut store, two_row_scene("scene-a"));
+        let cleared = store
+            .dispatch(
+                "scenes/clearSceneCell",
+                json!({ "sceneId": "scene-a", "rowIndex": 0 }),
+            )
+            .expect("clearSceneCell dispatches");
+        assert_eq!(cleared["groups"][0]["modules"], json!([]));
+
+        let updated = store
+            .dispatch(
+                "scenes/addModuleToCell",
+                json!({ "sceneId": "scene-a", "rowIndex": 0, "moduleName": "Bands" }),
+            )
+            .expect("addModuleToCell dispatches");
+
+        assert_eq!(
+            updated["groups"][0]["modules"]
+                .as_array()
+                .map(|modules| modules.len()),
+            Some(1),
+            "the empty cell ends up with exactly one module: {updated}"
+        );
+        let module_id = updated["groups"][0]["modules"][0]
+            .as_str()
+            .expect("module id");
+        assert_eq!(
+            updated["modules"][module_id]["$moduleName"],
+            json!("Bands"),
+            "the new module snapshot is named Bands: {updated}"
+        );
+
+        // A stamped live row Group was created and owns the new module.
+        let live = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| {
+                group.scene_id.as_deref() == Some("scene-a")
+                    && group.scene_row == Some(0)
+                    && group.transition_ghost != Some(true)
+            })
+            .expect("a live row-0 Group was created for scene-a");
+        assert_eq!(live.modules, vec![module_id.to_string()]);
+        assert_eq!(
+            store
+                .state()
+                .modules
+                .get(module_id)
+                .expect("the new module is live")
+                .module_name,
+            "Bands"
+        );
+    }
+
+    #[test]
+    fn add_module_to_cell_appends_to_an_occupied_cell() {
+        // An OCCUPIED cell already has a live Group stamped for the Scene and
+        // row. Dragging a new module in must append to that Group (keeping the
+        // existing module) and capture the row so the saved cell holds both.
+        let mut store = Store::new();
+        seed_scene(&mut store, two_row_scene("scene-a"));
+        store
+            .dispatch("scenes/applyScene", json!({ "sceneId": "scene-a" }))
+            .expect("applyScene dispatches");
+
+        let updated = store
+            .dispatch(
+                "scenes/addModuleToCell",
+                json!({ "sceneId": "scene-a", "rowIndex": 0, "moduleName": "Ball" }),
+            )
+            .expect("addModuleToCell dispatches");
+
+        assert_eq!(
+            updated["groups"][0]["modules"]
+                .as_array()
+                .map(|modules| modules.len()),
+            Some(2),
+            "the occupied cell keeps its old module and gains the new one: {updated}"
+        );
+        let snapshots = updated["modules"].as_object().expect("module snapshots");
+        let names: Vec<&str> = updated["groups"][0]["modules"]
+            .as_array()
+            .expect("row 0 modules")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|id| snapshots[id]["$moduleName"].as_str().expect("module name"))
+            .collect();
+        assert!(
+            names.contains(&"Bands") && names.contains(&"Ball"),
+            "both the original and new module are in the saved cell: {names:?} / {updated}"
+        );
+
+        // The live Group owns both modules too, preserving the original.
+        let live = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| {
+                group.scene_id.as_deref() == Some("scene-a")
+                    && group.scene_row == Some(0)
+                    && group.transition_ghost != Some(true)
+            })
+            .expect("the live row-0 Group exists for scene-a");
+        assert_eq!(live.modules.len(), 2, "the live row owns both modules");
+        let live_names: Vec<&str> = live
+            .modules
+            .iter()
+            .map(|id| {
+                store
+                    .state()
+                    .modules
+                    .get(id)
+                    .expect("live module exists")
+                    .module_name
+                    .as_str()
+            })
+            .collect();
+        assert!(
+            live_names.contains(&"Bands") && live_names.contains(&"Ball"),
+            "the live Group keeps the old module and gains the new one: {live_names:?}"
+        );
+    }
+
+    #[test]
     fn clearing_a_scene_cell_empties_the_live_group_and_its_capture() {
         // `clearSceneCell` (`scenes.js:3399-3420`) removes every Module the
         // live row Group owns and then rewrites the Group's module list with
@@ -6897,6 +7170,187 @@ mod tests {
             )
             .expect("empty copy dispatches");
         assert_eq!(empty, Value::Null);
+    }
+
+    #[test]
+    fn set_scene_cell_group_overwrites_an_occupied_cell() {
+        // Dragging a live Group onto an OCCUPIED Scene cell replaces the cell's
+        // Group + Module snapshots; it does not merge into the old cell. The
+        // UI-side confirmation is a separate cycle — the engine action itself
+        // just stamps the supplied Group over whatever is there.
+        let mut store = Store::new();
+        for (id, name) in [("scene-a", "Alpha"), ("scene-b", "Beta")] {
+            let mut scene = two_row_scene(id);
+            scene["name"] = json!(name);
+            seed_scene(&mut store, scene);
+        }
+
+        // Build the source Group: stamp a fresh row-1 Group for Beta, then add
+        // a known module so its Module set is distinct from Alpha's row 0.
+        let created = store
+            .dispatch(
+                "scenes/createSceneCellGroup",
+                json!({ "sceneId": "scene-b", "rowIndex": 1 }),
+            )
+            .expect("createSceneCellGroup dispatches");
+        let source_group_id = created["groupId"].as_str().expect("groupId").to_string();
+        let source = store
+            .dispatch(
+                "scenes/addModuleToCell",
+                json!({ "sceneId": "scene-b", "rowIndex": 1, "moduleName": "Ball" }),
+            )
+            .expect("addModuleToCell dispatches");
+        let source_module_ids: Vec<String> = source["groups"][1]["modules"]
+            .as_array()
+            .expect("source group modules")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            source_module_ids.len(),
+            1,
+            "the source Group owns Ball: {source}"
+        );
+        assert_eq!(
+            source["modules"][source_module_ids[0].as_str()]["$moduleName"],
+            json!("Ball"),
+            "the source Module snapshot is Ball: {source}"
+        );
+
+        // The target cell is occupied: Alpha row 0 still holds "doc-bands".
+        assert_eq!(
+            find_default_scene(&store, "Alpha")["groups"][0]["modules"],
+            json!(["doc-bands"])
+        );
+
+        let updated = store
+            .dispatch(
+                "scenes/setSceneCellGroup",
+                json!({
+                    "sceneId": "scene-a",
+                    "rowIndex": 0,
+                    "groupId": source_group_id,
+                }),
+            )
+            .expect("setSceneCellGroup dispatches");
+        assert!(
+            updated.is_object(),
+            "the updated Scene is returned: {updated}"
+        );
+
+        let row_modules: Vec<&str> = updated["groups"][0]["modules"]
+            .as_array()
+            .expect("row 0 modules")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            row_modules,
+            source_module_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            "row 0 holds exactly the source Group's modules: {updated}"
+        );
+        let snapshots = updated["modules"].as_object().expect("module snapshots");
+        assert_eq!(
+            snapshots[source_module_ids[0].as_str()]["$moduleName"],
+            json!("Ball"),
+            "the source Module snapshot is in the Scene: {updated}"
+        );
+        // Overwrite, not merge: the old Bands module is gone from the cell and
+        // its snapshot was pruned because no Group references it any more.
+        assert!(
+            !row_modules.contains(&"doc-bands"),
+            "the old Bands module is not kept in the cell: {updated}"
+        );
+        assert!(
+            !snapshots.contains_key("doc-bands"),
+            "the old Bands snapshot is pruned: {updated}"
+        );
+    }
+
+    #[test]
+    fn set_scene_cell_group_fills_an_empty_cell() {
+        // The same action must also fill an EMPTY cell with the supplied live
+        // Group — there is no cell content to confirm overwriting here.
+        let mut store = Store::new();
+        for (id, name) in [("scene-a", "Alpha"), ("scene-b", "Beta")] {
+            let mut scene = two_row_scene(id);
+            scene["name"] = json!(name);
+            seed_scene(&mut store, scene);
+        }
+
+        let created = store
+            .dispatch(
+                "scenes/createSceneCellGroup",
+                json!({ "sceneId": "scene-b", "rowIndex": 1 }),
+            )
+            .expect("createSceneCellGroup dispatches");
+        let source_group_id = created["groupId"].as_str().expect("groupId").to_string();
+        let source = store
+            .dispatch(
+                "scenes/addModuleToCell",
+                json!({ "sceneId": "scene-b", "rowIndex": 1, "moduleName": "Ball" }),
+            )
+            .expect("addModuleToCell dispatches");
+        let source_module_ids: Vec<String> = source["groups"][1]["modules"]
+            .as_array()
+            .expect("source group modules")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+
+        // Empty Alpha row 0 before stamping the source Group into it.
+        let cleared = store
+            .dispatch(
+                "scenes/clearSceneCell",
+                json!({ "sceneId": "scene-a", "rowIndex": 0 }),
+            )
+            .expect("clearSceneCell dispatches");
+        assert_eq!(cleared["groups"][0]["modules"], json!([]));
+
+        let updated = store
+            .dispatch(
+                "scenes/setSceneCellGroup",
+                json!({
+                    "sceneId": "scene-a",
+                    "rowIndex": 0,
+                    "groupId": source_group_id,
+                }),
+            )
+            .expect("setSceneCellGroup dispatches");
+        assert!(
+            updated.is_object(),
+            "the updated Scene is returned: {updated}"
+        );
+
+        let row_modules: Vec<&str> = updated["groups"][0]["modules"]
+            .as_array()
+            .expect("row 0 modules")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            !row_modules.is_empty(),
+            "the previously empty cell is now filled: {updated}"
+        );
+        assert_eq!(
+            row_modules,
+            source_module_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            "the empty cell holds the source Group's modules: {updated}"
+        );
+        let snapshots = updated["modules"].as_object().expect("module snapshots");
+        assert_eq!(
+            snapshots[source_module_ids[0].as_str()]["$moduleName"],
+            json!("Ball"),
+            "the source Module snapshot fills the empty cell: {updated}"
+        );
     }
 
     #[test]

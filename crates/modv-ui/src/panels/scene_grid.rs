@@ -11,6 +11,8 @@ use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::gallery_drag::GalleryDrag;
+use crate::group_drag::GroupDrag;
 use crate::layout::{LayoutState, WINDOW_PERFORMANCE_ROW_NAMES, WINDOW_SCENE_TIMING};
 use crate::model::{
     EngineSnapshot, PERFORMANCE_ORDERS, PreviewRequest, SceneCellView, SceneView, TimingUnit,
@@ -52,6 +54,8 @@ pub struct SceneGridState {
     still_cells: BTreeMap<CellRef, Vec<String>>,
     /// The in-flight `Clear cell` confirmation, if any.
     pub clear_cell_edit: Option<ClearCellEdit>,
+    /// The in-flight `Overwrite cell` confirmation for a Group drop, if any.
+    pub overwrite_cell_edit: Option<OverwriteCellEdit>,
     /// Inline Scene-name editor: `(scene_id, draft)`.
     pub renaming: Option<(String, String)>,
     /// One-shot focus request for the inline editor.
@@ -84,6 +88,18 @@ pub struct ClearCellEdit {
     pub row: usize,
     pub scene_name: String,
     pub module_names: Vec<String>,
+}
+
+/// A pending `Overwrite cell` confirmation: the occupied cell a dragged Group
+/// was dropped on, plus the labels the dialog shows. The payload is kept so the
+/// confirm path reuses [`GroupDrag::drop_action`] instead of rebuilding the
+/// action by hand.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverwriteCellEdit {
+    pub scene_id: String,
+    pub row: usize,
+    pub scene_name: String,
+    pub drag: GroupDrag,
 }
 
 /// The small Scene-timing dialog's draft values.
@@ -1477,6 +1493,55 @@ fn scene_dialogs(
             grid.clear_cell_edit = Some(edit);
         }
     }
+
+    if let Some(edit) = grid.overwrite_cell_edit.take() {
+        let mut open = true;
+        let mut confirm = false;
+        let mut cancel = false;
+        let row_name = snapshot
+            .scene_rows
+            .get(edit.row)
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("Row {}", edit.row + 1));
+        let window = layout.apply_window(
+            egui::Window::new(format!(
+                "Overwrite cell: {} row {}",
+                edit.scene_name,
+                edit.row + 1
+            ))
+            .id(egui::Id::unique("modv-window:scene_overwrite_cell"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .min_width(320.0)
+            .default_size([400.0, 150.0]),
+            "scene_overwrite_cell",
+        );
+        let response = window.show(ui.ctx(), |ui| {
+            ui.label(format!(
+                "Overwrite the {row_name} cell of {} with Group {}? Its saved modules will be replaced.",
+                edit.scene_name, edit.drag.group_name
+            ));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Overwrite cell").clicked() {
+                    confirm = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        if let Some(response) = response {
+            layout.record_window_rect("scene_overwrite_cell", response.response.rect);
+        }
+        if confirm {
+            actions.push(edit.drag.drop_action(&edit.scene_id, edit.row));
+        } else if !cancel && open {
+            grid.overwrite_cell_edit = Some(edit);
+        }
+    }
 }
 
 /// How one Scene cell is highlighted against the live state.
@@ -1838,6 +1903,44 @@ fn draw_scene_cell(
         && let Some(action) = grid.drop_copy(&target)
     {
         actions.push(action);
+    }
+
+    // Gallery -> Scene cell drop: a module tile released over ANY cell (empty
+    // or populated) adds that module to the cell's row. Checking the payload
+    // type explicitly leaves other drags (ModuleDrag, TabDrag) untouched, and
+    // taking the payload consumes the release so no other target answers it.
+    if egui::DragAndDrop::has_payload_of_type::<GalleryDrag>(ui.ctx())
+        && ui.rect_contains_pointer(rect)
+        && ui.input(|input| input.pointer.any_released())
+        && let Some(payload) = egui::DragAndDrop::take_payload::<GalleryDrag>(ui.ctx())
+    {
+        actions.push(UiAction::new(
+            "scenes/addModuleToCell",
+            serde_json::json!({
+                "sceneId": scene.id,
+                "rowIndex": row,
+                "moduleName": payload.module_name,
+            }),
+        ));
+    }
+
+    // Group -> Scene cell drop: an empty cell queues the overwrite immediately;
+    // an occupied cell stores a pending confirmation and queues nothing yet.
+    if egui::DragAndDrop::has_payload_of_type::<GroupDrag>(ui.ctx())
+        && ui.rect_contains_pointer(rect)
+        && ui.input(|input| input.pointer.any_released())
+        && let Some(payload) = egui::DragAndDrop::take_payload::<GroupDrag>(ui.ctx())
+    {
+        if cell.is_empty() {
+            actions.push(payload.drop_action(&scene.id, row));
+        } else {
+            grid.overwrite_cell_edit = Some(OverwriteCellEdit {
+                scene_id: scene.id.clone(),
+                row,
+                scene_name: scene.name.clone(),
+                drag: payload.as_ref().clone(),
+            });
+        }
     }
 
     let cell_label = if live {

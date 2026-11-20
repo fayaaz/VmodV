@@ -716,7 +716,9 @@ impl Store {
             "scenes/resetSceneTiming" => self.reset_scene_timing(params),
             "scenes/clearSceneCell" => self.clear_scene_cell(params),
             "scenes/captureSceneRowToScene" => self.capture_scene_row_to_scene(params),
+            "scenes/setSceneCellGroup" => self.set_scene_cell_group(params),
             "scenes/createSceneCellGroup" => self.create_scene_cell_group(params),
+            "scenes/addModuleToCell" => self.add_module_to_cell(params),
             "scenes/copySceneCellToScene" => self.copy_scene_cell_to_scene(params),
             // ————————————————— Performance runtime (WS-8 / M5c) ————————
             "scenes/startPerformance" => self.start_performance(),
