@@ -33,6 +33,8 @@ pub enum MediaFolder {
     Image,
     Video,
     Palette,
+    /// RED STUB: MilkDrop `.mlk` presets. GREEN wires it into the watcher.
+    Milkdrop,
 }
 
 impl MediaFolder {
@@ -42,6 +44,8 @@ impl MediaFolder {
             Self::Image => "image",
             Self::Video => "video",
             Self::Palette => "palette",
+            // RED STUB: GREEN returns "milkdrop".
+            Self::Milkdrop => "",
         }
     }
 }
@@ -273,6 +277,8 @@ pub fn supported(folder: MediaFolder, name: &str) -> bool {
         MediaFolder::Image => matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "gif"),
         MediaFolder::Video => matches!(extension.as_str(), "mp4" | "webm" | "webv"),
         MediaFolder::Palette => extension == "json",
+        // RED STUB: GREEN accepts case-insensitive `.mlk` here.
+        MediaFolder::Milkdrop => false,
     }
 }
 
@@ -542,6 +548,104 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn milkdrop_presets_have_their_own_label_extension_and_library_policy() {
+        assert!(
+            supported(MediaFolder::Milkdrop, "preset.mlk"),
+            "lowercase .mlk is a MilkDrop preset"
+        );
+        assert!(
+            supported(MediaFolder::Milkdrop, "PRESET.MLK"),
+            "the extension check is case-insensitive"
+        );
+        assert!(
+            !supported(MediaFolder::Milkdrop, "shader.fs"),
+            "an ISF shader is not a MilkDrop preset"
+        );
+        assert!(!supported(MediaFolder::Milkdrop, "notes.txt"));
+        assert_eq!(MediaFolder::Milkdrop.label(), "milkdrop");
+
+        let burst = MediaBurst {
+            folders: vec![MediaFolder::Milkdrop],
+            events: 1,
+        };
+        assert!(burst.has(MediaFolder::Milkdrop));
+        assert!(
+            !burst.touches_library(),
+            "a preset-only burst must not rescan the media library"
+        );
+    }
+
+    #[test]
+    fn milkdrop_burst_is_coalesced_once_and_does_not_touch_the_library() {
+        let start = Instant::now();
+        let mut debounce = Debounce::default();
+        for offset in [0, 20, 40, 60, 80] {
+            debounce.record(MediaFolder::Milkdrop, start + Duration::from_millis(offset));
+        }
+
+        assert_eq!(
+            debounce.take(start + Duration::from_millis(300), DEBOUNCE),
+            None,
+            "the 500 ms debounce is unchanged"
+        );
+        let burst = debounce
+            .take(start + Duration::from_millis(800), DEBOUNCE)
+            .expect("quiet burst");
+        assert_eq!(burst.folders, vec![MediaFolder::Milkdrop]);
+        assert_eq!(burst.events, 5, "the burst is coalesced into one");
+        assert!(
+            !burst.touches_library(),
+            "a preset-only burst must not rescan the media library"
+        );
+        assert_eq!(
+            debounce.take(start + Duration::from_secs(2), DEBOUNCE),
+            None,
+            "a burst is reported once"
+        );
+    }
+
+    #[test]
+    fn a_real_watcher_reports_debounced_milkdrop_preset_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "modv-media-watch-milkdrop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        // The other folders exist so `for_profile` still builds a watcher;
+        // only the MilkDrop folder is written to.
+        for folder in ["isf", "image", "video", "palette", "milkdrop"] {
+            std::fs::create_dir_all(root.join("live").join(folder)).expect("media folder");
+        }
+        let mut watcher =
+            MediaWatcher::for_profile(&root, "live", &[]).expect("a watchable media tree");
+
+        std::thread::sleep(Duration::from_millis(100));
+        for name in ["a.mlk", "b.MLK", "c.mlk"] {
+            std::fs::write(root.join("live/milkdrop").join(name), b"preset").expect("write preset");
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(burst) = watcher.pump_at(Instant::now()) {
+                assert!(burst.has(MediaFolder::Milkdrop), "{burst:?}");
+                assert!(
+                    !burst.touches_library(),
+                    "a preset-only burst must not rescan the media library"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no MilkDrop burst within 5 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

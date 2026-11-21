@@ -4547,6 +4547,17 @@ fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<Pat
     media_profiles::user_isf_dirs(media_root, profile, extra)
 }
 
+/// User MilkDrop preset folders under `<userData>/media`.
+///
+/// RED STUB: discovery is not wired into the shell yet. GREEN resolves these
+/// folders in `NativeApp::new`, passes them into `build_native_store`, rebuilds
+/// them with the watcher on profile/extra-dir changes and routes a `Milkdrop`
+/// burst to `rescan_modules` alongside `Isf`.
+#[allow(dead_code)] // RED stub: only the test uses it until GREEN wires discovery in.
+fn user_milkdrop_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
+    media_profiles::user_milkdrop_dirs(media_root, profile, extra)
+}
+
 /// Resolve a Library-relative folder under one kind root.
 ///
 /// Returns `None` for anything that could escape the profile: absolute paths,
@@ -5492,6 +5503,33 @@ module.exports = {
             "a switch must not keep scanning the previous profile"
         );
         assert!(!dirs.contains(&root.join("media/live/video")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn user_milkdrop_dirs_follow_the_active_profile_and_extras() {
+        let root = temp_dir("modv-user-milkdrop");
+        std::fs::create_dir_all(root.join("media/milkdrop")).expect("flat milkdrop");
+        std::fs::create_dir_all(root.join("media/default/milkdrop")).expect("default milkdrop");
+        std::fs::create_dir_all(root.join("media/live/milkdrop")).expect("live milkdrop");
+        let extra = root.join("third-party-presets");
+        std::fs::create_dir_all(&extra).expect("extra");
+
+        let dirs = user_milkdrop_dirs(&root.join("media"), "live", std::slice::from_ref(&extra));
+
+        assert!(
+            dirs.contains(&root.join("media/milkdrop")),
+            "legacy flat folder"
+        );
+        assert!(
+            dirs.contains(&root.join("media/live/milkdrop")),
+            "active profile"
+        );
+        assert!(dirs.contains(&extra), "explicit extra folder");
+        assert!(
+            !dirs.contains(&root.join("media/default/milkdrop")),
+            "a switch must not keep scanning the previous profile"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

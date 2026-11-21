@@ -260,6 +260,32 @@ pub fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec
     dirs
 }
 
+/// The user MilkDrop preset folders to scan for `profile`.
+///
+/// RED STUB: discovery is not implemented yet. GREEN replaces this body; the
+/// intended result is `<media>/milkdrop`, `<media>/<profile>/milkdrop` and the
+/// existing entries of `extra`, in a deterministic order.
+pub fn user_milkdrop_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
+    let override_dir = std::env::var_os("MODV_USER_MILKDROP_DIR").map(PathBuf::from);
+    user_milkdrop_dirs_with_override(media_root, profile, extra, override_dir.as_deref())
+}
+
+/// [`user_milkdrop_dirs`] with an explicit `MODV_USER_MILKDROP_DIR` override.
+///
+/// RED STUB: returns no folders. GREEN must honour `override_dir` first (when
+/// `Some`, only that folder is returned) and otherwise perform the discovery
+/// described on [`user_milkdrop_dirs`]. The explicit parameter keeps the
+/// override testable without mutating process-wide environment variables.
+pub fn user_milkdrop_dirs_with_override(
+    media_root: &Path,
+    profile: &str,
+    extra: &[PathBuf],
+    override_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let _ = (media_root, profile, extra, override_dir);
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +477,69 @@ mod tests {
             !dirs.contains(&media.join("default/isf")),
             "other profiles are not searched"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn milkdrop_dirs_follow_the_active_profile_and_explicit_extras() {
+        let root = temp_dir("modv-profile-milkdrop");
+        let media = root.join("media");
+        create_profile(&media, "default").expect("default");
+        create_profile(&media, "live").expect("live");
+        std::fs::create_dir_all(media.join("milkdrop")).expect("flat milkdrop");
+        std::fs::create_dir_all(media.join("live/milkdrop")).expect("live milkdrop");
+        let extra = root.join("third-party-presets");
+        std::fs::create_dir_all(&extra).expect("extra");
+
+        let dirs = user_milkdrop_dirs(&media, "live", &[extra.clone(), root.join("missing")]);
+
+        assert!(dirs.contains(&media.join("milkdrop")), "legacy flat folder");
+        assert!(
+            dirs.contains(&media.join("live/milkdrop")),
+            "active profile"
+        );
+        assert!(dirs.contains(&extra), "explicit extra folder");
+        assert!(
+            !dirs.contains(&media.join("default/milkdrop")),
+            "other profiles are not searched"
+        );
+        assert!(
+            !dirs.contains(&root.join("missing")),
+            "missing extras are not returned"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn milkdrop_dir_override_returns_only_the_override() {
+        let root = temp_dir("modv-profile-milkdrop-override");
+        let media = root.join("media");
+        create_profile(&media, "live").expect("live");
+        std::fs::create_dir_all(media.join("milkdrop")).expect("flat milkdrop");
+        let override_dir = root.join("chosen-milkdrop");
+
+        let dirs = user_milkdrop_dirs_with_override(&media, "live", &[], Some(&override_dir));
+
+        assert_eq!(
+            dirs,
+            vec![override_dir],
+            "the override replaces every other folder"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn creating_a_profile_makes_the_milkdrop_folders() {
+        let root = temp_dir("modv-profile-milkdrop-create");
+        let media = root.join("media");
+
+        let profile = create_profile(&media, " live ").expect("create profile");
+
+        assert!(
+            media.join("milkdrop").is_dir(),
+            "shared <media>/milkdrop folder"
+        );
+        assert!(profile.join("milkdrop").is_dir(), "profile milkdrop folder");
         let _ = std::fs::remove_dir_all(root);
     }
 }
