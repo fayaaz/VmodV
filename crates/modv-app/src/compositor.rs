@@ -305,6 +305,7 @@ use modv_render::{TexturePool, TexturePoolKey, UsageClass};
 use modv_renderers::isf::{
     CompiledIsf, IsfDocument, IsfFrameUniforms, IsfRuntime, IsfValue, IsfValues,
 };
+use modv_renderers::milkdrop::{MilkInstance, MilkRuntime};
 use modv_renderers::point10::audio_bridge::{
     AudioBridge, BandPayload, RawBands, ResponsivenessLevers,
 };
@@ -825,6 +826,9 @@ pub struct Compositor {
     surfaces: TextureSurfaces,
     registry: Arc<ModuleRegistry>,
     isf_runtime: IsfRuntime,
+    /// Per-compositor MilkDrop runtime (preset failure cache + GPU caches).
+    #[allow(dead_code)]
+    milkdrop_runtime: MilkRuntime,
     size: (u32, u32),
     /// Linear scale of the internal render targets (default 1.0 = full
     /// output resolution). The window/present path still uses the full
@@ -875,6 +879,13 @@ pub struct Compositor {
     /// ISF module ids whose compile failed; skipped without retrying each
     /// frame.
     failed_isf: HashSet<String>,
+    /// Live MilkDrop instances keyed by module id.
+    #[allow(dead_code)]
+    milkdrop: HashMap<String, MilkInstance>,
+    /// MilkDrop module ids whose preset failed; skipped without retrying each
+    /// frame.
+    #[allow(dead_code)]
+    failed_milkdrop: HashSet<String>,
     /// Uploaded video frames keyed by media source id (WS-10).
     media_textures: HashMap<String, MediaTexture>,
     /// Decoded image assets keyed by `(path, requested size)` — the image
@@ -1040,6 +1051,8 @@ impl Compositor {
             surfaces: TextureSurfaces::new(),
             registry,
             isf_runtime: IsfRuntime::new(device.clone(), queue.clone(), 4),
+            // RED stub: GREEN replaces this with a device-backed MilkRuntime::new(..).
+            milkdrop_runtime: MilkRuntime::default(),
             size: (0, 0),
             render_scale: 1.0,
             main: None,
@@ -1060,6 +1073,8 @@ impl Compositor {
             isf_mask_layout,
             isf_mask_pipeline,
             failed_isf: HashSet::new(),
+            milkdrop: HashMap::new(),
+            failed_milkdrop: HashSet::new(),
             media_textures: HashMap::new(),
             images: ImageTextures::new(),
             media_order: Vec::new(),
@@ -1087,6 +1102,8 @@ impl Compositor {
         self.registry = registry;
         self.failed_modules.clear();
         self.failed_isf.clear();
+        // RED stub: GREEN also clears `failed_milkdrop` and the MilkDrop
+        // runtime's failure cache so a previously broken preset can be retried.
     }
 
     /// Resize the output. Every output-sized texture is dropped and lazily
@@ -1897,6 +1914,9 @@ impl Compositor {
             // Vendored ISF shaders register with `meta.type: "isf"` and render
             // through the ISF runtime into their own target.
             "isf" => return self.render_isf_module(module, module_id, target, frame),
+            // `.mlk` presets register with `meta.type: "milkdrop"` (registry
+            // `meta_fields`), and render through the MilkDrop runtime.
+            "milkdrop" => return self.render_milkdrop_module(module, module_id, target, frame),
             "shader" => {}
             other => {
                 self.warn_once(
@@ -2382,6 +2402,25 @@ impl Compositor {
         }
 
         self.composite(texture_id, target.clone(), alpha, blend)
+    }
+
+    /// Render one MilkDrop `.mlk` preset into its module target and composite
+    /// the result onto the group target (mirrors [`Self::render_isf_module`]).
+    ///
+    /// RED stub: GREEN implements the full path — registry lookup, target
+    /// allocation/registering under [`milkdrop_texture_id`], `MilkInstance`
+    /// compile + per-frame CPU evaluation, `MilkRuntime::render` and the
+    /// meta-alpha/compositeOperation composite. Failures disable only this
+    /// module instance via [`Self::failed_milkdrop`].
+    #[allow(dead_code)]
+    fn render_milkdrop_module(
+        &mut self,
+        _module: &ModuleInstance,
+        _module_id: &str,
+        _target: &TextureId,
+        _frame: &FrameInfo,
+    ) -> Result<(), CompositorError> {
+        Ok(())
     }
 
     /// Render one ISF shader into its module target and composite the result
@@ -4031,6 +4070,11 @@ fn point10_texture_id(module_id: &str) -> TextureId {
 /// The frame-graph texture id of an ISF module's target.
 fn isf_texture_id(module_id: &str) -> TextureId {
     TextureId::from(format!("isf:{module_id}"))
+}
+
+/// The frame-graph texture id of a MilkDrop `.mlk` module's target.
+fn milkdrop_texture_id(module_id: &str) -> TextureId {
+    TextureId::from(format!("milkdrop:{module_id}"))
 }
 
 /// The texture id of an NDI receiver's latest frame (`ndi:<receiverId>`).
@@ -7426,5 +7470,188 @@ void main(void) {
             0,
             "Texture 2D resolves its `texture` prop, not a camera source"
         );
+    }
+
+    // ————————————————— MilkDrop `.mlk` compositor path —————————————————
+
+    /// A `.mlk` preset that parses into warp/comp shaders known to translate
+    /// cleanly (the same bodies the runtime's compile tests use). The module
+    /// name is the file stem, exactly like the ISF path.
+    const MILK_VALID_PRESET: &str = "[preset00]\n\
+        title=Valid Preset - Test Author\n\
+        warp_1=shader_body {\n\
+        warp_2=float2 uv = uv_orig + float2(roam_cos, roam_sin) * 0.01;\n\
+        warp_3=float3 ret = tex2D(sampler_main, uv).rgb;\n\
+        warp_4=}\n\
+        comp_1=shader_body {\n\
+        comp_2=float3 ret = GetMain(uv_orig).rgb;\n\
+        comp_3=}\n";
+
+    /// A registry that discovers one valid `.mlk` preset, plus its temp dir
+    /// (kept alive for the test — a GREEN may re-read the preset from disk).
+    fn milkdrop_registry() -> Option<(Arc<ModuleRegistry>, std::path::PathBuf)> {
+        let dir = std::env::temp_dir().join(format!(
+            "modv-app-milk-compositor-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("MilkDrop temp dir");
+        std::fs::write(dir.join("Valid Preset.mlk"), MILK_VALID_PRESET)
+            .expect("write test .mlk preset");
+        let registry = Arc::new(ModuleRegistry::build_with_milkdrop(
+            None,
+            &[],
+            std::slice::from_ref(&dir),
+        ));
+        if registry.milkdrop_definition("Valid Preset").is_none() {
+            eprintln!("skipping MilkDrop compositor test: preset was not registered");
+            let _ = std::fs::remove_dir_all(&dir);
+            return None;
+        }
+        Some((registry, dir))
+    }
+
+    /// A module record with `meta.type == "milkdrop"` — what `meta_fields`
+    /// emits for a registered `.mlk` preset.
+    fn milkdrop_module(module_id: &str, name: &str) -> ModuleInstance {
+        serde_json::from_value(json!({
+            "$id": module_id,
+            "$moduleName": name,
+            "meta": {
+                "name": name,
+                "type": "milkdrop",
+                "enabled": true,
+                "alpha": 1.0,
+                "compositeOperation": "normal"
+            },
+            "props": {},
+            "data": {}
+        }))
+        .expect("MilkDrop module decodes")
+    }
+
+    /// One clearing `Effects` group holding the given MilkDrop modules.
+    fn milkdrop_state(modules: &[(&str, &str)]) -> EngineState {
+        let ids: Vec<&str> = modules.iter().map(|(id, _)| *id).collect();
+        let mut state = EngineState::new();
+        state.groups.push(group_with(
+            "group-a",
+            "Effects",
+            &ids,
+            GROUP_ENABLED,
+            1.0,
+            true,
+            true,
+            json!(-1),
+        ));
+        for (id, name) in modules {
+            state
+                .modules
+                .insert(id.to_string(), milkdrop_module(id, name));
+        }
+        state
+    }
+
+    #[test]
+    fn milkdrop_texture_id_is_distinct_from_other_module_targets() {
+        let id = "module-a";
+        let milk = milkdrop_texture_id(id);
+        assert_ne!(milk, isf_texture_id(id), "collides with the ISF target id");
+        assert_ne!(
+            milk,
+            point10_texture_id(id),
+            "collides with the Point10 target id"
+        );
+        assert_ne!(
+            milk,
+            two_d_texture_id(id),
+            "collides with the 2D canvas id"
+        );
+        assert_eq!(milk, milkdrop_texture_id(id), "the id is stable per module");
+        assert_ne!(milk, milkdrop_texture_id("module-b"), "one id per module");
+    }
+
+    #[test]
+    fn milkdrop_module_renders_through_the_compositor() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some((registry, dir)) = milkdrop_registry() else {
+            return;
+        };
+        let mut compositor = Compositor::with_registry(&engine.device, &engine.queue, registry);
+        compositor.resize(SIZE, SIZE);
+
+        let state = milkdrop_state(&[("module-a", "Valid Preset")]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("MilkDrop frame renders");
+
+        assert!(
+            compositor
+                .surfaces
+                .contains_key(&milkdrop_texture_id("module-a")),
+            "a meta.type=\"milkdrop\" module did not register its MilkDrop target surface \
+             (it was skipped as an unknown type)"
+        );
+        assert!(
+            !compositor.failed_milkdrop.contains("module-a"),
+            "a valid .mlk preset was disabled"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn set_registry_clears_failed_milkdrop() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let registry = Arc::new(ModuleRegistry::builtin());
+        let mut compositor =
+            Compositor::with_registry(&engine.device, &engine.queue, Arc::clone(&registry));
+
+        // Seed a failure the way a bad compile/draw would.
+        compositor.failed_milkdrop.insert("module-a".to_string());
+        assert!(compositor.failed_milkdrop.contains("module-a"));
+
+        compositor.set_registry(registry);
+
+        assert!(
+            !compositor.failed_milkdrop.contains("module-a"),
+            "a registry swap must clear failed MilkDrop modules so they can be retried"
+        );
+    }
+
+    #[test]
+    fn malformed_milkdrop_module_is_failed_and_skipped() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some((registry, dir)) = milkdrop_registry() else {
+            return;
+        };
+        let mut compositor = Compositor::with_registry(&engine.device, &engine.queue, registry);
+        compositor.resize(SIZE, SIZE);
+
+        // A module claiming `meta.type == "milkdrop"` whose name has no
+        // registered `.mlk` definition (the MilkDrop analogue of ISF's
+        // unregistered-shader path) must be cached as failed, not panic.
+        let state = milkdrop_state(&[("module-a", "Not In The Registry")]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("first frame renders");
+        assert!(
+            compositor.failed_milkdrop.contains("module-a"),
+            "a broken/unregistered .mlk module must be added to failed_milkdrop"
+        );
+
+        // The failure cache must make the next frame a no-op, not a panic.
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("second frame skips the failed module without panicking");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
