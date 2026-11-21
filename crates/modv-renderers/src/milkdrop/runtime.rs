@@ -26,29 +26,55 @@
 //! bind-group layouts, samplers, a shared full-screen vertex module and render
 //! pipelines. None of this changes the CPU API below.
 //!
-//! # Render pipeline (Layer 5b)
+//! # Render pipeline (Layers 5b + 5c)
 //!
 //! [`MilkRuntime::render`] encodes one command buffer with six full-screen
-//! passes, in MilkDrop's order:
+//! passes plus an optional overlay pass, in MilkDrop's order:
 //!
 //! 1. **warp** — the translated warp WGSL resamples the previous composited
 //!    frame (`sampler_main`) at the mesh UVs carried in `uv_orig`.
 //! 2. **blur1/2/3** — populate the three `GetBlur{1,2,3}` targets. These are
 //!    currently plain texture copies; real blur kernels are a deliberate
-//!    simplification deferred to the wave/shape overlay cycle.
+//!    simplification.
 //! 3. **comp** — the translated comp WGSL samples the warped frame and produces
 //!    the composite colour.
-//! 4. **output** — post-processing into the caller-supplied target:
+//! 4. **overlays (Layer 5c)** — when at least one wave/shape was evaluated,
+//!    [`evaluate_overlays`]' results are drawn as `LineList` primitives onto
+//!    the comp target, between comp and output. When there are no overlays this
+//!    pass is skipped entirely, so the six-pass path is byte-for-byte unchanged.
+//! 5. **output** — post-processing into the caller-supplied target:
 //!    `gammaadj`, `invert` and `red_blue` are applied exactly, while
 //!    `brighten`, `darken` and `solarize` (booleans in a `.mlk`) use a fixed
 //!    small strength because their per-pixel `q` equations are not evaluated
 //!    here. The exact arithmetic lives in `OUTPUT_FRAGMENT_WGSL`.
 //!
 //! [`MilkGpuTargets`] owns the five `Rgba8Unorm` intermediate textures and
-//! reallocates them only when the size changes. Wave/shape overlays are deferred
-//! to the next cycle, so the mesh UV grid is not uploaded and the translated
-//! shaders read `uv_orig` from the uniform block instead; the wave/spectrum
-//! arrays copied onto [`MilkInstance`] are not yet consumed by any pass.
+//! reallocates them only when the size changes. The mesh UV grid is not
+//! uploaded for the warp pass; the translated shaders read `uv_orig` from the
+//! uniform block instead. The audio wave copied onto [`MilkInstance`] feeds the
+//! wave overlay's per-point equations (see below); the spectrum bytes are not
+//! yet consumed by any pass.
+//!
+//! # Overlay subset and error isolation (Layer 5c)
+//!
+//! Up to four enabled waves and four shapes are compiled once per preset and
+//! evaluated per frame. This is the *primitive subset* of MilkDrop's overlay
+//! engine, chosen to stay deterministic and allocation-light on the GPU path:
+//!
+//! * A **wave** is a `LineList` polyline over `x/y` points from its `point_eqs`;
+//!   every [`WAVE_VERTEX_STRIDE`]th point is kept. A **shape** is a closed
+//!   regular polygon whose `sides`/`cx`/`cy`/`radius`/`rot` come from the frame
+//!   pool. Each vertex carries its own NDC position and clamped `r/g/b/a`
+//!   colour; there are no textures or bind groups.
+//! * Solid 1-pixel lines are drawn (no thick/dotted/textured waves). The
+//!   `additive` variable selects one of two cached blend states. Per-wave
+//!   variables seeded for compatibility but not consumed by this subset
+//!   (`border_*`, `thick`, `usedots`, `spectrum`, the secondary colour, ...)
+//!   are still written to the pool so preset equations can read them.
+//! * Every section is isolated: a parse failure at compile time marks only
+//!   that section failed and is logged; a runtime EEL error returns a message
+//!   that the caller logs and skips for that section alone. Errors are never
+//!   propagated to the preset and never panic.
 //!
 //! # Per-frame contract (what the tests pin down)
 //!
@@ -1331,7 +1357,7 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
 
 /// Evaluate every enabled wave/shape overlay for `frame`.
 ///
-/// Contract for GREEN (documented so the stubs are unambiguous):
+/// Contract:
 ///
 /// * Compilation happens once in [`compile_preset`] — one [`WaveProgram`] /
 ///   [`ShapeProgram`] per enabled section, with malformed sections skipped and
@@ -1343,12 +1369,15 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
 ///   `sep`, `additive`, `usedots`, `spectrum`, `thick`, `r/g/b/a`) and the
 ///   per-shape-frame variables (`r/g/b/a`, `r2/g2/b2/a2`, `border_*`, `sides`,
 ///   `instance`, `num_inst`, `tex_zoom`, `tex_ang`, ...) before running the
-///   frame equations.
-/// * Wave `point_eqs` are then evaluated per sample point (bounded, e.g. 1024)
-///   with `x/y/sample/value1/value2`, producing [`WavePoint`]s.
-/// * The result is cached on `instance.overlay_frame` and returned by value.
-///   An error in one overlay disables only that overlay and is logged once; it
-///   is never propagated and never panics.
+///   frame equations. These defaults live in the tables above and any value a
+///   preset's equations assign afterwards wins.
+/// * Wave `point_eqs` are then evaluated per sample point (bounded to
+///   [`MAX_WAVE_SAMPLES`]) with `x/y/sample/value1/value2`, producing
+///   [`WavePoint`]s on a copy-on-write fork of the frame pool.
+/// * The result is cached on `instance.overlay_frame` and returned by value so
+///   [`MilkRuntime::render`] can draw it. Each section is evaluated behind its
+///   own `Result`: on error only that section is logged and skipped (no panic,
+///   no propagation), so one broken overlay cannot disable its neighbours.
 ///
 pub fn evaluate_overlays(
     instance: &mut MilkInstance,
@@ -1406,48 +1435,84 @@ pub fn evaluate_overlays(
     Ok(result)
 }
 
+/// Write a table of runtime-owned defaults into `pool`. The section's frame
+/// equations run afterwards, so any value the preset assigns wins.
+fn seed_vars(pool: &mut VarPool, vars: &[(&str, f32)]) {
+    for (name, value) in vars {
+        pool.set(name, *value);
+    }
+}
+
+/// Colour variables shared by every overlay kind. The GPU pass reads these
+/// from the evaluated frame pool, so both wave and shape paths seed the same
+/// deterministic default opaque-white value.
+const OVERLAY_COLOR_VARS: &[(&str, f32)] = &[("r", 1.0), ("g", 1.0), ("b", 1.0), ("a", 1.0)];
+
+/// Extra per-wave-frame variables. `samples` is dynamic (derived from the
+/// audio wave length) and is seeded separately by [`seed_wave_frame_vars`].
+const WAVE_FRAME_VARS: &[(&str, f32)] = &[
+    ("scaling", 1.0),
+    ("smoothing", 0.0),
+    ("sep", 0.0),
+    ("additive", 0.0),
+    ("usedots", 0.0),
+    ("spectrum", 0.0),
+    ("thick", 1.0),
+];
+
+/// Extra per-shape-frame variables, on top of [`OVERLAY_COLOR_VARS`]. The
+/// secondary colour and `border_*` are seeded for preset compatibility even
+/// though this subset only draws the primary-colour outline.
+const SHAPE_FRAME_VARS: &[(&str, f32)] = &[
+    ("r2", 1.0),
+    ("g2", 1.0),
+    ("b2", 1.0),
+    ("a2", 1.0),
+    ("border_r", 0.0),
+    ("border_g", 0.0),
+    ("border_b", 0.0),
+    ("border_a", 0.0),
+    ("sides", 4.0),
+    ("instance", 0.0),
+    ("num_inst", 1.0),
+    ("tex_zoom", 1.0),
+    ("tex_ang", 0.0),
+    ("cx", 0.0),
+    ("cy", 0.0),
+    ("rot", 0.0),
+    ("radius", 0.5),
+];
+
 /// Seed the runtime-owned variables a wave frame equation can read before it
 /// runs. These mirror the subset of MilkDrop's per-wave-frame variables that a
 /// preset's `frame_eqs` may reference; any value the preset assigns afterwards
 /// wins.
 fn seed_wave_frame_vars(pool: &mut VarPool, samples: usize) {
+    seed_vars(pool, OVERLAY_COLOR_VARS);
+    seed_vars(pool, WAVE_FRAME_VARS);
     pool.set("samples", samples as f32);
-    pool.set("scaling", 1.0);
-    pool.set("smoothing", 0.0);
-    pool.set("sep", 0.0);
-    pool.set("additive", 0.0);
-    pool.set("usedots", 0.0);
-    pool.set("spectrum", 0.0);
-    pool.set("thick", 1.0);
-    pool.set("r", 1.0);
-    pool.set("g", 1.0);
-    pool.set("b", 1.0);
-    pool.set("a", 1.0);
 }
 
 /// Seed the runtime-owned variables a shape frame equation can read.
 fn seed_shape_frame_vars(pool: &mut VarPool) {
-    pool.set("r", 1.0);
-    pool.set("g", 1.0);
-    pool.set("b", 1.0);
-    pool.set("a", 1.0);
-    pool.set("r2", 1.0);
-    pool.set("g2", 1.0);
-    pool.set("b2", 1.0);
-    pool.set("a2", 1.0);
-    pool.set("border_r", 0.0);
-    pool.set("border_g", 0.0);
-    pool.set("border_b", 0.0);
-    pool.set("border_a", 0.0);
-    pool.set("sides", 4.0);
-    pool.set("instance", 0.0);
-    pool.set("num_inst", 1.0);
-    pool.set("tex_zoom", 1.0);
-    pool.set("tex_ang", 0.0);
-    pool.set("cx", 0.0);
-    pool.set("cy", 0.0);
-    pool.set("rot", 0.0);
-    pool.set("radius", 0.5);
+    seed_vars(pool, OVERLAY_COLOR_VARS);
+    seed_vars(pool, SHAPE_FRAME_VARS);
+}
+
+/// Run a section's init equations once, capturing the `q1..q32` baseline and
+/// marking the state initialised. Shared by wave and shape sections.
+fn ensure_overlay_init(
+    init: &CompiledEquations,
+    state: &mut OverlayState,
+    globals: &Globals,
+) -> Result<(), String> {
+    if state.init_done {
+        return Ok(());
+    }
+    run_frame(init, &mut state.pool, globals).map_err(|e| format!("init: {e}"))?;
+    state.pool.snapshot_q();
+    state.init_done = true;
+    Ok(())
 }
 
 /// Run one wave section: init once, seed + run frame equations, then evaluate
@@ -1460,18 +1525,16 @@ fn evaluate_one_wave(
     audio_wave: &[f32],
     samples: usize,
 ) -> Result<WaveOverlay, String> {
-    if !state.init_done {
-        run_frame(&program.init, &mut state.pool, globals).map_err(|e| format!("init: {e}"))?;
-        state.pool.snapshot_q();
-        state.init_done = true;
-    }
+    ensure_overlay_init(&program.init, state, globals)?;
 
     seed_wave_frame_vars(&mut state.pool, samples);
     run_frame(&program.frame, &mut state.pool, globals).map_err(|e| format!("frame: {e}"))?;
 
-    // Point equations run on a clone so the frame-level pool (r/g/b/a, t1..t8,
+    // Point equations run on a fork so the frame-level pool (r/g/b/a, t1..t8,
     // samples, ...) survives unchanged for both the returned overlay and the
-    // GPU colour pass.
+    // GPU colour pass. `VarPool`'s megabuf is copy-on-write, so this fork (and
+    // the returned-overlay clone below) only copies the 4 MiB buffer if a
+    // point equation actually writes to it — typically zero copies per frame.
     let mut point_pool = state.pool.clone();
     let mut points = Vec::with_capacity(samples);
     for index in 0..samples {
@@ -1509,11 +1572,7 @@ fn evaluate_one_shape(
     state: &mut OverlayState,
     globals: &Globals,
 ) -> Result<ShapeOverlay, String> {
-    if !state.init_done {
-        run_frame(&program.init, &mut state.pool, globals).map_err(|e| format!("init: {e}"))?;
-        state.pool.snapshot_q();
-        state.init_done = true;
-    }
+    ensure_overlay_init(&program.init, state, globals)?;
 
     seed_shape_frame_vars(&mut state.pool);
     run_frame(&program.frame, &mut state.pool, globals).map_err(|e| format!("frame: {e}"))?;

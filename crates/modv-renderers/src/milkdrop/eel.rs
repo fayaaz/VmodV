@@ -265,11 +265,20 @@ impl Globals {
 /// (`q1`, `t3`, `reg07`, user vars, ...). [`VarPool::snapshot_q`] records the
 /// current `q1..q32` as the per-frame reset baseline captured from init
 /// equations. [`VarPool::set_global_state`] attaches a shared [`GlobalState`].
+///
+/// # Cheap, copy-on-write clones
+///
+/// `megabuf` is a fixed 1 048 576-float array (4 MiB). It is held behind an
+/// [`Arc`] so cloning a pool is cheap: the first write through [`VarPool::set_megabuf`]
+/// (via [`Arc::make_mut`]) forks a private copy, so clones keep independent
+/// megabufs *by value* without an eager memcpy. This matters for the wave/shape
+/// overlay path, which forks a frame pool once per section to evaluate point
+/// equations on a scratch copy; the fork no longer copies 4 MiB per point pass.
 #[derive(Clone, Debug)]
 pub struct VarPool {
     vars: HashMap<String, f32>,
     q_baseline: Option<HashMap<String, f32>>,
-    megabuf: Vec<f32>,
+    megabuf: Arc<Vec<f32>>,
     global: Option<GlobalState>,
     rng: Rng,
 }
@@ -290,7 +299,7 @@ impl VarPool {
         VarPool {
             vars: HashMap::new(),
             q_baseline: None,
-            megabuf: vec![0.0; MEGABUF_SIZE],
+            megabuf: Arc::new(vec![0.0; MEGABUF_SIZE]),
             global: None,
             rng,
         }
@@ -337,9 +346,13 @@ impl VarPool {
     }
 
     /// Write a `megabuf` slot directly.
+    ///
+    /// Forks the shared buffer on first write (copy-on-write) so a [`Clone`]d
+    /// pool keeps its own megabuf values without an eager 4 MiB copy at clone
+    /// time.
     pub fn set_megabuf(&mut self, index: usize, value: f32) {
         if index < MEGABUF_SIZE {
-            self.megabuf[index] = value;
+            Arc::make_mut(&mut self.megabuf)[index] = value;
         }
     }
 
