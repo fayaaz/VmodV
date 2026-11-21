@@ -104,6 +104,12 @@ const WARP_AMOUNT_SCALE: f32 = 0.01;
 const WARP_EPS: f32 = 1e-6;
 /// Sampling UV used when the warp arithmetic would otherwise be non-finite.
 const UV_FALLBACK: f32 = 0.5;
+/// Upper bound on wave sample points evaluated per section (EEL iteration cap).
+const MAX_WAVE_SAMPLES: usize = 1024;
+/// Sample count used when the frame carries no audio wave data.
+const DEFAULT_WAVE_SAMPLES: usize = 512;
+/// Draw every Nth evaluated wave point as a line segment (keeps vertex counts small).
+const WAVE_VERTEX_STRIDE: usize = 4;
 
 // --- GPU pass shaders (Layer 5b) -------------------------------------------
 //
@@ -189,6 +195,41 @@ fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
     if (params.invert != 0.0) { c = vec3<f32>(1.0) - c; }
     if (params.red_blue != 0.0) { c = vec3<f32>(c.b, c.g, c.r); }
     return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+"#;
+
+// --- Layer 5c overlay shaders ----------------------------------------------
+//
+// Overlays are drawn as `LineList` primitives directly onto the composite
+// target (between the comp and output passes). Each vertex carries its own
+// NDC position and RGBA colour, taken from the evaluated wave/shape pools, so
+// no bind groups are needed: the pipeline uses an auto layout derived from
+// these two entry points. A single 1-pixel line per segment is the faithful
+// subset chosen here — it keeps the pass allocation-free of textures and still
+// produces visible, deterministic, equation-driven pixels.
+
+const OVERLAY_VERTEX_WGSL: &str = r#"
+struct OverlayOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+@vertex
+fn vs_main(
+    @location(0) pos: vec2<f32>,
+    @location(1) color: vec4<f32>,
+) -> OverlayOut {
+    var out: OverlayOut;
+    out.position = vec4<f32>(pos, 0.0, 1.0);
+    out.color = color;
+    return out;
+}
+"#;
+
+const OVERLAY_FRAGMENT_WGSL: &str = r#"
+struct OverlayIn { @location(0) color: vec4<f32> }
+@fragment
+fn fs_main(input: OverlayIn) -> @location(0) vec4<f32> {
+    return input.color;
 }
 "#;
 
@@ -447,6 +488,86 @@ impl MilkGpuCache {
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.pipelines.insert(key, pipeline.clone());
+        Ok(pipeline)
+    }
+
+    /// Fetch (or build once) the overlay `LineList` pipeline. The only
+    /// difference between variants is the blend state: `additive` reads the
+    /// section's `additive` variable and uses `(src_alpha, one)`, otherwise a
+    /// straight-alpha blend is used. Both share the same vertex layout and an
+    /// auto-derived (empty) bind-group layout because the shaders declare no
+    /// bindings.
+    fn overlay_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        additive: bool,
+    ) -> Result<wgpu::RenderPipeline, MilkRuntimeError> {
+        let key = if additive {
+            "overlay|additive".to_string()
+        } else {
+            "overlay|alpha".to_string()
+        };
+        if let Some(pipeline) = self.pipelines.get(&key) {
+            return Ok(pipeline.clone());
+        }
+        let color_blend = if additive {
+            wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            }
+        } else {
+            wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            }
+        };
+        let blend = wgpu::BlendState {
+            color: color_blend,
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let vertex = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("modV MilkDrop overlay vertex"),
+            source: wgpu::ShaderSource::Wgsl(OVERLAY_VERTEX_WGSL.into()),
+        });
+        let fragment = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("modV MilkDrop overlay fragment"),
+            source: wgpu::ShaderSource::Wgsl(OVERLAY_FRAGMENT_WGSL.into()),
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("modV MilkDrop overlay"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &vertex,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(overlay_vertex_layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fragment,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -1059,6 +1180,22 @@ impl MilkRuntime {
             &comp_pipeline,
             &comp_bind,
         );
+        // Layer 5c: draw wave/shape overlay primitives onto the comp target so
+        // the output pass (which samples comp_view) sees them. Best-effort:
+        // when no overlays were evaluated the existing six-pass path is exact.
+        if !instance.overlay_frame.waves.is_empty() || !instance.overlay_frame.shapes.is_empty() {
+            let alpha_pipeline = cache.overlay_pipeline(device, false)?;
+            let additive_pipeline = cache.overlay_pipeline(device, true)?;
+            encode_overlay_passes(
+                device,
+                queue,
+                &mut encoder,
+                &comp_view,
+                &instance.overlay_frame,
+                &alpha_pipeline,
+                &additive_pipeline,
+            );
+        }
         // output: post-processing into the caller-supplied target.
         encode_fullscreen_pass(
             &mut encoder,
@@ -1104,6 +1241,40 @@ pub fn compile_preset(
     let comp = translate_milk_shader(&comp_src.prelude, &comp_src.body, MilkShaderStage::Comp)
         .map_err(|e| fail(format!("comp shader: {e}")))?;
 
+    // Layer 5c: compile one program per enabled wave/shape section. A malformed
+    // section is recorded and skipped individually so one broken overlay never
+    // fails the whole preset. Section order is preserved (index order).
+    let version = doc.version;
+    let mut waves = Vec::new();
+    for (index, wave) in doc.waves.iter().enumerate() {
+        if !wave.enabled {
+            continue;
+        }
+        let init_wave = compile(&wave.init_eqs, version).ok();
+        let frame_wave = compile(&wave.frame_eqs, version).ok();
+        let point_wave = compile(&wave.point_eqs, version).ok();
+        if let (Some(init), Some(frame), Some(point)) = (init_wave, frame_wave, point_wave) {
+            waves.push(WaveProgram { init, frame, point });
+        } else {
+            failures.mark_failed(&format!("{name}/wave{index}"));
+            eprintln!("MilkDrop {name}: skipping malformed wave {index}");
+        }
+    }
+    let mut shapes = Vec::new();
+    for (index, shape) in doc.shapes.iter().enumerate() {
+        if !shape.enabled {
+            continue;
+        }
+        let init_shape = compile(&shape.init_eqs, version).ok();
+        let frame_shape = compile(&shape.frame_eqs, version).ok();
+        if let (Some(init), Some(frame)) = (init_shape, frame_shape) {
+            shapes.push(ShapeProgram { init, frame });
+        } else {
+            failures.mark_failed(&format!("{name}/shape{index}"));
+            eprintln!("MilkDrop {name}: skipping malformed shape {index}");
+        }
+    }
+
     Ok(MilkCompiledPreset {
         doc: doc.clone(),
         init,
@@ -1111,10 +1282,8 @@ pub fn compile_preset(
         pixel,
         warp,
         comp,
-        // RED stub: GREEN compiles one program per enabled wave/shape section,
-        // skipping malformed sections individually.
-        waves: Vec::new(),
-        shapes: Vec::new(),
+        waves,
+        shapes,
     })
 }
 
@@ -1181,14 +1350,178 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
 ///   An error in one overlay disables only that overlay and is logged once; it
 ///   is never propagated and never panics.
 ///
-/// RED stub: returns an empty [`OverlayFrame`], so overlay tests fail on their
-/// assertions while still compiling.
 pub fn evaluate_overlays(
     instance: &mut MilkInstance,
     frame: &MilkFrameInfo,
 ) -> Result<OverlayFrame, MilkRuntimeError> {
-    let _ = (instance, frame);
-    Ok(OverlayFrame::default())
+    // `globals` is cloned so the compiled programs and the per-section states
+    // (disjoint fields of `instance`) can be borrowed independently below.
+    let globals = instance.globals.clone();
+    let wave_count = instance.compiled.waves.len();
+    let shape_count = instance.compiled.shapes.len();
+    if instance.wave_states.len() < wave_count {
+        instance
+            .wave_states
+            .resize_with(wave_count, OverlayState::default);
+    }
+    if instance.shape_states.len() < shape_count {
+        instance
+            .shape_states
+            .resize_with(shape_count, OverlayState::default);
+    }
+
+    let samples = if frame.audio.wave.is_empty() {
+        DEFAULT_WAVE_SAMPLES
+    } else {
+        frame.audio.wave.len().min(MAX_WAVE_SAMPLES)
+    };
+
+    let mut result = OverlayFrame::default();
+
+    for index in 0..wave_count {
+        match evaluate_one_wave(
+            &instance.compiled.waves[index],
+            &mut instance.wave_states[index],
+            &globals,
+            &frame.audio.wave,
+            samples,
+        ) {
+            Ok(overlay) => result.waves.push(overlay),
+            Err(message) => eprintln!("MilkDrop: skipping wave {index}: {message}"),
+        }
+    }
+    for index in 0..shape_count {
+        match evaluate_one_shape(
+            &instance.compiled.shapes[index],
+            &mut instance.shape_states[index],
+            &globals,
+        ) {
+            Ok(overlay) => result.shapes.push(overlay),
+            Err(message) => eprintln!("MilkDrop: skipping shape {index}: {message}"),
+        }
+    }
+
+    // Cache the freshly evaluated frame so the GPU pass can consume it.
+    instance.overlay_frame = result.clone();
+    Ok(result)
+}
+
+/// Seed the runtime-owned variables a wave frame equation can read before it
+/// runs. These mirror the subset of MilkDrop's per-wave-frame variables that a
+/// preset's `frame_eqs` may reference; any value the preset assigns afterwards
+/// wins.
+fn seed_wave_frame_vars(pool: &mut VarPool, samples: usize) {
+    pool.set("samples", samples as f32);
+    pool.set("scaling", 1.0);
+    pool.set("smoothing", 0.0);
+    pool.set("sep", 0.0);
+    pool.set("additive", 0.0);
+    pool.set("usedots", 0.0);
+    pool.set("spectrum", 0.0);
+    pool.set("thick", 1.0);
+    pool.set("r", 1.0);
+    pool.set("g", 1.0);
+    pool.set("b", 1.0);
+    pool.set("a", 1.0);
+}
+
+/// Seed the runtime-owned variables a shape frame equation can read.
+fn seed_shape_frame_vars(pool: &mut VarPool) {
+    pool.set("r", 1.0);
+    pool.set("g", 1.0);
+    pool.set("b", 1.0);
+    pool.set("a", 1.0);
+    pool.set("r2", 1.0);
+    pool.set("g2", 1.0);
+    pool.set("b2", 1.0);
+    pool.set("a2", 1.0);
+    pool.set("border_r", 0.0);
+    pool.set("border_g", 0.0);
+    pool.set("border_b", 0.0);
+    pool.set("border_a", 0.0);
+    pool.set("sides", 4.0);
+    pool.set("instance", 0.0);
+    pool.set("num_inst", 1.0);
+    pool.set("tex_zoom", 1.0);
+    pool.set("tex_ang", 0.0);
+    pool.set("cx", 0.0);
+    pool.set("cy", 0.0);
+    pool.set("rot", 0.0);
+    pool.set("radius", 0.5);
+}
+
+/// Run one wave section: init once, seed + run frame equations, then evaluate
+/// the point equations for each bounded sample. Any EEL failure is returned as
+/// a message so the caller can isolate this section.
+fn evaluate_one_wave(
+    program: &WaveProgram,
+    state: &mut OverlayState,
+    globals: &Globals,
+    audio_wave: &[f32],
+    samples: usize,
+) -> Result<WaveOverlay, String> {
+    if !state.init_done {
+        run_frame(&program.init, &mut state.pool, globals).map_err(|e| format!("init: {e}"))?;
+        state.pool.snapshot_q();
+        state.init_done = true;
+    }
+
+    seed_wave_frame_vars(&mut state.pool, samples);
+    run_frame(&program.frame, &mut state.pool, globals).map_err(|e| format!("frame: {e}"))?;
+
+    // Point equations run on a clone so the frame-level pool (r/g/b/a, t1..t8,
+    // samples, ...) survives unchanged for both the returned overlay and the
+    // GPU colour pass.
+    let mut point_pool = state.pool.clone();
+    let mut points = Vec::with_capacity(samples);
+    for index in 0..samples {
+        let t = if samples > 1 {
+            index as f32 / (samples - 1) as f32
+        } else {
+            0.5
+        };
+        let x = t * 2.0 - 1.0;
+        let audio_value = audio_wave.get(index).copied().unwrap_or(0.0);
+        point_pool.set("sample", t);
+        point_pool.set("value1", audio_value);
+        point_pool.set("value2", 0.0);
+        run_pixel(&program.point, &mut point_pool, x, audio_value, 0.0, 0.0)
+            .map_err(|e| format!("point {index}: {e}"))?;
+        points.push(WavePoint {
+            x: point_pool.get("x"),
+            y: point_pool.get("y"),
+            sample: point_pool.get("sample"),
+            value1: point_pool.get("value1"),
+            value2: point_pool.get("value2"),
+        });
+    }
+
+    Ok(WaveOverlay {
+        pool: state.pool.clone(),
+        points,
+        enabled: true,
+    })
+}
+
+/// Run one shape section: init once, then seed + run its frame equations.
+fn evaluate_one_shape(
+    program: &ShapeProgram,
+    state: &mut OverlayState,
+    globals: &Globals,
+) -> Result<ShapeOverlay, String> {
+    if !state.init_done {
+        run_frame(&program.init, &mut state.pool, globals).map_err(|e| format!("init: {e}"))?;
+        state.pool.snapshot_q();
+        state.init_done = true;
+    }
+
+    seed_shape_frame_vars(&mut state.pool);
+    run_frame(&program.frame, &mut state.pool, globals).map_err(|e| format!("frame: {e}"))?;
+
+    Ok(ShapeOverlay {
+        pool: state.pool.clone(),
+        enabled: true,
+    })
 }
 
 /// Advance `instance` to `frame`: run init once, build globals/audio, update
@@ -1540,6 +1873,169 @@ fn encode_fullscreen_pass(
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);
     pass.draw(0..3, 0..1);
+}
+
+// --- Layer 5c overlay GPU helpers ------------------------------------------
+
+/// `LineList` vertex layout: NDC `vec2` position followed by `vec4` RGBA.
+fn overlay_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: 24,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 8,
+                shader_location: 1,
+            },
+        ],
+    }
+}
+
+/// Pack a slice of floats into native-endian bytes without `bytemuck`/`unsafe`.
+fn f32_bytes(values: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * 4);
+    for value in values {
+        bytes.extend_from_slice(&value.to_ne_bytes());
+    }
+    bytes
+}
+
+/// Read a colour from a section's frame pool, clamped to `[0, 1]`.
+fn overlay_color(pool: &VarPool) -> [f32; 4] {
+    [
+        pool.get("r").clamp(0.0, 1.0),
+        pool.get("g").clamp(0.0, 1.0),
+        pool.get("b").clamp(0.0, 1.0),
+        pool.get("a").clamp(0.0, 1.0),
+    ]
+}
+
+/// Build `LineList` vertices (x, y, r, g, b, a) for one wave: a polyline over a
+/// strided subset of its evaluated sample points. Empty when fewer than two
+/// points remain after striding.
+fn wave_overlay_vertices(wave: &WaveOverlay) -> Vec<f32> {
+    let mut out = Vec::new();
+    let color = overlay_color(&wave.pool);
+    let mut previous: Option<[f32; 2]> = None;
+    let mut emitted = 0usize;
+    for point in wave.points.iter().step_by(WAVE_VERTEX_STRIDE) {
+        let current = [point.x.clamp(-1.0, 1.0), point.y.clamp(-1.0, 1.0)];
+        if let Some(start) = previous {
+            out.extend_from_slice(&[start[0], start[1], color[0], color[1], color[2], color[3]]);
+            out.extend_from_slice(&[
+                current[0], current[1], color[0], color[1], color[2], color[3],
+            ]);
+            emitted += 1;
+        }
+        previous = Some(current);
+    }
+    if emitted == 0 {
+        out.clear();
+    }
+    out
+}
+
+/// Build `LineList` vertices for one shape: a closed regular polygon whose
+/// side count, centre, radius and rotation come from the frame pool. `r2/g2/b2`
+/// are seeded but the outline uses the primary colour in this subset.
+fn shape_overlay_vertices(shape: &ShapeOverlay) -> Vec<f32> {
+    let sides = shape.pool.get("sides").round().clamp(3.0, 64.0) as usize;
+    let color = overlay_color(&shape.pool);
+    let cx = shape.pool.get("cx");
+    let cy = shape.pool.get("cy");
+    let radius = shape.pool.get("radius");
+    let rot = shape.pool.get("rot");
+    let ring: Vec<[f32; 2]> = (0..sides)
+        .map(|index| {
+            let angle = std::f32::consts::TAU * index as f32 / sides as f32 + rot;
+            [cx + radius * angle.cos(), cy + radius * angle.sin()]
+        })
+        .collect();
+    let mut out = Vec::with_capacity(sides * 12);
+    for index in 0..sides {
+        let a = ring[index];
+        let b = ring[(index + 1) % sides];
+        out.extend_from_slice(&[a[0], a[1], color[0], color[1], color[2], color[3]]);
+        out.extend_from_slice(&[b[0], b[1], color[0], color[1], color[2], color[3]]);
+    }
+    out
+}
+
+/// Encode one render pass that draws all evaluated overlays onto `comp_view`.
+/// Each overlay gets a small vertex buffer uploaded from the CPU results; the
+/// pipeline (alpha vs additive) is chosen from its `additive` variable.
+fn encode_overlay_passes(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    comp_view: &wgpu::TextureView,
+    overlays: &OverlayFrame,
+    alpha_pipeline: &wgpu::RenderPipeline,
+    additive_pipeline: &wgpu::RenderPipeline,
+) {
+    let mut draws: Vec<(Vec<f32>, bool)> = Vec::new();
+    for wave in &overlays.waves {
+        if !wave.enabled {
+            continue;
+        }
+        let vertices = wave_overlay_vertices(wave);
+        if !vertices.is_empty() {
+            draws.push((vertices, wave.pool.get("additive") > 0.5));
+        }
+    }
+    for shape in &overlays.shapes {
+        if !shape.enabled {
+            continue;
+        }
+        let vertices = shape_overlay_vertices(shape);
+        if !vertices.is_empty() {
+            draws.push((vertices, false));
+        }
+    }
+    if draws.is_empty() {
+        return;
+    }
+
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("modV MilkDrop overlays"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: comp_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    for (vertices, additive) in draws {
+        let bytes = f32_bytes(&vertices);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("modV MilkDrop overlay vertices"),
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, &bytes);
+        pass.set_pipeline(if additive {
+            additive_pipeline
+        } else {
+            alpha_pipeline
+        });
+        pass.set_vertex_buffer(0, buffer.slice(..));
+        let vertex_count = (vertices.len() / 6) as u32;
+        pass.draw(0..vertex_count, 0..1);
+    }
 }
 
 // ---------------------------------------------------------------------------
