@@ -5,9 +5,14 @@
 //!
 //! * every registry crate in `crates/Cargo.lock` has a row with a valid SPDX
 //!   licence and a plausible upstream link, and every row still resolves;
-//! * every in-tree file that carries an NC-SA marker (the Rust ports under
-//!   `crates/`, the ISF corpus and the bundled Point10 assets) is named in
-//!   `THIRD_PARTY_NOTICES.md`, and its `"CREDIT"` author is credited.
+//! * every in-tree file that carries an NC-SA marker is named in
+//!   `THIRD_PARTY_NOTICES.md`, and its author is credited. The scan covers the
+//!   Rust ports under `crates/`, the ISF corpus, the bundled Point10 assets
+//!   and `.mlk` files. The only `.mlk` in this tree is the guard fixture under
+//!   `tests/fixtures/notices`: user MilkDrop presets are read in place from
+//!   the user's media folders and are never bundled, so they are not scanned
+//!   here. ISF/Point10 sources name their author in a `"CREDIT"` field, while
+//!   MilkDrop presets use a leading `// Author:` comment line.
 //!
 //! It also pins the specific attribution corrections the JS guard used to
 //! cover (st_Ms2SD1, spherical-shader-tut, Perlin Transition, Helix Eye,
@@ -321,6 +326,10 @@ fn relative(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// Recursively collect `(relative path, source)` for text files that carry an
+/// NC-SA marker. The text-extension allowlist includes `.mlk` so MilkDrop
+/// preset fixtures are covered alongside ISF/Point10 sources; this guard file
+/// itself is skipped so its marker strings do not make the scan self-match.
 fn scan_source_files(dir: &Path, root: &Path, found: &mut Vec<(String, String)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -363,6 +372,10 @@ fn scan_source_files(dir: &Path, root: &Path, found: &mut Vec<(String, String)>)
     }
 }
 
+/// The in-tree roots the NC-SA guard scans. `resources/milkdrop` is absent in
+/// this tree (no presets are bundled) and is a no-op; the `.mlk` guard fixture
+/// lives under `crates/`, which is scanned. See the module docs for the
+/// bundled-vs-user-supplied distinction.
 fn nc_sa_sources(root: &Path) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for directory in [

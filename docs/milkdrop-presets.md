@@ -11,8 +11,9 @@ MilkDrop presets are plain-text files with a `.mlk` extension. Each file holds
 one preset in a `[preset00]` section: `key=value` lines configure warp, wave,
 shape and video settings, while `warp=` and `comp=` carry the EEL equations
 that animate the visuals. VmodV registers a loaded preset as a `milkdrop`
-module and renders it with its own MilkDrop runtime. Because these files are
-ordinary text, they are read from disk rather than compiled into the app.
+module and renders it with its own MilkDrop runtime. Because they are ordinary
+text files, presets are read from disk when VmodV builds its module registry —
+none are baked into the app or the installer.
 
 ## Where to put MilkDrop files
 
@@ -21,6 +22,10 @@ Put your `.mlk` files in the `milkdrop` folder of your media tree:
 - the shared `<userData>/media/milkdrop` folder, used by every profile;
 - the active profile's `<userData>/media/<profile>/milkdrop` folder; or
 - any extra MilkDrop folder you have configured.
+
+Folders are scanned recursively and `.mlk` is matched case-insensitively, so
+subfolders and names such as `MyPreset.MLK` are found too; hidden and temporary
+files are skipped. Only the active profile's folder counts.
 
 `MODV_USER_MILKDROP_DIR` overrides all of those with a single directory, which
 is useful for pointing VmodV at an existing collection without copying files
