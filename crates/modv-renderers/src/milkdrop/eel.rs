@@ -20,8 +20,11 @@
 //!   so evaluation is reproducible in tests.
 
 #![forbid(unsafe_code)]
-// The RED test assertions spell out `x >= lo && x < hi` explicitly; keep the
-// whole module (including its test harness) clean under `-D warnings`.
+// The fixed RED test suite spells out ranges as `x >= lo && x < hi` (see
+// `rand_is_deterministic_and_version_dependent`), which trips clippy's
+// `manual_range_contains` under `-D warnings`. Those assertions are part of
+// the TDD contract and may not be edited, so the lint is allowed here; no
+// production expression in this module uses that form.
 #![allow(clippy::manual_range_contains)]
 
 use std::collections::HashMap;
@@ -30,6 +33,40 @@ use std::sync::{Arc, Mutex};
 
 /// Comparison epsilon: values within this distance compare as equal.
 const EPS: f32 = 1e-4;
+
+// All EEL comparisons (operators and `equal`/`above`/`below`) share one
+// epsilon definition. Keeping the predicates here means the infix operators
+// and their builtin-function spellings can never drift apart.
+
+#[inline]
+fn eel_eq(a: f32, b: f32) -> bool {
+    (a - b).abs() <= EPS
+}
+
+#[inline]
+fn eel_lt(a: f32, b: f32) -> bool {
+    b - a > EPS
+}
+
+#[inline]
+fn eel_gt(a: f32, b: f32) -> bool {
+    a - b > EPS
+}
+
+#[inline]
+fn eel_le(a: f32, b: f32) -> bool {
+    a - b <= EPS
+}
+
+#[inline]
+fn eel_ge(a: f32, b: f32) -> bool {
+    b - a <= EPS
+}
+
+#[inline]
+fn bool_f32(cond: bool) -> f32 {
+    if cond { 1.0 } else { 0.0 }
+}
 
 /// Compiled, owned form of one EEL equation set.
 ///
@@ -192,6 +229,36 @@ impl Default for Globals {
     }
 }
 
+impl Globals {
+    /// Inject every built-in global into `pool` before a frame runs.
+    ///
+    /// Kept next to the struct so the set of exposed global names has a single
+    /// definition; the old form repeated fifteen `pool.set(...)` calls at the
+    /// call site.
+    fn inject_into(&self, pool: &mut VarPool) {
+        let entries = [
+            ("time", self.time),
+            ("fps", self.fps),
+            ("frame", self.frame),
+            ("bass", self.bass),
+            ("bass_att", self.bass_att),
+            ("mid", self.mid),
+            ("mid_att", self.mid_att),
+            ("treb", self.treb),
+            ("treb_att", self.treb_att),
+            ("meshx", self.meshx),
+            ("meshy", self.meshy),
+            ("pixelsx", self.pixelsx),
+            ("pixelsy", self.pixelsy),
+            ("aspectx", self.aspectx),
+            ("aspecty", self.aspecty),
+        ];
+        for (name, value) in entries {
+            pool.set(name, value);
+        }
+    }
+}
+
 /// Mutable variable pool with a stable key→slot map.
 ///
 /// Use [`VarPool::set`] / [`VarPool::get`] to seed and inspect named variables
@@ -337,6 +404,28 @@ enum Tok {
     Eof,
 }
 
+/// Map a single operator byte to `(bare token, doubled token, second byte)`.
+///
+/// The doubled form is emitted only when the next byte matches `second`: this
+/// covers both the compound assignments (`+=`, `-=`, `==`, ...) and the
+/// doubled logical/bitwise operators (`&&`, `||`) with one table.
+fn operator_tokens(c: u8) -> Option<(Tok, Tok, u8)> {
+    Some(match c {
+        b'=' => (Tok::Assign, Tok::Eq, b'='),
+        b'!' => (Tok::Bang, Tok::Ne, b'='),
+        b'<' => (Tok::Lt, Tok::Le, b'='),
+        b'>' => (Tok::Gt, Tok::Ge, b'='),
+        b'&' => (Tok::Amp, Tok::AndAnd, b'&'),
+        b'|' => (Tok::Pipe, Tok::OrOr, b'|'),
+        b'+' => (Tok::Plus, Tok::AddAssign, b'='),
+        b'-' => (Tok::Minus, Tok::SubAssign, b'='),
+        b'*' => (Tok::Star, Tok::MulAssign, b'='),
+        b'/' => (Tok::Slash, Tok::DivAssign, b'='),
+        b'%' => (Tok::Percent, Tok::ModAssign, b'='),
+        _ => return None,
+    })
+}
+
 /// Tokenize EEL source. Newlines are separators at top level (and inside
 /// braces) but are skipped inside parentheses/brackets so expressions may be
 /// wrapped across lines.
@@ -415,102 +504,15 @@ fn lex(src: &str) -> Result<Vec<Tok>, EelError> {
                     .map_err(|_| EelError::ParseError("bad identifier".into()))?;
                 out.push(Tok::Ident(text.to_string()));
             }
-            b'=' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::Eq);
+            c @ (b'=' | b'!' | b'<' | b'>' | b'&' | b'|' | b'+' | b'-' | b'*' | b'/' | b'%') => {
+                // `//` and `/*` were handled above, so a bare `/` is division.
+                let (bare, doubled, second) =
+                    operator_tokens(c).expect("operator_tokens covers every byte matched here");
+                if bytes.get(i + 1) == Some(&second) {
+                    out.push(doubled);
                     i += 2;
                 } else {
-                    out.push(Tok::Assign);
-                    i += 1;
-                }
-            }
-            b'!' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::Ne);
-                    i += 2;
-                } else {
-                    out.push(Tok::Bang);
-                    i += 1;
-                }
-            }
-            b'<' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::Le);
-                    i += 2;
-                } else {
-                    out.push(Tok::Lt);
-                    i += 1;
-                }
-            }
-            b'>' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::Ge);
-                    i += 2;
-                } else {
-                    out.push(Tok::Gt);
-                    i += 1;
-                }
-            }
-            b'&' => {
-                if bytes.get(i + 1) == Some(&b'&') {
-                    out.push(Tok::AndAnd);
-                    i += 2;
-                } else {
-                    out.push(Tok::Amp);
-                    i += 1;
-                }
-            }
-            b'|' => {
-                if bytes.get(i + 1) == Some(&b'|') {
-                    out.push(Tok::OrOr);
-                    i += 2;
-                } else {
-                    out.push(Tok::Pipe);
-                    i += 1;
-                }
-            }
-            b'+' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::AddAssign);
-                    i += 2;
-                } else {
-                    out.push(Tok::Plus);
-                    i += 1;
-                }
-            }
-            b'-' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::SubAssign);
-                    i += 2;
-                } else {
-                    out.push(Tok::Minus);
-                    i += 1;
-                }
-            }
-            b'*' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::MulAssign);
-                    i += 2;
-                } else {
-                    out.push(Tok::Star);
-                    i += 1;
-                }
-            }
-            b'/' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::DivAssign);
-                    i += 2;
-                } else {
-                    out.push(Tok::Slash);
-                    i += 1;
-                }
-            }
-            b'%' => {
-                if bytes.get(i + 1) == Some(&b'=') {
-                    out.push(Tok::ModAssign);
-                    i += 2;
-                } else {
-                    out.push(Tok::Percent);
+                    out.push(bare);
                     i += 1;
                 }
             }
@@ -619,7 +621,7 @@ enum Expr {
         value: Box<Expr>,
     },
     Call {
-        name: String,
+        func: Func,
         args: Vec<Expr>,
     },
 }
@@ -642,23 +644,132 @@ enum Stmt {
     },
 }
 
-/// Minimum argument count for each supported function. Unknown names are
-/// rejected here at compile time (as `UnknownIdentifier`).
-fn check_function(name: &str, argc: usize) -> Result<(), EelError> {
-    let min_args = match name {
-        "int" | "floor" | "abs" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp"
-        | "sqr" | "sqrt" | "log" | "log10" | "sign" | "rand" | "bnot" | "sigmoid" => 1,
-        "atan2" | "pow" | "bor" | "band" | "equal" | "above" | "below" | "min" | "max"
-        | "exec2" => 2,
-        "if" | "exec3" => 3,
-        _ => return Err(EelError::UnknownIdentifier(name.to_string())),
-    };
+/// Every builtin EEL function, resolved once at compile time.
+///
+/// This enum is the single source of truth for both the supported name set
+/// (compile-time validation) and runtime dispatch, replacing two parallel
+/// string `match`es that could drift apart. It also lets the evaluator branch
+/// on a `Copy` tag instead of re-matching a `String` for every call on the hot
+/// path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Func {
+    Int,
+    Floor,
+    Abs,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Exp,
+    Sqr,
+    Sqrt,
+    Log,
+    Log10,
+    Sign,
+    Rand,
+    Bnot,
+    Atan2,
+    Pow,
+    Min,
+    Max,
+    Sigmoid,
+    Bor,
+    Band,
+    Equal,
+    Above,
+    Below,
+    If,
+    Exec2,
+    Exec3,
+}
+
+impl Func {
+    /// Look up a builtin by its EEL source spelling.
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "int" => Func::Int,
+            "floor" => Func::Floor,
+            "abs" => Func::Abs,
+            "sin" => Func::Sin,
+            "cos" => Func::Cos,
+            "tan" => Func::Tan,
+            "asin" => Func::Asin,
+            "acos" => Func::Acos,
+            "atan" => Func::Atan,
+            "exp" => Func::Exp,
+            "sqr" => Func::Sqr,
+            "sqrt" => Func::Sqrt,
+            "log" => Func::Log,
+            "log10" => Func::Log10,
+            "sign" => Func::Sign,
+            "rand" => Func::Rand,
+            "bnot" => Func::Bnot,
+            "atan2" => Func::Atan2,
+            "pow" => Func::Pow,
+            "min" => Func::Min,
+            "max" => Func::Max,
+            "sigmoid" => Func::Sigmoid,
+            "bor" => Func::Bor,
+            "band" => Func::Band,
+            "equal" => Func::Equal,
+            "above" => Func::Above,
+            "below" => Func::Below,
+            "if" => Func::If,
+            "exec2" => Func::Exec2,
+            "exec3" => Func::Exec3,
+            _ => return None,
+        })
+    }
+
+    /// Minimum number of arguments this builtin accepts.
+    fn min_args(self) -> usize {
+        match self {
+            Func::Int
+            | Func::Floor
+            | Func::Abs
+            | Func::Sin
+            | Func::Cos
+            | Func::Tan
+            | Func::Asin
+            | Func::Acos
+            | Func::Atan
+            | Func::Exp
+            | Func::Sqr
+            | Func::Sqrt
+            | Func::Log
+            | Func::Log10
+            | Func::Sign
+            | Func::Rand
+            | Func::Bnot
+            | Func::Sigmoid => 1,
+            Func::Atan2
+            | Func::Pow
+            | Func::Bor
+            | Func::Band
+            | Func::Equal
+            | Func::Above
+            | Func::Below
+            | Func::Min
+            | Func::Max
+            | Func::Exec2 => 2,
+            Func::If | Func::Exec3 => 3,
+        }
+    }
+}
+
+/// Resolve a call's source name to a builtin and validate its argument count.
+fn check_function(name: &str, argc: usize) -> Result<Func, EelError> {
+    let func =
+        Func::from_name(name).ok_or_else(|| EelError::UnknownIdentifier(name.to_string()))?;
+    let min_args = func.min_args();
     if argc < min_args {
         return Err(EelError::ParseError(format!(
             "{name} expects at least {min_args} argument(s)"
         )));
     }
-    Ok(())
+    Ok(func)
 }
 
 // ---------------------------------------------------------------------------
@@ -951,8 +1062,8 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen)?;
-                    check_function(&name, args.len())?;
-                    Ok(Expr::Call { name, args })
+                    let func = check_function(&name, args.len())?;
+                    Ok(Expr::Call { func, args })
                 } else if matches!(self.peek(), Tok::LBracket) {
                     self.pos += 1;
                     let index = Box::new(self.parse_expr()?);
@@ -1009,26 +1120,32 @@ fn checked_index(value: f32) -> Result<usize, EelError> {
     }
 }
 
+#[inline]
+fn checked_div(a: f32, b: f32) -> Result<f32, EelError> {
+    if b == 0.0 {
+        Err(EelError::DivisionByZero)
+    } else {
+        Ok(a / b)
+    }
+}
+
+#[inline]
+fn checked_rem(a: f32, b: f32) -> Result<f32, EelError> {
+    if b == 0.0 {
+        Err(EelError::DivisionByZero)
+    } else {
+        Ok(a % b)
+    }
+}
+
 fn apply_assign(op: AssignOp, cur: f32, rhs: f32) -> Result<f32, EelError> {
     match op {
         AssignOp::Set => Ok(rhs),
         AssignOp::Add => Ok(cur + rhs),
         AssignOp::Sub => Ok(cur - rhs),
         AssignOp::Mul => Ok(cur * rhs),
-        AssignOp::Div => {
-            if rhs == 0.0 {
-                Err(EelError::DivisionByZero)
-            } else {
-                Ok(cur / rhs)
-            }
-        }
-        AssignOp::Mod => {
-            if rhs == 0.0 {
-                Err(EelError::DivisionByZero)
-            } else {
-                Ok(cur % rhs)
-            }
-        }
+        AssignOp::Div => checked_div(cur, rhs),
+        AssignOp::Mod => checked_rem(cur, rhs),
     }
 }
 
@@ -1040,7 +1157,7 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
             let v = eval_expr(e, ctx)?;
             match op {
                 UnOp::Neg => Ok(-v),
-                UnOp::Not => Ok(if v == 0.0 { 1.0 } else { 0.0 }),
+                UnOp::Not => Ok(bool_f32(v == 0.0)),
             }
         }
         Expr::Binary(op, l, r) => {
@@ -1052,7 +1169,7 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
                     _ => {}
                 }
                 let b = eval_expr(r, ctx)?;
-                return Ok(if b != 0.0 { 1.0 } else { 0.0 });
+                return Ok(bool_f32(b != 0.0));
             }
             let a = eval_expr(l, ctx)?;
             let b = eval_expr(r, ctx)?;
@@ -1060,26 +1177,14 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
                 BinOp::Add => Ok(a + b),
                 BinOp::Sub => Ok(a - b),
                 BinOp::Mul => Ok(a * b),
-                BinOp::Div => {
-                    if b == 0.0 {
-                        Err(EelError::DivisionByZero)
-                    } else {
-                        Ok(a / b)
-                    }
-                }
-                BinOp::Mod => {
-                    if b == 0.0 {
-                        Err(EelError::DivisionByZero)
-                    } else {
-                        Ok(a % b)
-                    }
-                }
-                BinOp::Eq => Ok(if (a - b).abs() <= EPS { 1.0 } else { 0.0 }),
-                BinOp::Ne => Ok(if (a - b).abs() <= EPS { 0.0 } else { 1.0 }),
-                BinOp::Lt => Ok(if b - a > EPS { 1.0 } else { 0.0 }),
-                BinOp::Gt => Ok(if a - b > EPS { 1.0 } else { 0.0 }),
-                BinOp::Le => Ok(if a - b <= EPS { 1.0 } else { 0.0 }),
-                BinOp::Ge => Ok(if b - a <= EPS { 1.0 } else { 0.0 }),
+                BinOp::Div => checked_div(a, b),
+                BinOp::Mod => checked_rem(a, b),
+                BinOp::Eq => Ok(bool_f32(eel_eq(a, b))),
+                BinOp::Ne => Ok(bool_f32(!eel_eq(a, b))),
+                BinOp::Lt => Ok(bool_f32(eel_lt(a, b))),
+                BinOp::Gt => Ok(bool_f32(eel_gt(a, b))),
+                BinOp::Le => Ok(bool_f32(eel_le(a, b))),
+                BinOp::Ge => Ok(bool_f32(eel_ge(a, b))),
                 BinOp::BitAnd => Ok(((a as i32) & (b as i32)) as f32),
                 BinOp::BitOr => Ok(((a as i32) | (b as i32)) as f32),
                 BinOp::And | BinOp::Or => unreachable!("handled above"),
@@ -1120,12 +1225,12 @@ fn eval_expr(expr: &Expr, ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
             }
             Ok(new)
         }
-        Expr::Call { name, args } => eval_call(name, args, ctx),
+        Expr::Call { func, args } => eval_call(*func, args, ctx),
     }
 }
 
-fn eval_call(name: &str, args: &[Expr], ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
-    if name == "if" {
+fn eval_call(func: Func, args: &[Expr], ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
+    if func == Func::If {
         // Ternary form: evaluate only the selected branch.
         let cond = eval_expr(&args[0], ctx)?;
         return if cond != 0.0 {
@@ -1134,28 +1239,30 @@ fn eval_call(name: &str, args: &[Expr], ctx: &mut EvalCtx<'_>) -> Result<f32, Ee
             eval_expr(&args[2], ctx)
         };
     }
+    // Keep eager evaluation of every argument: `exec2`/`exec3` rely on the
+    // side effects of their arguments, and EEL evaluates extra arguments too.
     let mut v = [0.0f32; 8];
     for (i, arg) in args.iter().enumerate() {
         v[i.min(7)] = eval_expr(arg, ctx)?;
     }
     let a = v[0];
     let b = v[1];
-    Ok(match name {
-        "int" => a.trunc(),
-        "floor" => a.floor(),
-        "abs" => a.abs(),
-        "sin" => a.sin(),
-        "cos" => a.cos(),
-        "tan" => a.tan(),
-        "asin" => a.asin(),
-        "acos" => a.acos(),
-        "atan" => a.atan(),
-        "exp" => a.exp(),
-        "sqr" => a * a,
-        "sqrt" => a.sqrt(),
-        "log" => a.ln(),
-        "log10" => a.log10(),
-        "sign" => {
+    Ok(match func {
+        Func::Int => a.trunc(),
+        Func::Floor => a.floor(),
+        Func::Abs => a.abs(),
+        Func::Sin => a.sin(),
+        Func::Cos => a.cos(),
+        Func::Tan => a.tan(),
+        Func::Asin => a.asin(),
+        Func::Acos => a.acos(),
+        Func::Atan => a.atan(),
+        Func::Exp => a.exp(),
+        Func::Sqr => a * a,
+        Func::Sqrt => a.sqrt(),
+        Func::Log => a.ln(),
+        Func::Log10 => a.log10(),
+        Func::Sign => {
             if a > 0.0 {
                 1.0
             } else if a < 0.0 {
@@ -1164,7 +1271,7 @@ fn eval_call(name: &str, args: &[Expr], ctx: &mut EvalCtx<'_>) -> Result<f32, Ee
                 0.0
             }
         }
-        "rand" => {
+        Func::Rand => {
             let r = ctx.pool.rng.next_f32();
             if ctx.version >= 2 {
                 r * a
@@ -1172,38 +1279,20 @@ fn eval_call(name: &str, args: &[Expr], ctx: &mut EvalCtx<'_>) -> Result<f32, Ee
                 (r * a) as i32 as f32
             }
         }
-        "bnot" => (!(a as i32)) as f32,
-        "atan2" => a.atan2(b),
-        "pow" => a.powf(b),
-        "min" => a.min(b),
-        "max" => a.max(b),
-        "sigmoid" => 1.0 / (1.0 + (-a).exp()),
-        "bor" => ((a as i32) | (b as i32)) as f32,
-        "band" => ((a as i32) & (b as i32)) as f32,
-        "equal" => {
-            if (a - b).abs() <= EPS {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        "above" => {
-            if a - b > EPS {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        "below" => {
-            if b - a > EPS {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        "exec2" => v[1],
-        "exec3" => v[2],
-        _ => 0.0, // names are validated at compile time
+        Func::Bnot => (!(a as i32)) as f32,
+        Func::Atan2 => a.atan2(b),
+        Func::Pow => a.powf(b),
+        Func::Min => a.min(b),
+        Func::Max => a.max(b),
+        Func::Sigmoid => 1.0 / (1.0 + (-a).exp()),
+        Func::Bor => ((a as i32) | (b as i32)) as f32,
+        Func::Band => ((a as i32) & (b as i32)) as f32,
+        Func::Equal => bool_f32(eel_eq(a, b)),
+        Func::Above => bool_f32(eel_gt(a, b)),
+        Func::Below => bool_f32(eel_lt(a, b)),
+        Func::If => unreachable!("ternary if is handled before argument evaluation"),
+        Func::Exec2 => v[1],
+        Func::Exec3 => v[2],
     })
 }
 
@@ -1264,21 +1353,7 @@ pub fn run_frame(
     globals: &Globals,
 ) -> Result<(), EelError> {
     pool.reset_q();
-    pool.set("time", globals.time);
-    pool.set("fps", globals.fps);
-    pool.set("frame", globals.frame);
-    pool.set("bass", globals.bass);
-    pool.set("bass_att", globals.bass_att);
-    pool.set("mid", globals.mid);
-    pool.set("mid_att", globals.mid_att);
-    pool.set("treb", globals.treb);
-    pool.set("treb_att", globals.treb_att);
-    pool.set("meshx", globals.meshx);
-    pool.set("meshy", globals.meshy);
-    pool.set("pixelsx", globals.pixelsx);
-    pool.set("pixelsy", globals.pixelsy);
-    pool.set("aspectx", globals.aspectx);
-    pool.set("aspecty", globals.aspecty);
+    globals.inject_into(pool);
     let mut ctx = EvalCtx {
         pool,
         version: eq.version,
