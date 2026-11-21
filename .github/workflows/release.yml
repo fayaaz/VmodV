@@ -190,10 +190,100 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  # Builds portable macOS .app bundles for both architectures (Intel x86_64
+  # and Apple Silicon arm64) for the release. Kept separate from the Linux
+  # publish job so a macOS toolchain/signing failure cannot block tagging.
+  # Both runner labels are pinned: the unpinned default arm64 runner was
+  # repeatedly unavailable in CI due to capacity constraints. The `release`
+  # job waits for both artifacts and attaches them to the GitHub release.
+  macos-portable:
+    name: Build portable macOS app bundle (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+            artifact: vmodv-native-macos-x86_64-portable
+            zip_prefix: VmodV-Native-macOS-x86_64-portable-
+          - arch: arm64
+            runner: macos-15
+            artifact: vmodv-native-macos-arm64-portable
+            zip_prefix: VmodV-Native-macOS-arm64-portable-
+    runs-on: ${{ matrix.runner }}
+    needs: version
+    if: ${{ needs.version.outputs.should_release == 'true' }}
+    timeout-minutes: 120
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tools/version.sh derives the version from tags.
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install GStreamer (Homebrew)
+        # gstreamer-sys build scripts use pkg-config to find the GStreamer
+        # libraries, so the devel headers/pkgconfig files are required.
+        run: brew install pkg-config gstreamer gst-plugins-base
+
+      - name: Configure GStreamer pkg-config path
+        run: |
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix gstreamer)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Build modv (release)
+        run: cargo build --release --manifest-path crates/Cargo.toml -p modv-app --bin modv
+
+      - name: Resolve version
+        run: echo "MACOS_VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Stage portable app bundle
+        run: |
+          bash tools/macos-portable.sh \
+            --root "$PWD/dist/macos-portable-${{ matrix.arch }}" \
+            --binary "$PWD/crates/target/release/modv" \
+            --project-root "$PWD"
+
+      - name: Ad-hoc codesign the .app
+        # Ad-hoc signing lets the bundled binary run without notarization.
+        # continue-on-error keeps packaging/upload working on runners where
+        # signing is unavailable.
+        continue-on-error: true
+        run: codesign --force --deep --sign - "$PWD/dist/macos-portable-${{ matrix.arch }}/VmodV.app"
+
+      - name: Create ZIP
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$PWD/dist/macos-portable-${{ matrix.arch }}" \
+            "$PWD/dist/${{ matrix.zip_prefix }}$MACOS_VERSION.zip"
+
+      - name: Upload portable macOS ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.zip_prefix }}*.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   release:
     name: Tag, build and publish
     runs-on: ubuntu-latest
-    needs: [version, windows-portable]
+    needs: [version, windows-portable, macos-portable]
     if: ${{ needs.version.outputs.should_release == 'true' }}
     timeout-minutes: 90
     env:
@@ -280,9 +370,21 @@ jobs:
           name: vmodv-native-windows-x86_64-portable
           path: dist-windows
 
+      - name: Download portable macOS ZIP (x86_64)
+        uses: actions/download-artifact@v4
+        with:
+          name: vmodv-native-macos-x86_64-portable
+          path: dist-macos
+
+      - name: Download portable macOS ZIP (arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: vmodv-native-macos-arm64-portable
+          path: dist-macos
+
       - name: Publish GitHub release
         run: |
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes-file release-notes.md \
-            dist/VmodV-Native-*.AppImage dist/VmodV-Native-*.deb dist-windows/*.zip
+            dist/VmodV-Native-*.AppImage dist/VmodV-Native-*.deb dist-windows/*.zip dist-macos/*.zip

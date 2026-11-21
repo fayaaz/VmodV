@@ -13,8 +13,11 @@ audio analysis and egui UI run in one `modv` binary, with no Electron, Node or
 web renderer. It reads and writes the same preset, Scene, playlist and media
 documents as the archived Electron app.
 
-Linux is the only 2.0 target. Windows and macOS builds of the native shell are
-not produced; the archived Electron tree is their only (unsupported) reference.
+Linux remains the primary 2.0 target. CI additionally produces a portable
+Windows ZIP and portable macOS x86_64 (Intel) and arm64 (Apple Silicon) `.app`
+ZIPs as best-effort artifacts; these are not installers and do not imply
+feature parity with Linux. The archived Electron tree is a further
+(unsupported) reference.
 
 ## Getting it
 
@@ -22,6 +25,9 @@ not produced; the archived Electron tree is their only (unsupported) reference.
 | --- | --- |
 | Native AppImage | `VmodV-Native-2.0.0-x86_64.AppImage` |
 | Native Debian package | `VmodV-Native-2.0.0-amd64.deb` |
+| Portable Windows ZIP (best effort) | `VmodV-Native-Windows-x86_64-portable-2.0.0.zip` |
+| Portable macOS x86_64 ZIP (Intel, best effort) | `VmodV-Native-macOS-x86_64-portable-2.0.0.zip` |
+| Portable macOS arm64 ZIP (Apple Silicon, best effort) | `VmodV-Native-macOS-arm64-portable-2.0.0.zip` |
 
 The `.deb` is package `vmodv-native`. It installs `modv` (plus the
 `vmodv-native` compatibility symlink), `vmodv-native.desktop`, the icon, and
@@ -45,6 +51,30 @@ AppImage runtime dependencies come from the host: Vulkan (or Mesa's lavapipe),
 PipeWire, ALSA, the GStreamer runtime and plugins used by camera/file/screen
 capture, and `libxkbcommon-x11` for the X11 fallback. The `.deb` declares them
 and recommends `mesa-vulkan-drivers`.
+
+### Portable macOS build (best effort)
+
+`.github/workflows/macos.yml` builds portable macOS `.app` bundles with a
+single matrix job covering both architectures: `macos-15-intel` (x86_64, Intel)
+and `macos-15` (pinned arm64/Apple Silicon). Each leg stages, ad-hoc signs and
+ZIPs its own bundle, uploading a separately named artifact —
+`vmodv-native-macos-x86_64-portable` or `vmodv-native-macos-arm64-portable` —
+with ZIP names `VmodV-Native-macOS-x86_64-portable-<version>.zip` and
+`VmodV-Native-macOS-arm64-portable-<version>.zip`. The matrix uses
+`fail-fast: false` so one architecture's failure does not cancel the other.
+The default arm64 runner (`macos-latest`) was avoided because capacity failures
+prevented the earlier run from acquiring a runner at all; both legs use the
+pinned labels instead. The arm64 CI path has not been verified yet.
+
+Both legs require Homebrew `pkg-config gstreamer gst-plugins-base` at build time
+(`gstreamer-sys` locates the libraries via pkg-config) and GStreamer at runtime;
+the launcher discovers the Homebrew prefix at startup. Each bundle is ad-hoc
+signed with `codesign --sign -`, so a downloaded ZIP may need
+`xattr -d com.apple.quarantine` on the extracted files before it will launch.
+
+Known runtime gaps on macOS are unchanged: screen capture (portal), PipeWire
+system-audio monitor capture and V4L2 camera enumeration are Linux-only;
+cpal/CoreAudio input, CoreMIDI, ISF/visual rendering and Metal work.
 
 ## userData compatibility
 
@@ -97,10 +127,15 @@ and logging).
 - `.github/workflows/native.yml` runs clippy/fmt, the workspace tests
   (`modv-app` serial), the native e2e harness and both package builds on
   changes, uploading workflow artifacts.
+- `.github/workflows/macos.yml` builds and ad-hoc signs portable macOS `.app`
+  bundles for both x86_64 (Intel) and arm64 (Apple Silicon) via a matrix on
+  every push, uploading both architecture ZIPs as CI artifacts so feature
+  branches can be verified without opening a PR.
 - `.github/workflows/release.yml` runs on every push to `main` that contains
   qualifying conventional commits, tags the released commit `vX.Y.Z` (no
   version-bump commit; the version comes from the tags) and publishes the
-  versioned AppImage/deb to a `vX.Y.Z` GitHub release (see
+  versioned AppImage/deb, attaching the portable Windows ZIP and both portable
+  macOS architecture ZIPs to the `vX.Y.Z` GitHub release (see
   `docs/releasing.md`). There is no Electron job and no rolling nightly.
 - Stable 2.0.0 artifacts are built with `make build` (or `NATIVE_VERSION`
   overridden) from a green commit.
