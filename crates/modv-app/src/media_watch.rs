@@ -1,10 +1,7 @@
 //! Debounced filesystem watch for the active project media tree (P6).
 //!
 //! Electron's `create-watcher.js` watches the whole media directory and feeds
-//! changed files back into its read handlers. The VmodV shell only consumes
-//! ISF shaders, but an image/video/palette change is still worth one log line,
-//! so this watcher covers those four folders of the active profile (plus any
-//! extra user ISF folders) and reports a coalesced burst.
+//! changed files back into its read handlers. The VmodV shell consumes ISF shaders and MilkDrop presets — both re-register engine modules on change — while an image/video/palette change is only worth one log line, so this watcher covers those five folders of the active profile (plus any extra user ISF folders) and reports a coalesced burst.
 //!
 //! `notify` reports every write; editors often produce several events per
 //! save. A burst is only taken after 500 ms of quiet, exactly like the old
@@ -47,6 +44,12 @@ impl MediaFolder {
             Self::Milkdrop => "milkdrop",
         }
     }
+
+    /// A change in this folder re-registers engine modules (ISF shaders or
+    /// MilkDrop presets) rather than only refreshing the media Library.
+    fn registers_modules(self) -> bool {
+        matches!(self, Self::Isf | Self::Milkdrop)
+    }
 }
 
 /// One watched directory and the read-handler folder it feeds.
@@ -69,12 +72,18 @@ impl MediaBurst {
         self.folders.contains(&folder)
     }
 
-    /// Whether any folder other than ISF changed (logged, no rescan).
+    /// Whether any changed folder feeds the module registry (ISF or MilkDrop).
+    pub(crate) fn registers_modules(&self) -> bool {
+        self.folders.iter().any(|folder| folder.registers_modules())
+    }
+
+    /// The changed folders that are *not* module sources — logged for
+    /// visibility, but needing no engine re-registration.
     pub fn other_folders(&self) -> Vec<MediaFolder> {
         self.folders
             .iter()
             .copied()
-            .filter(|folder| *folder != MediaFolder::Isf)
+            .filter(|folder| !folder.registers_modules())
             .collect()
     }
 
@@ -85,7 +94,7 @@ impl MediaBurst {
     pub fn touches_library(&self) -> bool {
         self.folders
             .iter()
-            .any(|folder| *folder != MediaFolder::Isf && *folder != MediaFolder::Milkdrop)
+            .any(|folder| !folder.registers_modules())
     }
 }
 

@@ -38,7 +38,11 @@ pub const PROFILE_FOLDERS: [&str; 10] = [
 /// The shared, non-profile folders created directly under `<media>`.
 ///
 /// These are corpus folders for every profile (kept for older native builds)
-/// and must not be mistaken for a project profile by [`list_profiles`].
+/// and must not be mistaken for a project profile by [`list_profiles`]. They
+/// share the `<media>` namespace with profiles, so their names are effectively
+/// **reserved**: a profile cannot be named `milkdrop`, because its folder would
+/// collide with the shared corpus folder. Naming one silently creates no usable
+/// profile (it is filtered out again on the next [`list_profiles`] call).
 pub const SHARED_MEDIA_FOLDERS: [&str; 1] = ["milkdrop"];
 
 /// One persisted project selection.
@@ -149,6 +153,11 @@ impl std::fmt::Display for ProfileNameError {
 impl std::error::Error for ProfileNameError {}
 
 /// Validate and trim a profile name.
+///
+/// Names in [`SHARED_MEDIA_FOLDERS`] are reserved for the shared corpus folders
+/// under `<media>`; currently that means `milkdrop` is not a usable profile
+/// name. This is intentionally left unchecked here so persisted settings from
+/// older installs still parse — [`list_profiles`] simply omits the collision.
 pub fn normalize_profile_name(raw: &str) -> Result<String, ProfileNameError> {
     let name = raw.trim();
     if name.is_empty() {
@@ -210,7 +219,8 @@ pub fn create_profile(media_root: &Path, profile: &str) -> Result<PathBuf, Strin
 
 /// Every profile folder under `<media>`, sorted case-insensitively.
 ///
-/// Files and hidden folders are not profiles.
+/// Files, hidden folders and the names in [`SHARED_MEDIA_FOLDERS`] are not
+/// profiles — the latter are corpus folders shared by every profile.
 pub fn list_profiles(media_root: &Path) -> Vec<String> {
     let Ok(read) = std::fs::read_dir(media_root) else {
         return Vec::new();

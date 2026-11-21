@@ -470,6 +470,9 @@ pub struct VmodvApp {
     isf_dir: Option<PathBuf>,
     user_isf_dirs: Vec<PathBuf>,
     /// The user MilkDrop preset folders to scan (mirrors `user_isf_dirs`).
+    /// Resolved in [`VmodvApp::new`], refreshed with the watcher in
+    /// [`VmodvApp::rebuild_user_isf_dirs`], and handed to the store so the
+    /// module registry can pick up `.mlk` presets on startup and on rescan.
     user_milkdrop_dirs: Vec<PathBuf>,
     media_watcher: Option<MediaWatcher>,
     /// The active profile's recursive image/video/palette index.
@@ -555,6 +558,9 @@ impl VmodvApp {
         let active_profile = prepared.active;
         let profiles = prepared.profiles;
         let extra_isf_dirs = project_settings.isf_dirs.clone();
+        // Resolve the user's module source folders for the active profile, then
+        // seed the store's registry with both. The paths are mirrored below in
+        // `user_*_dirs` so a profile switch or watcher burst can rebuild it.
         let user_isf_dirs = user_isf_dirs(&media_root, &active_profile, &extra_isf_dirs);
         let user_milkdrop_dirs = user_milkdrop_dirs(&media_root, &active_profile, &extra_isf_dirs);
         let VmodvStoreBootstrap {
@@ -1374,7 +1380,9 @@ impl VmodvApp {
         }
         if let Some(burst) = self.media_watcher.as_mut().and_then(MediaWatcher::pump) {
             self.library_refresh.note_burst(&burst);
-            if burst.has(MediaFolder::Isf) || burst.has(MediaFolder::Milkdrop) {
+            // ISF and MilkDrop both feed the module registry, so either burst
+            // rebuilds it; image/video/palette changes only touch the Library.
+            if burst.registers_modules() {
                 self.rescan_modules();
             }
             if burst.has(MediaFolder::Video) {
@@ -2538,7 +2546,9 @@ impl VmodvApp {
         }
     }
 
-    /// Recompute the user ISF and MilkDrop search folders and restart the watcher.
+    /// Recompute the user ISF and MilkDrop search folders after a profile or
+    /// extra-directory change, then restart the watcher over the new tree so a
+    /// later `.fs`/`.mlk` save is attributed to the right module source.
     fn rebuild_user_isf_dirs(&mut self) {
         self.user_isf_dirs =
             user_isf_dirs(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
@@ -3008,7 +3018,6 @@ impl VmodvApp {
         }
     }
 
-    /// Capture the outgoing frame for a starting whole-scene transition.
     /// Rebuild the module registry after a user ISF or MilkDrop change.
     fn rescan_modules(&mut self) {
         let registry = self.store.reload_modules_with_milkdrop(
@@ -3028,6 +3037,7 @@ impl VmodvApp {
         eprintln!("ui: INFO user ISF rescan registered {count} modules");
     }
 
+    /// Capture the outgoing frame for a starting whole-scene transition.
     fn capture_pending_transition(&mut self) {
         if self.store.take_pending_transition_capture().is_none() {
             return;
