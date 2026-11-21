@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Build the native Rust modV `.deb`.
+# Build the VmodV `.deb`.
 #
-# Runs inside the Dockerised Rust toolchain (`make native-deb`), with the
+# Runs inside the Dockerised Rust toolchain (`make vmodv-deb`), with the
 # repository at /app and the cargo registry volume at /cargo - the same layout
-# as tools/native-appimage.sh. The package installs the `modv` wrapper (which
+# as tools/vmodv-appimage.sh. The package installs the `modv` wrapper (which
 # exports the AppImage-equivalent asset paths) plus the real binary under
-# /usr/lib/vmodv-native, the ISF corpus, the Point10 textures, a desktop entry
+# /usr/lib/vmodv, the ISF corpus, the Point10 textures, a desktop entry
 # and an icon. GStreamer/PipeWire/Vulkan/ALSA/X11 are declared as host runtime
 # dependencies in DEBIAN/control.
 set -euo pipefail
 
 ROOT="${ROOT:-/app}"
-VERSION="${APP_VERSION:-${NATIVE_VERSION:-$(bash "$ROOT/tools/version.sh")}}"
+VERSION="${APP_VERSION:-${VMODV_VERSION:-$(bash "$ROOT/tools/version.sh")}}"
 DIST="${DIST_DIR:-$ROOT/dist}"
 case "$DIST" in
     /*) ;;
     *) DIST="$ROOT/$DIST" ;;
 esac
 
-PKG="VmodV-Native-$VERSION-amd64"
+PKG="VmodV-$VERSION-amd64"
 PKGROOT="$DIST/$PKG"
 DEB="$DIST/$PKG.deb"
 
@@ -36,33 +36,33 @@ rm -rf "$PKGROOT" "$DEB"
 install -d -m 0755 \
     "$PKGROOT/DEBIAN" \
     "$PKGROOT/usr/bin" \
-    "$PKGROOT/usr/lib/vmodv-native" \
+    "$PKGROOT/usr/lib/vmodv" \
     "$PKGROOT/usr/share/vmodv" \
     "$PKGROOT/usr/share/applications" \
     "$PKGROOT/usr/share/icons/hicolor/512x512/apps" \
-    "$PKGROOT/usr/share/doc/vmodv-native"
+    "$PKGROOT/usr/share/doc/vmodv"
 
-# The crate version is packaging metadata's default; APP_VERSION/NATIVE_VERSION
+# The crate version is packaging metadata's default; APP_VERSION/VMODV_VERSION
 # only override the .deb version (the AppImage does the same).
 cargo build --locked --release --manifest-path "$ROOT/crates/Cargo.toml" \
     -p modv-app --bin modv
 
 install -Dm755 "$ROOT/crates/target/release/modv" \
-    "$PKGROOT/usr/lib/vmodv-native/modv"
-install -Dm755 "$ROOT/packaging/native/log-run.sh" \
-    "$PKGROOT/usr/lib/vmodv-native/log-run.sh"
-install -Dm755 "$ROOT/packaging/native/deb-launcher.sh" "$PKGROOT/usr/bin/modv"
-ln -s modv "$PKGROOT/usr/bin/vmodv-native"
+    "$PKGROOT/usr/lib/vmodv/modv"
+install -Dm755 "$ROOT/packaging/vmodv/log-run.sh" \
+    "$PKGROOT/usr/lib/vmodv/log-run.sh"
+install -Dm755 "$ROOT/packaging/vmodv/deb-launcher.sh" "$PKGROOT/usr/bin/modv"
+ln -s modv "$PKGROOT/usr/bin/vmodv"
 
 cp -a "$ROOT/resources/isf" \
     "$PKGROOT/usr/share/vmodv/isf"
 cp -a "$ROOT/resources/point10/textures" \
     "$PKGROOT/usr/share/vmodv/textures"
-install -Dm644 "$ROOT/packaging/native/vmodv-native.desktop" \
-    "$PKGROOT/usr/share/applications/vmodv-native.desktop"
+install -Dm644 "$ROOT/packaging/vmodv/vmodv.desktop" \
+    "$PKGROOT/usr/share/applications/vmodv.desktop"
 install -Dm644 "$ROOT/resources/icon.png" \
-    "$PKGROOT/usr/share/icons/hicolor/512x512/apps/vmodv-native.png"
-install -Dm644 "$ROOT/LICENSE" "$PKGROOT/usr/share/doc/vmodv-native/copyright"
+    "$PKGROOT/usr/share/icons/hicolor/512x512/apps/vmodv.png"
+install -Dm644 "$ROOT/LICENSE" "$PKGROOT/usr/share/doc/vmodv/copyright"
 
 # cp -a preserves the checkout's permissions; normalise the payload so the
 # archive does not depend on the host umask/ownership.
@@ -71,7 +71,7 @@ find "$PKGROOT/usr/share/vmodv" -type f -exec chmod 0644 {} +
 
 INSTALLED_KIB=$(du -sk "$PKGROOT/usr" | cut -f1)
 
-# The dependency list in packaging/native/vmodv-native.control is justified
+# The dependency list in packaging/vmodv/vmodv.control is justified
 # against `readelf -d crates/target/release/modv` (libasound/libpipewire/
 # libgstreamer*/libglib are NEEDED) and the dlopened runtimes: libvulkan1 for
 # wgpu, libxkbcommon-x11-0 for winit's X11 fallback, and the GStreamer plugin
@@ -80,7 +80,7 @@ INSTALLED_KIB=$(du -sk "$PKGROOT/usr" | cut -f1)
 # libglib2.0-0 names, so the manifest keeps those for compatibility across
 # Debian 12 and trixie/Ubuntu 24.04+.
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@INSTALLED_SIZE@/$INSTALLED_KIB/g" \
-    "$ROOT/packaging/native/vmodv-native.control" >"$PKGROOT/DEBIAN/control"
+    "$ROOT/packaging/vmodv/vmodv.control" >"$PKGROOT/DEBIAN/control"
 chmod 0644 "$PKGROOT/DEBIAN/control"
 
 # Standard Debian md5sums for the regular payload files.
@@ -93,9 +93,9 @@ chmod 0644 "$PKGROOT/DEBIAN/md5sums"
 dpkg-deb --build --root-owner-group "$PKGROOT" "$DEB"
 rm -rf "$PKGROOT"
 
-if [ -f "$ROOT/tools/native-deb-check.sh" ]; then
+if [ -f "$ROOT/tools/vmodv-deb-check.sh" ]; then
     ROOT="$ROOT" DIST_DIR="$DIST" APP_VERSION="$VERSION" \
-        bash "$ROOT/tools/native-deb-check.sh"
+        bash "$ROOT/tools/vmodv-deb-check.sh"
 fi
 
-echo "native .deb: $DEB ($(du -h "$DEB" | cut -f1))"
+echo "VmodV .deb: $DEB ($(du -h "$DEB" | cut -f1))"

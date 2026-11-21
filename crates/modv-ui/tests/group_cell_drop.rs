@@ -1,4 +1,4 @@
-//! Group → Scene-cell drag and drop in the native shell (BUGS.md item 11, UI).
+//! Group → Scene-cell drag and drop in the VmodV shell (BUGS.md item 11, UI).
 //!
 //! Dragging a Group header onto a Scene-grid cell uses the same
 //! `scenes/setSceneCellGroup` action as the engine path. An occupied cell must

@@ -2,7 +2,7 @@
 //!
 //! This folds the three JS guards (`point10-removed-effects.test.js`,
 //! `cube-removed.test.js` and `point10-disco-ball-removal.test.js`) into one
-//! Rust test with the assertions that still apply to the native tree:
+//! Rust test with the assertions that still apply to the VmodV tree:
 //!
 //! * the removed module/scene implementation files are absent (including the
 //!   Rust Geometric Tunnel port and its exclusive SSAO pass);
@@ -67,7 +67,7 @@ const REMOVED_SCENE_REFERENCES: &[&str] = &[
     "DiscoBall",
 ];
 
-/// Implementation tokens that must not be wired into the native source. The
+/// Implementation tokens that must not be wired into the VmodV source. The
 /// migration tables in `modv-engine/src/default_scenes.rs` intentionally name
 /// retired modules so old presets can be rebuilt, so that file is excluded.
 const FORBIDDEN_TOKENS: &[&str] = &[
@@ -166,7 +166,7 @@ fn the_seeded_default_scenes_do_not_reference_removed_content() {
 }
 
 #[test]
-fn no_native_source_reintroduces_a_removed_implementation() {
+fn no_vmodv_source_reintroduces_a_removed_implementation() {
     let root = repo_root();
     let removed_scenes = root.join("crates/modv-engine/src/default_scenes.rs");
     let mut offenders = Vec::new();

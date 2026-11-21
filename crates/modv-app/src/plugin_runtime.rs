@@ -1,11 +1,11 @@
-//! The native shell's opt-in sandboxed Boa plugin runtime.
+//! The VmodV shell's opt-in sandboxed Boa plugin runtime.
 //!
 //! [`modv_engine::plugins`] owns the sandbox and the hook contract
 //! (`preProcessFrame`/`postProcessFrame`, `modV.get`, `modV.ws`, `log`,
 //! RGBA capture). This module owns everything the shell needs around it:
 //!
-//! * the persisted settings/consent gate (`<userData>/native-plugins.json`,
-//!   atomic `.json.tmp` + rename like `native-audio.json`), with the master
+//! * the persisted settings/consent gate (`<userData>/vmodv-plugins.json`,
+//!   atomic `.json.tmp` + rename like `vmodv-audio.json`), with the master
 //!   `enabled` switch normalised to `false` until the user has consented;
 //! * plugin discovery: the active project profile's `plugin/` folder plus
 //!   `<userData>/plugins`, sorted by path, de-duplicated and capped at
@@ -19,7 +19,7 @@
 //!   running plugin requested `captureWidth`/`captureHeight`;
 //! * `plugin: …` log forwarding (deduplicated) and `shutdown` on quit.
 //!
-//! The native Plugins panel calls the public methods here (`set_enabled`,
+//! The VmodV Plugins panel calls the public methods here (`set_enabled`,
 //! `set_consented`, `set_plugin_enabled`, `set_prop`, `reload`, `rescan`,
 //! `plugins`, `logs`) and treats the runtime as authoritative: the UI read
 //! model is rebuilt from it, never written back.
@@ -28,7 +28,7 @@
 //!
 //! * `modV.ws` is **not** wired: [`UnsupportedTransport`] rejects every post
 //!   and the host records a `Transport` error per plugin (the message says the
-//!   transport is not wired in the native shell yet). A correct WebSocket
+//!   transport is not wired in the VmodV shell yet). A correct WebSocket
 //!   client can replace it without changing the plugin API.
 //! * The legacy Electron `grab-canvas` bundle is not shipped; plugins that
 //!   import it need an external bundle (the host accepts a single
@@ -53,7 +53,7 @@ use serde_json::{Map, Value, json};
 use crate::store_ops::Store;
 
 /// The persisted plugin settings inside the shared userData directory.
-pub const PLUGIN_SETTINGS_FILENAME: &str = "native-plugins.json";
+pub const PLUGIN_SETTINGS_FILENAME: &str = "vmodv-plugins.json";
 
 /// The shortest interval between two capture read-backs (20 Hz).
 ///
@@ -128,7 +128,8 @@ impl PluginSettings {
     /// The returned document is already normalised. A malformed file is an
     /// error so the shell can warn and fall back to the disabled default.
     pub fn read_from(path: &Path) -> Result<Option<Self>, String> {
-        let text = match std::fs::read_to_string(path) {
+        let path = crate::settings_compat::read_path(path);
+        let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -299,14 +300,14 @@ pub struct PluginView {
 
 /// The host transport placeholder for `modV.ws`.
 ///
-/// The native shell has no WebSocket client yet, so every post is rejected;
+/// The VmodV shell has no WebSocket client yet, so every post is rejected;
 /// the host records one `Transport` error per plugin and `modV.ws` returns
 /// `false`. This is documented in the module docs and the task's residuals.
 struct UnsupportedTransport;
 
 impl PluginTransport for UnsupportedTransport {
     fn post(&mut self, _url: &str, _payload: &str) -> Result<(), String> {
-        Err("modV.ws transport is not wired in the native shell yet".to_string())
+        Err("modV.ws transport is not wired in the VmodV shell yet".to_string())
     }
 }
 
@@ -642,7 +643,7 @@ impl PluginRuntime {
 
     /// Replace the discovery roots and rescan.
     ///
-    /// The native shell calls this after a project-profile switch so the new
+    /// The VmodV shell calls this after a project-profile switch so the new
     /// profile's `plugin/` folder is picked up without a restart.
     pub fn set_roots(&mut self, roots: Vec<PathBuf>) {
         self.roots = roots;
@@ -940,7 +941,7 @@ fn phase_label(phase: PluginPhase) -> &'static str {
 /// * `groups.<id>.name`
 /// * `modules.<id>.moduleName`
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct NativeStateReader {
+pub struct VmodvStateReader {
     bpm: f64,
     kick: bool,
     fps: f64,
@@ -950,7 +951,7 @@ pub struct NativeStateReader {
     modules: BTreeMap<String, Value>,
 }
 
-impl NativeStateReader {
+impl VmodvStateReader {
     /// Snapshot the allow-listed fields from the engine store.
     pub fn from_store(store: &Store) -> Self {
         let audio = store.audio();
@@ -976,7 +977,7 @@ impl NativeStateReader {
     }
 }
 
-impl PluginStateReader for NativeStateReader {
+impl PluginStateReader for VmodvStateReader {
     fn get(&self, path: &str) -> Option<Value> {
         match path {
             "beats.bpm" => Some(json!(self.bpm)),
@@ -1061,6 +1062,24 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn legacy_native_plugins_filename_is_read_as_a_fallback() {
+        let dir = temp_dir("modv-plugins-compat");
+        let legacy = dir.join("native-plugins.json");
+        let saved = PluginSettings {
+            enabled: true,
+            consented: true,
+            ..Default::default()
+        };
+        saved.write_to(&legacy).expect("write legacy plugins");
+        let current = dir.join(PLUGIN_SETTINGS_FILENAME);
+        assert_eq!(
+            PluginSettings::read_from(&current).expect("read legacy plugins"),
+            Some(saved)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     const COUNTER: &str = r#"
 module.exports = {
@@ -1175,7 +1194,7 @@ module.exports = {
         value.as_f64().expect("a JSON number")
     }
 
-    fn reader_number(reader: &NativeStateReader, path: &str) -> f64 {
+    fn reader_number(reader: &VmodvStateReader, path: &str) -> f64 {
         number(&reader.get(path).expect("an allow-listed path"))
     }
 
@@ -1194,7 +1213,7 @@ module.exports = {
         settings.set_plugin_enabled("/plugins/a.js", false);
         settings.write_to(&path).expect("write settings");
         assert!(
-            !dir.join("native-plugins.json.tmp").exists(),
+            !dir.join("vmodv-plugins.json.tmp").exists(),
             "the atomic write must not leave its temporary file behind"
         );
         assert_eq!(
@@ -1511,7 +1530,7 @@ module.exports = {
 
     #[test]
     fn the_state_reader_exposes_only_the_allow_list() {
-        let reader = NativeStateReader {
+        let reader = VmodvStateReader {
             bpm: 120.0,
             kick: true,
             fps: 30.0,
@@ -1589,7 +1608,7 @@ module.exports = {
         assert!((number(&features["wave"][0]) - 0.1).abs() < 1e-6);
         assert!((number(&features["wave"][1]) - 0.2).abs() < 1e-6);
 
-        let reader = NativeStateReader::from_store(&store);
+        let reader = VmodvStateReader::from_store(&store);
         assert_eq!(reader.get("fps.fps"), Some(json!(30.0)));
         assert!((reader_number(&reader, "meyda.getFeature.rms") - 0.3).abs() < 1e-6);
         assert!((reader_number(&reader, "meyda.bands.bass") - 0.5).abs() < 1e-6);

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Behavioural checks for packaging/native/log-run.sh.
+# Behavioural checks for packaging/vmodv/log-run.sh.
 #
-# tools/native-deb-check.sh calls this so every `make native-deb` exercises the
-# launcher wrapper, and `make native-deb-check` re-runs it on its own. The test
+# tools/vmodv-deb-check.sh calls this so every `make vmodv-deb` exercises the
+# launcher wrapper, and `make vmodv-deb-check` re-runs it on its own. The test
 # uses a stub command rather than the real binary: that keeps it independent of
 # GPUs, windows and the Rust build while still checking the stderr-only tee,
 # exit-code propagation, the dated log name and rotation. It also assembles an
@@ -11,21 +11,21 @@
 set -euo pipefail
 
 ROOT="${ROOT:-/app}"
-if [ ! -d "$ROOT/packaging/native" ]; then
+if [ ! -d "$ROOT/packaging/vmodv" ]; then
     SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
     ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 fi
 
-LOG_RUN="$ROOT/packaging/native/log-run.sh"
-APPRUN="$ROOT/packaging/native/AppRun"
-APPIMAGE_SCRIPT="$ROOT/tools/native-appimage.sh"
+LOG_RUN="$ROOT/packaging/vmodv/log-run.sh"
+APPRUN="$ROOT/packaging/vmodv/AppRun"
+APPIMAGE_SCRIPT="$ROOT/tools/vmodv-appimage.sh"
 TODAY=$(date +%F)
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
-    echo "native-log-run-check: $*" >&2
+    echo "vmodv-log-run-check: $*" >&2
     exit 1
 }
 
@@ -139,7 +139,7 @@ grep -qi 'bash' "$TMP/no-bash.err" ||
 # (AppRun + log-run.sh + the binary) and run it, which is the same dispatch the
 # packaged image performs without mounting or opening a window.
 APP_DATA="$TMP/app-data"
-APP_DIR="$TMP/VmodV-Native.AppDir"
+APP_DIR="$TMP/VmodV.AppDir"
 mkdir -p "$APP_DIR/usr/bin"
 cp "$APPRUN" "$APP_DIR/AppRun"
 cp "$LOG_RUN" "$APP_DIR/usr/bin/log-run.sh"
@@ -157,6 +157,6 @@ grep -qF -- '--smoke' "$APP_DATA/logs/vmodv-$TODAY.log" ||
     fail "AppRun did not pass its arguments through the wrapper"
 
 grep -q 'log-run.sh' "$APPIMAGE_SCRIPT" ||
-    fail "tools/native-appimage.sh does not install log-run.sh"
+    fail "tools/vmodv-appimage.sh does not install log-run.sh"
 
-echo "native-log-run-check: OK ($LOG_RUN)"
+echo "vmodv-log-run-check: OK ($LOG_RUN)"

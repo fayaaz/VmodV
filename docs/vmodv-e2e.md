@@ -1,12 +1,12 @@
-# Native e2e process harness
+# VmodV e2e process harness
 
-Status: harness foundation (first native porting task)
-Binary: `modv` (the native single-process shell, `crates/modv-app/src/bin/modv.rs`)
+Status: harness foundation (first VmodV porting task)
+Binary: `modv` (the VmodV single-process shell, `crates/modv-app/src/bin/modv.rs`)
 Tests: `crates/modv-app/tests/e2e_harness.rs` + `crates/modv-app/tests/e2e/mod.rs`
 
 The archived Electron suite (`tests/e2e/spec/**`, Playwright, branch
 `legacy-electron`) launched Electron and drove the worker store through a page
-object. The native replacement proves the same behaviour against the **real**
+object. The VmodV replacement proves the same behaviour against the **real**
 Rust binary: no mocked store, no in-process test host. This document specifies
 the control protocol, the process harness, the display/CI requirements, and
 the rules for porting the archived specs with intent parity plus explicit
@@ -25,7 +25,7 @@ bypass the real binary.
 Unix-domain server. Without the flag no socket is created and the shell behaves
 exactly as before. The Electron/engine `modv-engine` binary keeps its existing
 binary-framed `modv-ipc` protocol on `--socket`; this JSON-lines protocol is
-served only by the native `modv` shell.
+served only by the VmodV `modv` shell.
 
 ### Framing
 
@@ -148,7 +148,7 @@ Group, window placement, Scene JSON opened like a preset).
 ### Spawning
 
 ```rust
-let mut app = NativeHarness::builder()
+let mut app = VmodvHarness::builder()
     .width(640)
     .height(360)
     .arg("--apply-scene")
@@ -160,7 +160,7 @@ app.wait_ready();                       // ping until the frame loop is live
 
 Restart tests own one `userData` tree across several launches: create it with
 `e2e::temp_root("name")`, pass `root.join("userData")` to
-`NativeHarnessBuilder::user_data`, and remove the root when the test ends. The
+`VmodvHarnessBuilder::user_data`, and remove the root when the test ends. The
 harness never deletes an explicit userData directory, so `engine-state.json`,
 `scenes.json` and `window-state.json` survive the process boundary.
 
@@ -216,9 +216,9 @@ Order:
    private `XDG_RUNTIME_DIR`; the harness discovers the `wayland-*` socket and
    sets `WAYLAND_DISPLAY` when Xvfb cannot start.
 
-Each `NativeHarness` owns its display and kills it in `Drop`. Tests must run
+Each `VmodvHarness` owns its display and kills it in `Drop`. Tests must run
 serially (`--test-threads=1`): the software Vulkan adapter is shared and
-multiple native apps on one CI GPU/display oversubscribe it.
+multiple VmodV apps on one CI GPU/display oversubscribe it.
 
 ### Docker / CI
 
@@ -231,7 +231,7 @@ make engine-test ARGS="-p modv-app --test e2e_harness -- --test-threads=1"
 make engine-test ARGS="-p modv-app --test e2e_process -- --test-threads=1"
 ```
 
-`.github/workflows/native.yml` runs the unit tests
+`.github/workflows/vmodv.yml` runs the unit tests
 (`-p modv-app --lib`) and the harness (separate steps, serial). A developer
 host with a real display/GPU simply inherits `DISPLAY`/`WAYLAND_DISPLAY`; the
 harness does not change the running desktop.
@@ -247,11 +247,11 @@ blocking cargo forever.
 Each of the 53 specs / 139 tests under `tests/e2e/spec/**` lands in exactly one
 bucket:
 
-1. **Process equivalent** — launch `NativeHarness`, drive the same action(s)
+1. **Process equivalent** — launch `VmodvHarness`, drive the same action(s)
    through `dispatch`, assert `state`, pixels and exit. This is the default for
    anything that only mutates the store or compositor.
-2. **Native-only replacement** — the Electron mechanism no longer exists (for
-   example the web worker, GL contexts, DOM drag events). Assert the native
+2. **VmodV-only replacement** — the Electron mechanism no longer exists (for
+   example the web worker, GL contexts, DOM drag events). Assert the VmodV
    intent (state transition, rendered frame, persisted file), not the old DOM.
 3. **Explicit waiver** — recorded with a reason. A waiver must say what the
    legacy test protected and what now protects it (a Rust unit test, a
@@ -260,7 +260,7 @@ bucket:
 
 ### Mapping guide
 
-| Playwright pattern | Native harness equivalent |
+| Playwright pattern | VmodV harness equivalent |
 | --- | --- |
 | `modVApp.evaluateWorkerState(...)` / `checkWorkerAndMainState` | `app.state()["..."]`; there is only one authoritative store. |
 | `modV.store.dispatch(action, payload)` | `app.dispatch(action, payload)`. |
@@ -268,15 +268,15 @@ bucket:
 | `waitFor`/`expect.poll` on state | `app.wait_for_state(timeout, predicate)`. |
 | canvas `getImageData` / screenshot expectations | `app.screenshot(path, Some(w), Some(h))`, then decode/compare with the `image` crate. |
 | launch flags / packaged app assumptions | builder `.arg(...)`; `MODV_USER_DATA` is always a temp tree. |
-| `beforeAll` app launch | one `NativeHarness` per test (or a shared harness in the test module when the spec needs one process). |
-| window close / quit cleanup | `app.quit()` + `app.assert_exit(0)` + assert `engine-state.json`/`scenes.json`/`native-layout.json`. |
+| `beforeAll` app launch | one `VmodvHarness` per test (or a shared harness in the test module when the spec needs one process). |
+| window close / quit cleanup | `app.quit()` + `app.assert_exit(0)` + assert `engine-state.json`/`scenes.json`/`vmodv-layout.json`. |
 | keyboard/mouse on a panel | port the **intent** through the same store action, or add a narrow `ui`/`command` socket command that maps to a `UiAction`. Do not reintroduce a DOM. |
-| ISF/Gallery hover pixels | assert the engine preview/compositor frame (the native shell has no DOM hover); add an egui `kittest` only for the actual widget behaviour. |
+| ISF/Gallery hover pixels | assert the engine preview/compositor frame (the VmodV shell has no DOM hover); add an egui `kittest` only for the actual widget behaviour. |
 
 For UI-only behaviour (tab switching, panel layout, drag handles), prefer an
 egui `kittest` interaction test; use the process harness when the assertion is
 about the live store, persistence or presented pixels. The harness can expose
-more native commands later (for example `ui` → `UiAction`) without changing
+more VmodV commands later (for example `ui` → `UiAction`) without changing
 the framing.
 
 Assertions should be **deterministic**: dispatch state, wait for a frame count
@@ -289,7 +289,7 @@ wall-clock sleeps; the harness timeouts are failure bounds, not pacing.
 
 `tests/e2e_harness.rs`:
 
-- `native_shell_serves_state_seeds_defaults_and_quits_cleanly` — ping/version,
+- `vmodv_shell_serves_state_seeds_defaults_and_quits_cleanly` — ping/version,
   one `"New Group"` default Group, seeded default Scenes, audio/tween/input
   sections, quit acknowledgement, exit 0 and a valid `engine-state.json`.
 - `dispatch_updates_state_and_screenshot_writes_a_png` — creates a Group,
@@ -305,16 +305,16 @@ wall-clock sleeps; the harness timeouts are failure bounds, not pacing.
   writes a `save` snapshot, SIGKILLs the shell (`signal() == 9`), relaunches
   over the same userData and observes the restored Group and a new pid. The
   Electron `MODV_ENGINE` supervisor path is a windowed `modv-engine` child; it
-  has no test seam that survives without Electron, so the native
+  has no test seam that survives without Electron, so the VmodV
   single-process shell ports the intent: the same snapshot format, the same
   kill without a graceful quit, and a clean replacement process. The
   supervisor's watchdog/restart budget stays covered by the existing Electron
   unit tests (`tests/unit/engine-supervisor.test.js`,
-  `tests/unit/engine-restart-budget.test.js`), not by the native harness.
+  `tests/unit/engine-restart-budget.test.js`), not by the VmodV harness.
 - `renders_the_main_window_at_the_requested_size` — readiness, live
   `runtime.frames`, `runtime.window` equals the requested 640×360, and a
   decoded 640×360 (16:9) PNG.
-- `fresh_native_start_creates_exactly_one_default_group` — one enabled
+- `fresh_vmodv_start_creates_exactly_one_default_group` — one enabled
   `"New Group"` on a fresh userData; after adding a user Group and quitting,
   the relaunch restores exactly two Groups with the same default id (no
   duplicate).
@@ -325,10 +325,10 @@ wall-clock sleeps; the harness timeouts are failure bounds, not pacing.
   passed as `--preset` is listed, sets `appliedSceneId`/`currentSceneId`, and
   its Group + Ball Module are live (no default Group is seeded on top).
 
-### Native startup parity
+### VmodV startup parity
 
-The native shell owns the store instead of an Electron renderer, so it
-reproduces the renderer's boot dispatch itself. On a **fresh** native start —
+The VmodV shell owns the store instead of an Electron renderer, so it
+reproduces the renderer's boot dispatch itself. On a **fresh** VmodV start —
 no restored `engine-state.json`, no successful startup preset/Scene (a
 playlist import does not replace the live stack), no `--apply-scene` — it
 dispatches `groups/createGroup` with `enabled: 1`, which yields the same

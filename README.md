@@ -13,13 +13,13 @@
 </p>
 <p align="center">
 VmodV is a fork of <a href="https://github.com/vcync/modV">modV</a>: a modular audio
-visualisation environment. This tree is the native Rust application — one
+visualisation environment. This tree is the VmodV Rust application — one
 <code>modv</code> binary with the engine, GPU compositor, media/audio capture and
 egui UI in-process.
 </p>
 
 <p align="center">
-  <img src="docs/images/native-ui.png" alt="The VmodV native UI: Groups panel, live output preview, module Gallery, Scenes grid and Inspector" width="900" />
+  <img src="docs/images/vmodv-ui.png" alt="The VmodV UI: Groups panel, live output preview, module Gallery, Scenes grid and Inspector" width="900" />
 </p>
 
 > **License note:** VmodV's own code is MIT-licensed. It also bundles
@@ -91,31 +91,31 @@ build dependencies live in the Docker toolchain image.
 ## Build
 
 ```bash
-make build            # native AppImage + .deb in dist/
-make appimage-native  # AppImage only
-make native-deb       # .deb only (runs native-deb-check.sh)
-make native-deb-check # re-check an existing .deb
+make build            # VmodV AppImage + .deb in dist/
+make appimage-vmodv  # AppImage only
+make vmodv-deb       # .deb only (runs vmodv-deb-check.sh)
+make vmodv-deb-check # re-check an existing .deb
 ```
 
-`NATIVE_VERSION` names the installers. Its default comes from the git tags
+`VMODV_VERSION` names the installers. Its default comes from the git tags
 (`vX.Y.Z` on HEAD, else the latest tag) via `tools/version.sh`; override it
 with the environment variable (`make version` prints the resolved value):
 
 ```bash
 make version
-NATIVE_VERSION=2.0.0 make build
+VMODV_VERSION=2.0.0 make build
 ```
 
 Artifacts:
 
-- `dist/VmodV-Native-<version>-x86_64.AppImage`
-- `dist/VmodV-Native-<version>-amd64.deb`
+- `dist/VmodV-<version>-x86_64.AppImage`
+- `dist/VmodV-<version>-amd64.deb`
 
 ## Development
 
 ```bash
-make dev          # native shell, release profile (Wayland preferred, X11 fallback)
-make native-debug # native shell, debug profile
+make dev          # VmodV shell, release profile (Wayland preferred, X11 fallback)
+make vmodv-debug # VmodV shell, debug profile
 make engine-run   # same binary through the engine entry point
 ```
 
@@ -129,15 +129,15 @@ make engine-run   # same binary through the engine entry point
 make engine-test                                    # full workspace
 make engine-test ARGS="-p modv-engine --lib"        # one package
 make engine-test ARGS="-p modv-app --test notices"  # one integration test
-make test-e2e-native                                # real-binary e2e + parity
+make test-e2e-vmodv                                # real-binary e2e + parity
 make engine-lint                                    # clippy -D warnings + rustfmt
 make format                                         # cargo fmt --all
 ```
 
 The e2e harness launches the real `modv` binary under Xvfb (lavapipe provides
 Vulkan when no hardware adapter is available). See
-[docs/native-e2e.md](docs/native-e2e.md) for the control protocol and
-[docs/native-parity-map.md](docs/native-parity-map.md) for coverage.
+[docs/vmodv-e2e.md](docs/vmodv-e2e.md) for the control protocol and
+[docs/vmodv-parity-map.md](docs/vmodv-parity-map.md) for coverage.
 
 ## Project layout
 
@@ -146,9 +146,9 @@ Vulkan when no hardware adapter is available). See
 | `crates/` | the Rust workspace (engine, renderers, media, UI, app) |
 | `resources/isf/` | bundled ISF shader corpus |
 | `resources/point10/textures/` | Point10 texture assets |
-| `packaging/native/` | AppImage/`.deb` launchers, desktop entry and control file |
-| `tools/native-*.sh` | packaging, checks and the packaged-app smoke suite |
-| `tests/e2e-rust/` | committed native e2e parity manifest |
+| `packaging/vmodv/` | AppImage/`.deb` launchers, desktop entry and control file |
+| `tools/vmodv-*.sh` | packaging, checks and the packaged-app smoke suite |
+| `tests/e2e-rust/` | committed VmodV e2e parity manifest |
 | `docs/` | design, parity, release and legacy-archive notes |
 
 ## License

@@ -1,4 +1,4 @@
-//! The tween curve model behind the native curve editor.
+//! The tween curve model behind the VmodV curve editor.
 //!
 //! Pure helpers only: the keyframe grid, axis maths, point editing and the
 //! Electron-style JSON shape. [`crate::widgets::tween_control`] draws them and

@@ -1,6 +1,6 @@
-//! Kittest coverage for the native Audio panel.
+//! Kittest coverage for the VmodV Audio panel.
 //!
-//! The panel is the native counterpart of Electron's `AudioVideo.vue` input
+//! The panel is the VmodV counterpart of Electron's `AudioVideo.vue` input
 //! picker: system audio (PipeWire monitor), the host default input and every
 //! enumerated cpal device, with the active choice marked and a live switch
 //! queued as a [`UiCommand::SetAudioSource`].

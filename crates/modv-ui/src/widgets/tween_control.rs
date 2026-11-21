@@ -2,7 +2,7 @@
 //!
 //! The compact rows edit the descriptor fields the legacy `TweenControl.vue`
 //! exposed (easing, direction, BPM division, loop, steps) plus the fields the
-//! native editor needed (duration, BPM, total time). "Edit curve" opens a
+//! VmodV editor needed (duration, BPM, total time). "Edit curve" opens a
 //! keyframe editor window: overlaid channel polylines with draggable handles,
 //! a beats-or-seconds axis driven by the engine's real cycle length, and the
 //! Electron-style JSON underneath.

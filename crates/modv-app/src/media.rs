@@ -200,7 +200,7 @@ pub struct MediaHub {
     /// GStreamer initialisation outcome (`Err` = capture unavailable).
     init: Result<(), String>,
     last_health: Instant,
-    /// `screen_support()` is logged once (the native shell asks at startup so
+    /// `screen_support()` is logged once (the VmodV shell asks at startup so
     /// the Media panel can explain a missing backend; the supervisor asks on
     /// the first screen start), so a host without PipeWire says why.
     screen_logged: bool,
@@ -1332,7 +1332,7 @@ mod tests {
 
     #[test]
     fn a_portal_screen_source_takes_a_webcam_index_like_a_camera() {
-        // The native shell starts its portal capture under this id; the Webcam
+        // The VmodV shell starts its portal capture under this id; the Webcam
         // module's 1-based `camera` prop and `reconcileCameraIndex` resolve it
         // through the same camera-only list as a real camera.
         let media = fake_hub(&[

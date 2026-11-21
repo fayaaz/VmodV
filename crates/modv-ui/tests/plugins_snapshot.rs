@@ -1,6 +1,6 @@
-//! Golden snapshot of the native Plugins panel.
+//! Golden snapshot of the VmodV Plugins panel.
 //!
-//! The panel is the native counterpart of Electron's opt-in plugin host: the
+//! The panel is the VmodV counterpart of Electron's opt-in plugin host: the
 //! consent gate and Advanced warning at the top, discovered scripts with their
 //! status/capture size, generated prop controls and the deduplicated runtime
 //! log window. The fixture is deterministic (fixed paths and values), so the

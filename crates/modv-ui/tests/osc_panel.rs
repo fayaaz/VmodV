@@ -1,4 +1,4 @@
-//! Kittest coverage for the native OSC panel.
+//! Kittest coverage for the VmodV OSC panel.
 //!
 //! The panel lists the engine's UDP listeners (the startup default plus any
 //! the user adds) and the latest values received under `osc.data`, so an OSC

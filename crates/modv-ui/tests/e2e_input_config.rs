@@ -2,7 +2,7 @@
 //!
 //! Legacy `InputConfig.vue` edits only the focused input: clicking a module
 //! prop focuses that input and the panel title becomes `<module>: <prop>`.
-//! The native shell has no separate Input Config tab; each prop's link row
+//! The VmodV shell has no separate Input Config tab; each prop's link row
 //! opens the same focused-input editor (`LinkEditor`) and its window repeats
 //! the legacy `<module>: <prop>` title. These tests drive that path and assert
 //! the editor targets the clicked prop's input id and shows the full title.
@@ -84,7 +84,7 @@ fn build() -> Harness<'static, UiState> {
     harness
 }
 
-/// Click the module row in the Groups pane, the native equivalent of clicking
+/// Click the module row in the Groups pane, the VmodV equivalent of clicking
 /// the module name in the legacy `Group.vue`.
 fn select_ball(harness: &mut Harness<'static, UiState>) {
     harness.get_by_label("Ball  (ball-567)").click();

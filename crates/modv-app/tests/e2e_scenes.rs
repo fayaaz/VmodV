@@ -373,7 +373,7 @@ fn applying_a_row_scene_only_replaces_that_row() {
     let after_row1 = scene_row_group(&store, 1)
         .expect("row 1 live after")
         .clone();
-    // Native row applies mint a fresh Group id (`applySceneRowNow` reuses the
+    // VmodV row applies mint a fresh Group id (`applySceneRowNow` reuses the
     // old id in JS); the other row must keep both its id and its Modules.
     assert_ne!(after_row0.id, before_row0.id);
     assert_eq!(after_row0.name, "Row Apply B0");

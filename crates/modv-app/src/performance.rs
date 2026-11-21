@@ -61,7 +61,7 @@
 //! * Phrase *detection* (`phrase-detector.js`) — `modv-media`'s analyser owns
 //!   it; this module only consumes the one-frame `phrase_drop` pulse the loop
 //!   forwards. The JS engine also runs the legacy whole-Scene autopilot for
-//!   Groups with no Modules (`scenes.js:3940-3978`); the native runtime's
+//!   Groups with no Modules (`scenes.js:3940-3978`); the VmodV runtime's
 //!   `tick_scenes` has no such branch, so there is no legacy phrase rule to
 //!   mirror.
 //! * Point10 pre-warming — the engine builds scenes synchronously; the
@@ -1416,7 +1416,7 @@ mod tests {
                 .expect("scene loads");
         }
 
-        // The native UI's payload: no `config` wrapper, exactly what the
+        // The VmodV UI's payload: no `config` wrapper, exactly what the
         // order select dispatches (`performance_bar`).
         store
             .dispatch("scenes/updatePerformance", json!({ "order": "random" }))
@@ -1435,7 +1435,7 @@ mod tests {
             "the order is persisted for the next launch"
         );
 
-        // Reload from the saved document, exactly like a native restart.
+        // Reload from the saved document, exactly like a VmodV restart.
         let mut reloaded = Store::with_state_path(Some(&state_path));
         reloaded
             .dispatch("scenes/hydrateScenes", json!({}))

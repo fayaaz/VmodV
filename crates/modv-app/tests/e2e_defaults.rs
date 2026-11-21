@@ -1,4 +1,4 @@
-//! Native content/dev-runtime port of `tests/e2e/spec/scenes/defaultScenes.spec.js`.
+//! VmodV content/dev-runtime port of `tests/e2e/spec/scenes/defaultScenes.spec.js`.
 //!
 //! The Electron spec audits two things:
 //!

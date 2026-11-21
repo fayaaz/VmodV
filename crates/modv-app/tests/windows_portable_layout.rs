@@ -290,7 +290,7 @@ fn ci_gstreamer_msi_urls_point_at_the_verified_release() {
     let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
 
     let workflows = [
-        ("native.yml", repo_root.join(".github/workflows/native.yml")),
+        ("vmodv.yml", repo_root.join(".github/workflows/vmodv.yml")),
         (
             "release.yml",
             repo_root.join(".github/workflows/release.yml"),
@@ -348,7 +348,7 @@ fn ci_windows_uses_native_pkgconf_for_drive_letter_paths() {
     let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
 
     let workflows = [
-        ("native.yml", repo_root.join(".github/workflows/native.yml")),
+        ("vmodv.yml", repo_root.join(".github/workflows/vmodv.yml")),
         (
             "release.yml",
             repo_root.join(".github/workflows/release.yml"),
@@ -666,12 +666,12 @@ fn ci_workflows_cache_cargo_and_gstreamer_downloads() {
     let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
 
     // (workflow name, path, minimum number of cache steps required).
-    // native.yml: lint + test + package (Linux Docker) + windows-portable.
+    // vmodv.yml: lint + test + package (Linux Docker) + windows-portable.
     // release.yml: release (Linux Docker) + windows-portable.
     let workflows = [
         (
-            "native.yml",
-            repo_root.join(".github/workflows/native.yml"),
+            "vmodv.yml",
+            repo_root.join(".github/workflows/vmodv.yml"),
             4,
         ),
         (

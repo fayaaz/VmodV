@@ -1,6 +1,6 @@
-name: Native Rust CI
+name: VmodV Rust CI
 
-# Rust-only lint/test/packaging for the native shell. Every change is built,
+# Rust-only lint/test/packaging for the VmodV shell. Every change is built,
 # tested and packaged without Node, Yarn or Electron. Stable releases are
 # published by release.yml (see docs/releasing.md).
 on:
@@ -11,15 +11,15 @@ on:
     paths:
       - 'crates/**'
       - 'resources/**'
-      - 'packaging/native/**'
-      - 'tools/native-*'
+      - 'packaging/vmodv/**'
+      - 'tools/vmodv-*'
       - 'tools/windows-portable.sh'
       - 'tests/**'
       - 'Dockerfile'
       - 'Makefile'
       - 'THIRD_PARTY_NOTICES.md'
       - 'LICENSE'
-      - '.github/workflows/native.yml'
+      - '.github/workflows/vmodv.yml'
   pull_request:
     branches:
       - main
@@ -27,22 +27,22 @@ on:
     paths:
       - 'crates/**'
       - 'resources/**'
-      - 'packaging/native/**'
-      - 'tools/native-*'
+      - 'packaging/vmodv/**'
+      - 'tools/vmodv-*'
       - 'tools/windows-portable.sh'
       - 'tests/**'
       - 'Dockerfile'
       - 'Makefile'
       - 'THIRD_PARTY_NOTICES.md'
       - 'LICENSE'
-      - '.github/workflows/native.yml'
+      - '.github/workflows/vmodv.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-${{ github.ref }}
+  group: vmodv-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -158,11 +158,11 @@ jobs:
       # Launches the real `modv` binary under Xvfb; lavapipe provides the
       # Vulkan adapter. One worker only because a process owns a virtual
       # display and the software GPU is shared.
-      - name: Native e2e harness and parity tests (serial)
-        run: make test-e2e-native
+      - name: VmodV e2e harness and parity tests (serial)
+        run: make test-e2e-vmodv
 
   package:
-    name: Native AppImage and .deb
+    name: VmodV AppImage and .deb
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -204,22 +204,22 @@ jobs:
           load: true
           cache-from: type=gha,scope=rust-toolchain
 
-      - name: Build native AppImage and .deb
+      - name: Build VmodV AppImage and .deb
         run: make build
 
       - name: Inspect installers
         run: |
           ls -lh dist
-          dpkg-deb -I dist/VmodV-Native-*.deb
-          dpkg-deb -c dist/VmodV-Native-*.deb | tail -n 5
+          dpkg-deb -I dist/VmodV-*.deb
+          dpkg-deb -c dist/VmodV-*.deb | tail -n 5
 
-      - name: Upload native installers
+      - name: Upload VmodV installers
         uses: actions/upload-artifact@v4
         with:
-          name: vmodv-native-linux-x64
+          name: vmodv-linux-x64
           path: |
-            dist/VmodV-Native-*.AppImage
-            dist/VmodV-Native-*.deb
+            dist/VmodV-*.AppImage
+            dist/VmodV-*.deb
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -340,15 +340,15 @@ jobs:
         shell: pwsh
         run: |
           $src = Join-Path $env:GITHUB_WORKSPACE 'dist\windows-portable'
-          $out = Join-Path $env:GITHUB_WORKSPACE "dist\VmodV-Native-Windows-x86_64-portable-$env:PORTABLE_VERSION.zip"
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist\VmodV-Windows-x86_64-portable-$env:PORTABLE_VERSION.zip"
           Compress-Archive -Path "$src\*" -DestinationPath $out -CompressionLevel Optimal
           Get-Item $out | Select-Object FullName, Length
 
       - name: Upload portable Windows ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: vmodv-native-windows-x86_64-portable
-          path: dist/VmodV-Native-Windows-x86_64-portable-*.zip
+          name: vmodv-windows-x86_64-portable
+          path: dist/VmodV-Windows-x86_64-portable-*.zip
           if-no-files-found: error
           retention-days: 7
           compression-level: 0

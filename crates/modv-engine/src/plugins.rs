@@ -1,7 +1,7 @@
 //! The opt-in sandboxed Boa plugin host (D5/P7).
 //!
 //! The legacy worker ran plugin objects in the renderer (`plugins.js`,
-//! `plugin-host.js`) with the renderer's full privileges. The native app has no
+//! `plugin-host.js`) with the renderer's full privileges. The VmodV app has no
 //! renderer, so this module re-creates the plugin surface in-process, behind
 //! an explicit opt-in switch:
 //!

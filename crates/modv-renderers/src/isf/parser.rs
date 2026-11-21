@@ -105,7 +105,7 @@ pub struct IsfPass {
     /// contents between frames (ping-pong texture pair).
     pub persistent: bool,
     /// `FLOAT`. Combined with `persistent`, allocates an `Rgba32Float`
-    /// texture with nearest filtering — the native replacement for
+    /// texture with nearest filtering — the VmodV replacement for
     /// `float-buffer-support.js`.
     pub float: bool,
     /// `CLEAR`. ISF default is `true`.

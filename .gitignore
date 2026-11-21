@@ -1,6 +1,6 @@
 .DS_Store
 
-# Native installers and build output
+# VmodV installers and build output
 /dist
 crates/target
 

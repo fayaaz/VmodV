@@ -1,9 +1,9 @@
 //! One-time import of loose Scene documents from the active media profile.
 //!
 //! Electron's media manager lists `scene/` files through `window-prefs.js`,
-//! while the native shell keeps `<userData>/scenes.json` authoritative. A user
-//! who saved Scenes before adopting the native shell therefore has documents
-//! under `<userData>/media/<profile>/scene/` that the native Scene grid never
+//! while the VmodV shell keeps `<userData>/scenes.json` authoritative. A user
+//! who saved Scenes before adopting the VmodV shell therefore has documents
+//! under `<userData>/media/<profile>/scene/` that the VmodV Scene grid never
 //! showed. This module imports them **once per profile**:
 //!
 //! - `scene/` and `preset/` are scanned recursively in a deterministic order
@@ -17,12 +17,12 @@
 //!   say they remain openable through File → Open preset…;
 //! - playlists are reported once and not imported;
 //! - [`ProjectSettings`] records `imported_documents: { "<profile>": true }` in
-//!   `<userData>/native-project.json`, so later launches and profile switches
+//!   `<userData>/vmodv-project.json`, so later launches and profile switches
 //!   do not re-read the folders. Adding files later therefore never silently
 //!   duplicates a Scene.
 //!
 //! The originals are never moved, rewritten or deleted. To deliberately pick
-//! up files added later, remove the profile's entry from `native-project.json`;
+//! up files added later, remove the profile's entry from `vmodv-project.json`;
 //! the id/name checks above still prevent duplicate Scenes.
 
 use std::collections::BTreeSet;
@@ -104,7 +104,7 @@ impl ImportReport {
 
 /// Import the profile's loose documents unless it was already done.
 ///
-/// Returns `None` when `<userData>/native-project.json` already records the
+/// Returns `None` when `<userData>/vmodv-project.json` already records the
 /// profile. Otherwise the folders are scanned, the flag is persisted and the
 /// concise summary (plus one line per name collision) is logged.
 pub fn import_profile_documents_once(
@@ -578,7 +578,7 @@ mod tests {
             before,
             "the originals are neither rewritten nor moved"
         );
-        assert!(fixture.user_data.join("native-project.json").is_file());
+        assert!(fixture.user_data.join("vmodv-project.json").is_file());
         let saved = ProjectSettings::read_from(&fixture.settings_path)
             .expect("read settings")
             .expect("settings exist");

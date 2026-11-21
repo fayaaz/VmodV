@@ -1,6 +1,6 @@
-//! The File menu's native actions and shortcuts.
+//! The File menu's VmodV actions and shortcuts.
 //!
-//! Menu clicks only queue commands; the native app owns the paths and the
+//! Menu clicks only queue commands; the VmodV app owns the paths and the
 //! dialogs. Testing the queue here proves the menu wiring without a real file
 //! dialog (the app-side `FilePicker` seam is exercised separately).
 
@@ -32,7 +32,7 @@ fn open_file_menu(mut harness: Harness<'static, UiState>) -> Harness<'static, Ui
 }
 
 #[test]
-fn file_menu_queues_every_native_dialog_action() {
+fn file_menu_queues_every_vmodv_dialog_action() {
     let mut harness = open_file_menu(harness(EngineSnapshot::default(), UiState::new()));
 
     harness.get_by_label("Open preset…").click();

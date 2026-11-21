@@ -1,13 +1,13 @@
-//! The native in-app file picker.
+//! The VmodV in-app file picker.
 //!
-//! The native shell cannot assume a desktop portal is running (the Docker
-//! `make native` session forwards Wayland/X11 and PulseAudio but not the D-Bus
+//! The VmodV shell cannot assume a desktop portal is running (the Docker
+//! `make vmodv` session forwards Wayland/X11 and PulseAudio but not the D-Bus
 //! session, and the Rust toolchain image has no GTK headers for `rfd`'s default
 //! backend). A compact egui picker reads directories with `std::fs` instead:
 //! it is only UI state, so it never blocks the frame loop, and it is fully
 //! testable in kittest.
 //!
-//! A menu click only queues [`crate::UiCommand::ShowFileDialog`]; the native
+//! A menu click only queues [`crate::UiCommand::ShowFileDialog`]; the VmodV
 //! app resolves the starting directory from the active media profile and calls
 //! [`crate::UiState::open_file_dialog`]. Confirming queues one
 //! [`crate::UiCommand::FileChosen`] with the action and the validated path.
@@ -100,7 +100,7 @@ impl FileDialogAction {
         }
     }
 
-    /// The command the native app runs once the user confirms `path`.
+    /// The command the VmodV app runs once the user confirms `path`.
     pub fn command(self, path: PathBuf) -> UiCommand {
         UiCommand::FileChosen { action: self, path }
     }

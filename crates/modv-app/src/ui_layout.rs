@@ -1,10 +1,10 @@
-//! The native shell's persisted resizable layout.
+//! The VmodV shell's persisted resizable layout.
 //!
-//! The native shell's centre area has a Live Output / Gallery / Scenes stack
+//! The VmodV shell's centre area has a Live Output / Gallery / Scenes stack
 //! with a draggable split, the Groups and Inspector side panels are resizable,
 //! and the floating tool windows (Tempo, Command palette, Keyboard shortcuts,
 //! About, Scene timing, Performance row names, Tween curve, …) can be moved and
-//! resized. Their geometry is stored in `<userData>/native-layout.json`:
+//! resized. Their geometry is stored in `<userData>/vmodv-layout.json`:
 //!
 //! ```json
 //! {
@@ -42,7 +42,7 @@ use modv_ui::layout::{LayoutState, TabPlacement, WindowBounds as UiWindowBounds}
 use modv_ui::state::SidePanelTab;
 
 /// The persisted layout document inside the shared userData directory.
-pub const LAYOUT_SETTINGS_FILENAME: &str = "native-layout.json";
+pub const LAYOUT_SETTINGS_FILENAME: &str = "vmodv-layout.json";
 
 /// The Groups panel's default width (logical points), matching the shell's
 /// current `egui::Panel::left("modv-groups").default_size(270.0)`.
@@ -198,7 +198,8 @@ impl LayoutSettings {
     /// [`LayoutSettings::load_or_default`]: a broken file must never stop the
     /// shell from opening.
     pub fn read_from(path: &Path) -> Result<Option<Self>, String> {
-        let text = match std::fs::read_to_string(path) {
+        let path = crate::settings_compat::read_path(path);
+        let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -509,6 +510,20 @@ impl LayoutSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_native_layout_filename_is_read_as_a_fallback() {
+        let (directory, _path) = temp_path();
+        let legacy = directory.join("native-layout.json");
+        let saved = LayoutSettings::default();
+        saved.write_to(&legacy).expect("write legacy layout");
+        let current = directory.join(LAYOUT_SETTINGS_FILENAME);
+        assert_eq!(
+            LayoutSettings::read_from(&current).expect("read legacy layout"),
+            Some(saved)
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     fn temp_path() -> (PathBuf, PathBuf) {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

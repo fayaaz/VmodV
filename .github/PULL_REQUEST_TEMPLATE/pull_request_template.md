@@ -13,4 +13,4 @@
 ### Changes to Core Features:
 
 * [ ] Have you added an explanation of what your changes do and why you'd like us to include them?
-* [ ] Does a packaged change still pass `make build`, `make native-deb-check` and `tools/native-smoke.sh`?
+* [ ] Does a packaged change still pass `make build`, `make vmodv-deb-check` and `tools/vmodv-smoke.sh`?

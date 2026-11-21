@@ -539,7 +539,7 @@ pub fn ndi_library_candidates_with_env(env_override: Option<&str>, exe_dir: &Pat
     }
 
     // Optional side-by-side copies for an AppImage or an unpacked build. The
-    // native packages do not bundle libndi.
+    // VmodV packages do not bundle libndi.
     candidates.push(exe_dir.join(NDI_SONAME));
     candidates.push(exe_dir.join("ndi").join(NDI_SONAME));
 

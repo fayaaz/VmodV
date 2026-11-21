@@ -4,18 +4,18 @@
 //! same folder set `fs-create-profile.js` makes:
 //! `image`, `video`, `palette`, `preset`, `scene`, `module`, `plugin`,
 //! `plugin_data` and `isf`. Presets and Scenes are ordinary files in those
-//! folders, so the native shell keeps the layout (and the shared
+//! folders, so the VmodV shell keeps the layout (and the shared
 //! `<userData>/scenes.json` list) untouched.
 //!
-//! The active profile is remembered in `<userData>/native-project.json`
-//! beside `native-audio.json` and `native-media.json`. Everything here is
+//! The active profile is remembered in `<userData>/vmodv-project.json`
+//! beside `vmodv-audio.json` and `vmodv-media.json`. Everything here is
 //! filesystem-simple and unit-testable on a headless host.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The persisted project choice inside the shared userData directory.
-pub const PROJECT_SETTINGS_FILENAME: &str = "native-project.json";
+pub const PROJECT_SETTINGS_FILENAME: &str = "vmodv-project.json";
 
 /// The profile the JS media manager creates on first launch.
 pub const DEFAULT_PROFILE: &str = "default";
@@ -45,7 +45,7 @@ pub struct ProjectSettings {
     /// Profiles whose loose `scene/`/`preset/` documents were imported once.
     ///
     /// Keyed by profile name and only ever set to `true`; the map lives here so
-    /// `native-project.json` remembers the one-time import across restarts and
+    /// `vmodv-project.json` remembers the one-time import across restarts and
     /// profile switches. See [`crate::media_import`].
     #[serde(default)]
     pub imported_documents: BTreeMap<String, bool>,
@@ -76,7 +76,8 @@ impl ProjectSettings {
 
     /// Read the document, treating a missing file as "nothing saved".
     pub fn read_from(path: &Path) -> Result<Option<Self>, String> {
-        let text = match std::fs::read_to_string(path) {
+        let path = crate::settings_compat::read_path(path);
+        let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -235,7 +236,7 @@ pub fn prepare_profiles(media_root: &Path, requested: &str) -> Result<PreparedPr
 
 /// The user ISF folders to scan for `profile`.
 ///
-/// The flat `<media>/isf` folder is kept for installs created by older native
+/// The flat `<media>/isf` folder is kept for installs created by older VmodV
 /// builds. Only the **active** profile's `isf` folder counts, so switching
 /// profiles changes the module corpus exactly like the JS media manager's
 /// folder reload. Explicit extra folders are included when they exist.
@@ -262,6 +263,23 @@ pub fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_native_project_filename_is_read_as_a_fallback() {
+        let root = temp_dir("modv-project-compat");
+        let legacy = root.join("native-project.json");
+        let saved = ProjectSettings {
+            profile: "live".to_string(),
+            ..Default::default()
+        };
+        saved.write_to(&legacy).expect("write legacy project");
+        let current = root.join(PROJECT_SETTINGS_FILENAME);
+        assert_eq!(
+            ProjectSettings::read_from(&current).expect("read legacy project"),
+            Some(saved)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -390,7 +408,7 @@ mod tests {
         assert!(!saved.documents_imported("default"));
 
         assert!(
-            !root.join("native-project.json.tmp").exists(),
+            !root.join("vmodv-project.json.tmp").exists(),
             "the temporary file is renamed into place"
         );
 

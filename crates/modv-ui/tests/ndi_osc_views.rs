@@ -1,4 +1,4 @@
-//! Pure formatting/view coverage for the native NDI and OSC panels.
+//! Pure formatting/view coverage for the VmodV NDI and OSC panels.
 //!
 //! The panel code is immediate-mode and reads [`EngineSnapshot`]s, so the
 //! interesting parts — availability warnings, sender/receiver status lines,

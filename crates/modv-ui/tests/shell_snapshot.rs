@@ -1,4 +1,4 @@
-//! Golden snapshot of the native shell with representative engine content.
+//! Golden snapshot of the VmodV shell with representative engine content.
 //!
 //! Run `cargo test -p modv-ui shell_snapshot`; the first run writes
 //! `tests/snapshots/shell.png` and the next run compares against it.

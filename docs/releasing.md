@@ -31,7 +31,7 @@ Merge commits are ignored.
      literal,
    - pushes the tag,
    - builds the AppImage and `.deb` via `make build` with
-     `NATIVE_VERSION=vX.Y.Z` (same artifacts as `make build` locally),
+     `VMODV_VERSION=vX.Y.Z` (same artifacts as `make build` locally),
    - publishes a GitHub release titled `vX.Y.Z` with the changelog since the
      previous tag and the two installers attached.
 3. The tag step is idempotent: re-running a failed workflow leaves an
@@ -53,9 +53,9 @@ removed — download the latest `vX.Y.Z` release for current artifacts.
   was **v2.1.0**; the tag pushes made by the workflow point at the exact
   commit being released rather than at a bot-made version-bump commit.
 - `git tag` is the single source of truth for the version. The Makefile
-  keeps no `NATIVE_VERSION` literal; `NATIVE_VERSION` is a make variable
+  keeps no `VMODV_VERSION` literal; `VMODV_VERSION` is a make variable
   whose default comes from `tools/version.sh`:
-  1. `$NATIVE_VERSION` when set in the environment,
+  1. `$VMODV_VERSION` when set in the environment,
   2. the `vX.Y.Z` tag on HEAD when building a tagged checkout,
   3. the highest `vX.Y.Z` tag otherwise (the latest released version),
   4. `0.0.0-dev` when no tag exists or git is unavailable (also the
@@ -67,7 +67,7 @@ removed — download the latest `vX.Y.Z` release for current artifacts.
 ```bash
 make version                  # print the version tools/version.sh resolves
 make build                    # installers named after the resolved version
-NATIVE_VERSION=2.2.0 make build   # explicit override
+VMODV_VERSION=2.2.0 make build   # explicit override
 tools/semver-next.sh          # print what the next release would be
 tools/semver-next.sh selftest # run the fixture tests (18 checks)
 ```
@@ -85,7 +85,7 @@ untagged-repository error path.
   version numbers.
 - To skip releasing a given change: use a non-feat/fix type (`chore:`,
   `docs:`, `perf:`…). Those never cut a release.
-- The release workflow does not run the test suite; `native.yml` gates
+- The release workflow does not run the test suite; `vmodv.yml` gates
   `main`. If the installer build fails, the tag remains pushed — re-run the
   failed job to rebuild and publish (the `gh release create` step is safe
   to re-run when the release does not exist yet).

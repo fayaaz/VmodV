@@ -3,7 +3,7 @@
 //! Parsed with clap's builder API: the `derive` feature of clap is not
 //! enabled in this workspace and `Cargo.toml` is frozen for this milestone.
 //! The `--state` flag is accepted for forward compatibility with the Electron
-//! supervisor; `--socket` doubles as the native shell's opt-in JSON-lines
+//! supervisor; `--socket` doubles as the VmodV shell's opt-in JSON-lines
 //! control channel (see [`crate::control_socket`]). `--emit-fixtures` writes
 //! the M2 parity fixtures and exits before any GPU/window work (see
 //! [`crate::fixtures`]).
@@ -187,7 +187,7 @@ pub struct Cli {
     /// always logged to stderr regardless of this flag).
     pub log_adapter: bool,
     /// Control socket path. In windowed engine mode this is the Electron
-    /// supervisor's binary-framed channel; the native shell serves the opt-in
+    /// supervisor's binary-framed channel; the VmodV shell serves the opt-in
     /// JSON-lines test protocol instead (see [`crate::control_socket`]).
     pub socket: Option<PathBuf>,
     /// Reserved for M1: state snapshot path. Accepted but unused here.
@@ -210,17 +210,17 @@ pub struct Cli {
     pub audio_device: Option<String>,
     /// Print the host's audio input devices (`--list-audio-devices`) and exit.
     pub list_audio_devices: bool,
-    /// Native shell only: apply this Scene name/id after seeding.
+    /// VmodV shell only: apply this Scene name/id after seeding.
     pub apply_scene: Option<String>,
-    /// Native shell only: start performance mode after the startup Scene and
+    /// VmodV shell only: start performance mode after the startup Scene and
     /// tick/seed, without needing the UI.
     pub start_performance: bool,
-    /// Native shell only: load a preset/Scene/playlist document at startup and
+    /// VmodV shell only: load a preset/Scene/playlist document at startup and
     /// use a plain preset as the default "Save preset" target.
     pub preset: Option<PathBuf>,
-    /// Native shell only: open a Scene document at startup.
+    /// VmodV shell only: open a Scene document at startup.
     pub scene: Option<PathBuf>,
-    /// Native shell only: import a Scenes playlist at startup.
+    /// VmodV shell only: import a Scenes playlist at startup.
     pub playlist: Option<PathBuf>,
 }
 
@@ -240,12 +240,12 @@ impl Cli {
     }
 }
 
-/// The windowed deadline for the native shell.
+/// The windowed deadline for the VmodV shell.
 ///
 /// The shared CLI defaults `--bench-seconds` to 10 for the headless/bench
-/// engine path; the native UI must run until the user closes it unless the
+/// engine path; the VmodV UI must run until the user closes it unless the
 /// flag was explicitly supplied.
-pub fn native_bench_seconds(explicit: bool, seconds: f64) -> f64 {
+pub fn vmodv_bench_seconds(explicit: bool, seconds: f64) -> f64 {
     if explicit { seconds } else { 0.0 }
 }
 
@@ -256,15 +256,15 @@ pub fn native_bench_seconds(explicit: bool, seconds: f64) -> f64 {
 /// `scenes.json` beside it is the same authoritative Scene list.
 pub const ENGINE_STATE_FILENAME: &str = "engine-state.json";
 
-/// The engine state snapshot the native shell restores from.
+/// The engine state snapshot the VmodV shell restores from.
 ///
 /// Electron's engine supervisor always spawns the engine with
-/// `--state <userData>/engine-state.json`. The native shell has no supervisor,
+/// `--state <userData>/engine-state.json`. The VmodV shell has no supervisor,
 /// so `--state` normally arrives unset; resolving it to the same file keeps
 /// `<userData>/scenes.json` (derived from the state file's parent by
 /// [`crate::store_ops::Store::with_state_path`]) authoritative for both front
 /// ends. An explicit `--state` always wins.
-pub fn native_state_path(explicit: Option<&Path>, user_data: &Path) -> PathBuf {
+pub fn vmodv_state_path(explicit: Option<&Path>, user_data: &Path) -> PathBuf {
     explicit
         .map(Path::to_path_buf)
         .unwrap_or_else(|| user_data.join(ENGINE_STATE_FILENAME))
@@ -355,7 +355,7 @@ pub fn parse() -> Cli {
                 .long("socket")
                 .alias("control-socket")
                 .value_name("PATH")
-                .help("Native shell: opt-in Unix control socket (JSON lines; test/debug IPC). \
+                .help("VmodV shell: opt-in Unix control socket (JSON lines; test/debug IPC). \
                        In engine mode this is the Electron supervisor channel"),
         )
         .arg(
@@ -368,31 +368,31 @@ pub fn parse() -> Cli {
             Arg::new("apply-scene")
                 .long("apply-scene")
                 .value_name("NAME")
-                .help("Native shell: apply this Scene name/id after seeding"),
+                .help("VmodV shell: apply this Scene name/id after seeding"),
         )
         .arg(
             Arg::new("start-performance")
                 .long("start-performance")
                 .action(clap::ArgAction::SetTrue)
-                .help("Native shell: start performance mode after startup"),
+                .help("VmodV shell: start performance mode after startup"),
         )
         .arg(
             Arg::new("preset")
                 .long("preset")
                 .value_name("PATH")
-                .help("Native shell: open a preset, Scene or Scenes playlist at startup (saves back here for a plain preset)"),
+                .help("VmodV shell: open a preset, Scene or Scenes playlist at startup (saves back here for a plain preset)"),
         )
         .arg(
             Arg::new("scene")
                 .long("scene")
                 .value_name("PATH")
-                .help("Native shell: open a Scene document at startup (alias for --preset with Scene detection)"),
+                .help("VmodV shell: open a Scene document at startup (alias for --preset with Scene detection)"),
         )
         .arg(
             Arg::new("playlist")
                 .long("playlist")
                 .value_name("PATH")
-                .help("Native shell: import a Scenes playlist at startup"),
+                .help("VmodV shell: import a Scenes playlist at startup"),
         )
         .arg(
             Arg::new("emit-fixtures")
@@ -593,15 +593,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_default_runs_until_the_window_closes() {
-        assert_eq!(native_bench_seconds(false, 10.0), 0.0);
-        assert_eq!(native_bench_seconds(true, 10.0), 10.0);
-        assert_eq!(native_bench_seconds(true, 0.0), 0.0);
+    fn vmodv_default_runs_until_the_window_closes() {
+        assert_eq!(vmodv_bench_seconds(false, 10.0), 0.0);
+        assert_eq!(vmodv_bench_seconds(true, 10.0), 10.0);
+        assert_eq!(vmodv_bench_seconds(true, 0.0), 0.0);
     }
 
     #[test]
     fn the_development_corpus_lives_under_resources() {
-        // The native build must not depend on the Electron renderer tree: the
+        // The VmodV build must not depend on the Electron renderer tree: the
         // corpus moved to `resources/isf` and the dev lookup follows it.
         let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -643,21 +643,21 @@ mod tests {
     }
 
     #[test]
-    fn native_state_path_defaults_to_the_supervisors_shared_file() {
+    fn vmodv_state_path_defaults_to_the_supervisors_shared_file() {
         let user_data = Path::new("/home/user/.config/VmodV");
         assert_eq!(
-            native_state_path(None, user_data),
+            vmodv_state_path(None, user_data),
             user_data.join(ENGINE_STATE_FILENAME),
             "the supervisor always passes <userData>/engine-state.json"
         );
     }
 
     #[test]
-    fn native_state_path_keeps_an_explicit_state_flag() {
+    fn vmodv_state_path_keeps_an_explicit_state_flag() {
         let user_data = Path::new("/home/user/.config/VmodV");
         let explicit = Path::new("/tmp/engine-test/engine-state.json");
         assert_eq!(
-            native_state_path(Some(explicit), user_data),
+            vmodv_state_path(Some(explicit), user_data),
             PathBuf::from(explicit)
         );
     }

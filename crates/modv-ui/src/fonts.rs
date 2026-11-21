@@ -1,6 +1,6 @@
 //! The bundled IBM Plex faces.
 //!
-//! The native shell ships four static TrueType faces so it looks the same on
+//! The VmodV shell ships four static TrueType faces so it looks the same on
 //! every host instead of inheriting whatever system fonts the platform has:
 //!
 //! - IBM Plex Sans Regular — body/button text

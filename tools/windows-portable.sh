@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage a portable Windows ZIP layout for the native `modv` binary.
+# Stage a portable Windows ZIP layout for the VmodV `modv` binary.
 #
 # The extracted layout is self-contained and works from any directory:
 #

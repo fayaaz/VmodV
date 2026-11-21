@@ -1,4 +1,4 @@
-//! Interaction tests for the native Output panel: what it renders and
+//! Interaction tests for the VmodV Output panel: what it renders and
 //! which commands it queues.
 //!
 //! The panel is the user-facing way to set the output window's resolution

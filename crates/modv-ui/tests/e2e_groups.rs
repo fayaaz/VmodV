@@ -1,4 +1,4 @@
-//! Port of the legacy `tests/e2e/spec/groups/*.spec.js` intents to the native
+//! Port of the legacy `tests/e2e/spec/groups/*.spec.js` intents to the VmodV
 //! Groups pane, plus `general/defaultGroupIsFocusedByDefault.spec.js` for the
 //! startup focus.
 //!
@@ -9,9 +9,9 @@
 //! the engine would apply it, so toggles round-trip (0 -> 1 -> 0) instead of
 //! asserting the same stale value twice.
 //!
-//! Native equivalents of the JS steps are used where the shell has no direct
+//! VmodV equivalents of the JS steps are used where the shell has no direct
 //! DOM counterpart: the JS `showControls` click is the Group-name click here,
-//! and the JS drag-reorder is the native Move up/down buttons. The JS checkbox
+//! and the JS drag-reorder is the VmodV Move up/down buttons. The JS checkbox
 //! is tri-state (`Checkbox.vue` with `allow-partial`): a plain click toggles
 //! 0/1 and an alt-click selects 2 ("drawn but not to the output canvas").
 
@@ -576,7 +576,7 @@ fn pipeline_state_can_be_toggled_between_0_and_1() {
 fn groups_can_be_rearranged() {
     let (mut harness, snapshot) = build();
 
-    // The native pane reorders with the per-Group Move up/down buttons rather
+    // The VmodV pane reorders with the per-Group Move up/down buttons rather
     // than a drag. The down button on the first Group swaps it with the
     // second, exactly like `groupsCanBeRearranged.spec.js`'s drop.
     row_button(&harness, "v", "Background").click();

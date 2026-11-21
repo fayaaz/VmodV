@@ -1,4 +1,4 @@
-//! Engine-owned Output Windows — the native replacement for Electron's
+//! Engine-owned Output Windows — the VmodV replacement for Electron's
 //! `window.open("./output-window.html")` popups (docs/rust-hybrid.md, "Output
 //! windows").
 //!

@@ -1,7 +1,7 @@
 # Legacy Electron archive
 
 The Electron/Vue implementation was removed from the working tree in the
-native 2.0 cleanup. It is preserved locally and in the repository history:
+VmodV 2.0 cleanup. It is preserved locally and in the repository history:
 
 | Ref | Points at |
 | --- | --- |
@@ -34,6 +34,6 @@ and the Electron app is no longer maintained or released.
 
 ## What stays in this tree
 
-`resources/isf`, `resources/point10/textures`, the native installer assets and
+`resources/isf`, `resources/point10/textures`, the VmodV installer assets and
 the Rust ports of the Electron behaviour remain current. The legacy archive is
 for reference only; fixes and features land in `crates/`.

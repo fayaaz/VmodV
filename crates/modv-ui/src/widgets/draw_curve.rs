@@ -1,4 +1,4 @@
-//! The curve model behind the native Draw input link.
+//! The curve model behind the VmodV Draw input link.
 //!
 //! A draw curve is a single-channel polyline: explicit `values` joined at
 //! explicit `times`. The default is two points (a flat line), so clicking the

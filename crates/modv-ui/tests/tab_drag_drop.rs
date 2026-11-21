@@ -1,4 +1,4 @@
-//! Right-panel tab drag and drop in the native shell.
+//! Right-panel tab drag and drop in the VmodV shell.
 //!
 //! A strip tab (and a floating window's grip) is a drag source carrying a
 //! typed `TabDrag` payload. The tab strip, the dock column and the central

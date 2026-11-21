@@ -1,13 +1,13 @@
-//! Native shell screen capture through the XDG desktop portal.
+//! VmodV shell screen capture through the XDG desktop portal.
 //!
-//! The native shell asks the portal itself: [`request_screencast`] raises the
+//! The VmodV shell asks the portal itself: [`request_screencast`] raises the
 //! compositor's own "share a monitor/window" dialog and answers with a
 //! [`PortalStream`] whose PipeWire node id the [`crate::media::MediaHub`]
 //! captures. Nothing here is specific to the engine binary — the supervisor's
 //! `media/pick-screen` uses the same portal call for the Electron path.
 //!
 //! ```text
-//! Media panel  ──MediaAction::ShareScreen──▶  NativeApp::share_screen
+//! Media panel  ──MediaAction::ShareScreen──▶  VmodvApp::share_screen
 //!                                               │ spawn_portal_request (thread)
 //!                                               ▼
 //!                                          request_screencast   (blocks on the dialog)

@@ -1,7 +1,7 @@
 //! Port of the `tests/e2e/spec/scenes/performanceGrid.spec.js` Scenes-grid
-//! intents that the native grid implements.
+//! intents that the VmodV grid implements.
 //!
-//! The native grid has no dialog-based cell editor: it exposes the same
+//! The VmodV grid has no dialog-based cell editor: it exposes the same
 //! operations through the cell/header context menus and a double-click on an
 //! empty cell. These tests drive those widgets and assert the exact
 //! `scenes/*` payload. The engine half of each operation (create/clear/capture/
@@ -11,12 +11,12 @@
 //!
 //! ## Cell-editor waiver
 //!
-//! Two JS intents are deliberately waived because native has no in-cell module
+//! Two JS intents are deliberately waived because VmodV has no in-cell module
 //! editor or module drag into that editor:
 //!
 //! - `editing a grid cell saves added modules back into the Scene` — the JS
 //!   dialog opens `Edit`, adds modules, and saves them back into the Scene.
-//!   Native provides the same end state without the dialog: double-click an
+//!   VmodV provides the same end state without the dialog: double-click an
 //!   empty cell to queue `scenes/createSceneCellGroup` (which stamps the row's
 //!   Group into the Scene), edit the live Group (Gallery/drag into the Groups
 //!   pane), then `Capture live row into this cell`
@@ -25,7 +25,7 @@
 //!   actions are asserted below and their store halves live in
 //!   `modv-app`'s `scene_ops` tests.
 //! - `the cell editor can drag a module from its panel into the Group` — there
-//!   is no editor module panel to drag from. Native's equivalent drag exists
+//!   is no editor module panel to drag from. VmodV's equivalent drag exists
 //!   already: a Gallery tile dropped on a Group block queues
 //!   `ui/addModuleToGroup` (`tests/gallery_drag_drop.rs`), and a Library asset
 //!   can be dragged onto its texture prop.
@@ -435,10 +435,10 @@ fn clearing_a_cell_asks_for_confirmation_first() {
 
 #[test]
 // `performanceGrid.spec.js`: "editing a grid cell saves added modules back
-// into the Scene" (native live-capture path).
+// into the Scene" (VmodV live-capture path).
 fn capturing_the_live_row_saves_the_added_modules_into_the_cell() {
     // Waived cell-editor intent: "editing a grid cell saves added modules
-    // back into the Scene". Native has no in-cell editor dialog; its
+    // back into the Scene". VmodV has no in-cell editor dialog; its
     // equivalent "edit this cell" path is: add a module to the live Group
     // (Gallery), then capture that live row back into the saved cell. The
     // store half is covered by

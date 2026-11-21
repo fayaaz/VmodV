@@ -1,4 +1,4 @@
-//! Kittest coverage for the native video-file transport.
+//! Kittest coverage for the VmodV video-file transport.
 //!
 //! The Inspector's texture control and the Media tab's Sources list share
 //! Play/Pause, Restart and Loop. Speed 0.1–10 lives only on the Inspector's

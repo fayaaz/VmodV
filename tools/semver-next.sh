@@ -110,7 +110,7 @@ selftest() {
 
   # feat: -> minor
   check "2.1.0" "feat: add thing"
-  check "2.1.0" "feat(native-ui): scoped feature"
+  check "2.1.0" "feat(vmodv-ui): scoped feature"
   check "2.1.0" "FEAT: case-insensitive type"
   # fix: -> patch
   check "2.0.1" "fix: bug"

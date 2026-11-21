@@ -1,8 +1,8 @@
-//! Video-file texture sources for the native shell.
+//! Video-file texture sources for the VmodV shell.
 //!
 //! The legacy renderer starts one hidden looping `<video>` per `video` texture
 //! prop, owned by the texture rather than the Inspector, and exposes
-//! Play/Pause, Restart and Speed 0.1–10. The native shell has to do the same
+//! Play/Pause, Restart and Speed 0.1–10. The VmodV shell has to do the same
 //! with the engine's GStreamer `MediaHub`: this module scans the live store for
 //! texture props of type `video` with an `options.path`, resolves each path
 //! under `<userData>/media`, and reconciles a path→source map.
@@ -258,7 +258,7 @@ pub fn video_source_id(path: &Path) -> String {
 /// `None` — "leave the playhead alone" — when the playhead is inside the trim,
 /// when `start == finish` (an empty trim), and when the trims are the
 /// full-clip defaults `0..1`: the default must be a complete no-op so the
-/// native end-of-stream/loop handling stays authoritative. Both trims are
+/// VmodV end-of-stream/loop handling stays authoritative. Both trims are
 /// clamped to `0..1`; when `start` exceeds `finish` the two values are used
 /// as given (no swap). Non-finite trims or an unknown/zero duration also
 /// yield `None`.
@@ -376,7 +376,7 @@ struct ManagedSource {
     options: VideoOptions,
 }
 
-/// The path→source map the native shell reconciles.
+/// The path→source map the VmodV shell reconciles.
 #[derive(Default)]
 pub struct VideoSources {
     sources: BTreeMap<PathBuf, ManagedSource>,

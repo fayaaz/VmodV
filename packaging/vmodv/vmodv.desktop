@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=VmodV Native
-Comment=Native Rust modV audio visualiser
+Name=VmodV
+Comment=VmodV audio visualiser
 Exec=modv
-Icon=vmodv-native
+Icon=vmodv
 Terminal=false
 Categories=Graphics;AudioVideo;
 StartupNotify=true

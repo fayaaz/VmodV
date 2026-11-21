@@ -33,7 +33,7 @@ impl UiAction {
         }
     }
 
-    /// A composite convenience handled by the native shell: create the module
+    /// A composite convenience handled by the VmodV shell: create the module
     /// and append it to `group_id` in one UI gesture.
     pub fn add_module_to_group(module_name: &str, group_id: &str) -> Self {
         Self::new(
@@ -110,7 +110,7 @@ pub enum UiCommand {
     SaveSnapshot,
     SavePreset,
     FlushLogs,
-    /// Open the in-app picker for this action. The native app resolves the
+    /// Open the in-app picker for this action. The VmodV app resolves the
     /// starting folder from the active media profile.
     ShowFileDialog(FileDialogAction),
     /// The picker (or a command-line open) produced a validated path.
@@ -145,7 +145,7 @@ pub enum UiCommand {
     OpenMediaFolder,
     /// Open `<userData>/logs` in the platform file manager.
     OpenLogsFolder,
-    /// Switch native audio capture live. `source` is `pipewire` or `input`;
+    /// Switch VmodV audio capture live. `source` is `pipewire` or `input`;
     /// an `input` with no `device` selects the host default input.
     SetAudioSource {
         source: String,
@@ -228,7 +228,7 @@ impl P0State {
     }
 }
 
-/// The durable native UI state.
+/// The durable VmodV UI state.
 pub struct UiState {
     pub selected_group: Option<String>,
     pub selected_module: Option<String>,
@@ -378,7 +378,7 @@ impl SidePanelTab {
         }
     }
 
-    /// The stable id persisted in `native-layout.json`.
+    /// The stable id persisted in `vmodv-layout.json`.
     pub fn key(self) -> &'static str {
         match self {
             Self::Inspector => "inspector",
@@ -418,7 +418,7 @@ impl SidePanelTab {
     }
 }
 
-/// The default OSC bind host the native app listens on at startup
+/// The default OSC bind host the VmodV app listens on at startup
 /// (`application/index.js` creates the same listener).
 pub const DEFAULT_OSC_HOST: &str = "0.0.0.0";
 
@@ -473,7 +473,7 @@ pub struct MidiLearnDraft {
 ///
 /// Legacy `ActiveModule.vue`/`Group.vue` dispatch
 /// `inputs/setFocusedInput` with `` `${name}: ${title}` ``, so the Input
-/// Config panel reads `Ball: Amount`. The native link rows only carry the
+/// Config panel reads `Ball: Amount`. The VmodV link rows only carry the
 /// control label and the input id; the owner name is resolved from the
 /// snapshot so every module prop, component sub-input and Group control keeps
 /// the legacy title shape.
@@ -516,7 +516,7 @@ pub fn focused_input_title(input_id: &str, control: &str, snapshot: &EngineSnaps
 /// The focused-input link editor's draft values.
 ///
 /// Legacy `InputConfig.vue` is a focused-input panel with Min/Max at the top
-/// and Audio/MIDI/Tween/OSC/Expression sections. The native editor keeps the
+/// and Audio/MIDI/Tween/OSC/Expression sections. The VmodV editor keeps the
 /// same draft semantics; each section's pure payload builder is unit-tested.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkEditor {
@@ -765,7 +765,7 @@ impl LinkEditor {
     ///
     /// Electron's `MIDI.vue` dispatches `inputs/createInputLink` with kind
     /// `mutation`, source `midi`, the quoted `channelData` location and the
-    /// `midi/WRITE_DATA` matcher. The native editor additionally releases a
+    /// `midi/WRITE_DATA` matcher. The VmodV editor additionally releases a
     /// stale smoothing id (and tween descriptor) from the link it replaces,
     /// which the JS path leaks.
     pub fn sync_midi_learn(&mut self, snapshot: &EngineSnapshot) -> Vec<UiAction> {
@@ -1165,7 +1165,7 @@ impl DrawCurveEditor {
 }
 
 /// Mint a smoothing id client-side.
-/// The engine's `meyda/getSmoothingId` exists but the native UI cannot await
+/// The engine's `meyda/getSmoothingId` exists but the VmodV UI cannot await
 /// an action result; the evaluator seeds an unseen id at `0` on first use
 /// (`input_links.rs`), so a locally unique id is equivalent.
 pub fn mint_smoothing_id() -> String {
@@ -1176,7 +1176,7 @@ pub fn mint_smoothing_id() -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("native-smoothing-{nanos}-{counter}")
+    format!("vmodv-smoothing-{nanos}-{counter}")
 }
 
 /// The `MIDI.vue` location for a learned message:

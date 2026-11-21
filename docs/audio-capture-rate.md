@@ -5,7 +5,7 @@ Nov 2026).
 
 ## TL;DR
 
-Every row in the native input picker (`2 ch · 44.1 kHz`) advertises 44.1 kHz
+Every row in the VmodV input picker (`2 ch · 44.1 kHz`) advertises 44.1 kHz
 because of a hard-coded heuristic in cpal's ALSA backend, **not** because
 modV or PipeWire capture at 44.1 kHz. modV captures at **48 kHz** everywhere:
 
@@ -19,7 +19,7 @@ modV or PipeWire capture at 44.1 kHz. modV captures at **48 kHz** everywhere:
 - PipeWire monitor paths are 48 kHz as well: the legacy `pw-record` transport
   uses `PIPEWIRE_SAMPLE_RATE = 48000` (`src/main/system-audio-pipewire.js`)
   and the renderer's chunk assembler uses `PCM_CHUNK_SAMPLE_RATE = 48000`
-  (`src/renderer/src/application/system-audio-pipewire.js`); the native
+  (`src/renderer/src/application/system-audio-pipewire.js`); the VmodV
   engine monitor opens `CaptureConfig::default()` (48000). The band-analyser
   constants in `modv-media` assume this rate.
 - The PipeWire graph itself is pinned to 48 kHz: `default.clock.rate = 48000`

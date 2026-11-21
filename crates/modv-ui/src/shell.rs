@@ -1,4 +1,4 @@
-//! The native shell: window chrome, menus, status bar and panel composition.
+//! The VmodV shell: window chrome, menus, status bar and panel composition.
 //!
 //! The composition deliberately mirrors the legacy layout closely enough to
 //! judge the immediate-mode fit: Groups on the left, Inspector on the right,
@@ -49,7 +49,7 @@ const MIN_SCENES_HEIGHT: f32 = 140.0;
 /// The Gallery section's minimum height.
 const MIN_GALLERY_HEIGHT: f32 = 96.0;
 
-/// Draw the complete native UI for one frame.
+/// Draw the complete VmodV UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     state.sync_status(snapshot);
     state.ensure_default_group_focus(snapshot);
@@ -229,7 +229,6 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                         .color(theme::ACCENT)
                         .size(15.0),
                 );
-                chip(ui, "NATIVE", theme::ACCENT);
                 ui.separator();
 
                 ui.menu_button("File", |ui| {
@@ -384,7 +383,7 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                         state.show_shortcuts = true;
                         ui.close();
                     }
-                    if ui.button("About modV Native").clicked() {
+                    if ui.button("About VmodV").clicked() {
                         state.show_about = true;
                         ui.close();
                     }
@@ -2172,7 +2171,7 @@ fn output_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
 
 fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
     ui.label(
-        egui::RichText::new("modV Native")
+        egui::RichText::new("VmodV")
             .strong()
             .size(16.0)
             .color(theme::ACCENT),
@@ -2643,7 +2642,7 @@ fn ndi_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) 
 /// The OSC tab: UDP listeners and the latest `osc.data` values.
 ///
 /// Electron creates one server at startup and the Input Link OSC source reads
-/// `osc.data.<address>`; the native shell does the same and this panel makes
+/// `osc.data.<address>`; the VmodV shell does the same and this panel makes
 /// both visible. The address tree is refreshed at 1 Hz by `modv-app` while the
 /// tab is visible.
 fn osc_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -2788,7 +2787,7 @@ fn plugins_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
     );
     ui.label(
         egui::RichText::new(
-            "Plugins are third-party JavaScript. In the native shell they run in a \
+            "Plugins are third-party JavaScript. In the VmodV shell they run in a \
              restricted Boa sandbox, not a security boundary.",
         )
         .size(11.5)
@@ -3182,7 +3181,7 @@ fn plugin_consent_window(ctx: &egui::Context, state: &mut UiState) {
             ui.label(
                 "Plugins can read an allow-listed, read-only snapshot of modV state \
                  (tempo, audio bands, group and module names) and request a small RGBA \
-                 capture of the output. modV.ws is not wired in the native shell yet.",
+                 capture of the output. modV.ws is not wired in the VmodV shell yet.",
             );
             ui.label(
                 "The sandbox is a containment layer, not a security boundary: a bug in \
@@ -4422,7 +4421,7 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             // Live Output and Gallery are resizable top sections; the Scenes
             // grid takes the remainder. The saved heights are applied as the
             // first-show defaults and captured from the real section rects so
-            // NativeApp can persist them.
+            // VmodvApp can persist them.
             let total_height = ui.available_height().max(1.0);
             let live_default = if state.layout.live_height > 0.0 {
                 state.layout.live_height
@@ -5130,7 +5129,7 @@ fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {
 
 fn about_window(ctx: &egui::Context, state: &mut UiState) {
     let window = restore_window(
-        egui::Window::new("About modV Native")
+        egui::Window::new("About VmodV")
             .id(egui::Id::unique("modv-window:about"))
             .open(&mut state.show_about)
             .collapsible(false)
@@ -5143,12 +5142,12 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
     );
     let response = window.show(ctx, |ui| {
         ui.label(
-            egui::RichText::new("modV Native")
+            egui::RichText::new("VmodV")
                 .strong()
                 .size(20.0)
                 .color(theme::ACCENT),
         );
-        ui.label("A native Rust build of modV — one binary, no Electron. The 1.x tree is archived (branch `legacy-electron`, tag `v1.x-final`).");
+        ui.label("VmodV — a Rust build of modV, one binary, no Electron. The 1.x tree is archived (branch `legacy-electron`, tag `v1.x-final`).");
         ui.separator();
         ui.label(format!("Adapter: {}", state.status.adapter));
         ui.label(format!("Backend: {}", state.status.backend));

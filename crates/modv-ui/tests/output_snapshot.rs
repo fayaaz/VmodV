@@ -1,4 +1,4 @@
-//! Golden snapshot of the native Output panel.
+//! Golden snapshot of the VmodV Output panel.
 //!
 //! The panel is where the output window's resolution and fullscreen state
 //! are set: the preset buttons, the custom width/height fields, the

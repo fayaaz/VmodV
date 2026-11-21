@@ -2,7 +2,7 @@
 //!
 //! Electron's `PaletteControl.vue` edits a tween whose `data` rows are colours
 //! (`Ball`/`Waveform`/`Polygon` `color` props declare `[r, g, b]` rows in
-//! `0..=255`). The native tween editor shows those rows as a swatch strip and
+//! `0..=255`). The VmodV tween editor shows those rows as a swatch strip and
 //! edits them through an egui colour picker, keeping the descriptor the same
 //! `{ data, keyframeTimes, ... }` shape.
 //!

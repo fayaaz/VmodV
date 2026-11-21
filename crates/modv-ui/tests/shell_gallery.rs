@@ -1,4 +1,4 @@
-//! Native shell smoke checks for the Gallery defaults and the retired P0 UI.
+//! VmodV shell smoke checks for the Gallery defaults and the retired P0 UI.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
