@@ -59,6 +59,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool, compile, run_frame, run_pixel};
@@ -117,6 +118,12 @@ pub struct MilkCompiledPreset {
     pub comp: CompiledMilkShader,
 }
 
+/// Byte stride of the `@group(0) @binding(0)` `MilkUniforms` block.
+///
+/// 256 is `wgpu::Limits::default().min_uniform_buffer_offset_alignment`, so the
+/// same buffer can be used with dynamic offsets on every backend.
+pub const MILK_UNIFORM_STRIDE: usize = 256;
+
 /// Typed failures from compiling or driving a MilkDrop preset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MilkRuntimeError {
@@ -124,6 +131,8 @@ pub enum MilkRuntimeError {
     Compile(String),
     /// Running an equation set for a frame/vertex failed.
     Evaluate(String),
+    /// Building or submitting a GPU pass failed (e.g. invalid WGSL).
+    Draw(String),
 }
 
 /// Names of modules whose preset failed to compile.
@@ -164,13 +173,161 @@ impl MilkFailureCache {
     }
 }
 
+/// Serialized `MilkUniforms` payload for one frame.
+///
+/// The GPU cycle fills this with the MilkDrop scalars/vec2s described by
+/// `milkdrop::translate::UNIFORM_MEMBERS` (globals, base vals, rand values and
+/// derived quantities). [`MilkUniforms::to_bytes`] always returns exactly
+/// [`MILK_UNIFORM_STRIDE`] bytes so the buffer can be used with dynamic offsets.
+pub struct MilkUniforms {
+    bytes: Vec<u8>,
+}
+
+impl MilkUniforms {
+    /// Build the uniform payload for `frame` from the live `instance` state.
+    pub fn from_frame(_instance: &MilkInstance, _frame: &MilkFrameInfo) -> Self {
+        // RED stub: the layout size is right but no values are serialized yet.
+        Self {
+            bytes: vec![0u8; MILK_UNIFORM_STRIDE],
+        }
+    }
+
+    /// The WGSL-aligned bytes to upload into `@group(0) @binding(0)`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+}
+
+/// Off-screen render targets owned by the MilkDrop GPU path.
+///
+/// The warp, composite and three blur passes render into these textures; the
+/// final output pass writes into the caller-supplied module target. All targets
+/// are `Rgba8Unorm` and are reallocated only when the size changes.
+pub struct MilkGpuTargets {
+    pub width: u32,
+    pub height: u32,
+    warp: Option<wgpu::Texture>,
+    comp: Option<wgpu::Texture>,
+    blur: [Option<wgpu::Texture>; 3],
+}
+
+impl MilkGpuTargets {
+    /// Allocate the warp/comp/blur targets at `width`×`height`.
+    pub fn new(_device: &wgpu::Device, width: u32, height: u32) -> Self {
+        // RED stub: dimensions are recorded but no textures are allocated yet.
+        Self {
+            width,
+            height,
+            warp: None,
+            comp: None,
+            blur: [None, None, None],
+        }
+    }
+
+    /// Reallocate only when the requested size differs from the current one.
+    pub fn resize(&mut self, _device: &wgpu::Device, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+    }
+
+    /// Warp-pass target (previous frame resampled through the mesh UVs).
+    pub fn warp_texture(&self) -> Option<&wgpu::Texture> {
+        self.warp.as_ref()
+    }
+
+    /// Composite-pass target.
+    pub fn comp_texture(&self) -> Option<&wgpu::Texture> {
+        self.comp.as_ref()
+    }
+
+    /// Blur target `index` (0, 1 or 2) feeding `GetBlur{1,2,3}`.
+    pub fn blur_texture(&self, index: usize) -> Option<&wgpu::Texture> {
+        self.blur.get(index).and_then(|texture| texture.as_ref())
+    }
+}
+
 /// Per-compositor owner of MilkDrop state.
 ///
-/// Device-free in this cycle; the GPU cycle attaches `wgpu::Device`/`Queue`
-/// and pipeline/sampler caches here without renaming this type.
-#[derive(Clone, Debug, Default)]
+/// Holds the shared failure cache plus optional device/queue handles and the
+/// bounded pipeline/sampler caches. [`MilkRuntime::default`] stays device-free
+/// so the Layer 5a CPU tests keep compiling; the compositor constructs one with
+/// [`MilkRuntime::new`] and calls [`MilkRuntime::render`] once per module.
+#[derive(Clone)]
 pub struct MilkRuntime {
     pub failures: MilkFailureCache,
+    device: Option<Arc<wgpu::Device>>,
+    queue: Option<Arc<wgpu::Queue>>,
+    cache_capacity: usize,
+}
+
+impl Default for MilkRuntime {
+    fn default() -> Self {
+        Self {
+            failures: MilkFailureCache::new(),
+            device: None,
+            queue: None,
+            cache_capacity: 4,
+        }
+    }
+}
+
+impl fmt::Debug for MilkRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MilkRuntime")
+            .field("failures", &self.failures)
+            .field("has_device", &self.device.is_some())
+            .field("cache_capacity", &self.cache_capacity)
+            .finish()
+    }
+}
+
+impl MilkRuntime {
+    /// Create a runtime backed by `device`/`queue`, with caches bounded to
+    /// `cache_capacity` entries (4 matches the ISF runtime's convention).
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, cache_capacity: usize) -> Self {
+        Self {
+            failures: MilkFailureCache::new(),
+            device: Some(device),
+            queue: Some(queue),
+            cache_capacity: cache_capacity.max(1),
+        }
+    }
+
+    /// Forget every cached compilation failure (called from
+    /// `Compositor::set_registry` when the registry is replaced).
+    pub fn clear_failures(&self) {
+        self.failures.clear();
+    }
+
+    /// Execute one frame of the warp → blur → comp → output core into `output`.
+    ///
+    /// `previous` is the last composited frame (bound as `sampler_main` for the
+    /// warp pass) and `targets` owns the intermediate warp/comp/blur textures.
+    /// A malformed shader yields [`MilkRuntimeError::Draw`] rather than a panic.
+    pub fn render(
+        &self,
+        instance: &mut MilkInstance,
+        frame: &MilkFrameInfo,
+        mesh: &MilkMesh,
+        previous: &wgpu::TextureView,
+        targets: &mut MilkGpuTargets,
+        output: &wgpu::TextureView,
+    ) -> Result<(), MilkRuntimeError> {
+        // RED stub: no passes are submitted yet, so `output` keeps its initial
+        // (black) contents. GREEN replaces this with the real GPU pipeline.
+        let _ = (
+            instance,
+            frame,
+            mesh,
+            previous,
+            targets,
+            output,
+            &self.device,
+            &self.queue,
+            self.cache_capacity,
+        );
+        Ok(())
+    }
 }
 
 /// Compile a parsed preset into an owned handle.
@@ -688,6 +845,433 @@ ret = uv;\n\
         assert!(
             cache.is_failed("broken"),
             "malformed shader marks the module failed"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RED tests — GPU render passes (Layer 5b). Device acquisition, read-back and
+// skip-on-no-adapter follow `crate::isf::golden` / `crate::test_gpu`.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod gpu_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::isf::runtime::read_texture;
+    use crate::test_gpu::gpu;
+
+    const WIDTH: u32 = 160;
+    const HEIGHT: u32 = 90;
+
+    /// Identity warp: sample the previous frame at the mesh's own UV.
+    const IDENTITY_WARP: &str = "shader_body {\n\
+        float3 ret = tex2D(sampler_main, uv_orig).rgb;\n\
+        }\n";
+
+    fn doc_with_comp(comp_body: &str) -> MilkDocument {
+        MilkDocument {
+            version: 2,
+            name: "gpu-fixture".to_string(),
+            warp: IDENTITY_WARP.to_string(),
+            comp: format!("shader_body {{\n{comp_body}\n}}\n"),
+            ..Default::default()
+        }
+    }
+
+    /// Neutralise the output pass so the comp colour reaches the target
+    /// unchanged (gammaadj 1.0, every post-op disabled).
+    fn identity_output(doc: &mut MilkDocument) {
+        doc.base.gammaadj = 1.0;
+        doc.base.invert = false;
+        doc.base.brighten = false;
+        doc.base.darken = false;
+        doc.base.solarize = false;
+        doc.base.red_blue = false;
+    }
+
+    fn frame() -> MilkFrameInfo {
+        MilkFrameInfo {
+            time_seconds: 1.25,
+            frame_index: 3,
+            fps: 60.0,
+            width: WIDTH,
+            height: HEIGHT,
+            meshx: 4,
+            meshy: 4,
+            audio: MilkAudio {
+                bass: 0.5,
+                mid: 0.25,
+                treble: 0.75,
+                wave: vec![0.0; 1024],
+                byte_frequency_data: vec![128; 1024],
+            },
+        }
+    }
+
+    fn test_texture(device: &wgpu::Device, width: u32, height: u32, label: &str) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    }
+
+    /// Clear a target to a known colour without drawing anything.
+    fn clear_to(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        rgba: [f64; 4],
+    ) {
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("milkdrop RED clear"),
+        });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("milkdrop RED clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: rgba[0],
+                            g: rgba[1],
+                            b: rgba[2],
+                            a: rgba[3],
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit(Some(encoder.finish()));
+    }
+
+    /// Every pixel's RGB channels must land within `tolerance` of `expected`.
+    fn assert_pixels_near(pixels: &[u8], expected: [u8; 3], tolerance: u8, context: &str) {
+        let (chunks, _) = pixels.as_chunks::<4>();
+        assert!(!chunks.is_empty(), "{context}: no pixels were read back");
+        for (index, pixel) in chunks.iter().enumerate() {
+            for channel in 0..3 {
+                let delta = pixel[channel].abs_diff(expected[channel]);
+                assert!(
+                    delta <= tolerance,
+                    "{context}: pixel {index} channel {channel} = {}, expected {} (±{tolerance}), delta {delta}",
+                    pixel[channel],
+                    expected[channel]
+                );
+            }
+        }
+    }
+
+    /// Prepare the compiled instance, frame, mesh and textures for a render test.
+    fn render_fixture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        runtime: &MilkRuntime,
+        doc: MilkDocument,
+    ) -> (
+        MilkInstance,
+        MilkFrameInfo,
+        MilkMesh,
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
+        MilkGpuTargets,
+    ) {
+        let name = doc.name.clone();
+        let compiled = compile_preset(&name, &doc, &runtime.failures).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 7);
+        let frame = frame();
+        begin_frame(&mut instance, &frame).expect("begin_frame");
+        let mesh = evaluate_mesh(&mut instance, &frame).expect("evaluate_mesh");
+
+        let previous = test_texture(device, WIDTH, HEIGHT, "milkdrop RED previous");
+        clear_to(device, queue, &previous, [0.0, 0.0, 0.0, 1.0]);
+        let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+        let output = test_texture(device, WIDTH, HEIGHT, "milkdrop RED output");
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let targets = MilkGpuTargets::new(device, WIDTH, HEIGHT);
+
+        (
+            instance,
+            frame,
+            mesh,
+            previous,
+            previous_view,
+            output,
+            output_view,
+            targets,
+        )
+    }
+
+    #[test]
+    fn uniform_payload_has_declared_stride_and_serializes_frame_values() {
+        assert_eq!(
+            MILK_UNIFORM_STRIDE % 256,
+            0,
+            "the uniform stride is 256-byte aligned"
+        );
+        let doc = doc_with_comp("float3 ret = float3(0.2, 0.4, 0.6);");
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("uniform-layout", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0xC0FFEE);
+        let frame = frame();
+        begin_frame(&mut instance, &frame).expect("begin_frame");
+
+        let uniforms = MilkUniforms::from_frame(&instance, &frame);
+        let bytes = uniforms.to_bytes();
+        assert_eq!(
+            bytes.len(),
+            MILK_UNIFORM_STRIDE,
+            "serialized uniform buffer has the declared stride"
+        );
+        assert!(
+            bytes.iter().any(|&byte| byte != 0),
+            "the uniform payload must serialize Globals + base vals + rand, not stay zeroed"
+        );
+    }
+
+    #[test]
+    fn gpu_comp_solid_color_matches_embedded_rgba() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_comp_solid_color: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let mut doc = doc_with_comp("float3 ret = float3(0.2, 0.4, 0.6);");
+        doc.name = "solid-comp".to_string();
+        identity_output(&mut doc);
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let (mut instance, frame, mesh, _previous, previous_view, output, output_view, mut targets) =
+            render_fixture(&device, &queue, &runtime, doc);
+
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &output_view,
+            )
+            .expect("solid comp renders");
+
+        let pixels = read_texture(&device, &queue, &output).expect("read the output back");
+        // 0.2/0.4/0.6 in Rgba8Unorm -> 51/102/153.
+        assert_pixels_near(&pixels, [51, 102, 153], 6, "solid comp");
+    }
+
+    #[test]
+    fn gpu_warp_passthrough_samples_previous_frame() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_warp_passthrough: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let mut doc = doc_with_comp("float3 ret = tex2D(sampler_main, uv_orig).rgb;");
+        doc.name = "warp-passthrough".to_string();
+        identity_output(&mut doc);
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let (mut instance, frame, mesh, previous, _previous_view, output, output_view, mut targets) =
+            render_fixture(&device, &queue, &runtime, doc);
+        // A known solid previous frame: 0.25/0.5/0.75 -> 64/128/191. With the
+        // identity warp and passthrough comp, that colour reaches the output.
+        clear_to(&device, &queue, &previous, [0.25, 0.5, 0.75, 1.0]);
+        let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &output_view,
+            )
+            .expect("warp passthrough renders");
+
+        let pixels = read_texture(&device, &queue, &output).expect("read the output back");
+        assert_pixels_near(&pixels, [64, 128, 191], 8, "warp passthrough");
+        assert!(
+            pixels.chunks_exact(4).any(|pixel| pixel[0] != 0),
+            "the passthrough output must not stay black"
+        );
+    }
+
+    #[test]
+    fn gpu_blur_targets_allocated_and_invert_output_changes_pixels() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_blur_invert: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let mut doc = doc_with_comp("float3 ret = float3(0.2, 0.4, 0.6);");
+        doc.name = "blur-invert".to_string();
+        identity_output(&mut doc);
+        doc.base.invert = true;
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let (mut instance, frame, mesh, _previous, previous_view, output, output_view, mut targets) =
+            render_fixture(&device, &queue, &runtime, doc);
+
+        // The three blur targets exist at the frame's dimensions before rendering.
+        for index in 0..3 {
+            let size = targets
+                .blur_texture(index)
+                .map(|texture| (texture.width(), texture.height()));
+            assert_eq!(
+                size,
+                Some((WIDTH, HEIGHT)),
+                "blur target {index} allocated at {WIDTH}x{HEIGHT}"
+            );
+        }
+
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &output_view,
+            )
+            .expect("invert output renders");
+
+        let pixels = read_texture(&device, &queue, &output).expect("read the output back");
+        // invert(0.2, 0.4, 0.6) = (0.8, 0.6, 0.4) -> 204/153/102.
+        assert_pixels_near(&pixels, [204, 153, 102], 6, "invert output");
+    }
+
+    #[test]
+    fn gpu_targets_resize_reallocates_textures() {
+        let (device, _) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_targets_resize: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let mut targets = MilkGpuTargets::new(&device, 160, 90);
+        assert_eq!((targets.width, targets.height), (160, 90));
+        assert_eq!(
+            targets
+                .warp_texture()
+                .map(|texture| (texture.width(), texture.height())),
+            Some((160, 90)),
+            "warp target allocated at the initial size"
+        );
+        assert_eq!(
+            targets
+                .comp_texture()
+                .map(|texture| (texture.width(), texture.height())),
+            Some((160, 90)),
+            "comp target allocated at the initial size"
+        );
+
+        targets.resize(&device, 320, 180);
+        assert_eq!((targets.width, targets.height), (320, 180));
+        assert_eq!(
+            targets
+                .warp_texture()
+                .map(|texture| (texture.width(), texture.height())),
+            Some((320, 180)),
+            "warp target reallocated on resize"
+        );
+        assert_eq!(
+            targets
+                .comp_texture()
+                .map(|texture| (texture.width(), texture.height())),
+            Some((320, 180)),
+            "comp target reallocated on resize"
+        );
+    }
+
+    #[test]
+    fn gpu_malformed_shader_is_typed_error_and_clear_failures_resets() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_malformed_shader: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+
+        // (a) A malformed comp shader is cached as failed, never panics at compile.
+        let bad = doc_with_comp("float3 ret = ;\nthis is not valid GLSL @@@");
+        assert!(
+            compile_preset("broken/shader", &bad, &runtime.failures).is_err(),
+            "malformed comp shader fails compilation"
+        );
+        assert!(
+            runtime.failures.is_failed("broken/shader"),
+            "failed module is recorded in the failure cache"
+        );
+
+        // (b) clear_failures() forgets it.
+        runtime.clear_failures();
+        assert!(
+            !runtime.failures.is_failed("broken/shader"),
+            "clear_failures resets recorded failures"
+        );
+
+        // (c) Invalid WGSL at draw time is a typed error, not a panic.
+        let mut doc = doc_with_comp("float3 ret = float3(0.2, 0.4, 0.6);");
+        doc.name = "render-fixture".to_string();
+        identity_output(&mut doc);
+        let (
+            mut instance,
+            frame,
+            mesh,
+            _previous,
+            previous_view,
+            _output,
+            output_view,
+            mut targets,
+        ) = render_fixture(&device, &queue, &runtime, doc);
+        instance.compiled.comp.wgsl = "this is not valid WGSL @@@".to_string();
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &output_view,
+            )
+        }));
+        assert!(outcome.is_ok(), "render must not panic on malformed WGSL");
+        let result = outcome.expect("no panic");
+        assert!(
+            matches!(&result, Err(MilkRuntimeError::Draw(_))),
+            "malformed WGSL returns MilkRuntimeError::Draw, got {result:?}"
         );
     }
 }

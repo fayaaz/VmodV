@@ -11,7 +11,7 @@
 //! | [`eel`] | EEL2/NSEEL equation text → owned compiled form, evaluated against a mutable variable pool (no `eval`/JS) |
 //! | [`translate`] | warp/comp shader body → desktop GLSL 450 → naga → owned WGSL ([`CompiledMilkShader`]) |
 //! | [`props`] | preset → module metadata ([`MilkMeta`]) and prop table ([`MilkProp`]), mirroring `isf/props.rs` |
-//! | [`runtime`] | CPU runtime core (Layer 5a): compile preset → [`MilkCompiledPreset`], per-frame globals/audio/followers, [`MilkMesh`] UV grid, [`MilkFailureCache`] (device attaches in 5b) |
+//! | [`runtime`] | runtime core: compile preset → [`MilkCompiledPreset`], per-frame globals/audio/followers, [`MilkMesh`] UV grid, [`MilkFailureCache`], GPU targets/uniforms and the per-frame render entry point ([`MilkRuntime`]) |
 //!
 //! # Layering
 //!
@@ -61,6 +61,7 @@ pub use translate::{
 pub use props::{MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise_props};
 
 pub use runtime::{
-    MilkAudio, MilkCompiledPreset, MilkFailureCache, MilkFrameInfo, MilkInstance, MilkMesh,
-    MilkRuntime, MilkRuntimeError, begin_frame, compile_preset, evaluate_mesh, new_instance,
+    MILK_UNIFORM_STRIDE, MilkAudio, MilkCompiledPreset, MilkFailureCache, MilkFrameInfo,
+    MilkGpuTargets, MilkInstance, MilkMesh, MilkRuntime, MilkRuntimeError, MilkUniforms,
+    begin_frame, compile_preset, evaluate_mesh, new_instance,
 };
