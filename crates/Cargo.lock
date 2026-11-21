@@ -2804,6 +2804,7 @@ dependencies = [
  "egui-winit",
  "gstreamer",
  "image",
+ "indexmap",
  "libc",
  "midir",
  "modv-engine",

@@ -108,15 +108,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use modv_engine::props::PropSchema;
 use modv_renderers::isf::{
     IsfDocument, IsfMeta, IsfProp, IsfPropType, meta_from_document, parse_isf, synthesise_props,
 };
-// RED stub: GREEN also imports `parse_milk`, `MilkDocument`,
-// `meta_from_document`/`synthesise_props` (aliased) for the real scanner.
-use modv_renderers::milkdrop::{MilkMeta, MilkProp};
+use modv_renderers::milkdrop::{
+    MilkMeta, MilkProp, meta_from_document as milk_meta_from_document, parse_milk,
+    synthesise_props as milk_synthesise_props,
+};
 use modv_renderers::point10::chromatic::line::ChromaticLine;
 use modv_renderers::point10::chromatic::wave::ChromaticWave;
 use modv_renderers::point10::scenes::around_plus::AroundPlus;
@@ -238,20 +240,15 @@ impl IsfDefinition {
 
 /// A registered MilkDrop `.mlk` preset: its display name, derived metadata and
 /// synthesised prop table.
-///
-/// RED stub: `props` is a `Vec<(String, MilkProp)>` here because `modv-app` has
-/// no direct `indexmap` dependency. GREEN replaces it with
-/// `IndexMap<String, MilkProp>` (the type returned by `synthesise_props`) and
-/// adds `indexmap = { version = "2", features = ["serde"] }` to
-/// `crates/modv-app/Cargo.toml`. The tests never name the field type.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkdropDefinition {
     /// Module name: the `.mlk` file stem.
     pub name: String,
     /// Metadata derived with `milkdrop::meta_from_document`.
     pub meta: MilkMeta,
-    /// Synthesised props (currently empty: presets are EEL-driven).
-    pub props: Vec<(String, MilkProp)>,
+    /// Synthesised props (currently empty: presets are EEL-driven), keyed by
+    /// prop name in declaration order — the value returned by `synthesise_props`.
+    pub props: IndexMap<String, MilkProp>,
 }
 
 /// The app-side wrapper around the concrete Point10 scenes.
@@ -755,8 +752,9 @@ impl ModuleRegistry {
 
     /// Build the registry with the ISF corpus plus user MilkDrop directories.
     ///
-    /// RED stub: `milkdrop_dirs` is ignored (no scanning yet); GREEN calls
-    /// [`collect_milkdrop_definitions`] with it.
+    /// `milkdrop_dirs` are scanned recursively by
+    /// [`collect_milkdrop_definitions`], following the same rules as user ISF
+    /// folders (sorted paths, hidden/symlink skips, bounded depth/entries).
     pub fn build_with_milkdrop(
         isf_dir: Option<&Path>,
         extra_isf_dirs: &[PathBuf],
@@ -1561,9 +1559,14 @@ struct ScannedIsf {
     definition: IsfDefinition,
 }
 
-/// One sorted, bounded walk of an ISF directory.
+/// One sorted, bounded walk of a user directory.
+///
+/// `extension` selects which files are collected (case-insensitively); the
+/// walker itself is shared by the ISF (`.fs`) and MilkDrop (`.mlk`) scanners so
+/// both honour the same hidden/symlink skips and depth/entry caps.
 struct IsfScan {
     limits: IsfScanLimits,
+    extension: &'static str,
     files: Vec<PathBuf>,
     visited: usize,
     depth_limited: bool,
@@ -1572,8 +1575,13 @@ struct IsfScan {
 
 impl IsfScan {
     fn collect(root: &Path, limits: IsfScanLimits) -> Self {
+        Self::collect_with_extension(root, limits, "fs")
+    }
+
+    fn collect_with_extension(root: &Path, limits: IsfScanLimits, extension: &'static str) -> Self {
         let mut scan = Self {
             limits,
+            extension,
             files: Vec::new(),
             visited: 0,
             depth_limited: false,
@@ -1659,7 +1667,7 @@ impl IsfScan {
             if path
                 .extension()
                 .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("fs"))
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(self.extension))
             {
                 self.files.push(path);
             }
@@ -1805,14 +1813,69 @@ fn scan_isf_directory(dir: &Path, limits: IsfScanLimits) -> Vec<ScannedIsf> {
     definitions
 }
 
+/// The `.mlk` files under `dir`, sorted by path and bounded by `limits`.
+fn scan_milk_paths(dir: &Path, limits: IsfScanLimits) -> Vec<PathBuf> {
+    IsfScan::collect_with_extension(dir, limits, "mlk").files
+}
+
 /// Collect MilkDrop presets from user directories.
 ///
-/// RED stub: returns no definitions. GREEN implements the real scanner here
-/// (case-insensitive `.mlk`, bounded recursion reusing `USER_ISF_MAX_DEPTH`/
-/// `USER_ISF_MAX_ENTRIES`, sorted paths, `is_ignored_media_name` skips, no
-/// symlinks, first sorted path wins duplicates, `parse_milk` + logs on error).
-fn collect_milkdrop_definitions(_user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition> {
-    Vec::new()
+/// Mirrors the ISF scan: roots are sorted before walking, the walk is sorted,
+/// bounded by [`USER_ISF_MAX_DEPTH`]/[`USER_ISF_MAX_ENTRIES`], skips hidden and
+/// temporary entries and symlinks, and the first sorted path wins a duplicate
+/// file stem. Each preset is parsed header-only with [`parse_milk`]; an
+/// unreadable or unparsable file is logged and skipped. The module name is the
+/// file stem, exactly like the ISF arm.
+fn collect_milkdrop_definitions(user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition> {
+    let mut dirs: Vec<&Path> = user_dirs.iter().map(PathBuf::as_path).collect();
+    dirs.sort_unstable();
+    dirs.dedup();
+
+    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut definitions = Vec::new();
+    for dir in dirs {
+        for path in scan_milk_paths(dir, IsfScanLimits::USER) {
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                eprintln!(
+                    "engine: WARN skipping MilkDrop preset with a non-UTF-8 file name: {}",
+                    path.display()
+                );
+                continue;
+            };
+            let name = stem.to_string();
+            let content = match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(error) => {
+                    eprintln!(
+                        "engine: WARN skipping MilkDrop preset {} (read failed: {error})",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+            let document = match parse_milk(&content, &name) {
+                Ok(document) => document,
+                Err(error) => {
+                    eprintln!(
+                        "engine: WARN skipping MilkDrop preset {} (parse failed: {error})",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+            if !seen_names.insert(name.clone()) {
+                eprintln!(
+                    "engine: WARN duplicate MilkDrop preset name `{name}`: keeping the first; ignoring {}",
+                    path.display()
+                );
+                continue;
+            }
+            let meta = milk_meta_from_document(&document);
+            let props = milk_synthesise_props(&document);
+            definitions.push(MilkdropDefinition { name, meta, props });
+        }
+    }
+    definitions
 }
 
 #[cfg(test)]
