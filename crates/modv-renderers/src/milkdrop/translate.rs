@@ -91,8 +91,8 @@ impl std::error::Error for TranslateError {}
 /// Built-in sampler uniforms, in the fixed order the runtime binds them.
 ///
 /// These are always declared by the wrapper (as split `texture2D`/`sampler`
-/// pairs, see [`crate::isf::source::texture_declarations`]) so MilkDrop bodies can
-/// call `GetMain`, `GetBlur1`, … without declaring anything themselves.
+/// pairs, mirroring ISF's `texture_declarations`) so MilkDrop bodies can call
+/// `GetMain`, `GetBlur1`, … without declaring anything themselves.
 const BUILTIN_SAMPLERS: &[&str] = &[
     "sampler_main",
     "sampler_fw_main",
@@ -158,7 +158,7 @@ const UNIFORM_MEMBERS: &[(&str, &str)] = &[
 /// GLSL definitions of the HLSL/MilkDrop compatibility shorthands.
 ///
 /// Samplers are declared as object-like macros expanding to naga's
-/// `sampler2D(texture, sampler)` constructor (see [`builtin_sampler_glsl`]), so
+/// `sampler2D(texture, sampler)` constructor (see [`sampler_bindings_glsl`]), so
 /// the function-like sampling macros work unchanged. All of these are valid for
 /// naga's preprocessor (no `##` token pasting — `pp-rs` does not support it).
 const HLSL_MACROS: &str = "\
@@ -174,6 +174,8 @@ const HLSL_MACROS: &str = "\
 #define M_PI_2 1.57079632679489661923
 #define M_INV_PI_2 0.63661977236758134308
 ";
+
+// --- Body rewriting --------------------------------------------------------
 
 fn is_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
@@ -203,28 +205,88 @@ fn rewrite_hlsl_types(body: &str) -> String {
     replace_ident(&body, "float4", "vec4")
 }
 
-/// Parse a prelude line of the form `uniform <type> <name>;` into `(type, name)`.
-fn parse_uniform_decl(line: &str) -> Option<(&str, &str)> {
-    let rest = line.trim().strip_prefix("uniform ")?;
-    let mut parts = rest.split_whitespace();
-    let ty = parts.next()?;
-    let name = parts.next()?.trim_end_matches(';').trim();
-    (!name.is_empty()).then_some((ty, name))
+// --- Prelude parsing -------------------------------------------------------
+
+/// Strip a leading `qualifier` that is followed by whitespace, returning the
+/// trimmed remainder. The whitespace check avoids matching prefixes of longer
+/// identifiers (e.g. `highp` in `highpressure`).
+fn strip_qualifier<'a>(source: &'a str, qualifier: &str) -> Option<&'a str> {
+    let rest = source.strip_prefix(qualifier)?;
+    if rest.starts_with(|c: char| c.is_whitespace()) {
+        Some(rest.trim_start())
+    } else {
+        None
+    }
+}
+
+/// Every `(type, name)` uniform member declared on a single prelude line.
+///
+/// Handles multiple declarators (`uniform float a, b;`), a leading
+/// `layout(...)`, precision qualifiers (`highp`/`mediump`/`lowp`) and trailing
+/// `//` comments. Array/initializer suffixes are dropped from the name.
+/// Non-uniform lines yield nothing, so comments and blank lines are ignored.
+fn parse_uniform_line(line: &str) -> Vec<(&str, &str)> {
+    let line = line.split("//").next().unwrap_or(line).trim();
+
+    let after_layout = if let Some(rest) = line.strip_prefix("layout") {
+        let rest = rest.trim_start();
+        let Some(end) = rest.strip_prefix('(').and_then(|r| r.find(')')) else {
+            return Vec::new();
+        };
+        rest[end + 1..].trim()
+    } else {
+        line
+    };
+
+    let Some(after_uniform) = after_layout.strip_prefix("uniform") else {
+        return Vec::new();
+    };
+    if !after_uniform.is_empty() && !after_uniform.starts_with(|c: char| c.is_whitespace()) {
+        return Vec::new();
+    }
+
+    let mut rest = after_uniform.trim_start();
+    for qualifier in ["highp", "mediump", "lowp", "flat", "smooth"] {
+        if let Some(next) = strip_qualifier(rest, qualifier) {
+            rest = next;
+        }
+    }
+
+    let declaration = rest.split(';').next().unwrap_or(rest);
+    let mut parts = declaration.splitn(2, |c: char| c.is_whitespace());
+    let ty = parts.next().unwrap_or("").trim();
+    let declarators = parts.next().unwrap_or("").trim();
+    if ty.is_empty() || declarators.is_empty() {
+        return Vec::new();
+    }
+
+    declarators
+        .split(',')
+        .filter_map(|decl| {
+            let name = decl.trim().split(['=', '[']).next()?.trim();
+            (!name.is_empty()).then_some((ty, name))
+        })
+        .collect()
+}
+
+/// Every uniform member declared anywhere in `prelude`, in source order.
+fn prelude_uniforms(prelude: &str) -> impl Iterator<Item = (&str, &str)> + '_ {
+    prelude.lines().flat_map(parse_uniform_line)
+}
+
+/// True when `name` is bound unconditionally by the wrapper (a built-in or a
+/// positional noise sampler) and must not be redeclared from the prelude.
+fn is_reserved_sampler(name: &str) -> bool {
+    BUILTIN_SAMPLERS.contains(&name) || NOISE_SAMPLERS.contains(&name)
 }
 
 /// The samplers a wrapper must bind: built-ins first, then user samplers from
-/// the prelude in declaration order. Noise redeclarations and built-ins named
-/// in the prelude are skipped (the wrapper is the single declaration).
+/// the prelude in declaration order. Reserved/noise samplers are skipped so the
+/// wrapper stays the single declaration naga sees.
 fn samplers_for_prelude(prelude: &str) -> Vec<String> {
-    let mut samplers: Vec<String> = BUILTIN_SAMPLERS
-        .iter()
-        .map(|name| name.to_string())
-        .collect();
-    for line in prelude.lines() {
-        let Some((ty, name)) = parse_uniform_decl(line) else {
-            continue;
-        };
-        if ty != "sampler2D" || NOISE_SAMPLERS.contains(&name) {
+    let mut samplers: Vec<String> = BUILTIN_SAMPLERS.iter().map(|s| s.to_string()).collect();
+    for (ty, name) in prelude_uniforms(prelude) {
+        if ty != "sampler2D" || is_reserved_sampler(name) {
             continue;
         }
         if samplers.iter().any(|existing| existing == name) {
@@ -259,22 +321,17 @@ fn sampler_bindings_glsl(samplers: &[String]) -> String {
 }
 
 /// The uniform block: canonical members plus any scalar/vector uniform declared
-/// in the prelude that is not already covered. Sampler declarations in the
-/// prelude are skipped — they become split bindings instead.
+/// in the prelude that is not already covered. Sampler declarations (including
+/// reserved noise samplers) are skipped — they become split bindings or are
+/// bound by the wrapper instead.
 fn uniform_block_glsl(prelude: &str) -> String {
-    let mut members: Vec<(String, String)> = UNIFORM_MEMBERS
-        .iter()
-        .map(|(ty, name)| ((*ty).to_string(), (*name).to_string()))
-        .collect();
-    for line in prelude.lines() {
-        let Some((ty, name)) = parse_uniform_decl(line) else {
-            continue;
-        };
-        if ty == "sampler2D" || NOISE_SAMPLERS.contains(&name) {
+    let mut members: Vec<(&str, &str)> = UNIFORM_MEMBERS.to_vec();
+    for (ty, name) in prelude_uniforms(prelude) {
+        if ty == "sampler2D" || is_reserved_sampler(name) {
             continue;
         }
-        if !members.iter().any(|(_, existing)| existing == name) {
-            members.push((ty.to_string(), name.to_string()));
+        if !members.iter().any(|(_, existing)| *existing == name) {
+            members.push((ty, name));
         }
     }
     let mut out = String::from("layout(binding = 0) uniform MilkUniforms {\n");
