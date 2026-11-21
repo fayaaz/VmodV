@@ -5,7 +5,7 @@
 //!
 //! A tween is a small descriptor (`id`, `data`, `duration`, `direction`,
 //! `easing`, `loop`, `useBpm`, `bpmDivision`, `durationAsTotalTime`, `steps`,
-//! and the native `keyframeTimes` extension).
+//! and the native `keyframeTimes` / `loopMode` extensions).
 //! The worker pre-renders the whole animation into an array of value frames by
 //! calling anime.js `seek()` at every frame boundary ([`build_tween_frames`]),
 //! then treats that array as a step sequencer: an Input Link reads the current
@@ -53,7 +53,9 @@
 //!   exhaust memory (the JS would allocate whatever it asked for).
 //! - A looped tween records frames `0..=framesRequired` and then `-1` back to
 //!   `1` (the ping-pong is done by the frame recorder, not by anime's
-//!   `direction`), giving `2 × framesRequired` frames per cycle.
+//!   `direction`), giving `2 × framesRequired` frames per cycle. The native
+//!   extension `loopMode: "restart"` opts into a single forward leg instead,
+//!   so the play head wraps to frame 0 and replays the same pattern.
 //! - Each channel is sampled the way anime normalises a property array. A
 //!   two-row tween is anime's `[from, to]` shorthand (one tween over the whole
 //!   duration). Three or more rows become one tween per keyframe, each
@@ -188,8 +190,16 @@ pub struct TweenDescriptor {
     pub direction: String,
     /// anime.js easing name (`easeInOutSine`, `linear`, `steps(4)`, ...).
     pub easing: String,
-    /// Whether the recorder ping-pongs the frames (`loop: true`).
+    /// Whether the tween loops (`loop: true`). By default the recorder
+    /// ping-pongs the frames; [`Self::loop_mode`] can opt into a restart.
     pub looping: bool,
+    /// Optional native extension: how a looping tween restarts (`loopMode`).
+    ///
+    /// Absent or any value other than `"restart"` keeps the legacy ping-pong
+    /// recorder. `"restart"` records a single forward leg, so
+    /// [`TweenRuntime::advance`](TweenRuntime::advance) wraps to frame 0 and
+    /// replays the drawn pattern beat-for-beat.
+    pub loop_mode: Option<String>,
     /// Whether the duration follows the tempo (`useBpm: true`).
     pub use_bpm: bool,
     /// BPM subdivision the tween advances on.
@@ -222,6 +232,7 @@ impl TweenDescriptor {
             direction: "alternate".to_string(),
             easing: "linear".to_string(),
             looping: true,
+            loop_mode: None,
             use_bpm: true,
             bpm_division: 16.0,
             duration_as_total_time: false,
@@ -273,6 +284,12 @@ impl TweenDescriptor {
         } else {
             base / self.data.len() as f64
         }
+    }
+
+    /// Whether a looping descriptor opts into restarting each cycle instead
+    /// of the legacy ping-pong recorder (`loopMode: "restart"`).
+    pub fn restarts_on_loop(&self) -> bool {
+        self.loop_mode.as_deref() == Some("restart")
     }
 
     /// Whether the descriptor still uses anime's evenly spaced keyframes:
@@ -361,6 +378,9 @@ impl TweenDescriptor {
         }
         if self.presence.looping {
             map.insert("loop".to_string(), Value::Bool(self.looping));
+        }
+        if let Some(loop_mode) = &self.loop_mode {
+            map.insert("loopMode".to_string(), Value::String(loop_mode.clone()));
         }
         if self.presence.use_bpm {
             map.insert("useBpm".to_string(), Value::Bool(self.use_bpm));
@@ -519,6 +539,8 @@ struct TweenDescriptorRepr {
     easing: Option<String>,
     #[serde(default, rename = "loop")]
     looping: Option<bool>,
+    #[serde(default, rename = "loopMode")]
+    loop_mode: Option<String>,
     #[serde(default, rename = "useBpm")]
     use_bpm: Option<bool>,
     #[serde(default, rename = "bpmDivision")]
@@ -572,6 +594,7 @@ impl<'de> Deserialize<'de> for TweenDescriptor {
             direction: repr.direction.unwrap_or_else(|| "alternate".to_string()),
             easing: repr.easing.unwrap_or_else(|| "linear".to_string()),
             looping: repr.looping.unwrap_or(true),
+            loop_mode: repr.loop_mode,
             use_bpm: repr.use_bpm.unwrap_or(true),
             bpm_division: repr.bpm_division.unwrap_or(16.0),
             duration_as_total_time: repr.duration_as_total_time.unwrap_or(false),
@@ -1013,7 +1036,9 @@ fn interpolate(from: f64, to: f64, progress: f64) -> f64 {
 /// The returned vector holds one frame per stored value row:
 ///
 /// - `loop`: `2 × framesRequired` frames — `0..=framesRequired` then
-///   `framesRequired - 1 ..= 1` (frame 0 is not repeated at the end).
+///   `framesRequired - 1 ..= 1` (frame 0 is not repeated at the end), unless
+///   the native `loopMode: "restart"` extension is set, which records only
+///   the `framesRequired`-frame forward leg.
 /// - no loop: `framesRequired` frames, `0..framesRequired`.
 ///
 /// A tween without `data` has no channels and cannot animate (the JS would
@@ -1062,7 +1087,7 @@ fn build_frames_with_seek(
         }
     };
 
-    if !tween.looping {
+    if !tween.looping || tween.restarts_on_loop() {
         let mut frames = Vec::with_capacity(frames_required);
         frames.push(reset_frame.clone());
         for frame in 1..frames_required {
@@ -1070,7 +1095,8 @@ fn build_frames_with_seek(
         }
         // `tweens.js:129` restores the seek position for both branches, not
         // just the looped one: a rebuild must not snap a one-shot tween back
-        // to frame 0.
+        // to frame 0. A restart loop wraps to frame 0 on its own, so a single
+        // forward leg replays the drawn pattern beat-for-beat.
         let restored = restored_frame(frames.len(), seek);
         return (frames, restored);
     }
@@ -1992,6 +2018,64 @@ mod tests {
             vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 0.8, 0.6, 0.4, 0.2]
         );
         assert_eq!(frames[10 - 1][0], 0.2);
+    }
+
+    #[test]
+    fn a_restart_loop_repeats_the_drawn_pattern_instead_of_ping_ponging() {
+        // A painted draw curve is a looping, free-keyframed descriptor. Read
+        // through `loopMode: "restart"`, each cycle must replay the same
+        // forward leg instead of oscillating back through the previous one.
+        let document = json!({
+            "id": "draw-link",
+            "data": [[0.0], [1.0], [1.0], [0.0], [0.0]],
+            "keyframeTimes": [0.0, 0.25, 0.5, 0.75, 1.0],
+            "duration": 4000.0,
+            "direction": "normal",
+            "easing": "linear",
+            "loop": true,
+            "loopMode": "restart",
+            "useBpm": false,
+            "bpmDivision": 16.0,
+            "durationAsTotalTime": true,
+            "steps": 0.0,
+        });
+        let descriptor: TweenDescriptor =
+            serde_json::from_value(document.clone()).expect("descriptor decodes");
+
+        // 4000 ms at 10 fps is a 40-frame leg. Today the recorder writes an
+        // 80-frame ping-pong, so the second batch of 40 reads mirrors the
+        // first batch instead of repeating it.
+        let mut runtime = TweenRuntime::new(descriptor.clone(), 10.0, 120.0);
+        let first_cycle: Vec<Vec<f64>> = (0..40)
+            .map(|_| runtime.value().expect("first-cycle value"))
+            .collect();
+        let second_cycle: Vec<Vec<f64>> = (0..40)
+            .map(|_| runtime.value().expect("second-cycle value"))
+            .collect();
+        assert_eq!(
+            first_cycle, second_cycle,
+            "each loop must replay the same drawn pattern"
+        );
+
+        assert_eq!(
+            build_tween_frames(&descriptor, 10.0, 120.0).len(),
+            40,
+            "a restart loop records one leg, not a mirrored leg"
+        );
+
+        // The key is opt-in: legacy descriptors keep the ping-pong recorder.
+        let mut legacy_document = document.clone();
+        legacy_document
+            .as_object_mut()
+            .expect("object")
+            .remove("loopMode");
+        let legacy: TweenDescriptor =
+            serde_json::from_value(legacy_document).expect("legacy descriptor decodes");
+        assert_eq!(
+            build_tween_frames(&legacy, 10.0, 120.0).len(),
+            80,
+            "without loopMode the recorded ping-pong is unchanged"
+        );
     }
 
     #[test]

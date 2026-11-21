@@ -471,7 +471,8 @@ fn cycle_seconds(view: &TweenView, bpm: f64) -> f64 {
 /// `keyframeTimes` is emitted for a curve with more than two points: without
 /// it anime's 3+ row handling would hold the first sample for a whole segment
 /// instead of joining the clicked points. A two-point curve uses the plain
-/// `[from, to]` shorthand.
+/// `[from, to]` shorthand. `loopMode: "restart"` opts into replaying the drawn
+/// cycle each time instead of ping-ponging it (what `loop: true` alone does).
 fn descriptor_payload(view: &TweenView) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "id": view.id,
@@ -480,6 +481,7 @@ fn descriptor_payload(view: &TweenView) -> serde_json::Value {
         "direction": view.direction,
         "easing": view.easing,
         "loop": view.looping,
+        "loopMode": "restart",
         "useBpm": view.use_bpm,
         "bpmDivision": view.bpm_division,
         "durationAsTotalTime": true,
@@ -763,6 +765,42 @@ mod tests {
             state.draw_editor.is_some(),
             "starting a draw opens the curve canvas"
         );
+    }
+
+    #[test]
+    fn a_draw_curve_descriptor_opts_into_restart_loops() {
+        // A newly created draw curve must opt out of the ping-pong recorder.
+        let mut state = UiState::new();
+        let mut control = DrawControl::new("gain", Some("input-1".to_string()), None, 0.0, 1.0);
+        control.create(&mut state, 120.0);
+
+        let actions = state.take_actions();
+        assert_eq!(actions[0].action, "tweens/createTween");
+        assert_eq!(actions[0].payload["loopMode"], "restart");
+
+        // Re-applying a painted curve to an existing draw must keep the same
+        // restart semantics.
+        let mut view = two_row();
+        view.looping = true;
+        let mut state = UiState::new();
+        let mut control = DrawControl::new(
+            "gain",
+            Some("input-1".to_string()),
+            Some(view.clone()),
+            0.0,
+            1.0,
+        );
+        let mut editor = DrawCurveEditor::new(
+            "input-1",
+            "gain",
+            DrawCurve::from_view(&view, 0.0, 1.0).expect("curve"),
+        );
+        editor.curve.paint((0.25, 0.1), (0.75, 0.9));
+        control.apply_curve(&mut state, &mut editor, 120.0);
+
+        let actions = state.take_actions();
+        assert_eq!(actions[0].action, "tweens/createTween");
+        assert_eq!(actions[0].payload["loopMode"], "restart");
     }
 
     #[test]
