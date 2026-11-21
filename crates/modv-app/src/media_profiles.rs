@@ -20,8 +20,9 @@ pub const PROJECT_SETTINGS_FILENAME: &str = "vmodv-project.json";
 /// The profile the JS media manager creates on first launch.
 pub const DEFAULT_PROFILE: &str = "default";
 
-/// The folders `fs-create-profile.js` creates in every profile.
-pub const PROFILE_FOLDERS: [&str; 9] = [
+/// The folders `fs-create-profile.js` creates in every profile, plus the
+/// native-only `milkdrop` folder for user MilkDrop presets.
+pub const PROFILE_FOLDERS: [&str; 10] = [
     "image",
     "video",
     "palette",
@@ -31,7 +32,14 @@ pub const PROFILE_FOLDERS: [&str; 9] = [
     "plugin",
     "plugin_data",
     "isf",
+    "milkdrop",
 ];
+
+/// The shared, non-profile folders created directly under `<media>`.
+///
+/// These are corpus folders for every profile (kept for older native builds)
+/// and must not be mistaken for a project profile by [`list_profiles`].
+pub const SHARED_MEDIA_FOLDERS: [&str; 1] = ["milkdrop"];
 
 /// One persisted project selection.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -190,6 +198,13 @@ pub fn create_profile(media_root: &Path, profile: &str) -> Result<PathBuf, Strin
         std::fs::create_dir_all(&path)
             .map_err(|error| format!("could not create {}: {error}", path.display()))?;
     }
+    // The shared flat corpus folders live beside the profiles so older native
+    // installs (and explicit `user_*_dirs` overrides) keep working.
+    for folder in SHARED_MEDIA_FOLDERS {
+        let path = media_root.join(folder);
+        std::fs::create_dir_all(&path)
+            .map_err(|error| format!("could not create {}: {error}", path.display()))?;
+    }
     Ok(root)
 }
 
@@ -205,6 +220,7 @@ pub fn list_profiles(media_root: &Path) -> Vec<String> {
         .filter(|entry| entry.metadata().map(|meta| meta.is_dir()).unwrap_or(false))
         .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
         .filter(|name| !name.starts_with('.'))
+        .filter(|name| !SHARED_MEDIA_FOLDERS.contains(&name.as_str()))
         .collect();
     profiles.sort_by_key(|name| name.to_lowercase());
     profiles
@@ -262,9 +278,10 @@ pub fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec
 
 /// The user MilkDrop preset folders to scan for `profile`.
 ///
-/// RED STUB: discovery is not implemented yet. GREEN replaces this body; the
-/// intended result is `<media>/milkdrop`, `<media>/<profile>/milkdrop` and the
-/// existing entries of `extra`, in a deterministic order.
+/// Mirrors [`user_isf_dirs`]: the flat `<media>/milkdrop` folder is kept for
+/// installs created by older native builds, only the **active** profile's
+/// `milkdrop` folder counts, and existing explicit extras are included. An
+/// explicit `MODV_USER_MILKDROP_DIR` environment override replaces all of them.
 pub fn user_milkdrop_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
     let override_dir = std::env::var_os("MODV_USER_MILKDROP_DIR").map(PathBuf::from);
     user_milkdrop_dirs_with_override(media_root, profile, extra, override_dir.as_deref())
@@ -272,18 +289,37 @@ pub fn user_milkdrop_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -
 
 /// [`user_milkdrop_dirs`] with an explicit `MODV_USER_MILKDROP_DIR` override.
 ///
-/// RED STUB: returns no folders. GREEN must honour `override_dir` first (when
-/// `Some`, only that folder is returned) and otherwise perform the discovery
-/// described on [`user_milkdrop_dirs`]. The explicit parameter keeps the
-/// override testable without mutating process-wide environment variables.
+/// `Some` returns only that folder (without an existence check — an explicit
+/// choice is honoured even before it is created). Otherwise performs the same
+/// discovery as [`user_isf_dirs`] with the `milkdrop` folder name. The explicit
+/// parameter keeps the override testable without mutating process-wide
+/// environment variables.
 pub fn user_milkdrop_dirs_with_override(
     media_root: &Path,
     profile: &str,
     extra: &[PathBuf],
     override_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let _ = (media_root, profile, extra, override_dir);
-    Vec::new()
+    if let Some(dir) = override_dir {
+        return vec![dir.to_path_buf()];
+    }
+    let mut dirs = Vec::new();
+    for candidate in [
+        media_root.join("milkdrop"),
+        profile_folder(media_root, profile, "milkdrop"),
+    ] {
+        if candidate.is_dir() {
+            dirs.push(candidate);
+        }
+    }
+    for path in extra {
+        if path.is_dir() {
+            dirs.push(path.clone());
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 #[cfg(test)]

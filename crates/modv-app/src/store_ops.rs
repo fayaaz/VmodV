@@ -307,6 +307,19 @@ impl Store {
         isf_dir: Option<&std::path::Path>,
         extra_isf_dirs: &[std::path::PathBuf],
     ) -> Self {
+        Self::with_state_path_and_dirs(state_path, isf_dir, extra_isf_dirs, &[])
+    }
+
+    /// [`Self::with_state_path_and_isf_dirs`] plus user MilkDrop directories.
+    ///
+    /// The MilkDrop folders are handed to [`ModuleRegistry::build_with_milkdrop`]
+    /// so `.mlk` presets are registered alongside the ISF corpus on startup.
+    pub fn with_state_path_and_dirs(
+        state_path: Option<&std::path::Path>,
+        isf_dir: Option<&std::path::Path>,
+        extra_isf_dirs: &[std::path::PathBuf],
+        milkdrop_dirs: &[std::path::PathBuf],
+    ) -> Self {
         let scenes_path = state_path
             .and_then(std::path::Path::parent)
             .map(|parent| parent.join(crate::scene_ops::SCENES_STORAGE_FILENAME));
@@ -321,7 +334,11 @@ impl Store {
         Self {
             state: EngineState::new(),
             deltas: DeltaStream::new(),
-            registry: Arc::new(ModuleRegistry::build_with_extra(isf_dir, extra_isf_dirs)),
+            registry: Arc::new(ModuleRegistry::build_with_milkdrop(
+                isf_dir,
+                extra_isf_dirs,
+                milkdrop_dirs,
+            )),
             scenes: crate::scene_ops::ScenesState::default(),
             scenes_path,
             applied_scene_id: None,
@@ -359,7 +376,22 @@ impl Store {
         isf_dir: Option<&std::path::Path>,
         extra_isf_dirs: &[std::path::PathBuf],
     ) -> Arc<ModuleRegistry> {
-        self.registry = Arc::new(ModuleRegistry::build_with_extra(isf_dir, extra_isf_dirs));
+        self.reload_modules_with_milkdrop(isf_dir, extra_isf_dirs, &[])
+    }
+
+    /// [`Self::reload_modules`] plus user MilkDrop directories, so a `.mlk`
+    /// save picked up by the media watcher re-registers the preset module.
+    pub fn reload_modules_with_milkdrop(
+        &mut self,
+        isf_dir: Option<&std::path::Path>,
+        extra_isf_dirs: &[std::path::PathBuf],
+        milkdrop_dirs: &[std::path::PathBuf],
+    ) -> Arc<ModuleRegistry> {
+        self.registry = Arc::new(ModuleRegistry::build_with_milkdrop(
+            isf_dir,
+            extra_isf_dirs,
+            milkdrop_dirs,
+        ));
         Arc::clone(&self.registry)
     }
 

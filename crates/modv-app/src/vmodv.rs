@@ -469,6 +469,8 @@ pub struct VmodvApp {
     last_osc_poll: Instant,
     isf_dir: Option<PathBuf>,
     user_isf_dirs: Vec<PathBuf>,
+    /// The user MilkDrop preset folders to scan (mirrors `user_isf_dirs`).
+    user_milkdrop_dirs: Vec<PathBuf>,
     media_watcher: Option<MediaWatcher>,
     /// The active profile's recursive image/video/palette index.
     media_library: crate::media_library::MediaLibrary,
@@ -554,14 +556,16 @@ impl VmodvApp {
         let profiles = prepared.profiles;
         let extra_isf_dirs = project_settings.isf_dirs.clone();
         let user_isf_dirs = user_isf_dirs(&media_root, &active_profile, &extra_isf_dirs);
+        let user_milkdrop_dirs = user_milkdrop_dirs(&media_root, &active_profile, &extra_isf_dirs);
         let VmodvStoreBootstrap {
             mut store,
             restored_snapshot,
-        } = build_vmodv_store(
+        } = build_vmodv_store_with_dirs(
             cli.state.as_deref(),
             &user_data,
             isf_dir.as_deref(),
             &user_isf_dirs,
+            &user_milkdrop_dirs,
         );
         // The VmodV shell has no renderer to forward the media manager's
         // path, so it dispatches `media/setMediaDirectoryPath` itself; the
@@ -881,6 +885,7 @@ impl VmodvApp {
             last_osc_poll: start,
             isf_dir,
             user_isf_dirs,
+            user_milkdrop_dirs,
             media_watcher,
             media_library,
             library_refresh: crate::media_library::LibraryRefresh::default(),
@@ -1369,7 +1374,7 @@ impl VmodvApp {
         }
         if let Some(burst) = self.media_watcher.as_mut().and_then(MediaWatcher::pump) {
             self.library_refresh.note_burst(&burst);
-            if burst.has(MediaFolder::Isf) {
+            if burst.has(MediaFolder::Isf) || burst.has(MediaFolder::Milkdrop) {
                 self.rescan_modules();
             }
             if burst.has(MediaFolder::Video) {
@@ -2533,10 +2538,12 @@ impl VmodvApp {
         }
     }
 
-    /// Recompute the user ISF search folders and restart the watcher.
+    /// Recompute the user ISF and MilkDrop search folders and restart the watcher.
     fn rebuild_user_isf_dirs(&mut self) {
         self.user_isf_dirs =
             user_isf_dirs(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
+        self.user_milkdrop_dirs =
+            user_milkdrop_dirs(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
         self.media_watcher =
             MediaWatcher::for_profile(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
     }
@@ -3002,11 +3009,13 @@ impl VmodvApp {
     }
 
     /// Capture the outgoing frame for a starting whole-scene transition.
-    /// Rebuild the module registry after a user ISF change.
+    /// Rebuild the module registry after a user ISF or MilkDrop change.
     fn rescan_modules(&mut self) {
-        let registry = self
-            .store
-            .reload_modules(self.isf_dir.as_deref(), &self.user_isf_dirs);
+        let registry = self.store.reload_modules_with_milkdrop(
+            self.isf_dir.as_deref(),
+            &self.user_isf_dirs,
+            &self.user_milkdrop_dirs,
+        );
         if let Some(compositor) = &mut self.compositor {
             compositor.set_registry(registry);
         }
@@ -4472,14 +4481,31 @@ struct VmodvStoreBootstrap {
 /// ([`crate::cli::vmodv_state_path`]); otherwise the store has no Scene path
 /// and `<userData>/scenes.json` — the authoritative list shared with
 /// Electron — is never read, leaving only the seeded defaults.
+#[cfg(test)] // The shell uses `build_vmodv_store_with_dirs`; tests keep this 4-arg form.
 fn build_vmodv_store(
     explicit_state: Option<&Path>,
     user_data: &Path,
     isf_dir: Option<&Path>,
     user_isf_dirs: &[PathBuf],
 ) -> VmodvStoreBootstrap {
+    build_vmodv_store_with_dirs(explicit_state, user_data, isf_dir, user_isf_dirs, &[])
+}
+
+/// The shell's store builder plus user MilkDrop folders for the module registry.
+fn build_vmodv_store_with_dirs(
+    explicit_state: Option<&Path>,
+    user_data: &Path,
+    isf_dir: Option<&Path>,
+    user_isf_dirs: &[PathBuf],
+    user_milkdrop_dirs: &[PathBuf],
+) -> VmodvStoreBootstrap {
     let state_path = crate::cli::vmodv_state_path(explicit_state, user_data);
-    let mut store = Store::with_state_path_and_isf_dirs(Some(&state_path), isf_dir, user_isf_dirs);
+    let mut store = Store::with_state_path_and_dirs(
+        Some(&state_path),
+        isf_dir,
+        user_isf_dirs,
+        user_milkdrop_dirs,
+    );
     let mut restored_snapshot = false;
     match store.restore_from_file(&state_path) {
         Ok(true) => {
@@ -4549,11 +4575,10 @@ fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<Pat
 
 /// User MilkDrop preset folders under `<userData>/media`.
 ///
-/// RED STUB: discovery is not wired into the shell yet. GREEN resolves these
-/// folders in `NativeApp::new`, passes them into `build_native_store`, rebuilds
-/// them with the watcher on profile/extra-dir changes and routes a `Milkdrop`
-/// burst to `rescan_modules` alongside `Isf`.
-#[allow(dead_code)] // RED stub: only the test uses it until GREEN wires discovery in.
+/// Mirrors [`user_isf_dirs`]: resolved in `VmodvApp::new`, passed into the
+/// store builder so the registry scans them, rebuilt with the watcher on
+/// profile/extra-dir changes, and reloaded when a watcher burst contains a
+/// `Milkdrop` change.
 fn user_milkdrop_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
     media_profiles::user_milkdrop_dirs(media_root, profile, extra)
 }

@@ -33,7 +33,7 @@ pub enum MediaFolder {
     Image,
     Video,
     Palette,
-    /// RED STUB: MilkDrop `.mlk` presets. GREEN wires it into the watcher.
+    /// MilkDrop `.mlk` presets.
     Milkdrop,
 }
 
@@ -44,8 +44,7 @@ impl MediaFolder {
             Self::Image => "image",
             Self::Video => "video",
             Self::Palette => "palette",
-            // RED STUB: GREEN returns "milkdrop".
-            Self::Milkdrop => "",
+            Self::Milkdrop => "milkdrop",
         }
     }
 }
@@ -81,12 +80,12 @@ impl MediaBurst {
 
     /// Whether the burst touched a folder the Library index mirrors.
     ///
-    /// A shader-only burst never rescans the media library; an image, video or
-    /// palette change asks for one coalesced rescan.
+    /// Shader-only and preset-only bursts never rescan the media library; an
+    /// image, video or palette change asks for one coalesced rescan.
     pub fn touches_library(&self) -> bool {
         self.folders
             .iter()
-            .any(|folder| *folder != MediaFolder::Isf)
+            .any(|folder| *folder != MediaFolder::Isf && *folder != MediaFolder::Milkdrop)
     }
 }
 
@@ -176,8 +175,8 @@ impl MediaWatcher {
         })
     }
 
-    /// Watch the active profile's `isf`, `image`, `video` and `palette`
-    /// folders, plus the extra user ISF folders, recursively.
+    /// Watch the active profile's `isf`, `image`, `video`, `palette` and
+    /// `milkdrop` folders, plus the extra user ISF folders, recursively.
     pub fn for_profile(media_root: &Path, profile: &str, extra_isf: &[PathBuf]) -> Option<Self> {
         let mut targets = Vec::new();
         for folder in [
@@ -185,6 +184,7 @@ impl MediaWatcher {
             MediaFolder::Image,
             MediaFolder::Video,
             MediaFolder::Palette,
+            MediaFolder::Milkdrop,
         ] {
             targets.push(WatchTarget {
                 dir: media_profiles::profile_folder(media_root, profile, folder.label()),
@@ -277,8 +277,8 @@ pub fn supported(folder: MediaFolder, name: &str) -> bool {
         MediaFolder::Image => matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "gif"),
         MediaFolder::Video => matches!(extension.as_str(), "mp4" | "webm" | "webv"),
         MediaFolder::Palette => extension == "json",
-        // RED STUB: GREEN accepts case-insensitive `.mlk` here.
-        MediaFolder::Milkdrop => false,
+        // The extension was lower-cased above, so this is case-insensitive.
+        MediaFolder::Milkdrop => extension == "mlk",
     }
 }
 
