@@ -38,6 +38,8 @@
 
 use std::fmt;
 
+use crate::isf::translate::glsl_to_wgsl;
+
 /// Which MilkDrop shader stage is being wrapped/translated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MilkShaderStage {
@@ -86,26 +88,248 @@ impl fmt::Display for TranslateError {
 
 impl std::error::Error for TranslateError {}
 
+/// Built-in sampler uniforms, in the fixed order the runtime binds them.
+///
+/// These are always declared by the wrapper (as split `texture2D`/`sampler`
+/// pairs, see [`crate::isf::source::texture_declarations`]) so MilkDrop bodies can
+/// call `GetMain`, `GetBlur1`, … without declaring anything themselves.
+const BUILTIN_SAMPLERS: &[&str] = &[
+    "sampler_main",
+    "sampler_fw_main",
+    "sampler_pw_main",
+    "sampler_fc_main",
+    "sampler_pc_main",
+    "sampler_blur1",
+    "sampler_blur2",
+    "sampler_blur3",
+];
+
+/// Noise samplers the runtime binds positionally. A preset that redeclares one
+/// of these in its prelude is stripped defensively so the split binding emitted
+/// below is the single declaration naga sees.
+const NOISE_SAMPLERS: &[&str] = &["sampler_pw_noise_lq", "sampler_pw_noise_hq"];
+
+/// The canonical MilkDrop uniform members emitted into the `@group(0)
+/// @binding(0)` block. Scalars are `float`, coordinates/`texsize` are `vec2`.
+/// Every name a body can reference (per the runtime prelude) is present here.
+const UNIFORM_MEMBERS: &[(&str, &str)] = &[
+    ("float", "time"),
+    ("float", "frame"),
+    ("float", "fps"),
+    ("float", "progress"),
+    ("float", "decay"),
+    ("float", "bass"),
+    ("float", "mid"),
+    ("float", "treb"),
+    ("float", "bass_att"),
+    ("float", "mid_att"),
+    ("float", "treb_att"),
+    ("float", "vol"),
+    ("float", "rand_preset"),
+    ("float", "rand_frame"),
+    ("float", "aspect"),
+    ("float", "slow_roam_cos"),
+    ("float", "slow_roam_sin"),
+    ("float", "roam_cos"),
+    ("float", "roam_sin"),
+    ("float", "hue_shader"),
+    ("float", "scale1"),
+    ("float", "scale2"),
+    ("float", "scale3"),
+    ("float", "bias1"),
+    ("float", "bias2"),
+    ("float", "bias3"),
+    ("float", "blur1_min"),
+    ("float", "blur1_max"),
+    ("float", "blur2_min"),
+    ("float", "blur2_max"),
+    ("float", "blur3_min"),
+    ("float", "blur3_max"),
+    ("vec2", "texsize"),
+    ("vec2", "texsize_fw"),
+    ("vec2", "texsize_pw"),
+    ("vec2", "texsize_fc"),
+    ("vec2", "texsize_pc"),
+    ("vec2", "uv_orig"),
+    ("vec2", "rad"),
+    ("vec2", "ang"),
+];
+
+/// GLSL definitions of the HLSL/MilkDrop compatibility shorthands.
+///
+/// Samplers are declared as object-like macros expanding to naga's
+/// `sampler2D(texture, sampler)` constructor (see [`builtin_sampler_glsl`]), so
+/// the function-like sampling macros work unchanged. All of these are valid for
+/// naga's preprocessor (no `##` token pasting — `pp-rs` does not support it).
+const HLSL_MACROS: &str = "\
+#define tex2D(s, uv) texture(s, uv)
+#define tex3D(s, uv) texture(s, uv)
+#define GetMain(uv) texture(sampler_main, uv)
+#define GetPixel(uv) texture(sampler_fw_main, uv)
+#define GetBlur1(uv) texture(sampler_blur1, uv)
+#define GetBlur2(uv) texture(sampler_blur2, uv)
+#define GetBlur3(uv) texture(sampler_blur3, uv)
+#define lum(c) dot((c).rgb, vec3(0.2126, 0.7152, 0.0722))
+#define M_PI 3.14159265358979323846
+#define M_PI_2 1.57079632679489661923
+#define M_INV_PI_2 0.63661977236758134308
+";
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Replace whole-identifier occurrences of `from` with `to` in `source`.
+fn replace_ident(source: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(position) = rest.find(from) {
+        let (before, after_start) = rest.split_at(position);
+        let after = &after_start[from.len()..];
+        let before_ok = before.chars().next_back().is_none_or(|c| !is_ident_char(c));
+        let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
+        out.push_str(before);
+        out.push_str(if before_ok && after_ok { to } else { from });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Rewrite HLSL `float2/3/4` constructors and declarations to GLSL vectors.
+fn rewrite_hlsl_types(body: &str) -> String {
+    let body = replace_ident(body, "float2", "vec2");
+    let body = replace_ident(&body, "float3", "vec3");
+    replace_ident(&body, "float4", "vec4")
+}
+
+/// Parse a prelude line of the form `uniform <type> <name>;` into `(type, name)`.
+fn parse_uniform_decl(line: &str) -> Option<(&str, &str)> {
+    let rest = line.trim().strip_prefix("uniform ")?;
+    let mut parts = rest.split_whitespace();
+    let ty = parts.next()?;
+    let name = parts.next()?.trim_end_matches(';').trim();
+    (!name.is_empty()).then_some((ty, name))
+}
+
+/// The samplers a wrapper must bind: built-ins first, then user samplers from
+/// the prelude in declaration order. Noise redeclarations and built-ins named
+/// in the prelude are skipped (the wrapper is the single declaration).
+fn samplers_for_prelude(prelude: &str) -> Vec<String> {
+    let mut samplers: Vec<String> = BUILTIN_SAMPLERS
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    for line in prelude.lines() {
+        let Some((ty, name)) = parse_uniform_decl(line) else {
+            continue;
+        };
+        if ty != "sampler2D" || NOISE_SAMPLERS.contains(&name) {
+            continue;
+        }
+        if samplers.iter().any(|existing| existing == name) {
+            continue;
+        }
+        samplers.push(name.to_string());
+    }
+    samplers
+}
+
+/// Split `texture2D`/`sampler` bindings plus object-like macros aliasing each
+/// sampler name to naga's `sampler2D(texture, sampler)` constructor.
+///
+/// Binding 0 is the uniform block, so textures/samplers occupy 1, 2, 3, …
+fn sampler_bindings_glsl(samplers: &[String]) -> String {
+    let mut out = String::new();
+    for (index, name) in samplers.iter().enumerate() {
+        let texture_binding = (index as u32) * 2 + 1;
+        let sampler_binding = texture_binding + 1;
+        out.push_str(&format!(
+            "#define {name} sampler2D(isf_tex_{name}, isf_smp_{name})\n"
+        ));
+        out.push_str(&format!(
+            "layout(binding = {texture_binding}) uniform texture2D isf_tex_{name};\n"
+        ));
+        out.push_str(&format!(
+            "layout(binding = {sampler_binding}) uniform sampler isf_smp_{name};\n"
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// The uniform block: canonical members plus any scalar/vector uniform declared
+/// in the prelude that is not already covered. Sampler declarations in the
+/// prelude are skipped — they become split bindings instead.
+fn uniform_block_glsl(prelude: &str) -> String {
+    let mut members: Vec<(String, String)> = UNIFORM_MEMBERS
+        .iter()
+        .map(|(ty, name)| ((*ty).to_string(), (*name).to_string()))
+        .collect();
+    for line in prelude.lines() {
+        let Some((ty, name)) = parse_uniform_decl(line) else {
+            continue;
+        };
+        if ty == "sampler2D" || NOISE_SAMPLERS.contains(&name) {
+            continue;
+        }
+        if !members.iter().any(|(_, existing)| existing == name) {
+            members.push((ty.to_string(), name.to_string()));
+        }
+    }
+    let mut out = String::from("layout(binding = 0) uniform MilkUniforms {\n");
+    for (ty, name) in members {
+        out.push_str(&format!("  {ty} {name};\n"));
+    }
+    out.push_str("};\n\n");
+    out
+}
+
 /// Wrap a MilkDrop `prelude`/`body` pair in a complete desktop-GLSL 450 shader.
 ///
 /// Emits the MilkDrop uniform prelude, HLSL compatibility macros, the body, and
 /// a `main` entry point returning `vec4(ret, 1.0)`.
 pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> String {
-    let _ = (prelude, body, stage);
-    String::new()
+    let samplers = samplers_for_prelude(prelude);
+    let body = rewrite_hlsl_types(body);
+
+    let mut out = String::with_capacity(body.len() + 4096);
+    out.push_str("#version 450\n\n");
+    out.push_str(&format!("// MilkDrop {stage:?} shader\n"));
+    out.push_str(HLSL_MACROS);
+    out.push('\n');
+    out.push_str(&uniform_block_glsl(prelude));
+    out.push_str(&sampler_bindings_glsl(&samplers));
+    out.push_str("layout(location = 0) out vec4 milk_FragColor;\n\n");
+    out.push_str("void main() {\n");
+    out.push_str(&body);
+    if !body.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("  milk_FragColor = vec4(ret, 1.0);\n");
+    out.push_str("}\n");
+    out
 }
 
 /// Translate one MilkDrop shader stage into owned WGSL.
+///
+/// Both stages are fragment shaders: warp produces warped UVs, comp produces
+/// the final colour. naga setup is shared with the ISF path via
+/// [`crate::isf::translate::glsl_to_wgsl`].
 pub fn translate_milk_shader(
     prelude: &str,
     body: &str,
     stage: MilkShaderStage,
 ) -> Result<CompiledMilkShader, TranslateError> {
-    let _ = prelude;
-    let _ = body;
+    let source = wrap_milk_shader(prelude, body, stage);
+    let wgsl =
+        glsl_to_wgsl(&source, naga::ShaderStage::Fragment).map_err(|error| TranslateError {
+            source: source.clone(),
+            diagnostics: error.to_string(),
+        })?;
     Ok(CompiledMilkShader {
-        wgsl: String::new(),
-        source: String::new(),
+        wgsl,
+        source,
         stage,
     })
 }
@@ -142,8 +366,10 @@ uniform sampler2D sampler_pw_noise_hq;\n";
 
     #[test]
     fn warp_and_comp_bodies_translate_with_main_and_bindings() {
-        for (stage, body) in [(MilkShaderStage::Warp, WARP_BODY), (MilkShaderStage::Comp, COMP_BODY)]
-        {
+        for (stage, body) in [
+            (MilkShaderStage::Warp, WARP_BODY),
+            (MilkShaderStage::Comp, COMP_BODY),
+        ] {
             let compiled = translate_milk_shader("", body, stage)
                 .unwrap_or_else(|error| panic!("{stage:?} body must translate: {error}"));
 

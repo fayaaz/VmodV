@@ -283,13 +283,13 @@ pub fn report_path() -> PathBuf {
     }
 }
 
-fn naga_defines() -> naga::FastHashMap<String, String> {
+pub(crate) fn naga_defines() -> naga::FastHashMap<String, String> {
     let mut defines = naga::FastHashMap::default();
     defines.insert("__VERSION__".to_string(), "450".to_string());
     defines
 }
 
-fn format_glsl_errors(errors: &naga::front::glsl::ParseErrors, source: &str) -> String {
+pub(crate) fn format_glsl_errors(errors: &naga::front::glsl::ParseErrors, source: &str) -> String {
     let mut message = String::new();
     for error in &errors.errors {
         if !message.is_empty() {
@@ -310,7 +310,13 @@ fn format_glsl_errors(errors: &naga::front::glsl::ParseErrors, source: &str) -> 
 }
 
 /// Translate one GLSL source with naga.
-fn glsl_to_wgsl(source: &str, stage: naga::ShaderStage) -> Result<String, TranslateError> {
+///
+/// Shared by the ISF path and the MilkDrop shader translator so both use one
+/// naga front-end → validator → WGSL back-end chain.
+pub(crate) fn glsl_to_wgsl(
+    source: &str,
+    stage: naga::ShaderStage,
+) -> Result<String, TranslateError> {
     let mut frontend = naga::front::glsl::Frontend::default();
     let options = naga::front::glsl::Options {
         stage,
