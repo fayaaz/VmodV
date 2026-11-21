@@ -1,0 +1,40 @@
+// MilkDrop preset — third-party-notices guard fixture
+// Preset: NC-SA Header Fixture
+// Author: Ada Lovelace
+// License: CC BY-NC-SA 3.0 (Attribution-NonCommercial-ShareAlike)
+// Note: non-commercial, share-alike; keep this attribution if remixed.
+// Source: https://example.org/presets/nc-sa-header-fixture.mlk
+
+[preset00]
+fRating=3.0
+fGammaAdj=2.0
+fDecay=0.98
+fVideoEchoZoom=1.0
+fVideoEchoAlpha=0.0
+fVideoEchoOrientation=0
+nVideoMode=0
+bAdditiveWaves=0
+bWaveDots=0
+bWaveThick=0
+bDarkenCenter=0
+bRedBlueStereo=0
+bBrighten=0
+bDarken=0
+bSolarize=0
+bInvert=0
+fWaveAlpha=1.0
+fWaveScale=1.0
+fWaveSmoothing=0.8
+fWarpAnimSpeed=0.0
+fWarpScale=1.0
+wave_r=1.0
+wave_g=1.0
+wave_b=1.0
+wave_x=0.5
+wave_y=0.5
+ob_size=0.01
+ob_a=1.0
+ib_size=0.01
+ib_a=1.0
+warp=
+comp=

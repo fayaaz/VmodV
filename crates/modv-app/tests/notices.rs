@@ -410,6 +410,15 @@ fn credit(source: &str) -> Option<String> {
     Some(raw.trim().to_string())
 }
 
+/// The author credited in a MilkDrop `.mlk` preset's comment header.
+///
+/// MilkDrop presets do not carry ISF-style `"CREDIT"` JSON: the author is
+/// written in a leading `//` comment line such as `// Author: Ada Lovelace`.
+/// This is a RED-phase stub; GREEN replaces the body with the real extraction.
+fn credit_milkdrop(_source: &str) -> Option<String> {
+    None
+}
+
 #[test]
 fn cargo_lock_scanner_finds_the_registry_and_workspace_packages() {
     let packages = cargo_lock_packages(CARGO_LOCK);
@@ -561,6 +570,96 @@ fn nc_sa_sources_are_scanned_and_named_in_the_notices() {
 }
 
 #[test]
+fn milkdrop_ncsa_fixture_is_detected_and_named_in_the_notices() {
+    // A `.mlk` fixture carrying an NC-SA marker must be picked up by the same
+    // scan_source_files machinery that guards the bundled ISF/Point10 sources.
+    // The fixture lives under tests/fixtures so no preset is bundled.
+    let root = repo_root();
+    let fixture_dir = root.join("crates/modv-app/tests/fixtures/notices");
+    let mut found = Vec::new();
+    scan_source_files(&fixture_dir, &root, &mut found);
+    let paths: Vec<&str> = found.iter().map(|(path, _)| path.as_str()).collect();
+
+    let fixture_path = "crates/modv-app/tests/fixtures/notices/milkdrop_ncsa.mlk";
+    assert!(
+        paths.contains(&fixture_path),
+        "the NC-SA scanner ignored the MilkDrop .mlk fixture ({fixture_path}); \
+         the text-extension list must include \"mlk\". found: {paths:?}"
+    );
+
+    assert!(
+        NOTICES.contains(fixture_path),
+        "{fixture_path} carries an NC-SA marker but is not named in \
+         THIRD_PARTY_NOTICES.md"
+    );
+}
+
+#[test]
+fn milkdrop_presets_guide_is_linked_and_has_required_sections() {
+    const DOC: &str = "docs/milkdrop-presets.md";
+    const PARITY: &str = include_str!("../../../docs/vmodv-parity-map.md");
+
+    assert!(
+        README.contains(DOC),
+        "the README licence note must link {DOC}"
+    );
+    assert!(
+        PARITY.contains(DOC),
+        "the third-party-loading item in docs/vmodv-parity-map.md must link {DOC}"
+    );
+
+    let path = repo_root().join(DOC);
+    let content = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("{DOC} must exist with the MilkDrop preset guidance: {error}")
+    });
+
+    for heading in [
+        "## What are MilkDrop presets",
+        "## Where to put MilkDrop files",
+        "## User files are read in place, never redistributed",
+        "## Why no presets are bundled",
+        "## Your responsibilities",
+        "## Troubleshooting",
+    ] {
+        assert!(
+            content.contains(heading),
+            "{DOC} is missing the section {heading:?}"
+        );
+    }
+
+    for fact in [
+        ".mlk",
+        "[preset00]",
+        "MODV_USER_MILKDROP_DIR",
+        "500 ms",
+        "THIRD_PARTY_NOTICES.md",
+    ] {
+        assert!(content.contains(fact), "{DOC} must mention {fact:?}");
+    }
+}
+
+#[test]
+fn notices_header_distinguishes_bundled_and_user_supplied_presets() {
+    const LINE: &str =
+        "MilkDrop `.mlk` presets are not bundled: user-supplied presets are read in place and never redistributed by VmodV.";
+    assert!(
+        NOTICES.contains(LINE),
+        "the THIRD_PARTY_NOTICES.md header must distinguish bundled content \
+         from user-supplied MilkDrop presets; expected a line containing {LINE:?}"
+    );
+}
+
+#[test]
+fn credit_milkdrop_extracts_the_fixture_header_author() {
+    let header = include_str!("fixtures/notices/milkdrop_ncsa.mlk");
+    assert_eq!(
+        credit_milkdrop(header).as_deref(),
+        Some("Ada Lovelace"),
+        "credit_milkdrop must read the author from the MilkDrop comment header"
+    );
+}
+
+#[test]
 fn specific_attribution_corrections_are_pinned() {
     let citations: &[(&str, &[&str])] = &[
         // st_Ms2SD1: the file names TDM and states NC-SA 3.0 explicitly.
@@ -604,6 +703,13 @@ fn specific_attribution_corrections_are_pinned() {
     assert!(
         !README.contains("img.shields.io/github/license"),
         "the README must not imply the bundled assets are MIT"
+    );
+
+    // No MilkDrop presets are bundled, so pin the attribution of the NC-SA
+    // guard fixture instead (see milkdrop_ncsa_fixture_is_detected_and_named_in_the_notices).
+    assert!(
+        NOTICES.contains("Ada Lovelace"),
+        "the MilkDrop notice-guard fixture's credited author must be pinned"
     );
 }
 
