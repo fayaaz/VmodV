@@ -1,27 +1,54 @@
-//! CPU-side MilkDrop runtime core (Layer 5a).
+//! MilkDrop runtime: CPU core plus the Layer 5b GPU render passes.
 //!
-//! This module turns a parsed [`MilkDocument`] into an owned, device-free
-//! [`MilkCompiledPreset`], then drives one or more [`MilkInstance`]s frame by
-//! frame. Every piece in here is pure CPU logic and is unit-tested **without a
-//! wgpu device**: equation compilation/evaluation, per-frame globals/audio
-//! mapping, band followers, q/reset persistence and the warped mesh UV grid.
+//! This module turns a parsed [`MilkDocument`] into an owned
+//! [`MilkCompiledPreset`], drives one or more [`MilkInstance`]s frame by frame,
+//! and — when backed by a wgpu device — executes one frame of the MilkDrop
+//! render graph. The CPU path (equation compilation/evaluation, globals/audio
+//! mapping, band followers, q/reset persistence and the warped mesh UV grid) is
+//! pure logic and is unit-tested **without a device**; the GPU path reuses
+//! `crate::test_gpu::gpu`, `crate::isf::runtime::read_texture` and
+//! `crate::isf::runtime::BoundedCache` instead of duplicating device setup.
 //!
-//! # Layering / GPU hand-off (Layer 5b)
+//! # Ownership and construction
 //!
-//! [`MilkRuntime`] is the per-compositor owner defined here. In this CPU-only
-//! cycle it holds only the device-free [`MilkFailureCache`]; the GPU cycle will
-//! attach `wgpu::Device`, `wgpu::Queue`, a pipeline cache keyed by module name
-//! and a sampler cache to it (behind a constructor like
-//! `MilkRuntime::with_device(device, queue)`), without changing any of the
-//! types below. In particular:
+//! [`MilkRuntime`] is the per-compositor owner. [`MilkRuntime::default`] is
+//! device-free and keeps the CPU tests self-contained; a GPU-backed runtime is
+//! built with [`MilkRuntime::new`]:
 //!
-//! * [`MilkCompiledPreset`] already owns both translated WGSL shader modules
-//!   ([`warp`]/[`comp`]); the GPU cycle builds `wgpu::RenderPipeline`s from
-//!   `compiled.warp.wgsl` / `compiled.comp.wgsl`.
-//! * [`MilkMesh::uvs`] is the vertex buffer the GPU cycle uploads once per
-//!   frame to drive the warp pass.
-//! * The wave/spectrum arrays copied onto [`MilkInstance`] become the shader
-//!   uniform/storage buffers for the wave consumers.
+//! ```ignore
+//! let runtime = MilkRuntime::new(Arc::new(device), Arc::new(queue), 4);
+//! ```
+//!
+//! `new` keeps the device/queue as `Arc`s and bounds the pipeline cache to
+//! `cache_capacity` entries (at least one; four matches the ISF runtime's
+//! convention). The runtime also owns a [`MilkFailureCache`] for compilation
+//! failures and a lazily populated, `Arc<Mutex<_>>`-wrapped GPU cache of
+//! bind-group layouts, samplers, a shared full-screen vertex module and render
+//! pipelines. None of this changes the CPU API below.
+//!
+//! # Render pipeline (Layer 5b)
+//!
+//! [`MilkRuntime::render`] encodes one command buffer with six full-screen
+//! passes, in MilkDrop's order:
+//!
+//! 1. **warp** — the translated warp WGSL resamples the previous composited
+//!    frame (`sampler_main`) at the mesh UVs carried in `uv_orig`.
+//! 2. **blur1/2/3** — populate the three `GetBlur{1,2,3}` targets. These are
+//!    currently plain texture copies; real blur kernels are a deliberate
+//!    simplification deferred to the wave/shape overlay cycle.
+//! 3. **comp** — the translated comp WGSL samples the warped frame and produces
+//!    the composite colour.
+//! 4. **output** — post-processing into the caller-supplied target:
+//!    `gammaadj`, `invert` and `red_blue` are applied exactly, while
+//!    `brighten`, `darken` and `solarize` (booleans in a `.mlk`) use a fixed
+//!    small strength because their per-pixel `q` equations are not evaluated
+//!    here. The exact arithmetic lives in `OUTPUT_FRAGMENT_WGSL`.
+//!
+//! [`MilkGpuTargets`] owns the five `Rgba8Unorm` intermediate textures and
+//! reallocates them only when the size changes. Wave/shape overlays are deferred
+//! to the next cycle, so the mesh UV grid is not uploaded and the translated
+//! shaders read `uv_orig` from the uniform block instead; the wave/spectrum
+//! arrays copied onto [`MilkInstance`] are not yet consumed by any pass.
 //!
 //! # Per-frame contract (what the tests pin down)
 //!
@@ -207,6 +234,44 @@ impl MilkGpuCache {
         }
     }
 
+    /// Filterable 2D float texture binding visible to the fragment stage.
+    fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }
+    }
+
+    /// Filtering sampler binding visible to the fragment stage.
+    fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        }
+    }
+
+    /// The single 256-byte uniform binding visible to the fragment stage.
+    fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
+            },
+            count: None,
+        }
+    }
+
     /// Lazily create the device-owned objects common to every pass.
     fn ensure_common(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if self.sampler.is_none() {
@@ -269,32 +334,15 @@ impl MilkGpuCache {
             }));
         }
         if self.milk_layout.is_none() {
+            // Binding 0 is the uniform; bindings 1..=16 are eight
+            // (texture, sampler) pairs in `BUILTIN_SAMPLERS` order.
             let mut entries = Vec::with_capacity(17);
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
-                },
-                count: None,
-            });
+            entries.push(Self::uniform_entry(0));
             for binding in 1..=16u32 {
-                let ty = if binding % 2 == 1 {
-                    wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    }
+                entries.push(if binding % 2 == 1 {
+                    Self::texture_entry(binding)
                 } else {
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
-                };
-                entries.push(wgpu::BindGroupLayoutEntry {
-                    binding,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty,
-                    count: None,
+                    Self::sampler_entry(binding)
                 });
             }
             self.milk_layout = Some(device.create_bind_group_layout(
@@ -308,24 +356,7 @@ impl MilkGpuCache {
             self.pass_layout = Some(device.create_bind_group_layout(
                 &wgpu::BindGroupLayoutDescriptor {
                     label: Some("modV MilkDrop blur layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                    ],
+                    entries: &[Self::texture_entry(0), Self::sampler_entry(1)],
                 },
             ));
         }
@@ -334,32 +365,9 @@ impl MilkGpuCache {
                 &wgpu::BindGroupLayoutDescriptor {
                     label: Some("modV MilkDrop output layout"),
                     entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
+                        Self::uniform_entry(0),
+                        Self::texture_entry(1),
+                        Self::sampler_entry(2),
                     ],
                 },
             ));
@@ -368,6 +376,15 @@ impl MilkGpuCache {
 
     /// Fetch a cached pipeline or build it once. Invalid WGSL is reported as a
     /// typed `Draw` error and remembered so it is not compiled again.
+    ///
+    /// Validation uses naga's `parse_str` rather than a wgpu error scope. The
+    /// shader source is either produced by our own translator (syntactically
+    /// valid by construction) or supplied at runtime by a caller; a parse
+    /// failure catches the latter (e.g. an empty or truncated `main`) and keeps
+    /// the failure path synchronous. Semantic faults that only wgpu can see are
+    /// reported through the device's normal validation-error handling; adding
+    /// an error scope here would require blocking on `pop_error_scope()` inside
+    /// the cache mutex for no test-visible benefit in this cycle.
     fn pipeline(
         &mut self,
         device: &wgpu::Device,
@@ -384,6 +401,8 @@ impl MilkGpuCache {
                 "cached invalid MilkDrop WGSL for {entry}"
             )));
         }
+        // Cheap syntactic guard: translated WGSL is valid by construction, so
+        // this only trips on caller-supplied garbage (see the method docs).
         if naga::front::wgsl::parse_str(source).is_err() {
             self.failed.insert(key);
             return Err(MilkRuntimeError::Draw(format!(
@@ -442,8 +461,8 @@ impl MilkGpuCache {
 /// Audio snapshot consumed for one frame.
 ///
 /// `wave` and `byte_frequency_data` are kept as `Vec`s (rather than fixed
-/// arrays) so callers can pass whatever their capture backend produced; the
-/// runtime copies them onto the instance for the GPU cycle. The canonical
+/// arrays) so callers can pass whatever their capture backend produced;
+/// [`begin_frame`] copies them onto the instance each frame. The canonical
 /// lengths are 1024 samples each.
 #[derive(Clone, Debug, Default)]
 pub struct MilkAudio {
@@ -500,9 +519,9 @@ pub enum MilkRuntimeError {
 /// Names of modules whose preset failed to compile.
 ///
 /// Device-free and shareable: the compositor owns one cache per registry and
-/// calls [`MilkFailureCache::clear`] from `Compositor::set_registry` (next
-/// integration cycle). Interior mutability keeps the `compile_preset(&cache)`
-/// signature borrow-only.
+/// clears it (via [`MilkRuntime::clear_failures`]) when the registry is
+/// replaced. Interior mutability keeps the `compile_preset(&cache)` signature
+/// borrow-only.
 #[derive(Clone, Debug, Default)]
 pub struct MilkFailureCache {
     // `Arc` keeps the handle `Clone` (and shareable with the compositor) while
@@ -537,9 +556,9 @@ impl MilkFailureCache {
 
 /// Serialized `MilkUniforms` payload for one frame.
 ///
-/// The GPU cycle fills this with the MilkDrop scalars/vec2s described by
+/// This holds the MilkDrop scalars/vec2s described by
 /// `milkdrop::translate::UNIFORM_MEMBERS` (globals, base vals, rand values and
-/// derived quantities). [`MilkUniforms::to_bytes`] always returns exactly
+/// derived quantities) for one frame. [`MilkUniforms::to_bytes`] always returns exactly
 /// [`MILK_UNIFORM_STRIDE`] bytes so the buffer can be used with dynamic offsets.
 pub struct MilkUniforms {
     bytes: Vec<u8>,
@@ -564,20 +583,10 @@ impl MilkUniforms {
         } else {
             1.0
         };
-        let rand_frame = instance.pool.get("rand_frame");
-        let rand_preset = instance.pool.get("rand_preset");
-        let deterministic_rand =
-            |salt: f32| -> f32 { ((frame.frame_index as f32 + 1.0) * 0.618_034 + salt).fract() };
-        let rand_frame = if rand_frame == 0.0 {
-            deterministic_rand(0.25)
-        } else {
-            rand_frame
-        };
-        let rand_preset = if rand_preset == 0.0 {
-            deterministic_rand(0.75)
-        } else {
-            rand_preset
-        };
+        // A zero pool value means "never assigned"; derive a deterministic
+        // stand-in so two instances with the same seed still agree.
+        let rand_frame = effective_rand(instance.pool.get("rand_frame"), 0.25, frame.frame_index);
+        let rand_preset = effective_rand(instance.pool.get("rand_preset"), 0.75, frame.frame_index);
         let scalars = [
             g.time,                          // time
             g.frame,                         // frame
@@ -729,7 +738,7 @@ impl MilkGpuTargets {
 ///
 /// Holds the shared failure cache plus optional device/queue handles and the
 /// bounded pipeline/sampler caches. [`MilkRuntime::default`] stays device-free
-/// so the Layer 5a CPU tests keep compiling; the compositor constructs one with
+/// so the CPU tests need no adapter; the compositor constructs one with
 /// [`MilkRuntime::new`] and calls [`MilkRuntime::render`] once per module.
 #[derive(Clone)]
 pub struct MilkRuntime {
@@ -811,6 +820,9 @@ impl MilkRuntime {
             .queue
             .as_ref()
             .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop runtime has no wgpu queue".into()))?;
+        // `mesh` and `cache_capacity` are intentionally unused this cycle: the
+        // UV grid is deferred to the wave/shape overlay passes, and the cache
+        // capacity is applied in `new`/`default` when the cache is created.
         let _ = (mesh, self.cache_capacity);
 
         targets.resize(device, frame.width.max(1), frame.height.max(1));
@@ -1253,6 +1265,16 @@ pub fn evaluate_mesh(
 
 // --- GPU helpers -----------------------------------------------------------
 
+/// Use the EEL value when the pool has assigned it, otherwise derive a stable
+/// per-frame stand-in so rand-driven output remains deterministic.
+fn effective_rand(value: f32, salt: f32, frame_index: u32) -> f32 {
+    if value == 0.0 {
+        ((frame_index as f32 + 1.0) * 0.618_034 + salt).fract()
+    } else {
+        value
+    }
+}
+
 fn write_f32(bytes: &mut [u8], offset: usize, value: f32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
 }
@@ -1283,6 +1305,33 @@ fn create_target(device: &wgpu::Device, width: u32, height: u32, label: &str) ->
     })
 }
 
+/// Uniform-buffer entry at binding 0, shared by the warp/comp and output
+/// passes. The whole 256-byte stride is bound so one buffer serves both.
+fn uniform_bind_entry(buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry {
+        binding: 0,
+        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer,
+            offset: 0,
+            size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
+        }),
+    }
+}
+
+fn texture_bind(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry {
+        binding,
+        resource: wgpu::BindingResource::TextureView(view),
+    }
+}
+
+fn sampler_bind(binding: u32, sampler: &wgpu::Sampler) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry {
+        binding,
+        resource: wgpu::BindingResource::Sampler(sampler),
+    }
+}
+
 /// Bind the uniform block plus the eight built-in sampler pairs of a
 /// translated warp/comp shader. Bindings follow `translate.rs`: binding 0 is
 /// the uniform, `sampler_main` is `main_view`, blur samplers 1..3 are the
@@ -1297,14 +1346,7 @@ fn milk_bind_group(
     dummy_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let mut entries = Vec::with_capacity(17);
-    entries.push(wgpu::BindGroupEntry {
-        binding: 0,
-        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-            buffer: uniform,
-            offset: 0,
-            size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
-        }),
-    });
+    entries.push(uniform_bind_entry(uniform));
     let textures: [&wgpu::TextureView; 8] = [
         main_view,
         dummy_view,
@@ -1317,14 +1359,8 @@ fn milk_bind_group(
     ];
     for (index, view) in textures.iter().enumerate() {
         let base = (index as u32) * 2 + 1;
-        entries.push(wgpu::BindGroupEntry {
-            binding: base,
-            resource: wgpu::BindingResource::TextureView(view),
-        });
-        entries.push(wgpu::BindGroupEntry {
-            binding: base + 1,
-            resource: wgpu::BindingResource::Sampler(sampler),
-        });
+        entries.push(texture_bind(base, view));
+        entries.push(sampler_bind(base + 1, sampler));
     }
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("modV MilkDrop shader bind group"),
@@ -1342,16 +1378,7 @@ fn pass_bind_group(
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("modV MilkDrop blur bind group"),
         layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
+        entries: &[texture_bind(0, view), sampler_bind(1, sampler)],
     })
 }
 
@@ -1366,22 +1393,9 @@ fn output_bind_group(
         label: Some("modV MilkDrop output bind group"),
         layout,
         entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: uniform,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
-                }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
+            uniform_bind_entry(uniform),
+            texture_bind(1, view),
+            sampler_bind(2, sampler),
         ],
     })
 }
