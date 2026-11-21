@@ -62,6 +62,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use crate::isf::runtime::BoundedCache;
 use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool, compile, run_frame, run_pixel};
 use crate::milkdrop::preset::{MilkBaseVals, MilkDocument, extract_shader_body};
 use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_milk_shader};
@@ -76,6 +77,367 @@ const WARP_AMOUNT_SCALE: f32 = 0.01;
 const WARP_EPS: f32 = 1e-6;
 /// Sampling UV used when the warp arithmetic would otherwise be non-finite.
 const UV_FALLBACK: f32 = 0.5;
+
+// --- GPU pass shaders (Layer 5b) -------------------------------------------
+//
+// The warp/comp fragment stages come from `translate::translate_milk_shader`
+// and already declare `@group(0) @binding(0)` (uniform) plus eight built-in
+// sampler pairs at bindings 1..=16 (see `translate::BUILTIN_SAMPLERS`). A single
+// full-screen triangle vertex stage drives every pass; the mesh UV grid is
+// carried in the uniform block's `uv_orig` slot for this cycle (waves/shapes
+// overlays remain a separate, later cycle).
+
+/// Shared full-screen-triangle vertex stage. `@location(0)` carries an
+/// upright (top-left origin) UV to the fragment stages.
+const FULLSCREEN_VERTEX_WGSL: &str = r#"
+struct MilkVertexOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> MilkVertexOut {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    let position = positions[index];
+    var out: MilkVertexOut;
+    out.position = vec4<f32>(position, 0.0, 1.0);
+    out.uv = vec2<f32>((position.x + 1.0) * 0.5, (1.0 - position.y) * 0.5);
+    return out;
+}
+"#;
+
+/// Plain texture copy, used by the three blur passes. Real blur kernels are
+/// intentionally deferred: these passes only need to populate the blur
+/// targets so `GetBlur{1,2,3}` samplers have valid inputs.
+const BLUR_FRAGMENT_WGSL: &str = r#"
+@group(0) @binding(0) var src_texture: texture_2d<f32>;
+@group(0) @binding(1) var src_sampler: sampler;
+struct MilkFragIn { @location(0) uv: vec2<f32> }
+@fragment
+fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
+    return vec4<f32>(textureSample(src_texture, src_sampler, input.uv).rgb, 1.0);
+}
+"#;
+
+/// Final output pass. Applies the documented subset of MilkDrop's post
+/// ops in the canonical order: gamma adjust, brighten/darken, solarize,
+/// invert, red/blue stereo swap. `brighten`/`darken`/`solarize` are booleans
+/// in a `.mlk` (their per-pixel `q` equations are not evaluated here), so they
+/// are applied with a small fixed strength — a deliberate simplification
+/// documented in the module notes. gamma/invert/red_blue are exact.
+const OUTPUT_FRAGMENT_WGSL: &str = r#"
+struct MilkOutputUniforms {
+    _pad0: vec4<f32>, _pad1: vec4<f32>, _pad2: vec4<f32>, _pad3: vec4<f32>,
+    _pad4: vec4<f32>, _pad5: vec4<f32>, _pad6: vec4<f32>, _pad7: vec4<f32>,
+    _pad8: vec4<f32>, _pad9: vec4<f32>, _pad10: vec4<f32>, _pad11: vec4<f32>,
+    gammaadj: f32,
+    brighten: f32,
+    darken: f32,
+    invert: f32,
+    solarize: f32,
+    red_blue: f32,
+    rand_frame: f32,
+    rand_preset: f32,
+    brightness: f32,
+    decay: f32,
+}
+@group(0) @binding(0) var<uniform> params: MilkOutputUniforms;
+@group(0) @binding(1) var src_texture: texture_2d<f32>;
+@group(0) @binding(2) var src_sampler: sampler;
+struct MilkFragIn { @location(0) uv: vec2<f32> }
+@fragment
+fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
+    var c = textureSample(src_texture, src_sampler, input.uv).rgb;
+    if (params.gammaadj > 0.0 && params.gammaadj != 1.0) {
+        c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / params.gammaadj));
+    }
+    if (params.brighten != 0.0) { c = c * (1.0 + params.brighten); }
+    if (params.darken != 0.0) { c = c * (1.0 - params.darken); }
+    if (params.solarize != 0.0) {
+        c = select(c, vec3<f32>(1.0) - c, c > vec3<f32>(0.5));
+    }
+    if (params.invert != 0.0) { c = vec3<f32>(1.0) - c; }
+    if (params.red_blue != 0.0) { c = vec3<f32>(c.b, c.g, c.r); }
+    return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+"#;
+
+/// Which bind-group layout a cached pipeline was built against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MilkLayout {
+    /// The translated warp/comp shaders: uniform + 8 sampler pairs.
+    WarpComp,
+    /// The blur passes: one texture + one sampler.
+    Pass,
+    /// The output pass: uniform + one texture + one sampler.
+    Output,
+}
+
+/// Reusable GPU objects shared by every render of one runtime. Kept behind an
+/// `Arc<Mutex<_>>` so `render(&self, ..)` can populate caches while the runtime
+/// stays `Clone` + `Debug` and `Default` remains device-free.
+#[derive(Clone)]
+struct MilkGpuCache {
+    pipelines: BoundedCache<String, wgpu::RenderPipeline>,
+    milk_layout: Option<wgpu::BindGroupLayout>,
+    pass_layout: Option<wgpu::BindGroupLayout>,
+    output_layout: Option<wgpu::BindGroupLayout>,
+    vertex: Option<wgpu::ShaderModule>,
+    sampler: Option<wgpu::Sampler>,
+    dummy: Option<(wgpu::Texture, wgpu::TextureView)>,
+    /// WGSL sources already known to fail validation, so a broken preset is
+    /// reported as a typed [`MilkRuntimeError::Draw`] without recompiling.
+    failed: HashSet<String>,
+}
+
+impl MilkGpuCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            pipelines: BoundedCache::new(capacity),
+            milk_layout: None,
+            pass_layout: None,
+            output_layout: None,
+            vertex: None,
+            sampler: None,
+            dummy: None,
+            failed: HashSet::new(),
+        }
+    }
+
+    /// Lazily create the device-owned objects common to every pass.
+    fn ensure_common(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.sampler.is_none() {
+            self.sampler = Some(device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("modV MilkDrop sampler"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                lod_min_clamp: 0.0,
+                lod_max_clamp: 0.0,
+                compare: None,
+                anisotropy_clamp: 1,
+                border_color: None,
+            }));
+        }
+        if self.dummy.is_none() {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("modV MilkDrop dummy sampler"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &[0u8; 4],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4),
+                    rows_per_image: Some(1),
+                },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.dummy = Some((texture, view));
+        }
+        if self.vertex.is_none() {
+            self.vertex = Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("modV MilkDrop vertex"),
+                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_VERTEX_WGSL.into()),
+            }));
+        }
+        if self.milk_layout.is_none() {
+            let mut entries = Vec::with_capacity(17);
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
+                },
+                count: None,
+            });
+            for binding in 1..=16u32 {
+                let ty = if binding % 2 == 1 {
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }
+                } else {
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
+                };
+                entries.push(wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty,
+                    count: None,
+                });
+            }
+            self.milk_layout = Some(device.create_bind_group_layout(
+                &wgpu::BindGroupLayoutDescriptor {
+                    label: Some("modV MilkDrop shader layout"),
+                    entries: &entries,
+                },
+            ));
+        }
+        if self.pass_layout.is_none() {
+            self.pass_layout = Some(device.create_bind_group_layout(
+                &wgpu::BindGroupLayoutDescriptor {
+                    label: Some("modV MilkDrop blur layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                    ],
+                },
+            ));
+        }
+        if self.output_layout.is_none() {
+            self.output_layout = Some(device.create_bind_group_layout(
+                &wgpu::BindGroupLayoutDescriptor {
+                    label: Some("modV MilkDrop output layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                    ],
+                },
+            ));
+        }
+    }
+
+    /// Fetch a cached pipeline or build it once. Invalid WGSL is reported as a
+    /// typed `Draw` error and remembered so it is not compiled again.
+    fn pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        key: String,
+        source: &str,
+        entry: &str,
+        kind: MilkLayout,
+    ) -> Result<wgpu::RenderPipeline, MilkRuntimeError> {
+        if let Some(pipeline) = self.pipelines.get(&key) {
+            return Ok(pipeline.clone());
+        }
+        if self.failed.contains(&key) {
+            return Err(MilkRuntimeError::Draw(format!(
+                "cached invalid MilkDrop WGSL for {entry}"
+            )));
+        }
+        if naga::front::wgsl::parse_str(source).is_err() {
+            self.failed.insert(key);
+            return Err(MilkRuntimeError::Draw(format!(
+                "invalid WGSL for MilkDrop {entry} pass"
+            )));
+        }
+        let layout = match kind {
+            MilkLayout::WarpComp => self.milk_layout.clone(),
+            MilkLayout::Pass => self.pass_layout.clone(),
+            MilkLayout::Output => self.output_layout.clone(),
+        }
+        .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop bind group layout missing".into()))?;
+        let vertex = self
+            .vertex
+            .clone()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop vertex module missing".into()))?;
+        let fragment = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("modV MilkDrop fragment"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("modV MilkDrop pipeline layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("modV MilkDrop pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vertex,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fragment,
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.pipelines.insert(key, pipeline.clone());
+        Ok(pipeline)
+    }
+}
 
 /// Audio snapshot consumed for one frame.
 ///
@@ -185,11 +547,99 @@ pub struct MilkUniforms {
 
 impl MilkUniforms {
     /// Build the uniform payload for `frame` from the live `instance` state.
-    pub fn from_frame(_instance: &MilkInstance, _frame: &MilkFrameInfo) -> Self {
-        // RED stub: the layout size is right but no values are serialized yet.
-        Self {
-            bytes: vec![0u8; MILK_UNIFORM_STRIDE],
+    ///
+    /// Offsets 0..=191 mirror the 32 scalars + 8 vec2s of
+    /// `translate::UNIFORM_MEMBERS` (the layout the warp/comp WGSL expects).
+    /// Offsets 192..=231 carry the base-val post-processing controls and
+    /// deterministic per-frame rand values consumed by the output pass. Both
+    /// live in one 256-byte slice so a single buffer serves every pass.
+    pub fn from_frame(instance: &MilkInstance, frame: &MilkFrameInfo) -> Self {
+        let mut bytes = vec![0u8; MILK_UNIFORM_STRIDE];
+        let g = &instance.globals;
+        let base = &instance.compiled.doc.base;
+
+        // The 32 scalars of the translated uniform block, in declaration order.
+        let aspect = if g.aspecty.abs() > 1e-6 {
+            g.aspectx / g.aspecty
+        } else {
+            1.0
+        };
+        let rand_frame = instance.pool.get("rand_frame");
+        let rand_preset = instance.pool.get("rand_preset");
+        let deterministic_rand =
+            |salt: f32| -> f32 { ((frame.frame_index as f32 + 1.0) * 0.618_034 + salt).fract() };
+        let rand_frame = if rand_frame == 0.0 {
+            deterministic_rand(0.25)
+        } else {
+            rand_frame
+        };
+        let rand_preset = if rand_preset == 0.0 {
+            deterministic_rand(0.75)
+        } else {
+            rand_preset
+        };
+        let scalars = [
+            g.time,                          // time
+            g.frame,                         // frame
+            g.fps,                           // fps
+            0.0,                             // progress
+            base.decay as f32,               // decay
+            g.bass,                          // bass
+            g.mid,                           // mid
+            g.treb,                          // treb
+            g.bass_att,                      // bass_att
+            g.mid_att,                       // mid_att
+            g.treb_att,                      // treb_att
+            (g.bass + g.mid + g.treb) / 3.0, // vol
+            rand_preset,                     // rand_preset
+            rand_frame,                      // rand_frame
+            aspect,                          // aspect
+            0.0,                             // slow_roam_cos
+            0.0,                             // slow_roam_sin
+            0.0,                             // roam_cos
+            0.0,                             // roam_sin
+            0.0,                             // hue_shader
+            1.0,                             // scale1 (no preset field; neutral)
+            1.0,                             // scale2
+            1.0,                             // scale3
+            0.0,                             // bias1
+            0.0,                             // bias2
+            0.0,                             // bias3
+            base.b1n as f32,                 // blur1_min
+            base.b2n as f32,                 // blur2_min
+            base.b3n as f32,                 // blur3_min
+            1.0,                             // blur1_max
+            1.0,                             // blur2_max
+            1.0,                             // blur3_max
+        ];
+        for (index, value) in scalars.iter().enumerate() {
+            write_f32(&mut bytes, index * 4, *value);
         }
+
+        // The eight vec2 members start at byte 128 (8-byte aligned).
+        let size = [frame.width as f32, frame.height as f32];
+        write_vec2(&mut bytes, 128, size);
+        write_vec2(&mut bytes, 136, size);
+        write_vec2(&mut bytes, 144, size);
+        write_vec2(&mut bytes, 152, size);
+        write_vec2(&mut bytes, 160, size);
+        write_vec2(&mut bytes, 168, [0.5, 0.5]); // uv_orig (texture centre)
+        write_vec2(&mut bytes, 176, [0.5, 0.5]); // rad
+        write_vec2(&mut bytes, 184, [0.0, 0.0]); // ang
+
+        // Output-pass controls (see OUTPUT_FRAGMENT_WGSL).
+        write_f32(&mut bytes, 192, base.gammaadj as f32);
+        write_f32(&mut bytes, 196, if base.brighten { 0.2 } else { 0.0 });
+        write_f32(&mut bytes, 200, if base.darken { 0.2 } else { 0.0 });
+        write_f32(&mut bytes, 204, if base.invert { 1.0 } else { 0.0 });
+        write_f32(&mut bytes, 208, if base.solarize { 1.0 } else { 0.0 });
+        write_f32(&mut bytes, 212, if base.red_blue { 1.0 } else { 0.0 });
+        write_f32(&mut bytes, 216, rand_frame);
+        write_f32(&mut bytes, 220, rand_preset);
+        write_f32(&mut bytes, 224, base.brightness as f32);
+        write_f32(&mut bytes, 228, base.decay as f32);
+
+        Self { bytes }
     }
 
     /// The WGSL-aligned bytes to upload into `@group(0) @binding(0)`.
@@ -213,21 +663,50 @@ pub struct MilkGpuTargets {
 
 impl MilkGpuTargets {
     /// Allocate the warp/comp/blur targets at `width`×`height`.
-    pub fn new(_device: &wgpu::Device, width: u32, height: u32) -> Self {
-        // RED stub: dimensions are recorded but no textures are allocated yet.
-        Self {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let mut targets = Self {
             width,
             height,
             warp: None,
             comp: None,
             blur: [None, None, None],
-        }
+        };
+        targets.allocate(device);
+        targets
+    }
+
+    /// Allocate (or replace) all five intermediate textures.
+    fn allocate(&mut self, device: &wgpu::Device) {
+        self.warp = Some(create_target(
+            device,
+            self.width,
+            self.height,
+            "modV MilkDrop warp",
+        ));
+        self.comp = Some(create_target(
+            device,
+            self.width,
+            self.height,
+            "modV MilkDrop comp",
+        ));
+        self.blur = [0, 1, 2].map(|index| {
+            Some(create_target(
+                device,
+                self.width,
+                self.height,
+                &format!("modV MilkDrop blur{index}"),
+            ))
+        });
     }
 
     /// Reallocate only when the requested size differs from the current one.
-    pub fn resize(&mut self, _device: &wgpu::Device, width: u32, height: u32) {
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if self.width == width && self.height == height {
+            return;
+        }
         self.width = width;
         self.height = height;
+        self.allocate(device);
     }
 
     /// Warp-pass target (previous frame resampled through the mesh UVs).
@@ -258,6 +737,9 @@ pub struct MilkRuntime {
     device: Option<Arc<wgpu::Device>>,
     queue: Option<Arc<wgpu::Queue>>,
     cache_capacity: usize,
+    /// Device-owned pipeline/sampler/layout objects behind interior
+    /// mutability, so `render(&self, ..)` can populate them.
+    cache: Arc<Mutex<MilkGpuCache>>,
 }
 
 impl Default for MilkRuntime {
@@ -267,6 +749,7 @@ impl Default for MilkRuntime {
             device: None,
             queue: None,
             cache_capacity: 4,
+            cache: Arc::new(Mutex::new(MilkGpuCache::new(4))),
         }
     }
 }
@@ -285,11 +768,13 @@ impl MilkRuntime {
     /// Create a runtime backed by `device`/`queue`, with caches bounded to
     /// `cache_capacity` entries (4 matches the ISF runtime's convention).
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, cache_capacity: usize) -> Self {
+        let capacity = cache_capacity.max(1);
         Self {
             failures: MilkFailureCache::new(),
             device: Some(device),
             queue: Some(queue),
-            cache_capacity: cache_capacity.max(1),
+            cache_capacity: capacity,
+            cache: Arc::new(Mutex::new(MilkGpuCache::new(capacity))),
         }
     }
 
@@ -304,6 +789,11 @@ impl MilkRuntime {
     /// `previous` is the last composited frame (bound as `sampler_main` for the
     /// warp pass) and `targets` owns the intermediate warp/comp/blur textures.
     /// A malformed shader yields [`MilkRuntimeError::Draw`] rather than a panic.
+    ///
+    /// The mesh UV grid is not uploaded in this cycle (waves/shapes are a
+    /// separate pass); the translated shaders read `uv_orig` from the uniform
+    /// block instead. The blur passes currently copy their source unchanged —
+    /// real blur kernels are deferred until the wave/shape overlay cycle.
     pub fn render(
         &self,
         instance: &mut MilkInstance,
@@ -313,19 +803,191 @@ impl MilkRuntime {
         targets: &mut MilkGpuTargets,
         output: &wgpu::TextureView,
     ) -> Result<(), MilkRuntimeError> {
-        // RED stub: no passes are submitted yet, so `output` keeps its initial
-        // (black) contents. GREEN replaces this with the real GPU pipeline.
-        let _ = (
-            instance,
-            frame,
-            mesh,
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop runtime has no wgpu device".into()))?;
+        let queue = self
+            .queue
+            .as_ref()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop runtime has no wgpu queue".into()))?;
+        let _ = (mesh, self.cache_capacity);
+
+        targets.resize(device, frame.width.max(1), frame.height.max(1));
+
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.ensure_common(device, queue);
+
+        // Compile (or fetch from the bounded LRU) each pass pipeline. Warp and
+        // comp are keyed by their WGSL so a preset swap invalidates the entry.
+        let warp_key = format!("warp|{}", instance.compiled.warp.wgsl);
+        let comp_key = format!("comp|{}", instance.compiled.comp.wgsl);
+        let warp_pipeline = cache.pipeline(
+            device,
+            warp_key,
+            &instance.compiled.warp.wgsl,
+            "main",
+            MilkLayout::WarpComp,
+        )?;
+        let comp_pipeline = cache.pipeline(
+            device,
+            comp_key,
+            &instance.compiled.comp.wgsl,
+            "main",
+            MilkLayout::WarpComp,
+        )?;
+        let blur_pipeline = cache.pipeline(
+            device,
+            "blur|copy-v1".into(),
+            BLUR_FRAGMENT_WGSL,
+            "fs_main",
+            MilkLayout::Pass,
+        )?;
+        let output_pipeline = cache.pipeline(
+            device,
+            "output|v1".into(),
+            OUTPUT_FRAGMENT_WGSL,
+            "fs_main",
+            MilkLayout::Output,
+        )?;
+
+        // One 256-byte uniform slice serves every pass.
+        let uniform_bytes = MilkUniforms::from_frame(instance, frame).to_bytes();
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("modV MilkDrop uniform buffer"),
+            size: MILK_UNIFORM_STRIDE as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buffer, 0, &uniform_bytes);
+
+        let warp_view = targets
+            .warp_texture()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop warp target missing".into()))?
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let comp_view = targets
+            .comp_texture()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop comp target missing".into()))?
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let blur_views: Vec<wgpu::TextureView> = (0..3)
+            .map(|index| {
+                targets
+                    .blur_texture(index)
+                    .ok_or_else(|| {
+                        MilkRuntimeError::Draw(format!("MilkDrop blur{index} target missing"))
+                    })
+                    .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            })
+            .collect::<Result<_, _>>()?;
+        let blur_refs: [&wgpu::TextureView; 3] = [&blur_views[0], &blur_views[1], &blur_views[2]];
+
+        let sampler = cache
+            .sampler
+            .clone()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop sampler missing".into()))?;
+        let dummy_view = cache
+            .dummy
+            .as_ref()
+            .map(|(_, view)| view.clone())
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop dummy texture missing".into()))?;
+        let milk_layout = cache
+            .milk_layout
+            .clone()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop shader layout missing".into()))?;
+        let pass_layout = cache
+            .pass_layout
+            .clone()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop blur layout missing".into()))?;
+        let output_layout = cache
+            .output_layout
+            .clone()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop output layout missing".into()))?;
+
+        let warp_bind = milk_bind_group(
+            device,
+            &milk_layout,
+            &uniform_buffer,
             previous,
-            targets,
-            output,
-            &self.device,
-            &self.queue,
-            self.cache_capacity,
+            blur_refs,
+            &sampler,
+            &dummy_view,
         );
+        let comp_bind = milk_bind_group(
+            device,
+            &milk_layout,
+            &uniform_buffer,
+            &warp_view,
+            blur_refs,
+            &sampler,
+            &dummy_view,
+        );
+        let output_bind = output_bind_group(
+            device,
+            &output_layout,
+            &uniform_buffer,
+            &comp_view,
+            &sampler,
+        );
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("modV MilkDrop frame"),
+        });
+
+        // warp: resample `previous` through the (uniform) mesh UVs.
+        encode_fullscreen_pass(
+            &mut encoder,
+            "milkdrop warp",
+            &warp_view,
+            &warp_pipeline,
+            &warp_bind,
+        );
+        // blur1/2/3: populate the blur targets feeding GetBlur{1,2,3}. These are
+        // plain copies in this cycle (real kernels are deferred).
+        let blur1_bind = pass_bind_group(device, &pass_layout, previous, &sampler);
+        encode_fullscreen_pass(
+            &mut encoder,
+            "milkdrop blur1",
+            &blur_views[0],
+            &blur_pipeline,
+            &blur1_bind,
+        );
+        let blur2_bind = pass_bind_group(device, &pass_layout, &blur_views[0], &sampler);
+        encode_fullscreen_pass(
+            &mut encoder,
+            "milkdrop blur2",
+            &blur_views[1],
+            &blur_pipeline,
+            &blur2_bind,
+        );
+        let blur3_bind = pass_bind_group(device, &pass_layout, &blur_views[1], &sampler);
+        encode_fullscreen_pass(
+            &mut encoder,
+            "milkdrop blur3",
+            &blur_views[2],
+            &blur_pipeline,
+            &blur3_bind,
+        );
+        // comp: translated composite shader, sampling the warped frame.
+        encode_fullscreen_pass(
+            &mut encoder,
+            "milkdrop comp",
+            &comp_view,
+            &comp_pipeline,
+            &comp_bind,
+        );
+        // output: post-processing into the caller-supplied target.
+        encode_fullscreen_pass(
+            &mut encoder,
+            "milkdrop output",
+            output,
+            &output_pipeline,
+            &output_bind,
+        );
+
+        queue.submit(Some(encoder.finish()));
         Ok(())
     }
 }
@@ -587,6 +1249,169 @@ pub fn evaluate_mesh(
     }
 
     Ok(MilkMesh { uvs, width, height })
+}
+
+// --- GPU helpers -----------------------------------------------------------
+
+fn write_f32(bytes: &mut [u8], offset: usize, value: f32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
+}
+
+fn write_vec2(bytes: &mut [u8], offset: usize, value: [f32; 2]) {
+    write_f32(bytes, offset, value[0]);
+    write_f32(bytes, offset + 4, value[1]);
+}
+
+/// An off-screen MilkDrop target: `Rgba8Unorm`, renderable, sampleable and
+/// readable back for tests/previews.
+fn create_target(device: &wgpu::Device, width: u32, height: u32, label: &str) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}
+
+/// Bind the uniform block plus the eight built-in sampler pairs of a
+/// translated warp/comp shader. Bindings follow `translate.rs`: binding 0 is
+/// the uniform, `sampler_main` is `main_view`, blur samplers 1..3 are the
+/// blur targets and every other built-in uses the 1×1 dummy texture.
+fn milk_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform: &wgpu::Buffer,
+    main_view: &wgpu::TextureView,
+    blur_views: [&wgpu::TextureView; 3],
+    sampler: &wgpu::Sampler,
+    dummy_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    let mut entries = Vec::with_capacity(17);
+    entries.push(wgpu::BindGroupEntry {
+        binding: 0,
+        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: uniform,
+            offset: 0,
+            size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
+        }),
+    });
+    let textures: [&wgpu::TextureView; 8] = [
+        main_view,
+        dummy_view,
+        dummy_view,
+        dummy_view,
+        dummy_view,
+        blur_views[0],
+        blur_views[1],
+        blur_views[2],
+    ];
+    for (index, view) in textures.iter().enumerate() {
+        let base = (index as u32) * 2 + 1;
+        entries.push(wgpu::BindGroupEntry {
+            binding: base,
+            resource: wgpu::BindingResource::TextureView(view),
+        });
+        entries.push(wgpu::BindGroupEntry {
+            binding: base + 1,
+            resource: wgpu::BindingResource::Sampler(sampler),
+        });
+    }
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("modV MilkDrop shader bind group"),
+        layout,
+        entries: &entries,
+    })
+}
+
+fn pass_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("modV MilkDrop blur bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+fn output_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform: &wgpu::Buffer,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("modV MilkDrop output bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: uniform,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+fn encode_fullscreen_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind_group, &[]);
+    pass.draw(0..3, 0..1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1118,7 +1943,7 @@ mod gpu_tests {
         let pixels = read_texture(&device, &queue, &output).expect("read the output back");
         assert_pixels_near(&pixels, [64, 128, 191], 8, "warp passthrough");
         assert!(
-            pixels.chunks_exact(4).any(|pixel| pixel[0] != 0),
+            pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[0] != 0),
             "the passthrough output must not stay black"
         );
     }
