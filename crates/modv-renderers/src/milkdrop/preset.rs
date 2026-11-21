@@ -5,11 +5,20 @@
 //! lowercases and compatibility-renames keys, concatenates numbered lines in
 //! numeric order, and records unrecognised keys in [`MilkDocument::diagnostics`]
 //! instead of dropping them silently.
+//!
+//! [`MilkDocument::warp`] and [`MilkDocument::comp`] keep the assembled source
+//! (with the `shader_body` sentinel and braces intact, noise-sampler
+//! redeclarations removed). [`extract_shader_body`] is the canonical way for
+//! later layers to split that source into a prelude and a body, so brace
+//! matching and noise stripping are implemented in exactly one place.
 
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::fmt;
+
+/// Number of wave/shape slots a MilkDrop preset can define.
+const SECTION_COUNT: usize = 4;
 
 /// Errors from [`parse_milk`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,70 +238,241 @@ fn parse_bool(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
 }
 
+/// A key family mapping onto one scalar field of [`MilkBaseVals`].
+///
+/// `keys[0]` is the canonical MilkDrop name; the remaining entries are the
+/// compatibility spellings that appear in real `.mlk` files (`f`/`b`/`n`
+/// prefixes and legacy names). Keeping the aliases beside the setter makes
+/// the rename map impossible to drift from the field it feeds.
+struct BaseVal {
+    keys: &'static [&'static str],
+    set: fn(&mut MilkBaseVals, &str),
+}
+
+/// Canonical key → setter table. A line is matched against each family once;
+/// ordering is therefore irrelevant (unlike a long `match` with fallthrough).
+static BASE_VALS: &[BaseVal] = &[
+    BaseVal {
+        keys: &["decay", "fdecay"],
+        set: |b, v| b.decay = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["gammaadj", "fgammaadj"],
+        set: |b, v| b.gammaadj = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["zoom", "fzoom"],
+        set: |b, v| b.zoom = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["zoomexp", "fzoomexponent"],
+        set: |b, v| b.zoomexp = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["warp", "fwarp"],
+        set: |b, v| b.warp = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["rot", "frot"],
+        set: |b, v| b.rot = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["cx", "fcx"],
+        set: |b, v| b.cx = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["cy", "fcy"],
+        set: |b, v| b.cy = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["dx", "fdx"],
+        set: |b, v| b.dx = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["dy", "fdy"],
+        set: |b, v| b.dy = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["sx", "fsx"],
+        set: |b, v| b.sx = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["sy", "fsy"],
+        set: |b, v| b.sy = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["echo_zoom", "fvideoechozoom"],
+        set: |b, v| b.echo_zoom = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["echo_alpha", "fvideoechoalpha"],
+        set: |b, v| b.echo_alpha = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["echo_orient", "nvideoechoorientation"],
+        set: |b, v| b.echo_orient = parse_i64(v),
+    },
+    BaseVal {
+        keys: &["wave_mode", "nwavemode"],
+        set: |b, v| b.wave_mode = parse_i64(v),
+    },
+    BaseVal {
+        keys: &["additivewave", "badditivewaves"],
+        set: |b, v| b.additivewave = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["wave_dots", "bwavedots"],
+        set: |b, v| b.wave_dots = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["wave_thick", "bwavethick"],
+        set: |b, v| b.wave_thick = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["wave_brighten", "bmaximizewavecolor"],
+        set: |b, v| b.wave_brighten = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["wrap", "btexwrap"],
+        set: |b, v| b.wrap = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["darken_center", "bdarkencenter"],
+        set: |b, v| b.darken_center = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["red_blue", "bredbluestereo"],
+        set: |b, v| b.red_blue = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["brighten", "bbrighten"],
+        set: |b, v| b.brighten = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["darken", "bdarken"],
+        set: |b, v| b.darken = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["solarize", "bsolarize"],
+        set: |b, v| b.solarize = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["invert", "binvert"],
+        set: |b, v| b.invert = parse_bool(v),
+    },
+    BaseVal {
+        keys: &["wave_a", "fwavealpha"],
+        set: |b, v| b.wave_a = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_scale", "fwavescale"],
+        set: |b, v| b.wave_scale = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_smoothing", "fwavesmoothing"],
+        set: |b, v| b.wave_smoothing = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_mystery", "fwaveparam"],
+        set: |b, v| b.wave_mystery = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["modwavealphastart", "fmodwavealphastart"],
+        set: |b, v| b.modwavealphastart = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["modwavealphaend", "fmodwavealphaend"],
+        set: |b, v| b.modwavealphaend = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["warpanimspeed", "fwarpanimspeed"],
+        set: |b, v| b.warpanimspeed = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["warpscale", "fwarpscale"],
+        set: |b, v| b.warpscale = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["mv_x", "nmotionvectorsx"],
+        set: |b, v| b.mv_x = parse_i64(v),
+    },
+    BaseVal {
+        keys: &["mv_y", "nmotionvectorsy"],
+        set: |b, v| b.mv_y = parse_i64(v),
+    },
+    BaseVal {
+        keys: &["mv_a"],
+        set: |b, v| b.mv_a = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["mv_r"],
+        set: |b, v| b.mv_r = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["mv_g"],
+        set: |b, v| b.mv_g = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["mv_b"],
+        set: |b, v| b.mv_b = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["mv_len"],
+        set: |b, v| b.mv_len = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["ob_size"],
+        set: |b, v| b.ob_size = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["ob_a"],
+        set: |b, v| b.ob_a = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["ib_size"],
+        set: |b, v| b.ib_size = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["ib_a"],
+        set: |b, v| b.ib_a = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["b1n", "fb1n"],
+        set: |b, v| b.b1n = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["b2n", "fb2n"],
+        set: |b, v| b.b2n = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["b3n", "fb3n"],
+        set: |b, v| b.b3n = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["brightness", "fbrightness"],
+        set: |b, v| b.brightness = parse_f64(v),
+    },
+];
+
+/// Metadata keys that are valid in a preset but carry no scalar state.
+static METADATA_KEYS: &[&str] = &[
+    "milkdrop_preset_version",
+    "frating",
+    "fshader",
+    "fpreview",
+    "author",
+    "desc",
+    "description",
+];
+
 /// Apply one `key=value` base val to `base`. `key` is already lowercased;
-/// MilkDrop compatibility aliases are folded onto canonical field names here.
+/// compatibility aliases are folded onto canonical fields via [`BASE_VALS`].
 /// Unrecognised keys are appended to `diagnostics` rather than dropped.
 fn apply_base_val(base: &mut MilkBaseVals, key: &str, value: &str, diagnostics: &mut Vec<String>) {
-    match key {
-        "decay" | "fdecay" => base.decay = parse_f64(value),
-        "gammaadj" | "fgammaadj" => base.gammaadj = parse_f64(value),
-        "zoom" | "fzoom" => base.zoom = parse_f64(value),
-        "zoomexp" | "fzoomexponent" => base.zoomexp = parse_f64(value),
-        "warp" | "fwarp" => base.warp = parse_f64(value),
-        "rot" | "frot" => base.rot = parse_f64(value),
-        "cx" | "fcx" => base.cx = parse_f64(value),
-        "cy" | "fcy" => base.cy = parse_f64(value),
-        "dx" | "fdx" => base.dx = parse_f64(value),
-        "dy" | "fdy" => base.dy = parse_f64(value),
-        "sx" | "fsx" => base.sx = parse_f64(value),
-        "sy" | "fsy" => base.sy = parse_f64(value),
-        "echo_zoom" | "fvideoechozoom" => base.echo_zoom = parse_f64(value),
-        "echo_alpha" | "fvideoechoalpha" => base.echo_alpha = parse_f64(value),
-        "echo_orient" | "nvideoechoorientation" => base.echo_orient = parse_i64(value),
-        "wave_mode" | "nwavemode" => base.wave_mode = parse_i64(value),
-        "additivewave" | "badditivewaves" => base.additivewave = parse_bool(value),
-        "wave_dots" | "bwavedots" => base.wave_dots = parse_bool(value),
-        "wave_thick" | "bwavethick" => base.wave_thick = parse_bool(value),
-        "wave_brighten" | "bmaximizewavecolor" => base.wave_brighten = parse_bool(value),
-        "wrap" | "btexwrap" => base.wrap = parse_bool(value),
-        "darken_center" | "bdarkencenter" => base.darken_center = parse_bool(value),
-        "red_blue" | "bredbluestereo" => base.red_blue = parse_bool(value),
-        "brighten" | "bbrighten" => base.brighten = parse_bool(value),
-        "darken" | "bdarken" => base.darken = parse_bool(value),
-        "solarize" | "bsolarize" => base.solarize = parse_bool(value),
-        "invert" | "binvert" => base.invert = parse_bool(value),
-        "wave_a" | "fwavealpha" => base.wave_a = parse_f64(value),
-        "wave_scale" | "fwavescale" => base.wave_scale = parse_f64(value),
-        "wave_smoothing" | "fwavesmoothing" => base.wave_smoothing = parse_f64(value),
-        "wave_mystery" | "fwaveparam" => base.wave_mystery = parse_f64(value),
-        "modwavealphastart" | "fmodwavealphastart" => base.modwavealphastart = parse_f64(value),
-        "modwavealphaend" | "fmodwavealphaend" => base.modwavealphaend = parse_f64(value),
-        "warpanimspeed" | "fwarpanimspeed" => base.warpanimspeed = parse_f64(value),
-        "warpscale" | "fwarpscale" => base.warpscale = parse_f64(value),
-        "mv_x" | "nmotionvectorsx" => base.mv_x = parse_i64(value),
-        "mv_y" | "nmotionvectorsy" => base.mv_y = parse_i64(value),
-        "mv_a" => base.mv_a = parse_f64(value),
-        "mv_r" => base.mv_r = parse_f64(value),
-        "mv_g" => base.mv_g = parse_f64(value),
-        "mv_b" => base.mv_b = parse_f64(value),
-        "mv_len" => base.mv_len = parse_f64(value),
-        "ob_size" => base.ob_size = parse_f64(value),
-        "ob_a" => base.ob_a = parse_f64(value),
-        "ib_size" => base.ib_size = parse_f64(value),
-        "ib_a" => base.ib_a = parse_f64(value),
-        "b1n" | "fb1n" => base.b1n = parse_f64(value),
-        "b2n" | "fb2n" => base.b2n = parse_f64(value),
-        "b3n" | "fb3n" => base.b3n = parse_f64(value),
-        "brightness" | "fbrightness" => base.brightness = parse_f64(value),
-        // Metadata keys are recognised but carry no scalar state.
-        "milkdrop_preset_version"
-        | "frating"
-        | "fshader"
-        | "fpreview"
-        | "author"
-        | "desc"
-        | "description" => {}
-        _ => diagnostics.push(format!("unknown base val: {key}={value}")),
+    if let Some(entry) = BASE_VALS.iter().find(|entry| entry.keys.contains(&key)) {
+        (entry.set)(base, value);
+    } else if !METADATA_KEYS.contains(&key) {
+        diagnostics.push(format!("unknown base val: {key}={value}"));
     }
 }
 
@@ -329,6 +509,27 @@ impl SectionAcc {
             ..Default::default()
         }
     }
+
+    /// Apply a `wavecode_<i>_*` / `shapecode_<i>_*` property. `enabled` is the
+    /// only non-scalar property; every other property is a base val.
+    fn set_prop(&mut self, prop: &str, value: &str, diagnostics: &mut Vec<String>) {
+        if prop == "enabled" {
+            self.enabled = parse_bool(value);
+        } else {
+            apply_base_val(&mut self.base, prop, value, diagnostics);
+        }
+    }
+
+    /// Route a `wave_<i>_*` / `shape_<i>_*` equation into its accumulator.
+    /// Unknown kinds are ignored (shapes have no `per_point`, for instance).
+    fn push_eq(&mut self, kind: &str, index: usize, value: &str) {
+        match kind {
+            "init" => self.init.push(index, value),
+            "per_frame" => self.frame.push(index, value),
+            "per_point" => self.point.push(index, value),
+            _ => {}
+        }
+    }
 }
 
 /// If `key` is `prefix` or `prefix_N`, return its numeric index (bare → 0).
@@ -342,28 +543,38 @@ fn numbered_index(key: &str, prefix: &str) -> Option<usize> {
         .ok()
 }
 
+/// Route a numbered line into the first matching equation set.
+fn push_numbered(key: &str, value: &str, sets: &mut [(&str, &mut EqLines)]) -> bool {
+    for (prefix, lines) in sets.iter_mut() {
+        if let Some(index) = numbered_index(key, prefix) {
+            lines.push(index, value);
+            return true;
+        }
+    }
+    false
+}
+
+/// Convert a 1-based section number into a 0-based slot index.
+fn section_index(num: &str) -> Option<usize> {
+    let i = num.parse::<usize>().ok()?;
+    (i > 0 && i <= SECTION_COUNT).then_some(i - 1)
+}
+
 /// Parse `wavecode_<i>_<prop>` / `shapecode_<i>_<prop>`; `i` is 1-based.
 fn parse_section_prop(rest: &str) -> Option<(usize, &str)> {
     let (num, prop) = rest.split_once('_')?;
-    let i = num.parse::<usize>().ok()?;
-    if i == 0 || i > 4 {
-        return None;
-    }
-    Some((i - 1, prop))
+    Some((section_index(num)?, prop))
 }
 
 /// Parse `wave_<i>_<kind>[_N]` / `shape_<i>_<kind>[_N]`.
 fn parse_section_eq(rest: &str) -> Option<(usize, &str, usize)> {
     let (num, tail) = rest.split_once('_')?;
-    let i = num.parse::<usize>().ok()?;
-    if i == 0 || i > 4 {
-        return None;
-    }
+    let i = section_index(num)?;
     let (kind, index) = match tail.rsplit_once('_') {
         Some((kind, n)) => (kind, n.parse::<usize>().ok()?),
         None => (tail, 0),
     };
-    Some((i - 1, kind, index))
+    Some((i, kind, index))
 }
 
 /// Drop noise-sampler redeclaration lines, keeping their use sites.
@@ -431,22 +642,16 @@ pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseE
         1
     };
 
-    let mut doc = MilkDocument {
-        version,
-        name: file_stem.to_string(),
-        base: default_base_vals(),
-        waves: std::array::from_fn(|_| MilkWave::default()),
-        shapes: std::array::from_fn(|_| MilkShape::default()),
-        ..Default::default()
-    };
-
+    let mut name: Option<String> = None;
+    let mut base = default_base_vals();
+    let mut diagnostics = Vec::new();
     let mut init_eqs = EqLines::default();
     let mut frame_eqs = EqLines::default();
     let mut pixel_eqs = EqLines::default();
     let mut warp_lines = EqLines::default();
     let mut comp_lines = EqLines::default();
-    let mut wave_acc: [SectionAcc; 4] = std::array::from_fn(|_| SectionAcc::new());
-    let mut shape_acc: [SectionAcc; 4] = std::array::from_fn(|_| SectionAcc::new());
+    let mut wave_acc: [SectionAcc; SECTION_COUNT] = std::array::from_fn(|_| SectionAcc::new());
+    let mut shape_acc: [SectionAcc; SECTION_COUNT] = std::array::from_fn(|_| SectionAcc::new());
 
     for line in normalized.lines().skip(section_start + 1) {
         let trimmed = line.trim();
@@ -467,106 +672,80 @@ pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseE
 
         if key == "title" || key == "presetname" {
             if !value.trim().is_empty() {
-                doc.name = value.trim().to_string();
+                name = Some(value.trim().to_string());
             }
             continue;
         }
 
-        if let Some(index) = numbered_index(&key, "per_frame_init") {
-            init_eqs.push(index, value);
-            continue;
-        }
-        if let Some(index) = numbered_index(&key, "per_frame") {
-            frame_eqs.push(index, value);
-            continue;
-        }
-        if let Some(index) = numbered_index(&key, "per_pixel") {
-            pixel_eqs.push(index, value);
-            continue;
-        }
-        if let Some(index) = numbered_index(&key, "warp") {
-            warp_lines.push(index, value);
-            continue;
-        }
-        if let Some(index) = numbered_index(&key, "comp") {
-            comp_lines.push(index, value);
+        if push_numbered(
+            &key,
+            value,
+            &mut [
+                ("per_frame_init", &mut init_eqs),
+                ("per_frame", &mut frame_eqs),
+                ("per_pixel", &mut pixel_eqs),
+                ("warp", &mut warp_lines),
+                ("comp", &mut comp_lines),
+            ],
+        ) {
             continue;
         }
 
         if let Some(rest) = key.strip_prefix("wavecode_")
             && let Some((i, prop)) = parse_section_prop(rest)
         {
-            let section = &mut wave_acc[i];
-            if prop == "enabled" {
-                section.enabled = parse_bool(value);
-            } else {
-                apply_base_val(&mut section.base, prop, value, &mut doc.diagnostics);
-            }
+            wave_acc[i].set_prop(prop, value, &mut diagnostics);
             continue;
         }
         if let Some(rest) = key.strip_prefix("shapecode_")
             && let Some((i, prop)) = parse_section_prop(rest)
         {
-            let section = &mut shape_acc[i];
-            if prop == "enabled" {
-                section.enabled = parse_bool(value);
-            } else {
-                apply_base_val(&mut section.base, prop, value, &mut doc.diagnostics);
-            }
+            shape_acc[i].set_prop(prop, value, &mut diagnostics);
             continue;
         }
         if let Some(rest) = key.strip_prefix("wave_")
             && let Some((i, kind, index)) = parse_section_eq(rest)
         {
-            let section = &mut wave_acc[i];
-            match kind {
-                "init" => section.init.push(index, value),
-                "per_frame" => section.frame.push(index, value),
-                "per_point" => section.point.push(index, value),
-                _ => {}
-            }
+            wave_acc[i].push_eq(kind, index, value);
             continue;
         }
         if let Some(rest) = key.strip_prefix("shape_")
             && let Some((i, kind, index)) = parse_section_eq(rest)
         {
-            let section = &mut shape_acc[i];
-            match kind {
-                "init" => section.init.push(index, value),
-                "per_frame" => section.frame.push(index, value),
-                _ => {}
-            }
+            shape_acc[i].push_eq(kind, index, value);
             continue;
         }
 
-        apply_base_val(&mut doc.base, &key, value, &mut doc.diagnostics);
+        apply_base_val(&mut base, &key, value, &mut diagnostics);
     }
 
-    doc.init_eqs = init_eqs.into_source();
-    doc.frame_eqs = frame_eqs.into_source();
-    doc.pixel_eqs = pixel_eqs.into_source();
-    doc.warp = strip_noise_decls(&warp_lines.into_source());
-    doc.comp = strip_noise_decls(&comp_lines.into_source());
+    let waves = wave_acc.map(|section| MilkWave {
+        enabled: section.enabled,
+        base: section.base,
+        init_eqs: section.init.into_source(),
+        frame_eqs: section.frame.into_source(),
+        point_eqs: section.point.into_source(),
+    });
+    let shapes = shape_acc.map(|section| MilkShape {
+        enabled: section.enabled,
+        base: section.base,
+        init_eqs: section.init.into_source(),
+        frame_eqs: section.frame.into_source(),
+    });
 
-    for (i, section) in wave_acc.into_iter().enumerate() {
-        doc.waves[i] = MilkWave {
-            enabled: section.enabled,
-            base: section.base,
-            init_eqs: section.init.into_source(),
-            frame_eqs: section.frame.into_source(),
-            point_eqs: section.point.into_source(),
-        };
-    }
-    for (i, section) in shape_acc.into_iter().enumerate() {
-        doc.shapes[i] = MilkShape {
-            enabled: section.enabled,
-            base: section.base,
-            init_eqs: section.init.into_source(),
-            frame_eqs: section.frame.into_source(),
-        };
-    }
-
-    Ok(doc)
+    Ok(MilkDocument {
+        version,
+        name: name.unwrap_or_else(|| file_stem.to_string()),
+        base,
+        init_eqs: init_eqs.into_source(),
+        frame_eqs: frame_eqs.into_source(),
+        pixel_eqs: pixel_eqs.into_source(),
+        waves,
+        shapes,
+        warp: strip_noise_decls(&warp_lines.into_source()),
+        comp: strip_noise_decls(&comp_lines.into_source()),
+        diagnostics,
+    })
 }
 
 #[cfg(test)]
