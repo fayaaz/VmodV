@@ -65,6 +65,17 @@ use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool, compile, run_fra
 use crate::milkdrop::preset::{MilkBaseVals, MilkDocument, extract_shader_body};
 use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_milk_shader};
 
+/// MilkDrop scales each raw audio band by two before exposing it to EEL.
+const AUDIO_GAIN: f32 = 2.0;
+/// Per-frame interpolation rate for the `*_att` band follower variables.
+const BAND_FOLLOWER_RATE: f32 = 0.2;
+/// Warp displacement is `warp * warpscale * WARP_AMOUNT_SCALE`.
+const WARP_AMOUNT_SCALE: f32 = 0.01;
+/// Denominators smaller than this are treated as degenerate in the warp mesh.
+const WARP_EPS: f32 = 1e-6;
+/// Sampling UV used when the warp arithmetic would otherwise be non-finite.
+const UV_FALLBACK: f32 = 0.5;
+
 /// Audio snapshot consumed for one frame.
 ///
 /// `wave` and `byte_frequency_data` are kept as `Vec`s (rather than fixed
@@ -242,19 +253,28 @@ pub fn begin_frame(
     frame: &MilkFrameInfo,
 ) -> Result<(), MilkRuntimeError> {
     // (1) Init equations run exactly once and capture the q1..q32 baseline.
+    // `compiled`, `pool` and `globals` are disjoint fields, so they can be
+    // borrowed independently without cloning the compiled equations.
     if !instance.init_done {
-        let init = instance.compiled.init.clone();
-        run_frame(&init, &mut instance.pool, &Globals::default())
-            .map_err(|e| MilkRuntimeError::Evaluate(format!("init equations: {e}")))?;
+        run_frame(
+            &instance.compiled.init,
+            &mut instance.pool,
+            &Globals::default(),
+        )
+        .map_err(|e| MilkRuntimeError::Evaluate(format!("init equations: {e}")))?;
         instance.pool.snapshot_q();
         instance.init_done = true;
     }
 
     // (2) Rebuild the fifteen globals from this frame's geometry and audio.
     let audio = &frame.audio;
-    let values = [audio.bass * 2.0, audio.mid * 2.0, audio.treble * 2.0];
+    let values = [
+        audio.bass * AUDIO_GAIN,
+        audio.mid * AUDIO_GAIN,
+        audio.treble * AUDIO_GAIN,
+    ];
     for (att, value) in instance.band_att.iter_mut().zip(values) {
-        *att += (value - *att) * 0.2;
+        *att += (value - *att) * BAND_FOLLOWER_RATE;
     }
 
     let (aspectx, aspecty) = if frame.width >= frame.height {
@@ -286,9 +306,12 @@ pub fn begin_frame(
 
     // (3) Per-frame equations: `run_frame` restores the captured q baseline
     // before injecting the globals, so q changes never leak into the next frame.
-    let equations = instance.compiled.frame.clone();
-    run_frame(&equations, &mut instance.pool, &instance.globals)
-        .map_err(|e| MilkRuntimeError::Evaluate(format!("frame equations: {e}")))?;
+    run_frame(
+        &instance.compiled.frame,
+        &mut instance.pool,
+        &instance.globals,
+    )
+    .map_err(|e| MilkRuntimeError::Evaluate(format!("frame equations: {e}")))?;
     Ok(())
 }
 
@@ -303,45 +326,67 @@ pub struct MilkMesh {
     pub height: u32,
 }
 
+/// Resolve one warp parameter from the live EEL pool, falling back to the
+/// preset's base-val default.
+///
+/// Per-frame equations may override any of these variables at runtime. The
+/// pool is not seeded with the base vals, so a `0.0` read means "untouched"
+/// and the base value wins. For a hand-written fixture whose base vals are all
+/// zero this leaves the parameter at zero (the warp math below guards it),
+/// keeping the result finite and deterministic.
+fn warp_param(pool: &VarPool, name: &str, base: f64) -> f32 {
+    let live = pool.get(name);
+    if live == 0.0 { base as f32 } else { live }
+}
+
+/// `value` when it is finite and non-degenerate, otherwise `fallback`.
+fn nonzero_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() && value.abs() > WARP_EPS {
+        value
+    } else {
+        fallback
+    }
+}
+
+/// `value` when finite, otherwise `fallback` (the texture centre for UVs).
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value } else { fallback }
+}
+
 /// Map a mesh vertex's `[-1, 1]` position to a warped sampling UV.
 ///
-/// All the recipe terms come from the preset's base values (plus the current
-/// frame time for the warp animation). Every denominator is guarded so a
+/// This mirrors MilkDrop's warp mesh: warp displacement, rotation, zoom (with
+/// exponent), centre/offset (`cx`/`cy`/`dx`/`dy`) and per-axis stretch
+/// (`sx`/`sy`). Parameter values come from the EEL pool (per-frame overrides)
+/// with the preset's base vals as defaults. Every divisor is guarded so a
 /// hand-written fixture with all-zero base vals still yields finite,
 /// deterministic UVs; a non-finite result falls back to the texture centre.
-fn warped_uv(base: &MilkBaseVals, x: f32, y: f32, time: f32) -> [f32; 2] {
-    let warp = base.warp as f32;
-    let warp_anim = base.warpanimspeed as f32;
-    let warp_scale = base.warpscale as f32;
+fn warped_uv(pool: &VarPool, base: &MilkBaseVals, x: f32, y: f32, time: f32) -> [f32; 2] {
+    let warp = warp_param(pool, "warp", base.warp);
+    let warp_anim = warp_param(pool, "warpanimspeed", base.warpanimspeed);
+    let warp_scale = warp_param(pool, "warpscale", base.warpscale);
     let t = time * warp_anim;
-    let amount = warp * warp_scale * 0.01;
+    let amount = warp * warp_scale * WARP_AMOUNT_SCALE;
     let wx = x + amount * (t.sin() + (2.0 * t).sin());
     let wy = y + amount * (t.cos() + (2.0 * t).cos());
 
-    let zoom = base.zoom as f32;
-    let zoom = if zoom.abs() > 1e-6 { zoom } else { 1.0 };
-    let zoomexp = base.zoomexp as f32;
-    let zoom_factor = zoom.powf(zoomexp);
-    let zoom_factor = if zoom_factor.is_finite() && zoom_factor.abs() > 1e-6 {
-        zoom_factor
-    } else {
-        1.0
-    };
+    let zoom = nonzero_or(warp_param(pool, "zoom", base.zoom), 1.0);
+    let zoomexp = warp_param(pool, "zoomexp", base.zoomexp);
+    let zoom_factor = nonzero_or(zoom.powf(zoomexp), 1.0);
 
-    let sx = base.sx as f32;
-    let sx = if sx.abs() > 1e-6 { sx } else { 1.0 };
-    let sy = base.sy as f32;
-    let sy = if sy.abs() > 1e-6 { sy } else { 1.0 };
-    let (sin_rot, cos_rot) = (base.rot as f32).sin_cos();
+    let sx = nonzero_or(warp_param(pool, "sx", base.sx), 1.0);
+    let sy = nonzero_or(warp_param(pool, "sy", base.sy), 1.0);
+    let (sin_rot, cos_rot) = warp_param(pool, "rot", base.rot).sin_cos();
     let rx = wx * cos_rot - wy * sin_rot;
     let ry = wx * sin_rot + wy * cos_rot;
 
-    let u = (rx / (sx * zoom_factor) + base.cx as f32 + base.dx as f32) * 0.5 + 0.5;
-    let v = (ry / (sy * zoom_factor) + base.cy as f32 + base.dy as f32) * 0.5 + 0.5;
-    [
-        if u.is_finite() { u } else { 0.5 },
-        if v.is_finite() { v } else { 0.5 },
-    ]
+    let cx = warp_param(pool, "cx", base.cx);
+    let cy = warp_param(pool, "cy", base.cy);
+    let dx = warp_param(pool, "dx", base.dx);
+    let dy = warp_param(pool, "dy", base.dy);
+    let u = (rx / (sx * zoom_factor) + cx + dx) * 0.5 + 0.5;
+    let v = (ry / (sy * zoom_factor) + cy + dy) * 0.5 + 0.5;
+    [finite_or(u, UV_FALLBACK), finite_or(v, UV_FALLBACK)]
 }
 
 /// Evaluate the per-pixel equations and warped UV grid for `frame`.
@@ -353,11 +398,7 @@ pub fn evaluate_mesh(
 ) -> Result<MilkMesh, MilkRuntimeError> {
     let width = frame.meshx + 1;
     let height = frame.meshy + 1;
-
-    // Snapshot the data we read while the pool is mutably borrowed per vertex.
-    let base = instance.compiled.doc.base.clone();
     let time = instance.globals.time;
-    let pixel = instance.compiled.pixel.clone();
 
     let mut uvs = Vec::with_capacity((width as usize).saturating_mul(height as usize));
     for row in 0..height {
@@ -374,9 +415,17 @@ pub fn evaluate_mesh(
             };
             let rad = x.hypot(y);
             let ang = y.atan2(x);
-            run_pixel(&pixel, &mut instance.pool, x, y, rad, ang)
+            // `compiled` and `pool` are disjoint fields: borrow the equations
+            // instead of cloning them per vertex.
+            run_pixel(&instance.compiled.pixel, &mut instance.pool, x, y, rad, ang)
                 .map_err(|e| MilkRuntimeError::Evaluate(format!("pixel equations: {e}")))?;
-            uvs.push(warped_uv(&base, x, y, time));
+            uvs.push(warped_uv(
+                &instance.pool,
+                &instance.compiled.doc.base,
+                x,
+                y,
+                time,
+            ));
         }
     }
 
