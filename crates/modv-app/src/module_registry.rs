@@ -249,8 +249,13 @@ pub struct MilkdropDefinition {
     /// Synthesised props (currently empty: presets are EEL-driven), keyed by
     /// prop name in declaration order — the value returned by `synthesise_props`.
     pub props: IndexMap<String, MilkProp>,
-    /// The parsed preset, kept so the compositor can compile a
+    /// The parsed preset, kept additively so the compositor can compile a
     /// `MilkCompiledPreset` on first draw without re-reading the source file.
+    ///
+    /// Re-parsing at draw time is not viable: the compositor only has the
+    /// module's name (no file path), and that path may be gone by the time the
+    /// module draws if the user removed the preset from disk. Parsing once here
+    /// — alongside `meta`/`props` — also avoids duplicating the work.
     pub document: MilkDocument,
 }
 

@@ -335,6 +335,26 @@ pub const PREVIEW_HEIGHT: u32 = 360;
 /// `:390`).
 const ALPHA_CULL: f64 = 0.001;
 
+/// Frame rate reported to MilkDrop's EEL `fps` global.
+///
+/// [`FrameInfo`] carries no frame-rate field, so the engine's conventional
+/// 60 fps is used. Deriving fps from `frame_index / time_seconds` would be
+/// noisy at startup and divide by zero on the first frame.
+const MILKDROP_FPS: f32 = 60.0;
+
+/// Default warp/comp mesh grid (`meshx`/`meshy` globals) for MilkDrop.
+///
+/// The mesh UV grid is not uploaded in this cycle (waves/shapes are a separate
+/// pass), so the preset sees MilkDrop's usual 32×24 default.
+const MILKDROP_MESH_X: u32 = 32;
+const MILKDROP_MESH_Y: u32 = 24;
+
+/// Fixed seed for a new MilkDrop instance's EEL variable pool.
+///
+/// Kept deterministic so a preset's `rand`-style initial state is reproducible
+/// across runs; this is the analogue of the JS renderer's initial seed.
+const MILKDROP_INITIAL_SEED: u64 = 1;
+
 /// One in-flight row crossfade, handed to the compositor for this frame
 /// (`rowTransitions[row]`, `scenes.js:2502-2512`).
 ///
@@ -1068,11 +1088,7 @@ impl Compositor {
             surfaces: TextureSurfaces::new(),
             registry,
             isf_runtime: IsfRuntime::new(device.clone(), queue.clone(), 4),
-            milkdrop_runtime: MilkRuntime::new(
-                Arc::new(device.clone()),
-                Arc::new(queue.clone()),
-                4,
-            ),
+            milkdrop_runtime: create_milk_runtime(device, queue),
             size: (0, 0),
             render_scale: 1.0,
             main: None,
@@ -1203,11 +1219,7 @@ impl Compositor {
         self.failed_milkdrop.clear();
         // Drop cached MilkDrop pipelines/failures too: a restored state can
         // reference different presets.
-        self.milkdrop_runtime = MilkRuntime::new(
-            Arc::new(self.device.clone()),
-            Arc::new(self.queue.clone()),
-            4,
-        );
+        self.milkdrop_runtime = create_milk_runtime(&self.device, &self.queue);
         // Drop translated pipelines too: a restored state can reference
         // different shaders, and the cache is bounded but never expired.
         self.isf_runtime = IsfRuntime::new(self.device.clone(), self.queue.clone(), 4);
@@ -2520,7 +2532,7 @@ impl Compositor {
                     return Ok(());
                 }
             };
-            let instance = new_instance(compiled, 1);
+            let instance = new_instance(compiled, MILKDROP_INITIAL_SEED);
             let gpu = MilkGpuTargets::new(&self.device, width, height);
             self.milkdrop.insert(
                 module_id.to_string(),
@@ -2563,17 +2575,18 @@ impl Compositor {
         };
 
         // Map the engine frame + audio onto the runtime's frame contract.
-        // `FrameInfo` has no fps field, so the engine's conventional 60 fps is
-        // used for the EEL `fps` global; the mesh grid uses MilkDrop's usual
-        // 32×24 defaults (the UV grid is not uploaded in this cycle).
+        // `FrameInfo` carries no fps, so the EEL `fps` global uses the engine's
+        // conventional 60 (see [`MILKDROP_FPS`]); the mesh grid uses MilkDrop's
+        // usual defaults (see [`MILKDROP_MESH_X`]/[`MILKDROP_MESH_Y`]) because
+        // the UV grid is not uploaded in this cycle.
         let milk_frame = MilkFrameInfo {
             time_seconds: frame.time_seconds as f64,
             frame_index: frame.frame_index as u32,
-            fps: 60.0,
+            fps: MILKDROP_FPS,
             width,
             height,
-            meshx: 32,
-            meshy: 24,
+            meshx: MILKDROP_MESH_X,
+            meshy: MILKDROP_MESH_Y,
             audio: MilkAudio {
                 bass: frame.audio.bass,
                 mid: frame.audio.mid,
@@ -4028,6 +4041,21 @@ pub(crate) fn scene_prop_number(value: &Value) -> Option<f32> {
         _ => None,
     }
     .filter(|value| value.is_finite())
+}
+
+/// Build a device-backed [`MilkRuntime`] with the compositor's cache capacity.
+///
+/// Used both on construction and on [`Compositor::reset`] (a restored state can
+/// reference different presets, so no cached pipelines or failures survive).
+/// The runtime owns `Arc` clones of the device/queue, matching
+/// [`IsfRuntime::new`]'s cache-capacity convention.
+fn create_milk_runtime(device: &wgpu::Device, queue: &wgpu::Queue) -> MilkRuntime {
+    const CACHE_CAPACITY: usize = 4;
+    MilkRuntime::new(
+        Arc::new(device.clone()),
+        Arc::new(queue.clone()),
+        CACHE_CAPACITY,
+    )
 }
 
 /// Allocate an `Rgba8Unorm` texture usable as a render target, a sampled
