@@ -60,6 +60,7 @@ The two JS guards that still described VmodV content moved into Rust:
 | `packaging/linuxBundleIsTrimmed.spec.js` | `tools/vmodv-deb-check.sh` verifies the VmodV package contents; `vmodv.yml` builds the AppImage/.deb. This is the only bundle now: the Electron build is archived | C |
 | packaged VmodV smoke | `tools/vmodv-smoke.sh`: headless `--frames --bench`, windowed apply-scene, state round-trip, AppRun log, SIGKILL recovery, optional bounded soak | C (VmodV AppImage run) |
 | `presets/generatesAPresetWithExpectedKeys.spec.js` | Rust preset round-trip tests (existing) | C |
+| user third-party preset loading (ISF / MilkDrop) | user-ISF watch/hot reload and MilkDrop `.mlk` discovery stay in place (500 ms debounce); no preset corpus is bundled — see [docs/milkdrop-presets.md](./milkdrop-presets.md) | C |
 | `scenes/defaultScenes.spec.js` | `default_scenes` Rust tests + VmodV 56-Scene seed | C |
 | `scenes/captureLiveState.spec.js` | engine `scenes/captureLiveStateToScene` tests + VmodV Scene menu action | C |
 | `scenes/sceneSnapshotsAndPerformance.spec.js` | `scene_ops`/performance tests + VmodV Scenes panel | P (kittest automation pending) |

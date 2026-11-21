@@ -27,6 +27,9 @@ egui UI in-process.
 > modules and the Point10/Plane9 scene ports are CC BY-NC-SA (no commercial
 > use, share-alike). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for
 > the full per-file attribution before redistributing or selling a build.
+> MilkDrop `.mlk` presets are **not** bundled; user-supplied presets are read in
+> place and never redistributed — see
+> [docs/milkdrop-presets.md](docs/milkdrop-presets.md).
 
 ## What this tree is
 

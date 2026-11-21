@@ -344,7 +344,7 @@ fn scan_source_files(dir: &Path, root: &Path, found: &mut Vec<(String, String)>)
             .is_some_and(|extension| {
                 matches!(
                     extension.to_ascii_lowercase().as_str(),
-                    "rs" | "wgsl" | "fs" | "vs" | "frag" | "json" | "md" | "txt" | "svg"
+                    "rs" | "wgsl" | "fs" | "vs" | "frag" | "json" | "md" | "txt" | "svg" | "mlk"
                 )
             });
         if !text_extension {
@@ -365,7 +365,12 @@ fn scan_source_files(dir: &Path, root: &Path, found: &mut Vec<(String, String)>)
 
 fn nc_sa_sources(root: &Path) -> Vec<(String, String)> {
     let mut found = Vec::new();
-    for directory in ["crates", "resources/isf", "resources/point10"] {
+    for directory in [
+        "crates",
+        "resources/isf",
+        "resources/point10",
+        "resources/milkdrop",
+    ] {
         scan_source_files(&root.join(directory), root, &mut found);
     }
     found.sort_by(|left, right| left.0.cmp(&right.0));
@@ -414,9 +419,12 @@ fn credit(source: &str) -> Option<String> {
 ///
 /// MilkDrop presets do not carry ISF-style `"CREDIT"` JSON: the author is
 /// written in a leading `//` comment line such as `// Author: Ada Lovelace`.
-/// This is a RED-phase stub; GREEN replaces the body with the real extraction.
-fn credit_milkdrop(_source: &str) -> Option<String> {
-    None
+fn credit_milkdrop(source: &str) -> Option<String> {
+    source.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("//")?.trim_start();
+        let author = value.strip_prefix("Author:")?.trim();
+        (!author.is_empty()).then(|| author.to_string())
+    })
 }
 
 #[test]
@@ -640,8 +648,7 @@ fn milkdrop_presets_guide_is_linked_and_has_required_sections() {
 
 #[test]
 fn notices_header_distinguishes_bundled_and_user_supplied_presets() {
-    const LINE: &str =
-        "MilkDrop `.mlk` presets are not bundled: user-supplied presets are read in place and never redistributed by VmodV.";
+    const LINE: &str = "MilkDrop `.mlk` presets are not bundled: user-supplied presets are read in place and never redistributed by VmodV.";
     assert!(
         NOTICES.contains(LINE),
         "the THIRD_PARTY_NOTICES.md header must distinguish bundled content \

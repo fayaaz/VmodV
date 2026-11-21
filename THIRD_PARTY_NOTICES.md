@@ -15,6 +15,10 @@ Files known to carry an NC (non-commercial) license — notably everything whose
 license defaults to CC BY-NC-SA 3.0 — may not be used commercially, and
 modified versions must remain under the same license ("share-alike").
 
+MilkDrop `.mlk` presets are not bundled: user-supplied presets are read in place and never redistributed by VmodV.
+See [docs/milkdrop-presets.md](docs/milkdrop-presets.md) for where user presets
+are loaded from and what that means when redistributing a build.
+
 ## Shadertoy-derived modules
 
 | File(s) | Source | Author | License |
@@ -82,6 +86,22 @@ Other Point10 textures use ambientCG assets (CC0; e.g. `tinore`, `rubber002`,
 `moon_04`, `concrete044c`), Poly Haven skies (`stormy`, `spruit_sunrise`), or
 NASA-derived Earth/Milky Way imagery. Where an asset's provenance or license
 is unclear it is not relicensed under MIT.
+
+## MilkDrop user presets (not bundled)
+
+No MilkDrop preset corpus is shipped with VmodV. User-supplied `.mlk` presets
+are read in place from the user's media folders and are never copied into the
+installer, AppImage or `.deb`. The only `.mlk` file in this tree is a test
+fixture that exists solely so the NC-SA scanner above is exercised for the
+MilkDrop format; it is not shipped as a preset.
+
+| Fixture | Source | Author | License |
+| --- | --- | --- | --- |
+| `crates/modv-app/tests/fixtures/notices/milkdrop_ncsa.mlk` | [NC-SA Header Fixture](https://example.org/presets/nc-sa-header-fixture.mlk) (test fixture, not bundled) | Ada Lovelace | CC BY-NC-SA 3.0 (stated in header) |
+
+Real users' MilkDrop presets stay under their own licenses; the attribution and
+share-alike duties of any preset you load or share remain yours — see
+[docs/milkdrop-presets.md](docs/milkdrop-presets.md).
 
 ## Fonts
 
