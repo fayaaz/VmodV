@@ -26,10 +26,10 @@
 //! # Per-frame contract (what the tests pin down)
 //!
 //! 1. [`begin_frame`] runs the preset's init equations exactly once (on the
-//!   first frame of an instance), then [`VarPool::snapshot_q`] records the
-//!   `q1..q32` baseline. Every subsequent frame restores that baseline via
-//!   [`run_frame`] before running the per-frame equations, then sets the
-//!   globals (see below) and runs those equations.
+//!    first frame of an instance), then [`VarPool::snapshot_q`] records the
+//!    `q1..q32` baseline. Every subsequent frame restores that baseline via
+//!    [`run_frame`] before running the per-frame equations, then sets the
+//!    globals (see below) and runs those equations.
 //! 2. Globals are built from [`MilkFrameInfo`]:
 //!    `time = time_seconds`, `frame = frame_index`, `fps`, `meshx`, `meshy`,
 //!    `pixelsx/pixelsy = width/height`. Aspect is chosen so the *smaller*
@@ -58,9 +58,12 @@
 
 #![forbid(unsafe_code)]
 
-use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool};
-use crate::milkdrop::preset::MilkDocument;
-use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+
+use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool, compile, run_frame, run_pixel};
+use crate::milkdrop::preset::{MilkBaseVals, MilkDocument, extract_shader_body};
+use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_milk_shader};
 
 /// Audio snapshot consumed for one frame.
 ///
@@ -120,7 +123,10 @@ pub enum MilkRuntimeError {
 /// signature borrow-only.
 #[derive(Clone, Debug, Default)]
 pub struct MilkFailureCache {
-    // RED stub: no storage. GREEN adds interior-mutable storage.
+    // `Arc` keeps the handle `Clone` (and shareable with the compositor) while
+    // `Mutex` gives the `&self` methods interior mutability. Poison is recovered
+    // rather than propagated: a failed compilation must never abort rendering.
+    failed: Arc<Mutex<HashSet<String>>>,
 }
 
 impl MilkFailureCache {
@@ -129,19 +135,21 @@ impl MilkFailureCache {
     }
 
     /// Record `name` as having failed compilation.
-    pub fn mark_failed(&self, _name: &str) {
-        // RED stub.
+    pub fn mark_failed(&self, name: &str) {
+        let mut failed = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        failed.insert(name.to_string());
     }
 
     /// Whether `name` is currently marked as failed.
-    pub fn is_failed(&self, _name: &str) -> bool {
-        // RED stub.
-        false
+    pub fn is_failed(&self, name: &str) -> bool {
+        let failed = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        failed.contains(name)
     }
 
     /// Forget all recorded failures.
     pub fn clear(&self) {
-        // RED stub.
+        let mut failed = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+        failed.clear();
     }
 }
 
@@ -163,23 +171,35 @@ pub fn compile_preset(
     doc: &MilkDocument,
     failures: &MilkFailureCache,
 ) -> Result<MilkCompiledPreset, MilkRuntimeError> {
-    let _ = (name, failures);
-    // RED stub: return an owned but inert preset so tests compile.
+    // One failure path for every stage: record the module, then return a typed
+    // error. Closures keep the borrow-only cache signature intact.
+    let fail = |message: String| {
+        failures.mark_failed(name);
+        MilkRuntimeError::Compile(message)
+    };
+
+    let init =
+        compile(&doc.init_eqs, doc.version).map_err(|e| fail(format!("init equations: {e}")))?;
+    let frame =
+        compile(&doc.frame_eqs, doc.version).map_err(|e| fail(format!("frame equations: {e}")))?;
+    let pixel =
+        compile(&doc.pixel_eqs, doc.version).map_err(|e| fail(format!("pixel equations: {e}")))?;
+
+    let warp_src = extract_shader_body(&doc.warp);
+    let warp = translate_milk_shader(&warp_src.prelude, &warp_src.body, MilkShaderStage::Warp)
+        .map_err(|e| fail(format!("warp shader: {e}")))?;
+
+    let comp_src = extract_shader_body(&doc.comp);
+    let comp = translate_milk_shader(&comp_src.prelude, &comp_src.body, MilkShaderStage::Comp)
+        .map_err(|e| fail(format!("comp shader: {e}")))?;
+
     Ok(MilkCompiledPreset {
         doc: doc.clone(),
-        init: CompiledEquations::default(),
-        frame: CompiledEquations::default(),
-        pixel: CompiledEquations::default(),
-        warp: CompiledMilkShader {
-            wgsl: String::new(),
-            source: String::new(),
-            stage: MilkShaderStage::Warp,
-        },
-        comp: CompiledMilkShader {
-            wgsl: String::new(),
-            source: String::new(),
-            stage: MilkShaderStage::Comp,
-        },
+        init,
+        frame,
+        pixel,
+        warp,
+        comp,
     })
 }
 
@@ -217,9 +237,58 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
 
 /// Advance `instance` to `frame`: run init once, build globals/audio, update
 /// the band followers and run the per-frame equations.
-pub fn begin_frame(instance: &mut MilkInstance, frame: &MilkFrameInfo) -> Result<(), MilkRuntimeError> {
-    let _ = (instance, frame);
-    // RED stub.
+pub fn begin_frame(
+    instance: &mut MilkInstance,
+    frame: &MilkFrameInfo,
+) -> Result<(), MilkRuntimeError> {
+    // (1) Init equations run exactly once and capture the q1..q32 baseline.
+    if !instance.init_done {
+        let init = instance.compiled.init.clone();
+        run_frame(&init, &mut instance.pool, &Globals::default())
+            .map_err(|e| MilkRuntimeError::Evaluate(format!("init equations: {e}")))?;
+        instance.pool.snapshot_q();
+        instance.init_done = true;
+    }
+
+    // (2) Rebuild the fifteen globals from this frame's geometry and audio.
+    let audio = &frame.audio;
+    let values = [audio.bass * 2.0, audio.mid * 2.0, audio.treble * 2.0];
+    for (att, value) in instance.band_att.iter_mut().zip(values) {
+        *att += (value - *att) * 0.2;
+    }
+
+    let (aspectx, aspecty) = if frame.width >= frame.height {
+        (1.0, frame.height as f32 / frame.width as f32)
+    } else {
+        (frame.width as f32 / frame.height as f32, 1.0)
+    };
+
+    instance.globals = Globals {
+        time: frame.time_seconds as f32,
+        frame: frame.frame_index as f32,
+        fps: frame.fps,
+        meshx: frame.meshx as f32,
+        meshy: frame.meshy as f32,
+        pixelsx: frame.width as f32,
+        pixelsy: frame.height as f32,
+        aspectx,
+        aspecty,
+        bass: values[0],
+        bass_att: instance.band_att[0],
+        mid: values[1],
+        mid_att: instance.band_att[1],
+        treb: values[2],
+        treb_att: instance.band_att[2],
+    };
+    instance.frame_index = frame.frame_index;
+    instance.wave = frame.audio.wave.clone();
+    instance.byte_frequency_data = frame.audio.byte_frequency_data.clone();
+
+    // (3) Per-frame equations: `run_frame` restores the captured q baseline
+    // before injecting the globals, so q changes never leak into the next frame.
+    let equations = instance.compiled.frame.clone();
+    run_frame(&equations, &mut instance.pool, &instance.globals)
+        .map_err(|e| MilkRuntimeError::Evaluate(format!("frame equations: {e}")))?;
     Ok(())
 }
 
@@ -234,6 +303,47 @@ pub struct MilkMesh {
     pub height: u32,
 }
 
+/// Map a mesh vertex's `[-1, 1]` position to a warped sampling UV.
+///
+/// All the recipe terms come from the preset's base values (plus the current
+/// frame time for the warp animation). Every denominator is guarded so a
+/// hand-written fixture with all-zero base vals still yields finite,
+/// deterministic UVs; a non-finite result falls back to the texture centre.
+fn warped_uv(base: &MilkBaseVals, x: f32, y: f32, time: f32) -> [f32; 2] {
+    let warp = base.warp as f32;
+    let warp_anim = base.warpanimspeed as f32;
+    let warp_scale = base.warpscale as f32;
+    let t = time * warp_anim;
+    let amount = warp * warp_scale * 0.01;
+    let wx = x + amount * (t.sin() + (2.0 * t).sin());
+    let wy = y + amount * (t.cos() + (2.0 * t).cos());
+
+    let zoom = base.zoom as f32;
+    let zoom = if zoom.abs() > 1e-6 { zoom } else { 1.0 };
+    let zoomexp = base.zoomexp as f32;
+    let zoom_factor = zoom.powf(zoomexp);
+    let zoom_factor = if zoom_factor.is_finite() && zoom_factor.abs() > 1e-6 {
+        zoom_factor
+    } else {
+        1.0
+    };
+
+    let sx = base.sx as f32;
+    let sx = if sx.abs() > 1e-6 { sx } else { 1.0 };
+    let sy = base.sy as f32;
+    let sy = if sy.abs() > 1e-6 { sy } else { 1.0 };
+    let (sin_rot, cos_rot) = (base.rot as f32).sin_cos();
+    let rx = wx * cos_rot - wy * sin_rot;
+    let ry = wx * sin_rot + wy * cos_rot;
+
+    let u = (rx / (sx * zoom_factor) + base.cx as f32 + base.dx as f32) * 0.5 + 0.5;
+    let v = (ry / (sy * zoom_factor) + base.cy as f32 + base.dy as f32) * 0.5 + 0.5;
+    [
+        if u.is_finite() { u } else { 0.5 },
+        if v.is_finite() { v } else { 0.5 },
+    ]
+}
+
 /// Evaluate the per-pixel equations and warped UV grid for `frame`.
 ///
 /// The caller must have called [`begin_frame`] for the same frame first.
@@ -241,9 +351,36 @@ pub fn evaluate_mesh(
     instance: &mut MilkInstance,
     frame: &MilkFrameInfo,
 ) -> Result<MilkMesh, MilkRuntimeError> {
-    let _ = (instance, frame);
-    // RED stub.
-    Ok(MilkMesh::default())
+    let width = frame.meshx + 1;
+    let height = frame.meshy + 1;
+
+    // Snapshot the data we read while the pool is mutably borrowed per vertex.
+    let base = instance.compiled.doc.base.clone();
+    let time = instance.globals.time;
+    let pixel = instance.compiled.pixel.clone();
+
+    let mut uvs = Vec::with_capacity((width as usize).saturating_mul(height as usize));
+    for row in 0..height {
+        let y = if height > 1 {
+            1.0 - 2.0 * (row as f32 / (height - 1) as f32)
+        } else {
+            0.0
+        };
+        for col in 0..width {
+            let x = if width > 1 {
+                2.0 * (col as f32 / (width - 1) as f32) - 1.0
+            } else {
+                0.0
+            };
+            let rad = x.hypot(y);
+            let ang = y.atan2(x);
+            run_pixel(&pixel, &mut instance.pool, x, y, rad, ang)
+                .map_err(|e| MilkRuntimeError::Evaluate(format!("pixel equations: {e}")))?;
+            uvs.push(warped_uv(&base, x, y, time));
+        }
+    }
+
+    Ok(MilkMesh { uvs, width, height })
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +466,10 @@ ret = uv;\n\
         let cache = MilkFailureCache::new();
         let compiled_a = compile_preset("fixture/a", &doc, &cache).expect("fixture compiles");
         let compiled_b = compile_preset("fixture/b", &doc, &cache).expect("fixture compiles");
-        assert!(!cache.is_failed("fixture/a"), "valid preset must not be cached failed");
+        assert!(
+            !cache.is_failed("fixture/a"),
+            "valid preset must not be cached failed"
+        );
 
         let mut a = new_instance(compiled_a, 0xFEED);
         let mut b = new_instance(compiled_b, 0xFEED);
@@ -344,8 +484,16 @@ ret = uv;\n\
 
         // (1) q reset: baseline from init is q1=3; each frame adds 1, so after
         // two frames q1 is 4 (NOT 5), and the frame equation saw baseline 3.
-        approx!(a.pool.get("q1"), 4.0, "q1 restored to init baseline each frame");
-        approx!(a.pool.get("seen_q1"), 3.0, "per-frame equations see baseline q1");
+        approx!(
+            a.pool.get("q1"),
+            4.0,
+            "q1 restored to init baseline each frame"
+        );
+        approx!(
+            a.pool.get("seen_q1"),
+            3.0,
+            "per-frame equations see baseline q1"
+        );
 
         // (2) band followers: value = audio*2, att += (value - att)*0.2.
         // frame1: 0.2 / 0.1 / 0.4 ; frame2: 0.36 / 0.18 / 0.72.
@@ -396,9 +544,17 @@ ret = uv;\n\
         approx!(instance.globals.treb, 2.0, "audio.treble * 2.0");
         approx!(instance.globals.bass_att, 0.2, "first-frame bass follower");
         approx!(instance.globals.mid_att, 0.1, "first-frame mid follower");
-        approx!(instance.globals.treb_att, 0.4, "first-frame treble follower");
+        approx!(
+            instance.globals.treb_att,
+            0.4,
+            "first-frame treble follower"
+        );
         approx!(instance.globals.aspectx, 1.0, "landscape aspectx");
-        approx!(instance.globals.aspecty, 1080.0 / 1920.0, "landscape aspecty");
+        approx!(
+            instance.globals.aspecty,
+            1080.0 / 1920.0,
+            "landscape aspecty"
+        );
         assert_eq!(instance.frame_index, 42);
         assert_eq!(instance.wave, f.audio.wave, "wave data copied to instance");
         assert_eq!(
@@ -454,7 +610,10 @@ ret = uv;\n\
         assert!(!cache.is_failed("mod/b"), "other modules unaffected");
 
         let runtime = MilkRuntime::default();
-        assert!(!runtime.failures.is_failed("mod/a"), "runtime owns its own cache");
+        assert!(
+            !runtime.failures.is_failed("mod/a"),
+            "runtime owns its own cache"
+        );
 
         cache.clear();
         assert!(!cache.is_failed("mod/a"), "clear forgets failures");
@@ -477,6 +636,9 @@ ret = uv;\n\
         }));
         let result = result.expect("malformed shader must not panic");
         assert!(result.is_err(), "malformed shader returns an error");
-        assert!(cache.is_failed("broken"), "malformed shader marks the module failed");
+        assert!(
+            cache.is_failed("broken"),
+            "malformed shader marks the module failed"
+        );
     }
 }

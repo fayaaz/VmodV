@@ -62,5 +62,5 @@ pub use props::{MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise
 
 pub use runtime::{
     MilkAudio, MilkCompiledPreset, MilkFailureCache, MilkFrameInfo, MilkInstance, MilkMesh,
-    MilkRuntimeError, MilkRuntime, begin_frame, compile_preset, evaluate_mesh, new_instance,
+    MilkRuntime, MilkRuntimeError, begin_frame, compile_preset, evaluate_mesh, new_instance,
 };
