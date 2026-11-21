@@ -497,6 +497,75 @@ pub struct MilkCompiledPreset {
     pub pixel: CompiledEquations,
     pub warp: CompiledMilkShader,
     pub comp: CompiledMilkShader,
+    /// One compiled program per *enabled* wave section (Layer 5c). Added
+    /// additively; existing fields and behaviour are unchanged.
+    pub waves: Vec<WaveProgram>,
+    /// One compiled program per *enabled* shape section (Layer 5c).
+    pub shapes: Vec<ShapeProgram>,
+}
+
+// --- Layer 5c wave/shape overlays (RED stubs) ------------------------------
+//
+// These public types/functions are the surface the GREEN phase implements.
+// The stubs make the overlay tests compile while leaving them failing on their
+// assertions; no existing render pass is modified.
+
+/// Persistent per-section state for one wave or shape overlay.
+///
+/// `pool` carries the section's user variables and the `t1..t8` values captured
+/// from its init equations; `init_done` records whether init has run for the
+/// current preset instance.
+#[derive(Clone, Debug, Default)]
+pub struct OverlayState {
+    pub pool: VarPool,
+    pub init_done: bool,
+}
+
+/// One compiled wave overlay: its init/frame/point EEL equation sets.
+#[derive(Clone, Debug, Default)]
+pub struct WaveProgram {
+    pub init: CompiledEquations,
+    pub frame: CompiledEquations,
+    pub point: CompiledEquations,
+}
+
+/// One compiled shape overlay: its init/frame EEL equation sets.
+#[derive(Clone, Debug, Default)]
+pub struct ShapeProgram {
+    pub init: CompiledEquations,
+    pub frame: CompiledEquations,
+}
+
+/// One evaluated sample point of a wave overlay.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WavePoint {
+    pub x: f32,
+    pub y: f32,
+    pub sample: f32,
+    pub value1: f32,
+    pub value2: f32,
+}
+
+/// Per-frame evaluated state of one wave overlay.
+#[derive(Clone, Debug, Default)]
+pub struct WaveOverlay {
+    pub pool: VarPool,
+    pub points: Vec<WavePoint>,
+    pub enabled: bool,
+}
+
+/// Per-frame evaluated state of one shape overlay.
+#[derive(Clone, Debug, Default)]
+pub struct ShapeOverlay {
+    pub pool: VarPool,
+    pub enabled: bool,
+}
+
+/// Every overlay evaluated for one frame, cached on [`MilkInstance`].
+#[derive(Clone, Debug, Default)]
+pub struct OverlayFrame {
+    pub waves: Vec<WaveOverlay>,
+    pub shapes: Vec<ShapeOverlay>,
 }
 
 /// Byte stride of the `@group(0) @binding(0)` `MilkUniforms` block.
@@ -1042,6 +1111,10 @@ pub fn compile_preset(
         pixel,
         warp,
         comp,
+        // RED stub: GREEN compiles one program per enabled wave/shape section,
+        // skipping malformed sections individually.
+        waves: Vec::new(),
+        shapes: Vec::new(),
     })
 }
 
@@ -1060,6 +1133,13 @@ pub struct MilkInstance {
     pub init_done: bool,
     pub wave: Vec<f32>,
     pub byte_frequency_data: Vec<u8>,
+    /// Persistent per-section overlay state (Layer 5c). Indexed in enabled-wave
+    /// / enabled-shape order, matching `compiled.waves` / `compiled.shapes`.
+    pub wave_states: Vec<OverlayState>,
+    pub shape_states: Vec<OverlayState>,
+    /// Overlays evaluated for the current frame (Layer 5c), cached here by
+    /// [`evaluate_overlays`] so the GPU pass can consume them.
+    pub overlay_frame: OverlayFrame,
 }
 
 /// Build an instance for `compiled` whose `rand` draws are reproducible via
@@ -1074,7 +1154,41 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
         init_done: false,
         wave: Vec::new(),
         byte_frequency_data: Vec::new(),
+        wave_states: Vec::new(),
+        shape_states: Vec::new(),
+        overlay_frame: OverlayFrame::default(),
     }
+}
+
+/// Evaluate every enabled wave/shape overlay for `frame`.
+///
+/// Contract for GREEN (documented so the stubs are unambiguous):
+///
+/// * Compilation happens once in [`compile_preset`] — one [`WaveProgram`] /
+///   [`ShapeProgram`] per enabled section, with malformed sections skipped and
+///   recorded in [`MilkFailureCache`] so a single broken overlay never fails
+///   the whole preset.
+/// * Per frame, each section's init equations run once (capturing `t1..t8` and
+///   the `q1..q32` baseline into the persistent [`OverlayState`]). The runtime
+///   seeds the per-wave-frame variables (`samples`, `scaling`, `smoothing`,
+///   `sep`, `additive`, `usedots`, `spectrum`, `thick`, `r/g/b/a`) and the
+///   per-shape-frame variables (`r/g/b/a`, `r2/g2/b2/a2`, `border_*`, `sides`,
+///   `instance`, `num_inst`, `tex_zoom`, `tex_ang`, ...) before running the
+///   frame equations.
+/// * Wave `point_eqs` are then evaluated per sample point (bounded, e.g. 1024)
+///   with `x/y/sample/value1/value2`, producing [`WavePoint`]s.
+/// * The result is cached on `instance.overlay_frame` and returned by value.
+///   An error in one overlay disables only that overlay and is logged once; it
+///   is never propagated and never panics.
+///
+/// RED stub: returns an empty [`OverlayFrame`], so overlay tests fail on their
+/// assertions while still compiling.
+pub fn evaluate_overlays(
+    instance: &mut MilkInstance,
+    frame: &MilkFrameInfo,
+) -> Result<OverlayFrame, MilkRuntimeError> {
+    let _ = (instance, frame);
+    Ok(OverlayFrame::default())
 }
 
 /// Advance `instance` to `frame`: run init once, build globals/audio, update
@@ -1686,6 +1800,159 @@ ret = uv;\n\
             "malformed shader marks the module failed"
         );
     }
+
+    // --- Layer 5c: wave/shape overlay CPU tests ----------------------------
+
+    #[test]
+    fn wave_init_frame_and_point_equations_share_t_vars() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].init_eqs = "t1 = 7;".to_string();
+        // `samples` is a runtime-seeded per-wave-frame var; `r` must reflect it.
+        doc.waves[0].frame_eqs = "r = t1 + samples;".to_string();
+        // `t1` carried from init must be visible to the point equations.
+        doc.waves[0].point_eqs = "value1 = t1; sample = 0.5;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-vars", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x11);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        assert_eq!(overlays.waves.len(), 1, "one enabled wave is evaluated");
+        let wave = &overlays.waves[0];
+        assert!(wave.enabled, "the enabled wave is marked enabled");
+        approx!(
+            wave.pool.get("t1"),
+            7.0,
+            "t1 from init carries into the frame pool"
+        );
+        let samples = wave.pool.get("samples");
+        assert!(samples != 0.0, "samples is seeded as a per-wave-frame var");
+        approx!(wave.pool.get("r"), 7.0 + samples, "r = t1 + samples");
+        assert!(
+            !wave.points.is_empty(),
+            "point equations produce sample points"
+        );
+        approx!(
+            wave.points[0].value1,
+            7.0,
+            "t1 carries into point equations"
+        );
+    }
+
+    #[test]
+    fn shape_init_and_frame_equations_share_t_vars() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.shapes[0].enabled = true;
+        doc.shapes[0].init_eqs = "t1 = 5;".to_string();
+        doc.shapes[0].frame_eqs = "sides = t1 + 3;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("shape-vars", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x22);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        assert_eq!(overlays.shapes.len(), 1, "one enabled shape is evaluated");
+        let shape = &overlays.shapes[0];
+        assert!(shape.enabled, "the enabled shape is marked enabled");
+        approx!(
+            shape.pool.get("t1"),
+            5.0,
+            "t1 from init carries into the frame pool"
+        );
+        approx!(shape.pool.get("sides"), 8.0, "sides = t1 + 3");
+    }
+
+    #[test]
+    fn disabled_overlays_do_not_run_and_active_counts_match() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        // Default wave/shape sections are all disabled.
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("all-disabled", &doc, &cache).expect("fixture compiles");
+        assert!(
+            compiled.waves.is_empty(),
+            "no enabled waves -> no wave programs"
+        );
+        assert!(
+            compiled.shapes.is_empty(),
+            "no enabled shapes -> no shape programs"
+        );
+
+        let mut instance = new_instance(compiled, 0x33);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        assert!(
+            overlays.waves.is_empty(),
+            "disabled waves leave no pool side effects"
+        );
+        assert!(
+            overlays.shapes.is_empty(),
+            "disabled shapes leave no pool side effects"
+        );
+
+        // Enable one wave (index 1) and one shape (index 2): the active lists
+        // must grow to match the enabled counts, and only those sections run.
+        doc.waves[1].enabled = true;
+        doc.waves[1].frame_eqs = "r = 1;".to_string();
+        doc.shapes[2].enabled = true;
+        doc.shapes[2].frame_eqs = "sides = 4;".to_string();
+        let compiled2 = compile_preset("some-enabled", &doc, &cache).expect("fixture compiles");
+        assert_eq!(
+            compiled2.waves.len(),
+            1,
+            "active wave list length matches enabled count"
+        );
+        assert_eq!(
+            compiled2.shapes.len(),
+            1,
+            "active shape list length matches enabled count"
+        );
+
+        let mut instance2 = new_instance(compiled2, 0x34);
+        begin_frame(&mut instance2, &f).expect("begin_frame");
+        let overlays2 = evaluate_overlays(&mut instance2, &f).expect("evaluate_overlays");
+        assert_eq!(overlays2.waves.len(), 1, "only the enabled wave runs");
+        assert_eq!(overlays2.shapes.len(), 1, "only the enabled shape runs");
+    }
+
+    #[test]
+    fn malformed_wave_eel_is_skipped_without_panicking_and_other_waves_run() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].init_eqs = "if (1) { x = 2;".to_string(); // unbalanced braces -> parse error
+        doc.waves[1].enabled = true;
+        doc.waves[1].init_eqs = "t2 = 9;".to_string();
+        doc.waves[1].frame_eqs = "g = t2 + 1;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_preset("wave-errors", &doc, &cache)
+        }));
+        let compiled = outcome
+            .expect("malformed wave EEL must not panic")
+            .expect("a broken wave must not fail the whole preset");
+        assert_eq!(
+            compiled.waves.len(),
+            1,
+            "the malformed wave is skipped; the valid wave remains"
+        );
+
+        let mut instance = new_instance(compiled, 0x44);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        assert_eq!(overlays.waves.len(), 1, "only the valid wave is evaluated");
+        approx!(
+            overlays.waves[0].pool.get("g"),
+            10.0,
+            "the valid wave still evaluates"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2111,6 +2378,109 @@ mod gpu_tests {
         assert!(
             matches!(&result, Err(MilkRuntimeError::Draw(_))),
             "malformed WGSL returns MilkRuntimeError::Draw, got {result:?}"
+        );
+    }
+
+    // --- Layer 5c: GPU overlay golden tests -------------------------------
+
+    /// Compile, evaluate overlays, render and read back one preset.
+    fn render_pixels(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        runtime: &MilkRuntime,
+        doc: MilkDocument,
+    ) -> Vec<u8> {
+        let (mut instance, frame, mesh, _previous, previous_view, output, output_view, mut targets) =
+            render_fixture(device, queue, runtime, doc);
+        // GREEN caches the evaluated overlays on `instance` for the GPU pass.
+        let _ = evaluate_overlays(&mut instance, &frame).expect("evaluate_overlays");
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &output_view,
+            )
+            .expect("render");
+        read_texture(device, queue, &output).expect("read back")
+    }
+
+    /// Count pixels that are bright in all three channels.
+    fn bright_count(pixels: &[u8]) -> usize {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[0] > 128 && pixel[1] > 128 && pixel[2] > 128)
+            .count()
+    }
+
+    #[test]
+    fn gpu_wave_overlay_enabled_changes_pixels_vs_disabled() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_wave_overlay: no GPU adapter in this environment");
+                return;
+            }
+        };
+        // A near-black composite background; the wave's frame equations set a
+        // solid bright colour that the overlay pass must paint onto the comp.
+        let mut off = doc_with_comp("float3 ret = float3(0.05, 0.05, 0.05);");
+        off.name = "wave-off".to_string();
+        identity_output(&mut off);
+        let mut on = off.clone();
+        on.name = "wave-on".to_string();
+        on.waves[0].enabled = true;
+        on.waves[0].frame_eqs = "r = 1; g = 1; b = 1; a = 1;".to_string();
+
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let off_pixels = render_pixels(&device, &queue, &runtime, off);
+        let on_pixels = render_pixels(&device, &queue, &runtime, on);
+        assert_ne!(
+            off_pixels, on_pixels,
+            "enabling a bright wave must change the rendered pixels"
+        );
+        assert!(
+            bright_count(&on_pixels) > bright_count(&off_pixels),
+            "the enabled wave must produce more bright pixels (on={}, off={})",
+            bright_count(&on_pixels),
+            bright_count(&off_pixels)
+        );
+    }
+
+    #[test]
+    fn gpu_shape_overlay_enabled_changes_pixels_vs_disabled() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_shape_overlay: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let mut off = doc_with_comp("float3 ret = float3(0.05, 0.05, 0.05);");
+        off.name = "shape-off".to_string();
+        identity_output(&mut off);
+        let mut on = off.clone();
+        on.name = "shape-on".to_string();
+        on.shapes[0].enabled = true;
+        on.shapes[0].frame_eqs =
+            "r = 1; g = 1; b = 1; a = 1; r2 = 1; g2 = 1; b2 = 1; a2 = 1; sides = 6;".to_string();
+
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let off_pixels = render_pixels(&device, &queue, &runtime, off);
+        let on_pixels = render_pixels(&device, &queue, &runtime, on);
+        assert_ne!(
+            off_pixels, on_pixels,
+            "enabling a bright shape must change the rendered pixels"
+        );
+        assert!(
+            bright_count(&on_pixels) > bright_count(&off_pixels),
+            "the enabled shape must produce more bright pixels (on={}, off={})",
+            bright_count(&on_pixels),
+            bright_count(&off_pixels)
         );
     }
 }

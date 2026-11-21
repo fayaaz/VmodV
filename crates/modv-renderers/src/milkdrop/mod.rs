@@ -63,5 +63,6 @@ pub use props::{MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise
 pub use runtime::{
     MILK_UNIFORM_STRIDE, MilkAudio, MilkCompiledPreset, MilkFailureCache, MilkFrameInfo,
     MilkGpuTargets, MilkInstance, MilkMesh, MilkRuntime, MilkRuntimeError, MilkUniforms,
-    begin_frame, compile_preset, evaluate_mesh, new_instance,
+    OverlayFrame, OverlayState, ShapeOverlay, ShapeProgram, WaveOverlay, WavePoint, WaveProgram,
+    begin_frame, compile_preset, evaluate_mesh, evaluate_overlays, new_instance,
 };
