@@ -1,4 +1,4 @@
-//! Module drag and drop in the native Groups pane.
+//! Module drag and drop in the VmodV Groups pane.
 //!
 //! Modules are re-ordered and moved between Groups by dragging their two-bar
 //! grip: the upper half of a row inserts above it, the lower half below it, and

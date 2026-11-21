@@ -1,9 +1,9 @@
-//! Kittest coverage for the native Media panel's webcam picker.
+//! Kittest coverage for the VmodV Media panel's webcam picker.
 //!
 //! Electron's `AudioVideo.vue` lists every camera with a checkbox; a checked
 //! camera is appended to `mediaStream.selectedVideoSources` (the Webcam
 //! module's 1-based `camera` index) and gets its resolution/frame-rate selects.
-//! The native panel mirrors that: checkbox, `#N` Webcam-index badge and up/down
+//! The VmodV panel mirrors that: checkbox, `#N` Webcam-index badge and up/down
 //! arrows that reorder the running cameras.
 
 use egui_kittest::Harness;

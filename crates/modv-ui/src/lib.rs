@@ -1,4 +1,4 @@
-//! Native egui UI for modV.
+//! VmodV egui UI for modV.
 //!
 //! The UI is deliberately engine-agnostic: it renders an [`EngineSnapshot`]
 //! (a once-per-frame read model built by `modv-app`) and emits [`UiAction`]s

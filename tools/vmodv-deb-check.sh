@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Verify the native `.deb` built by tools/native-deb.sh without root.
+# Verify the VmodV `.deb` built by tools/vmodv-deb.sh without root.
 #
-# `make native-deb-check` runs this inside the Dockerised Rust toolchain, and
-# tools/native-deb.sh calls it at the end of every build. It inspects the
+# `make vmodv-deb-check` runs this inside the Dockerised Rust toolchain, and
+# tools/vmodv-deb.sh calls it at the end of every build. It inspects the
 # archive metadata and file list, extracts the payload to a temporary directory
 # and checks that the packaged binary starts (`--help`/`--version`) and that
 # the desktop entry points at the launcher.
 set -euo pipefail
 
 ROOT="${ROOT:-/app}"
-VERSION="${APP_VERSION:-${NATIVE_VERSION:-$(bash "$ROOT/tools/version.sh")}}"
+VERSION="${APP_VERSION:-${VMODV_VERSION:-$(bash "$ROOT/tools/version.sh")}}"
 DIST="${DIST_DIR:-$ROOT/dist}"
 case "$DIST" in
     /*) ;;
     *) DIST="$ROOT/$DIST" ;;
 esac
-DEB="$DIST/VmodV-Native-$VERSION-amd64.deb"
+DEB="$DIST/VmodV-$VERSION-amd64.deb"
 
 # The corpus count is derived from the checkout when available so a future ISF
 # addition does not need this script edited; the fixed fallback is the current
@@ -40,11 +40,11 @@ if [ -z "$EXPECTED_TEXTURES" ]; then
 fi
 
 fail() {
-    echo "native-deb-check: $*" >&2
+    echo "vmodv-deb-check: $*" >&2
     exit 1
 }
 
-[ -f "$DEB" ] || fail "missing $DEB (run 'make native-deb' first)"
+[ -f "$DEB" ] || fail "missing $DEB (run 'make vmodv-deb' first)"
 command -v dpkg-deb >/dev/null || fail "dpkg-deb is not available"
 
 field() {
@@ -57,7 +57,7 @@ assert_field() {
     [ "$actual" = "$expected" ] || fail "$name is '$actual', expected '$expected'"
 }
 
-assert_field Package vmodv-native
+assert_field Package vmodv
 assert_field Version "$VERSION"
 assert_field Architecture amd64
 assert_field Section sound
@@ -102,18 +102,18 @@ has_path() {
 }
 
 has_path '\./usr/bin/modv'
-has_path '\./usr/lib/vmodv-native/modv'
-has_path '\./usr/lib/vmodv-native/log-run.sh'
-has_path '\./usr/share/applications/vmodv-native.desktop'
-has_path '\./usr/share/icons/hicolor/512x512/apps/vmodv-native.png'
-grep -qE ' \./usr/bin/vmodv-native -> modv$' <<<"$CONTENTS" ||
-    fail "missing usr/bin/vmodv-native symlink"
+has_path '\./usr/lib/vmodv/modv'
+has_path '\./usr/lib/vmodv/log-run.sh'
+has_path '\./usr/share/applications/vmodv.desktop'
+has_path '\./usr/share/icons/hicolor/512x512/apps/vmodv.png'
+grep -qE ' \./usr/bin/vmodv -> modv$' <<<"$CONTENTS" ||
+    fail "missing usr/bin/vmodv symlink"
 grep -qE '^-rwxr-xr-x root/root .* \./usr/bin/modv$' <<<"$CONTENTS" ||
     fail "usr/bin/modv is not a root-owned executable"
-grep -qE '^-rwxr-xr-x root/root .* \./usr/lib/vmodv-native/modv$' <<<"$CONTENTS" ||
-    fail "usr/lib/vmodv-native/modv is not a root-owned executable"
-grep -qE '^-rwxr-xr-x root/root .* \./usr/lib/vmodv-native/log-run.sh$' <<<"$CONTENTS" ||
-    fail "usr/lib/vmodv-native/log-run.sh is not a root-owned executable"
+grep -qE '^-rwxr-xr-x root/root .* \./usr/lib/vmodv/modv$' <<<"$CONTENTS" ||
+    fail "usr/lib/vmodv/modv is not a root-owned executable"
+grep -qE '^-rwxr-xr-x root/root .* \./usr/lib/vmodv/log-run.sh$' <<<"$CONTENTS" ||
+    fail "usr/lib/vmodv/log-run.sh is not a root-owned executable"
 
 isf_count=$(grep -cE '^-.* \./usr/share/vmodv/isf/.*\.fs$' <<<"$CONTENTS" || true)
 [ "$isf_count" -eq "$EXPECTED_ISF" ] ||
@@ -127,18 +127,18 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 dpkg-deb -x "$DEB" "$TMP"
 
-[ -x "$TMP/usr/lib/vmodv-native/modv" ] || fail "binary lacks the executable bit"
+[ -x "$TMP/usr/lib/vmodv/modv" ] || fail "binary lacks the executable bit"
 grep -q 'MODV_ISF_DIR' "$TMP/usr/bin/modv" ||
     fail "launcher does not define MODV_ISF_DIR"
 grep -q 'MODV_ASSETS_DIR' "$TMP/usr/bin/modv" ||
     fail "launcher does not define MODV_ASSETS_DIR"
 grep -q 'log-run.sh' "$TMP/usr/bin/modv" ||
     fail "launcher does not run the binary through log-run.sh"
-grep -q '^Exec=modv$' "$TMP/usr/share/applications/vmodv-native.desktop" ||
+grep -q '^Exec=modv$' "$TMP/usr/share/applications/vmodv.desktop" ||
     fail "desktop entry does not launch modv"
-grep -q '^Icon=vmodv-native$' "$TMP/usr/share/applications/vmodv-native.desktop" ||
-    fail "desktop entry does not reference the vmodv-native icon"
-ICON_TYPE=$(file -b "$TMP/usr/share/icons/hicolor/512x512/apps/vmodv-native.png")
+grep -q '^Icon=vmodv$' "$TMP/usr/share/applications/vmodv.desktop" ||
+    fail "desktop entry does not reference the vmodv icon"
+ICON_TYPE=$(file -b "$TMP/usr/share/icons/hicolor/512x512/apps/vmodv.png")
 case "$ICON_TYPE" in
     PNG*image*data*) ;;
     *) fail "icon is not a PNG: $ICON_TYPE" ;;
@@ -183,21 +183,21 @@ grep -q 'error:' "$LAUNCH_LOG" ||
 # covers the AppImage dispatch without mounting an image or opening a window.
 APP_DIR="$TMP/appdir"
 mkdir -p "$APP_DIR/usr/bin"
-install -m0755 "$ROOT/packaging/native/AppRun" "$APP_DIR/AppRun"
-install -m0755 "$TMP/usr/lib/vmodv-native/modv" "$APP_DIR/usr/bin/modv"
-install -m0755 "$TMP/usr/lib/vmodv-native/log-run.sh" \
+install -m0755 "$ROOT/packaging/vmodv/AppRun" "$APP_DIR/AppRun"
+install -m0755 "$TMP/usr/lib/vmodv/modv" "$APP_DIR/usr/bin/modv"
+install -m0755 "$TMP/usr/lib/vmodv/log-run.sh" \
     "$APP_DIR/usr/bin/log-run.sh"
 APP_DATA="$TMP/apprun-data"
 MODV_USER_DATA="$APP_DATA" "$APP_DIR/AppRun" --help >/dev/null
 APP_LOG="$APP_DATA/logs/vmodv-$(date +%F).log"
 [ -f "$APP_LOG" ] || fail "AppRun did not create $APP_LOG"
-grep -q 'native-launch' "$APP_LOG" ||
+grep -q 'vmodv-launch' "$APP_LOG" ||
     fail "AppRun did not go through log-run.sh"
 
-if [ -f "$ROOT/tools/native-log-run-check.sh" ]; then
-    ROOT="$ROOT" bash "$ROOT/tools/native-log-run-check.sh"
+if [ -f "$ROOT/tools/vmodv-log-run-check.sh" ]; then
+    ROOT="$ROOT" bash "$ROOT/tools/vmodv-log-run-check.sh"
 fi
 
-echo "native-deb-check: OK $DEB"
+echo "vmodv-deb-check: OK $DEB"
 echo "  isf files: $isf_count, textures: $texture_count, installed: ${INSTALLED_SIZE} KiB"
 echo "  packaged binary: $BINARY_VERSION"

@@ -1,7 +1,7 @@
-//! Opt-in JSON-lines control socket for the native shell.
+//! Opt-in JSON-lines control socket for the VmodV shell.
 //!
 //! `modv --socket <PATH>` starts a Unix-domain socket server that tests and
-//! debug tools can drive the real native process with. Each request is one
+//! debug tools can drive the real VmodV process with. Each request is one
 //! JSON object per line:
 //!
 //! ```json
@@ -83,7 +83,7 @@ pub struct Request {
     pub command: Command,
 }
 
-/// A command the native shell knows how to answer.
+/// A command the VmodV shell knows how to answer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     /// `state`: a JSON snapshot of the authoritative store plus runtime info.
@@ -271,7 +271,7 @@ struct Reply {
 
 /// Write an RGBA8 buffer as a PNG, returning the file size.
 ///
-/// Kept here (rather than in `native.rs`) so the encoding is unit-testable
+/// Kept here (rather than in `vmodv.rs`) so the encoding is unit-testable
 /// without a GPU.
 pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<u64, String> {
     if width == 0 || height == 0 {
@@ -388,7 +388,7 @@ impl ControlServer {
 #[cfg(not(unix))]
 /// Non-Unix stand-in for the JSON-lines control server.
 ///
-/// The native shell's `--socket` e2e protocol uses a Unix-domain socket and is
+/// The VmodV shell's `--socket` e2e protocol uses a Unix-domain socket and is
 /// supported on Linux only. This stub keeps the shell compiling on Windows and
 /// returns an explicit "unsupported" error from `bind` so `--socket` fails
 /// clearly rather than silently doing nothing.

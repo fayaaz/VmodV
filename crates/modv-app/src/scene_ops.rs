@@ -2295,7 +2295,7 @@ impl Store {
         ))
     }
 
-    /// `scenes/setCellEnabled` (native-only): toggle one Scene cell's
+    /// `scenes/setCellEnabled` (VmodV-only): toggle one Scene cell's
     /// performance-mode flag.
     ///
     /// The flag lives in `performance.disabledCells` (`{ "<sceneId>": [row] }`,
@@ -3155,7 +3155,7 @@ impl Store {
     /// Active rows implied by every live Scene-stamped Group, as
     /// `row -> (scene id, group id)`.
     ///
-    /// This is the typed source behind `scenes/SET_ACTIVE_ROWS` and the native
+    /// This is the typed source behind `scenes/SET_ACTIVE_ROWS` and the VmodV
     /// snapshot's per-row live markers. A transition ghost is the outgoing
     /// half of a row crossfade, so it must not claim the row; a Group with no
     /// Scene stamp or no row is not a Scene cell.
@@ -4106,7 +4106,7 @@ fn parse_stored_scenes(stored: &Value) -> Option<ParsedStoredScenes> {
         defaults_version = 0;
     }
 
-    // Native-only per-cell flags: prune unknown Scenes/rows so a stale
+    // VmodV-only per-cell flags: prune unknown Scenes/rows so a stale
     // `scenes.json` cannot disable a cell that no longer exists. The JS UI
     // ignores `disabledCells` and keeps it in the document.
     let row_names = normalize_row_names(performance.get("rowNames"));
@@ -4620,7 +4620,7 @@ mod tests {
     fn load_scene_from_json_applies_by_default_and_skips_it_when_asked() {
         // `scenes.js:2048-2074` defaults `apply` to `true`: opening a Scene
         // JSON (File → Open Scene, the worker's `loadPreset` branch) applies
-        // it, so the native action must do the same.
+        // it, so the VmodV action must do the same.
         let mut store = Store::new();
         let opened = store
             .dispatch(
@@ -6169,7 +6169,7 @@ mod tests {
 
     #[test]
     fn saved_row_names_survive_hydrate_rename_and_reload() {
-        // Regression for the native Scenes grid losing the row labels: the
+        // Regression for the VmodV Scenes grid losing the row labels: the
         // shared `scenes.json` carries `performance.rowNames` (the real install
         // uses ["WEBCAM", "Background", "Foreground", "Effects", ""]), and the
         // names must hydrate, rename, persist and reload unchanged.

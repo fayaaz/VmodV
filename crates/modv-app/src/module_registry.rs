@@ -62,7 +62,7 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 27 Point10 scenes and 36 shader modules, plus the native-only `Video` 2D
+//! 27 Point10 scenes and 36 shader modules, plus the VmodV-only `Video` 2D
 //! module and the 354 `.fs` shaders of the ISF corpus (433 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
@@ -87,9 +87,9 @@
 //! * The engine resolves the corpus directory from `--isf-dir`, then
 //!   `$MODV_ISF_DIR`, then a development default relative to the executable
 //!   (see [`crate::cli::resolve_isf_dir`]) and hands it to
-//!   [`ModuleRegistry::build`]. The native packages ship the corpus as
+//!   [`ModuleRegistry::build`]. The VmodV packages ship the corpus as
 //!   `/usr/share/vmodv/isf` (`.deb`) or `usr/share/vmodv/isf` inside the
-//!   AppImage (see `tools/native-appimage.sh`/`tools/native-deb.sh`).
+//!   AppImage (see `tools/vmodv-appimage.sh`/`tools/vmodv-deb.sh`).
 //! * A file that cannot be read or parsed is skipped with a one-line warning;
 //!   the summary line reports the registered/failed counts.
 //! * The built-in corpus is scanned flat. User ISF folders supplied through
@@ -721,7 +721,7 @@ pub struct ModuleRegistry {
 
 impl ModuleRegistry {
     /// The 36 built-in shader modules, the 16 2D modules (15 ported plus the
-    /// native-only `Video`) and the ported Point10 scenes, with no ISF corpus.
+    /// VmodV-only `Video`) and the ported Point10 scenes, with no ISF corpus.
     ///
     /// Used by unit tests and the headless benchmark, which must not depend on
     /// files outside the process. The engine path calls [`Self::build`].
@@ -744,7 +744,7 @@ impl ModuleRegistry {
     /// The corpus wins on a name collision; user folders are scanned
     /// recursively (subfolders allowed), sorted by path, and duplicate stems
     /// across folders keep the first sorted path. Every ignored duplicate is
-    /// reported once at startup. This is the native app's third-party ISF path
+    /// reported once at startup. This is the VmodV app's third-party ISF path
     /// (the media watcher calls it again when a `.fs` file changes).
     pub fn build_with_extra(isf_dir: Option<&Path>, extra_dirs: &[PathBuf]) -> Self {
         Self::build_with_milkdrop(isf_dir, extra_dirs, &[])
@@ -2758,10 +2758,10 @@ void main() {{ gl_FragColor = vec4(1.0); }}
         ));
         std::fs::create_dir_all(&dir).expect("create extra ISF dir");
         std::fs::write(
-            dir.join("Native Test Shader.fs"),
+            dir.join("VmodV Test Shader.fs"),
             r#"/*{
-  "NAME": "Native Test Shader",
-  "DESCRIPTION": "native registration test",
+  "NAME": "VmodV Test Shader",
+  "DESCRIPTION": "VmodV registration test",
   "CREDIT": "modV",
   "ISFVSN": "2",
   "CATEGORIES": ["Effects"],
@@ -2776,7 +2776,7 @@ void main() { gl_FragColor = vec4(1.0); }
             registry
                 .isf_definitions()
                 .iter()
-                .any(|definition| definition.name == "Native Test Shader"),
+                .any(|definition| definition.name == "VmodV Test Shader"),
             "extra ISF directory was not registered"
         );
         let _ = std::fs::remove_dir_all(dir);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage a portable macOS app bundle for the native `modv` binary.
+# Stage a portable macOS app bundle for the VmodV `modv` binary.
 #
 # The staged layout is a real .app bundle plus a shell launcher:
 #

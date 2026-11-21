@@ -1,6 +1,6 @@
 //! Window placement persistence, ported from `src/main/window-state.js`.
 //!
-//! The native shell writes the same `window-state.json` document as the
+//! The VmodV shell writes the same `window-state.json` document as the
 //! Electron app, so switching between the two builds keeps the main window (and
 //! output windows) where the user left them. Bounds are logical pixels, the
 //! same unit Electron's `BrowserWindow` uses.

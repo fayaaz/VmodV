@@ -1,4 +1,4 @@
-//! Native MIDI input (P7), replacing the Web MIDI plane.
+//! VmodV MIDI input (P7), replacing the Web MIDI plane.
 //!
 //! `setup-midi.js` is the behavioural reference: one device record per port,
 //! Note On/Off and CC decoding (including `ccLatch`/`noteOnLatch`), MIDI clock
@@ -138,7 +138,7 @@ struct ClockState {
     next_bpm_update: Option<Instant>,
 }
 
-/// The native MIDI client.
+/// The VmodV MIDI client.
 pub struct MidiClient {
     tx: Sender<(String, Vec<u8>)>,
     rx: Receiver<(String, Vec<u8>)>,
@@ -160,7 +160,7 @@ impl Default for MidiClient {
 impl MidiClient {
     pub fn new() -> Self {
         let (tx, rx) = channel();
-        let (available, error) = match MidiInput::new("modV Native") {
+        let (available, error) = match MidiInput::new("VmodV") {
             Ok(_) => (true, None),
             Err(error) => (false, Some(error.to_string())),
         };
@@ -263,7 +263,7 @@ impl MidiClient {
 
     /// Diff the current input ports against the connected set.
     fn scan(&mut self, store: &mut Store) {
-        let Ok(input) = MidiInput::new("modV Native") else {
+        let Ok(input) = MidiInput::new("VmodV") else {
             return;
         };
         let ports = input.ports();
@@ -277,7 +277,7 @@ impl MidiClient {
             let key = format!("{id}-{name}-{manufacturer}");
             seen.insert(key.clone());
             if !self.connections.contains_key(&key) {
-                let Ok(connection_input) = MidiInput::new("modV Native") else {
+                let Ok(connection_input) = MidiInput::new("VmodV") else {
                     continue;
                 };
                 let Some(connection_port) = connection_input.find_port_by_id(&id) else {
@@ -287,7 +287,7 @@ impl MidiClient {
                 let callback_key = key.clone();
                 match connection_input.connect(
                     &connection_port,
-                    "modV Native",
+                    "VmodV",
                     move |_timestamp, message, _| {
                         let _ = tx.send((callback_key.clone(), message.to_vec()));
                     },

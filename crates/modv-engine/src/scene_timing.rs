@@ -25,7 +25,7 @@
 //!
 //! ## Bar timing (`timingUnit`)
 //!
-//! The native engine adds `performance.timingUnit: "seconds" | "bars"`
+//! The VmodV engine adds `performance.timingUnit: "seconds" | "bars"`
 //! (missing means seconds). A bar is [`BEATS_PER_BAR`] beats and
 //! `bar seconds = 4 * 60 / bpm`; an invalid/absent tempo uses
 //! [`FALLBACK_BPM`] (120), the same `beats.bpm || 120` fallback the tween
@@ -39,7 +39,7 @@
 //! Scene edit never silently converts the grid.
 //!
 //! **Electron compatibility:** the JS build does not read `timingUnit` and
-//! would interpret the same numbers as seconds. A native document edited in
+//! would interpret the same numbers as seconds. A VmodV document edited in
 //! bars therefore looks wrong in an older Electron build (and switching back
 //! to seconds before handing the project over is the safe path). The keys
 //! themselves keep their historical names, so no document migration is
@@ -83,7 +83,7 @@ pub const FALLBACK_BPM: f64 = 120.0;
 /// Unit the performance `minSeconds` / `maxSeconds` values are expressed in.
 ///
 /// The keys keep their historical names (`minSeconds`/`maxSeconds`) so the
-/// Electron build can still read a document written by the native engine; see
+/// Electron build can still read a document written by the VmodV engine; see
 /// the module compatibility note. The unit itself is stored alongside them as
 /// `performance.timingUnit`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -409,7 +409,7 @@ pub fn normalize_performance_timing(performance: Option<&Value>) -> PerformanceT
 /// A Scene's effective timing as stored: values in the active [`TimingUnit`].
 ///
 /// Unlike [`SceneTiming`] this keeps the minimum and maximum separate, so the
-/// native UI can edit an override without collapsing both fields to the
+/// VmodV UI can edit an override without collapsing both fields to the
 /// maximum.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneTimingValues {

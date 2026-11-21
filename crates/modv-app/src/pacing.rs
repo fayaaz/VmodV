@@ -1,11 +1,11 @@
-//! Render-loop pacing for the native shell.
+//! Render-loop pacing for the VmodV shell.
 //!
 //! The Electron worker renders at `store.state.fps.fps` (60 by default) and
 //! advances per-frame work — tween frames, audio smoothing, canvas feedback —
-//! once per paced frame. The native winit loop used to redraw as fast as the
+//! once per paced frame. The VmodV winit loop used to redraw as fast as the
 //! event loop allowed (~140 fps on a fast GPU), so those systems ran 2-4x
 //! faster and visuals changed speed with the host frame rate. This pacer gives
-//! the native loop the same fixed cadence, independent of GPU speed.
+//! the VmodV loop the same fixed cadence, independent of GPU speed.
 
 use std::time::{Duration, Instant};
 

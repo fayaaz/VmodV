@@ -1,4 +1,4 @@
-//! The native shell's black-and-neon-green theme.
+//! The VmodV shell's black-and-neon-green theme.
 //!
 //! The palette descends from the legacy dark chrome (`App.vue` +
 //! `golden-layout_theme.css`) but is rebuilt as black surfaces with a

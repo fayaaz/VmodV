@@ -1,4 +1,4 @@
-//! Golden snapshot of the native Audio panel.
+//! Golden snapshot of the VmodV Audio panel.
 //!
 //! Unlike the default `shell` snapshot (Inspector tab), this opens the Audio
 //! tab so the "IN USE" banner, the output-monitor/input-device split and the

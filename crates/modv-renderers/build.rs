@@ -3,7 +3,7 @@
 //! The directory is the single source of truth: every `.wgsl` file in it is
 //! pulled into the crate with `include_str!`, so a packaged engine carries the
 //! overrides without shipping a data directory next to the executable
-//! (`packaging/native` bundles the binary and assets only). Adding or editing
+//! (`packaging/vmodv` bundles the binary and assets only). Adding or editing
 //! an override only needs a rebuild — `cargo:rerun-if-changed` on the directory
 //! handles that.
 //!

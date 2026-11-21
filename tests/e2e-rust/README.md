@@ -28,12 +28,12 @@ tree.
 
 - **covered** — a Rust test asserts the same behaviour. `rust` names one or
   more `crates/...:test_name` (or `tools/...` check) entries.
-- **waived** — not meaningful in the native shell for a concrete reason. The
+- **waived** — not meaningful in the VmodV shell for a concrete reason. The
   `notes` field names the Electron/worker dependency and, where applicable, the
   Rust test that covers the surviving intent.
 
-`notes` also records native semantic differences where the intent is covered:
-row applies mint fresh Group ids, the kill-survival test uses the native
+`notes` also records VmodV semantic differences where the intent is covered:
+row applies mint fresh Group ids, the kill-survival test uses the VmodV
 single-process shell instead of a supervised engine child, and the Scene-open
 path now applies by default.
 
@@ -47,14 +47,14 @@ path now applies by default.
 | groups | 11 | 11 | 11 | 0 | `crates/modv-ui/tests/e2e_groups.rs` |
 | inputLinks | 1 | 1 | 1 | 0 | `crates/modv-ui/tests/e2e_input_config.rs`, `src/store_ops.rs` |
 | main | 2 | 2 | 1 | 1 | `crates/modv-app/tests/e2e_process.rs`, `src/window_state.rs` |
-| packaging | 1 | 1 | 0 | 1 | `tools/native-deb-check.sh`, `tools/native-smoke.sh` |
+| packaging | 1 | 1 | 0 | 1 | `tools/vmodv-deb-check.sh`, `tools/vmodv-smoke.sh` |
 | point10 | 8 | 18 | 18 | 0 | `crates/modv-renderers/src/point10/scene_tests.rs`, `.../scenes/*.rs` |
 | presets | 1 | 1 | 1 | 0 | `crates/modv-engine/src/preset.rs`, `src/fixtures.rs` |
 | scenes | 10 | 77 | 73 | 4 | `crates/modv-app/tests/e2e_scenes.rs`, `e2e_defaults.rs`, `e2e_process.rs`, `crates/modv-ui/tests/e2e_scenes_grid.rs`, `src/scene_ops.rs`, `src/performance.rs` |
 | main (legacy placeholder) | 1 | 0 | 0 | 0 | — |
 | **Total** | **50** | **147** | **137** | **10** | |
 
-The process-level tests launch the real `modv` binary through the native
+The process-level tests launch the real `modv` binary through the VmodV
 harness (`crates/modv-app/tests/e2e/mod.rs`), so window state, startup
 seeding and Scene-open behaviour are exercised end to end rather than only
 through the store.
@@ -65,13 +65,13 @@ through the store.
 | --- | --- |
 | `general/fullScreenGlContextsAreNotAntialiased` | Inspects Chromium WebGL context attributes (`antialias:false`) on worker `OffscreenCanvas` aux outputs. Native ISF/shader passes are wgpu pipelines with no multisample state to configure. |
 | `general/galleryGroupInheritsOnlyWhenHovered` (×2) | The legacy worker Gallery Group canvas does not exist natively. Hover previews are isolated offscreen renders; `compositor.rs:module_preview_composites_over_the_live_output` covers the compositing intent, and there is no idle Gallery canvas to repaint. |
-| `general/moduleDataCommitsOnlyWhenChanged` | Vuex commit de-duplication in the worker loop. Native module data is updated in place with no per-frame commit/mirror message to suppress. |
-| `main/quitCleansUp` | Asserts Chromium's main/renderer/GPU/utility child tree is gone after `app.quit()`. The native shell is one process with no such tree; `tools/native-smoke.sh` already checks clean windowed exits. |
-| `packaging/linuxBundleIsTrimmed` | Asserts electron-builder `app.asar.unpacked` contents, `hapticjs`/`grandiose` addons and Chromium locale `.pak` files. Native packaging has separate `native-deb`/`native-appimage` checks and contains none of those payloads. |
-| `scenes/hoverPreviewIsolation` | Regression for deleting the shared WebGL unit-quad vertex buffer when a preview ISF renderer is disposed. Native previews use separate wgpu module instances; `scene_preview.rs:cache_keeps_the_other_cells_instances_while_a_hover_moves` covers isolation. |
-| `scenes/hoverPreviewUsesGalleryContexts` | Asserts the worker's shared live ISF `OffscreenCanvas` keeps its output size during a hover. Native previews never resize the live surface. |
-| `scenes/performanceGrid` — editing a grid cell saves added modules | Native has no in-cell module-editor dialog. The same end state is reachable by creating the cell Group (`scenes/createSceneCellGroup`), editing the live Group via the Gallery/Groups pane, then capturing it back (`scenes/captureSceneRowToScene`) or clearing it (`scenes/clearSceneCell`, now confirmed). The grid widgets are asserted by `e2e_scenes_grid.rs`; the store half by `scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows`. |
-| `scenes/performanceGrid` — drag a module from its panel into the Group | There is no editor module panel to drag from. Native has the equivalent drag: a Gallery tile dropped on a Group block queues `ui/addModuleToGroup` (`gallery_drag_drop.rs:dragging_a_gallery_tile_onto_a_group_queues_the_add_action`), and a Library asset can be dragged onto its texture prop. |
+| `general/moduleDataCommitsOnlyWhenChanged` | Vuex commit de-duplication in the worker loop. VmodV module data is updated in place with no per-frame commit/mirror message to suppress. |
+| `main/quitCleansUp` | Asserts Chromium's main/renderer/GPU/utility child tree is gone after `app.quit()`. The VmodV shell is one process with no such tree; `tools/vmodv-smoke.sh` already checks clean windowed exits. |
+| `packaging/linuxBundleIsTrimmed` | Asserts electron-builder `app.asar.unpacked` contents, `hapticjs`/`grandiose` addons and Chromium locale `.pak` files. VmodV packaging has separate `vmodv-deb`/`vmodv-appimage` checks and contains none of those payloads. |
+| `scenes/hoverPreviewIsolation` | Regression for deleting the shared WebGL unit-quad vertex buffer when a preview ISF renderer is disposed. VmodV previews use separate wgpu module instances; `scene_preview.rs:cache_keeps_the_other_cells_instances_while_a_hover_moves` covers isolation. |
+| `scenes/hoverPreviewUsesGalleryContexts` | Asserts the worker's shared live ISF `OffscreenCanvas` keeps its output size during a hover. VmodV previews never resize the live surface. |
+| `scenes/performanceGrid` — editing a grid cell saves added modules | VmodV has no in-cell module-editor dialog. The same end state is reachable by creating the cell Group (`scenes/createSceneCellGroup`), editing the live Group via the Gallery/Groups pane, then capturing it back (`scenes/captureSceneRowToScene`) or clearing it (`scenes/clearSceneCell`, now confirmed). The grid widgets are asserted by `e2e_scenes_grid.rs`; the store half by `scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows`. |
+| `scenes/performanceGrid` — drag a module from its panel into the Group | There is no editor module panel to drag from. VmodV has the equivalent drag: a Gallery tile dropped on a Group block queues `ui/addModuleToGroup` (`gallery_drag_drop.rs:dragging_a_gallery_tile_onto_a_group_queues_the_add_action`), and a Library asset can be dragged onto its texture prop. |
 
 ## Closed port gaps
 
@@ -81,11 +81,11 @@ The port closed the gaps the previous inventory listed as `port-*`:
   opening a Scene JSON through the media dialog applies it:
   `a_scene_json_can_be_loaded_directly` and
   `a_scene_json_opened_like_a_preset_is_applied_as_a_scene`.
-- **Fresh-start default Group** — a fresh native userData seeds exactly one
+- **Fresh-start default Group** — a fresh VmodV userData seeds exactly one
   `New Group`, matching Electron (there is no Gallery Group canvas):
-  `fresh_native_start_creates_exactly_one_default_group` and
-  `native_shell_serves_state_seeds_defaults_and_quits_cleanly`.
-- **Kill/restart and window state** — the native shell restores its saved
+  `fresh_vmodv_start_creates_exactly_one_default_group` and
+  `vmodv_shell_serves_state_seeds_defaults_and_quits_cleanly`.
+- **Kill/restart and window state** — the VmodV shell restores its saved
   snapshot after SIGKILL and remembers window placement across restarts:
   `engine_skeleton_survives_sigkill_and_restores_state` and
   `window_state_survives_a_restart`.

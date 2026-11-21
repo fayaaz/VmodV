@@ -1,4 +1,4 @@
-//! Kittest coverage for the native Library tab.
+//! Kittest coverage for the VmodV Library tab.
 //!
 //! The Library browses the active profile's image/video/palette folders
 //! recursively. These tests drive the real shell: the tab strip, folder

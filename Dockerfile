@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 #
-# Rust-only build for VmodV Native. There is no Node, Yarn or Electron stage:
-# the app is the `modv` binary in the `crates/` workspace, and the native
+# Rust-only build for VmodV. There is no Node, Yarn or Electron stage:
+# the app is the `modv` binary in the `crates/` workspace, and the VmodV
 # installers bundle that binary plus `resources/isf` and the Point10 textures.
 #
 # Targets:
 #   rust             clang/fmt, GStreamer/PipeWire/Vulkan/Xvfb toolchain used by
-#                    `make engine*`, `make dev` and `make test-e2e-native`.
-#   native-package   builds both installers inside the build (slow, no cache);
+#                    `make engine*`, `make dev` and `make test-e2e-vmodv`.
+#   vmodv-package   builds both installers inside the build (slow, no cache);
 #                    `make build` uses the cached `docker run` path instead.
 #   appimage / deb   metadata-only stages holding the respective artifact.
 #   artifacts        both installers, for `docker buildx --output type=local`.
@@ -35,8 +35,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
-# The day-to-day toolchain for every `make engine*` / `make native*` target.
-# The runtime packages are also what the Xvfb-backed native e2e harness and the
+# The day-to-day toolchain for every `make engine*` / `make vmodv*` target.
+# The runtime packages are also what the Xvfb-backed VmodV e2e harness and the
 # packaged-app smoke checks need, so one image serves build, test and package.
 FROM base AS rust
 RUN apt-get update \
@@ -79,25 +79,25 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path \
     && rustup component add rustfmt clippy
 
-# Build both native installers in one stage. The scripts are the same ones the
+# Build both VmodV installers in one stage. The scripts are the same ones the
 # Makefile runs with a cargo volume cache; this stage exists for reproducible
 # `docker buildx` release artifacts and does not use Node.
-FROM rust AS native-package
+FROM rust AS vmodv-package
 # No version literal lives in the tree; the host passes the git-tag-derived
-# version via `docker buildx build --build-arg NATIVE_VERSION=...` (make
+# version via `docker buildx build --build-arg VMODV_VERSION=...` (make
 # docker-package does this via tools/version.sh). The fallback only marks a
 # build made without the argument. .git is not in the context.
-ARG NATIVE_VERSION=0.0.0-dev
-ENV APP_VERSION=${NATIVE_VERSION}
+ARG VMODV_VERSION=0.0.0-dev
+ENV APP_VERSION=${VMODV_VERSION}
 COPY . .
-RUN bash tools/native-appimage.sh \
-    && bash tools/native-deb.sh
+RUN bash tools/vmodv-appimage.sh \
+    && bash tools/vmodv-deb.sh
 
 FROM scratch AS appimage
-COPY --from=native-package /app/dist/*.AppImage /
+COPY --from=vmodv-package /app/dist/*.AppImage /
 
 FROM scratch AS deb
-COPY --from=native-package /app/dist/*.deb /
+COPY --from=vmodv-package /app/dist/*.deb /
 
 FROM scratch AS artifacts
 COPY --from=appimage / /

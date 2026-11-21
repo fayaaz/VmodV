@@ -402,7 +402,7 @@ impl Store {
 
     /// The configured render frame rate (`fps/SET_FPS`, default 60).
     ///
-    /// The native shell paces its redraw loop to this value, mirroring the
+    /// The VmodV shell paces its redraw loop to this value, mirroring the
     /// worker's `requestAnimationFrame` interval, so per-frame animation work
     /// (tween frames, smoothing, feedback) runs at the same wall-clock speed
     /// regardless of GPU throughput.
@@ -1874,7 +1874,7 @@ impl Store {
     /// `groups/MOVE_MODULE`: move a Module to `toIndex` in another Group (or
     /// within its own), keeping every other Module's order.
     ///
-    /// The native Groups pane owns this action; `toIndex` is the final index in
+    /// The VmodV Groups pane owns this action; `toIndex` is the final index in
     /// the destination Group *after* the Module is removed from its source, so
     /// the same-group math is unambiguous. Both Groups receive the existing
     /// `groups/REPLACE_GROUP_MODULES` mirror delta (source first, then target)

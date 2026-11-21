@@ -1,7 +1,7 @@
 //! Debounced filesystem watch for the active project media tree (P6).
 //!
 //! Electron's `create-watcher.js` watches the whole media directory and feeds
-//! changed files back into its read handlers. The native shell only consumes
+//! changed files back into its read handlers. The VmodV shell only consumes
 //! ISF shaders, but an image/video/palette change is still worth one log line,
 //! so this watcher covers those four folders of the active profile (plus any
 //! extra user ISF folders) and reports a coalesced burst.

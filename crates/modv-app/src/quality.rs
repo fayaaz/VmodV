@@ -1,6 +1,6 @@
 //! Per-module render quality rules.
 //!
-//! The native app has a global *internal rendering resolution* preference
+//! The VmodV app has a global *internal rendering resolution* preference
 //! (Full / Balanced / Performance). This module decides, per module instance,
 //! what that setting means, and it adds the per-module **Quality** prop
 //! (`global` / `full` / `balanced` / `performance`) that overrides it.

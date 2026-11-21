@@ -1,7 +1,7 @@
-//! Kittest coverage for the native Media panel's screen-capture section.
+//! Kittest coverage for the VmodV Media panel's screen-capture section.
 //!
 //! Electron's `ScreenCapture.vue`/`ScreenPickerDialog.vue` asked for a screen
-//! through `getDisplayMedia()`; the native shell asks the XDG desktop portal
+//! through `getDisplayMedia()`; the VmodV shell asks the XDG desktop portal
 //! itself, so the panel only offers two buttons and the portal's own dialog
 //! chooses the monitor or window. The snapshot is a fixture, so no D-Bus portal
 //! and no PipeWire server are needed to run these tests.

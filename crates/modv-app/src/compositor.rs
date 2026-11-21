@@ -837,7 +837,7 @@ pub struct Compositor {
     group_targets: HashSet<String>,
     /// Row-fade blend targets keyed by row index (`loop.js:498-537`).
     row_fade_targets: HashMap<usize, OutputTexture>,
-    /// Row-monitor snapshot textures keyed by Group id (the native Scenes
+    /// Row-monitor snapshot textures keyed by Group id (the VmodV Scenes
     /// grid's per-row thumbnails). One plain GPU-GPU copy of the Group's
     /// rendered texture, taken at the UI's slow monitor cadence; dropped with
     /// the Group on prune/resize/reset, never sharing a production pass.
@@ -3379,7 +3379,7 @@ impl Compositor {
 
     /// A clone of the composited main texture view.
     ///
-    /// The native UI registers this view with `egui-wgpu` as a native texture,
+    /// The VmodV UI registers this view with `egui-wgpu` as a native texture,
     /// so the preview path has no readback and no shared-memory ring. The view
     /// is recreated on resize/reset; callers re-register when
     /// [`Self::main_texture_size`] changes.
@@ -3396,7 +3396,7 @@ impl Compositor {
     }
 
     /// Copy `group_id`'s current rendered texture into the Group's row-monitor
-    /// snapshot (the native Scenes grid's per-row thumbnail source).
+    /// snapshot (the VmodV Scenes grid's per-row thumbnail source).
     ///
     /// This is a plain GPU-GPU copy at output size — no read-back, no extra
     /// pass in the production frame graph and no isolated state: the Group's
@@ -5017,7 +5017,7 @@ void main() {
         let mut compositor = isf_compositor(engine, Arc::clone(&registry));
 
         // The outgoing Scene is opaque white; the incoming Scene is empty
-        // (transparent), exactly like the native crossfade test.
+        // (transparent), exactly like the VmodV crossfade test.
         compositor
             .render_frame(&invert_state(1.0), &frame_info())
             .expect("outgoing frame renders");

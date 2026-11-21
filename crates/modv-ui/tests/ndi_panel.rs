@@ -1,7 +1,7 @@
-//! Kittest coverage for the native NDI panel.
+//! Kittest coverage for the VmodV NDI panel.
 //!
 //! Electron's `InputDeviceConfig/NDI.vue` drives the engine's `ndi` store
-//! module; the native panel dispatches the same actions. The snapshot is a
+//! module; the VmodV panel dispatches the same actions. The snapshot is a
 //! fixture, so no libndi/NDI SDK is required to run these tests.
 
 use egui_kittest::Harness;

@@ -4,7 +4,7 @@
 //! in the tab strip, in their own dock column, or in an in-app floating window.
 //! These tests drive the real shell buttons and assert both the placement model
 //! and the rendered state. Section sizes are captured from the real panel rects,
-//! which is what `NativeApp` persists in `native-layout.json`.
+//! which is what `VmodvApp` persists in `vmodv-layout.json`.
 
 use accesskit::Role;
 use egui_kittest::Harness;

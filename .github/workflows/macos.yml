@@ -40,12 +40,12 @@ jobs:
         include:
           - arch: x86_64
             runner: macos-15-intel
-            artifact: vmodv-native-macos-x86_64-portable
-            zip_prefix: VmodV-Native-macOS-x86_64-portable-
+            artifact: vmodv-macos-x86_64-portable
+            zip_prefix: VmodV-macOS-x86_64-portable-
           - arch: arm64
             runner: macos-15
-            artifact: vmodv-native-macos-arm64-portable
-            zip_prefix: VmodV-Native-macOS-arm64-portable-
+            artifact: vmodv-macos-arm64-portable
+            zip_prefix: VmodV-macOS-arm64-portable-
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:

@@ -27,7 +27,6 @@ pub mod media_watch;
 pub mod midi;
 pub mod module_preview;
 pub mod module_registry;
-pub mod native;
 pub mod ndi_runtime;
 pub mod pacing;
 pub mod performance;
@@ -39,11 +38,13 @@ pub mod scene_ops;
 pub mod scene_preview;
 pub mod scene_transition;
 pub mod screen_share;
+pub mod settings_compat;
 pub mod store_ops;
 pub mod supervisor;
 pub mod texture_sources;
 pub mod ui_layout;
 pub mod video_sources;
+pub mod vmodv;
 pub mod window;
 pub mod window_state;
 pub mod windows;
@@ -139,14 +140,14 @@ pub fn run_engine() -> ExitCode {
     }
 }
 
-/// Entry point for the `modv` native-UI binary.
+/// Entry point for the `modv` VmodV UI binary.
 ///
 /// `--headless` and `--screenshot` keep the engine-only behaviour.
-pub fn native_main() -> ExitCode {
+pub fn vmodv_main() -> ExitCode {
     die_with_parent();
 
     let mut cli = cli::parse();
-    cli.bench_seconds = cli::native_bench_seconds(cli.bench_seconds_explicit, cli.bench_seconds);
+    cli.bench_seconds = cli::vmodv_bench_seconds(cli.bench_seconds_explicit, cli.bench_seconds);
 
     if cli.list_audio_devices {
         audio::print_devices();
@@ -202,7 +203,7 @@ pub fn native_main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    match native::run(cli, engine, adapter) {
+    match vmodv::run(cli, engine, adapter) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err}");

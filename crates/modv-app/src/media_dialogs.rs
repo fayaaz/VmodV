@@ -1,9 +1,9 @@
-//! Native file-dialog plumbing: document detection, preset/playlist IO and
+//! VmodV file-dialog plumbing: document detection, preset/playlist IO and
 //! the seam between a picked path and the engine.
 //!
 //! Electron's renderer owns the dialogs and the worker does the file IO
 //! (`loadPreset` in `index.worker.js`, `export-scenes-playlist` /
-//! `import-scenes-playlist` in `window-prefs.js`). The native shell keeps the
+//! `import-scenes-playlist` in `window-prefs.js`). The VmodV shell keeps the
 //! same document formats but does the IO in-process:
 //!
 //! - opening auto-detects a preset, a Scene document or a Scenes playlist,
@@ -12,7 +12,7 @@
 //! - playlist export/import use `scenes/exportPlaylist`/`scenes/importPlaylist`.
 //!
 //! [`FilePicker`] is the test seam: the menu and the in-app picker only
-//! produce a path, and a picker implementation applies it. [`NativeApp`]
+//! produce a path, and a picker implementation applies it. [`VmodvApp`]
 //! implements it for real; unit tests record the calls.
 
 use std::ffi::OsString;
@@ -204,7 +204,7 @@ pub fn logs_dir(user_data: &Path) -> PathBuf {
 
 /// The seam between a picked path and the engine.
 ///
-/// The native shell implements this for [`crate::native::NativeApp`]; tests use
+/// The VmodV shell implements this for [`crate::vmodv::VmodvApp`]; tests use
 /// a recording implementation, so menu wiring can be asserted without a real
 /// dialog or file system.
 pub trait FilePicker {

@@ -177,15 +177,15 @@ jobs:
         shell: pwsh
         run: |
           $src = Join-Path $env:GITHUB_WORKSPACE 'dist\windows-portable'
-          $out = Join-Path $env:GITHUB_WORKSPACE "dist\VmodV-Native-Windows-x86_64-portable-$env:VERSION.zip"
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist\VmodV-Windows-x86_64-portable-$env:VERSION.zip"
           Compress-Archive -Path "$src\*" -DestinationPath $out -CompressionLevel Optimal
           Get-Item $out | Select-Object FullName, Length
 
       - name: Upload portable Windows ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: vmodv-native-windows-x86_64-portable
-          path: dist/VmodV-Native-Windows-x86_64-portable-*.zip
+          name: vmodv-windows-x86_64-portable
+          path: dist/VmodV-Windows-x86_64-portable-*.zip
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -204,12 +204,12 @@ jobs:
         include:
           - arch: x86_64
             runner: macos-15-intel
-            artifact: vmodv-native-macos-x86_64-portable
-            zip_prefix: VmodV-Native-macOS-x86_64-portable-
+            artifact: vmodv-macos-x86_64-portable
+            zip_prefix: VmodV-macOS-x86_64-portable-
           - arch: arm64
             runner: macos-15
-            artifact: vmodv-native-macos-arm64-portable
-            zip_prefix: VmodV-Native-macOS-arm64-portable-
+            artifact: vmodv-macos-arm64-portable
+            zip_prefix: VmodV-macOS-arm64-portable-
     runs-on: ${{ matrix.runner }}
     needs: version
     if: ${{ needs.version.outputs.should_release == 'true' }}
@@ -339,15 +339,15 @@ jobs:
           load: true
           cache-from: type=gha,scope=rust-toolchain
 
-      - name: Build native AppImage and .deb
+      - name: Build VmodV AppImage and .deb
         run: make build
         env:
-          NATIVE_VERSION: ${{ env.VERSION }}
+          VMODV_VERSION: ${{ env.VERSION }}
 
       - name: Inspect installers
         run: |
           ls -lh dist
-          dpkg-deb -I dist/VmodV-Native-*.deb
+          dpkg-deb -I dist/VmodV-*.deb
 
       - name: Generate release notes
         run: |
@@ -367,19 +367,19 @@ jobs:
       - name: Download portable Windows ZIP
         uses: actions/download-artifact@v4
         with:
-          name: vmodv-native-windows-x86_64-portable
+          name: vmodv-windows-x86_64-portable
           path: dist-windows
 
       - name: Download portable macOS ZIP (x86_64)
         uses: actions/download-artifact@v4
         with:
-          name: vmodv-native-macos-x86_64-portable
+          name: vmodv-macos-x86_64-portable
           path: dist-macos
 
       - name: Download portable macOS ZIP (arm64)
         uses: actions/download-artifact@v4
         with:
-          name: vmodv-native-macos-arm64-portable
+          name: vmodv-macos-arm64-portable
           path: dist-macos
 
       - name: Publish GitHub release
@@ -387,4 +387,4 @@ jobs:
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes-file release-notes.md \
-            dist/VmodV-Native-*.AppImage dist/VmodV-Native-*.deb dist-windows/*.zip dist-macos/*.zip
+            dist/VmodV-*.AppImage dist/VmodV-*.deb dist-windows/*.zip dist-macos/*.zip

@@ -92,7 +92,7 @@ impl Input {
 /// The JS reads them from the worker's `dataTypes` state
 /// (`dataTypes.js`: `vec2` → `{0,1}`, `vec3` → `{0,1,2}`,
 /// `vec4` → `{0,1,2,3}`, `color` → `{r,g,b,a}`); they are compiled in here
-/// so the engine, the scene snapshot machinery and the native UI agree on
+/// so the engine, the scene snapshot machinery and the VmodV UI agree on
 /// one table. A plugin-registered type contributes no sub-inputs, which
 /// matches the `inputs`-less entries.
 pub fn data_type_input_keys(type_name: &str) -> &'static [&'static str] {
@@ -256,7 +256,7 @@ pub fn resolve_input_link_value_for_source(
 
 /// Whether an Input Link source is backed by a tween descriptor.
 ///
-/// `tween` is the legacy curve editor; `draw` is the native freehand editor.
+/// `tween` is the legacy curve editor; `draw` is the VmodV freehand editor.
 /// Both store their curve in `state.tweens` under the input id, so they share
 /// the descriptor lifecycle: a link replacing or removing one must drop it, a
 /// Scene apply must carry it, and a retargeted link must rewrite its location.

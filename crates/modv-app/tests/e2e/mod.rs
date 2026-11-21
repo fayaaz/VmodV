@@ -1,16 +1,16 @@
-//! Process-level harness for the native Rust shell (`modv`).
+//! Process-level harness for the VmodV Rust shell (`modv`).
 //!
-//! The Electron e2e suite drives a live app through Playwright; the native
-//! equivalent launches the real binary (no mocks, no in-process `NativeApp`)
+//! The Electron e2e suite drives a live app through Playwright; the VmodV
+//! equivalent launches the real binary (no mocks, no in-process `VmodvApp`)
 //! with a temporary userData tree (or an explicit one for restart tests), a
 //! JSON-lines control socket and a virtual display when the environment has
 //! none. Tests then assert `state`, dispatch Vuex-style actions, capture
 //! compositor frames and verify the process exit.
 //!
 //! ```ignore
-//! use crate::e2e::NativeHarness;
+//! use crate::e2e::VmodvHarness;
 //!
-//! let mut app = NativeHarness::spawn();
+//! let mut app = VmodvHarness::spawn();
 //! app.wait_ready(Duration::from_secs(60));
 //! app.dispatch("groups/createGroup", serde_json::json!({"name": "E2E"}));
 //! assert!(app.state()["groups"].as_array().unwrap().iter().any(|g| g["name"] == "E2E"));
@@ -45,8 +45,8 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default time allowed for a graceful quit.
 pub const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Builder for [`NativeHarness`].
-pub struct NativeHarnessBuilder {
+/// Builder for [`VmodvHarness`].
+pub struct VmodvHarnessBuilder {
     width: u32,
     height: u32,
     args: Vec<String>,
@@ -54,7 +54,7 @@ pub struct NativeHarnessBuilder {
     user_data: Option<PathBuf>,
 }
 
-impl Default for NativeHarnessBuilder {
+impl Default for VmodvHarnessBuilder {
     fn default() -> Self {
         Self {
             width: 960,
@@ -66,7 +66,7 @@ impl Default for NativeHarnessBuilder {
     }
 }
 
-impl NativeHarnessBuilder {
+impl VmodvHarnessBuilder {
     /// Output window width (the compositor's main texture size).
     pub fn width(mut self, width: u32) -> Self {
         self.width = width;
@@ -122,14 +122,14 @@ impl NativeHarnessBuilder {
         self
     }
 
-    /// Spawn the native shell and wait until it answers `ping`.
-    pub fn spawn(self) -> NativeHarness {
-        NativeHarness::launch(self)
+    /// Spawn the VmodV shell and wait until it answers `ping`.
+    pub fn spawn(self) -> VmodvHarness {
+        VmodvHarness::launch(self)
     }
 }
 
 /// A running `modv` process plus its control-socket client.
-pub struct NativeHarness {
+pub struct VmodvHarness {
     child: Option<Child>,
     client: Option<ControlClient>,
     display: TestDisplay,
@@ -145,19 +145,19 @@ pub struct NativeHarness {
     pid: u32,
 }
 
-impl NativeHarness {
+impl VmodvHarness {
     /// Spawn with the default 960 × 540 output.
     pub fn spawn() -> Self {
         Self::builder().spawn()
     }
 
     /// Configure a harness before spawning.
-    pub fn builder() -> NativeHarnessBuilder {
-        NativeHarnessBuilder::default()
+    pub fn builder() -> VmodvHarnessBuilder {
+        VmodvHarnessBuilder::default()
     }
 
-    fn launch(options: NativeHarnessBuilder) -> Self {
-        let temp_dir = unique_dir("native-e2e");
+    fn launch(options: VmodvHarnessBuilder) -> Self {
+        let temp_dir = unique_dir("vmodv-e2e");
         fs::create_dir_all(&temp_dir).expect("create harness temp dir");
         let user_data = match options.user_data.clone() {
             Some(path) => path,
@@ -286,7 +286,7 @@ impl NativeHarness {
         while Instant::now() < deadline {
             if let Some(status) = self.try_wait() {
                 panic!(
-                    "native shell exited during startup ({status})\n--- logs ---\n{}",
+                    "VmodV shell exited during startup ({status})\n--- logs ---\n{}",
                     self.logs()
                 );
             }
@@ -297,7 +297,7 @@ impl NativeHarness {
             thread::sleep(Duration::from_millis(100));
         }
         panic!(
-            "native shell was not ready after {timeout:?}: {last_error}\n--- logs ---\n{}",
+            "VmodV shell was not ready after {timeout:?}: {last_error}\n--- logs ---\n{}",
             self.logs()
         );
     }
@@ -456,7 +456,7 @@ impl NativeHarness {
             if Instant::now() >= deadline {
                 let _ = self.kill();
                 panic!(
-                    "native shell did not exit within {timeout:?}\n--- logs ---\n{}",
+                    "VmodV shell did not exit within {timeout:?}\n--- logs ---\n{}",
                     self.logs()
                 );
             }
@@ -490,9 +490,9 @@ impl NativeHarness {
         let mut child = self
             .child
             .take()
-            .expect("kill_and_wait needs a running native shell");
+            .expect("kill_and_wait needs a running VmodV shell");
         let _ = child.kill();
-        child.wait().expect("reap the killed native shell")
+        child.wait().expect("reap the killed VmodV shell")
     }
 
     fn expect(&mut self, request: Value) -> Value {
@@ -512,18 +512,18 @@ impl NativeHarness {
                 Some(status)
             }
             Ok(None) => None,
-            Err(error) => panic!("could not poll the native shell: {error}"),
+            Err(error) => panic!("could not poll the VmodV shell: {error}"),
         }
     }
 }
 
-impl Drop for NativeHarness {
+impl Drop for VmodvHarness {
     fn drop(&mut self) {
         let _ = self.kill();
         // A failing assertion keeps the temp tree (log + PNG) for diagnosis.
         if self.keep || std::thread::panicking() {
             eprintln!(
-                "native e2e artifacts kept at {} ({}x{})",
+                "VmodV e2e artifacts kept at {} ({}x{})",
                 self.temp_dir.display(),
                 self.width,
                 self.height
@@ -814,7 +814,7 @@ fn unique_dir(prefix: &str) -> PathBuf {
 ///
 /// The harness removes only its own per-launch tree, so a restart test owns
 /// this root: pass `root.join("userData")` to
-/// [`NativeHarnessBuilder::user_data`] and remove `root` when the test ends.
+/// [`VmodvHarnessBuilder::user_data`] and remove `root` when the test ends.
 pub fn temp_root(prefix: &str) -> PathBuf {
     let dir = unique_dir(prefix);
     fs::create_dir_all(&dir).expect("create harness temp root");

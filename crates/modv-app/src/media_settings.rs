@@ -1,13 +1,13 @@
-//! The native shell's persisted webcam selection, order and capture modes.
+//! The VmodV shell's persisted webcam selection, order and capture modes.
 //!
 //! Electron persists its whole `mediaStream` module (`vuex-persistedstate`,
 //! `paths: ["mediaStream"]`): an ordered `selectedVideoSources` list, where a
 //! camera's 1-based position is the Webcam module's `camera` prop index, and a
 //! per-device `videoSettings` map with the chosen resolution/frame rate. The
-//! native shell had neither: a restart forgot every camera and always asked for
+//! VmodV shell had neither: a restart forgot every camera and always asked for
 //! 1280×720@30.
 //!
-//! The panel's choice is stored in `<userData>/native-media.json`:
+//! The panel's choice is stored in `<userData>/vmodv-media.json`:
 //!
 //! ```json
 //! {
@@ -33,7 +33,7 @@ use std::path::Path;
 use modv_media::video::{CameraInfo, VideoMode};
 
 /// The persisted webcam choice inside the shared userData directory.
-pub const MEDIA_SETTINGS_FILENAME: &str = "native-media.json";
+pub const MEDIA_SETTINGS_FILENAME: &str = "vmodv-media.json";
 
 /// 1280×720@30: the legacy renderer's unset-camera default and
 /// `VideoSourceConfig::normalised`'s fallback.
@@ -87,7 +87,8 @@ pub struct MediaSettings {
 impl MediaSettings {
     /// Read the document, treating a missing file as "nothing saved".
     pub fn read_from(path: &Path) -> Result<Option<Self>, String> {
-        let text = match std::fs::read_to_string(path) {
+        let path = crate::settings_compat::read_path(path);
+        let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -308,6 +309,21 @@ fn max_mode(caps: &[VideoMode]) -> CameraMode {
 mod tests {
     use super::*;
     use modv_media::video::VideoMode;
+
+    #[test]
+    fn legacy_native_media_filename_is_read_as_a_fallback() {
+        let (directory, _path) = temp_path();
+        let legacy = directory.join("vmodv-media.json");
+        let mut saved = MediaSettings::default();
+        saved.add("/dev/video0");
+        saved.write_to(&legacy).expect("write legacy media");
+        let current = directory.join(MEDIA_SETTINGS_FILENAME);
+        assert_eq!(
+            MediaSettings::read_from(&current).expect("read legacy media"),
+            Some(saved)
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     fn camera(id: &str, caps: &[(u32, u32, u32)]) -> CameraInfo {
         CameraInfo {

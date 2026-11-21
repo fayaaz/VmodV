@@ -1,7 +1,7 @@
-//! The native in-app file picker and the File-menu dialog commands.
+//! The VmodV in-app file picker and the File-menu dialog commands.
 //!
-//! The picker exists because the native binary cannot rely on a desktop
-//! portal: `make native` runs in a container with no D-Bus session, and the
+//! The picker exists because the VmodV binary cannot rely on a desktop
+//! portal: `make vmodv` runs in a container with no D-Bus session, and the
 //! Docker Rust image has no GTK headers for `rfd`'s default backend. Reading
 //! directories through `std::fs` keeps the dialog non-blocking (it is just
 //! egui state) and testable in plain kittest.

@@ -1,7 +1,7 @@
-//! Gallery → Group drag and drop in the native shell.
+//! Gallery → Group drag and drop in the VmodV shell.
 //!
 //! Electron's Gallery has been a drag source for a long time; its Group module
-//! strips are drop targets. The native shell has the double-click and context
+//! strips are drop targets. The VmodV shell has the double-click and context
 //! menu paths, so these tests pin the missing pointer path: dragging a tile
 //! onto a Group queues the same `ui/addModuleToGroup` action for that Group,
 //! and releasing over empty space queues nothing.

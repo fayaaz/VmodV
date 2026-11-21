@@ -1088,7 +1088,7 @@ fn performance_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, actions: &mut V
         ));
     }
     ui.separator();
-    // `timingUnit` is native-only: switching it converts the global pair
+    // `timingUnit` is VmodV-only: switching it converts the global pair
     // and every Scene override with the current BPM, so the same
     // durations stay in place.
     let unit = snapshot.performance.timing_unit;

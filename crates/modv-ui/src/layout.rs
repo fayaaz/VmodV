@@ -1,10 +1,10 @@
-//! The native shell's in-memory layout: panel sizes, floating window bounds and
+//! The VmodV shell's in-memory layout: panel sizes, floating window bounds and
 //! right-panel tab placement.
 //!
 //! [`LayoutState`] is the runtime counterpart of
 //! `modv-app::ui_layout::LayoutSettings`. The shell mutates it while drawing
 //! (panel widths/heights captured from the real rects, window bounds captured on
-//! move/resize) and `NativeApp` diffs it against the saved document to persist
+//! move/resize) and `VmodvApp` diffs it against the saved document to persist
 //! changes (debounced, best-effort).
 //!
 //! The placement model is deliberately an exhaustive per-tab value rather than
@@ -81,7 +81,7 @@ pub enum TabPlacement {
 }
 
 impl TabPlacement {
-    /// The stable key written to `native-layout.json`.
+    /// The stable key written to `vmodv-layout.json`.
     pub fn key(self) -> &'static str {
         match self {
             Self::Tabs => "tabs",

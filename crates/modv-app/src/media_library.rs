@@ -1,4 +1,4 @@
-//! The native Library tab's media index (WS: full media library).
+//! The VmodV Library tab's media index (WS: full media library).
 //!
 //! The panel browses the **active profile's** `image/`, `video/` and
 //! `palette/` folders recursively. `modv-app` owns the IO and decoding:

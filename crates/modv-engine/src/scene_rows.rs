@@ -252,7 +252,7 @@ pub fn normalize_row_names(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-/// Parse `performance.disabledCells` (native-only): scene id → row indexes.
+/// Parse `performance.disabledCells` (VmodV-only): scene id → row indexes.
 ///
 /// Invalid entries are dropped, indexes are sorted and de-duplicated, and
 /// indexes at or beyond [`MAX_SCENE_ROWS`] are discarded. The map itself keeps

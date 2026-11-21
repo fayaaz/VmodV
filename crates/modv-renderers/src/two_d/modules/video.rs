@@ -1,4 +1,4 @@
-//! Native-only `Video` module: `Texture 2D` plus `start` and `finish` trim
+//! VmodV-only `Video` module: `Texture 2D` plus `start` and `finish` trim
 //! props (both 0..1 fractions of the clip) that bound playback on the app side.
 //!
 //! Drawing is identical to [`Texture2d`]; the `start`/`finish` trims are

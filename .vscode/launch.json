@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug native modv",
+      "name": "Debug VmodV",
       "type": "lldb",
       "request": "launch",
       "program": "${workspaceFolder}/crates/target/debug/modv",

@@ -1,4 +1,4 @@
-//! Golden snapshot of the native Quality panel.
+//! Golden snapshot of the VmodV Quality panel.
 //!
 //! The panel is where the internal rendering resolution preference lives:
 //! the three Full/Balanced/Performance presets and a readout of the current

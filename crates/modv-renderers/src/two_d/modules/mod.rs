@@ -1,6 +1,6 @@
 //! The 16 built-in 2D modules: 15 ported from
 //! `src/renderer/src/application/renderers/2d/modules/*.js`, plus the
-//! native-only `Video` module (Texture 2D + `start`/`finish` trim props).
+//! VmodV-only `Video` module (Texture 2D + `start`/`finish` trim props).
 //!
 //! Each JS default export becomes a struct implementing [`TwoDModule`]:
 //!
@@ -10,7 +10,7 @@
 //! | `Text.js` | `text.rs` | `canvas-text-wrapper` behaviour inlined (no scratch canvas) |
 //! | `Polygon.js` | `polygon.rs` | rotating n-gon |
 //! | `Texture2d.js` | `texture_2d.rs` | needs `DrawContext::input_texture` |
-//! | (native only) | `video.rs` | `Video`: Texture 2D + `start`/`finish` trims |
+//! | (VmodV only) | `video.rs` | `Video`: Texture 2D + `start`/`finish` trims |
 //! | `Buffer.js` | `buffer.rs` | owns a scratch [`Canvas`] as its buffer output |
 //! | `Concentrics.js` | `concentrics.rs` | HSL rings |
 //! | `X-Drips.js` | `x_drips.rs` | pattern of drips + circular clip |

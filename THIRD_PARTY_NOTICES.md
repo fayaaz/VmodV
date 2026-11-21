@@ -85,7 +85,7 @@ is unclear it is not relicensed under MIT.
 
 ## Fonts
 
-The native shell (`crates/modv-ui/assets/fonts/`) bundles four IBM Plex faces:
+The VmodV shell (`crates/modv-ui/assets/fonts/`) bundles four IBM Plex faces:
 IBM Plex Sans Regular and SemiBold, and IBM Plex Mono Regular and Medium. They
 are licensed under the **SIL Open Font License, Version 1.1** (OFL-1.1); the
 full licence text is included alongside them in

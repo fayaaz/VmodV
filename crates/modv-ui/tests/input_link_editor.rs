@@ -1,4 +1,4 @@
-//! Interaction coverage for the focused-input editor's native additions:
+//! Interaction coverage for the focused-input editor's VmodV additions:
 //! the Group/Module Alpha link row and the Expression section.
 
 use egui_kittest::Harness;

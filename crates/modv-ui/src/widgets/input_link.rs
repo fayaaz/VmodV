@@ -1,7 +1,7 @@
 //! Focused-input link editor.
 //!
 //! Legacy `InputConfig.vue` only edits the focused input; inputs themselves are
-//! auto-created for module props, meta fields and Group controls. The native
+//! auto-created for module props, meta fields and Group controls. The VmodV
 //! inspector uses the prop's `$props[prop].id` and edits that input's single
 //! link here.
 //!
@@ -445,7 +445,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
 /// manual state-path field.
 ///
 /// Electron's `MIDI.vue` only offers Learn/Forget; the manual field is the
-/// native editor's existing convenience and builds a `state` link on the
+/// VmodV editor's existing convenience and builds a `state` link on the
 /// typed path. Learn is available for any non-MIDI link too, because
 /// `inputs/createInputLink` replaces the record (the safe path additionally
 /// releases the replaced link's smoothing id/tween).
@@ -882,7 +882,7 @@ mod tests {
         assert_eq!(args[0], serde_json::json!("bass"));
         let id = args[1].as_str().expect("smoothing id");
         assert!(
-            id.starts_with("native-smoothing-"),
+            id.starts_with("vmodv-smoothing-"),
             "unexpected smoothing id {id}"
         );
         assert_eq!(args[2], serde_json::json!(0.25));

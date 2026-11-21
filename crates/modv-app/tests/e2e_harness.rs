@@ -1,4 +1,4 @@
-//! Process-level e2e tests for the native shell's control socket.
+//! Process-level e2e tests for the VmodV shell's control socket.
 //!
 //! Run with:
 //!
@@ -8,7 +8,7 @@
 //!
 //! Each test launches the real `modv` binary (the one Cargo just built) under
 //! Xvfb when the environment has no display. See `tests/e2e/mod.rs` for the
-//! harness and `docs/native-e2e.md` for the protocol/mapping notes.
+//! harness and `docs/vmodv-e2e.md` for the protocol/mapping notes.
 
 #![cfg(unix)] // the control harness uses Unix-domain sockets
 
@@ -16,7 +16,7 @@ mod e2e;
 
 use serde_json::{Value, json};
 
-use e2e::NativeHarness;
+use e2e::VmodvHarness;
 
 fn scene_with_groups(state: &Value) -> Value {
     state["scenes"]
@@ -34,8 +34,8 @@ fn scene_with_groups(state: &Value) -> Value {
 }
 
 #[test]
-fn native_shell_serves_state_seeds_defaults_and_quits_cleanly() {
-    let mut app = NativeHarness::builder().width(640).height(360).spawn();
+fn vmodv_shell_serves_state_seeds_defaults_and_quits_cleanly() {
+    let mut app = VmodvHarness::builder().width(640).height(360).spawn();
 
     let pong = app.wait_ready();
     assert_eq!(pong["pong"], json!(true), "{pong}");
@@ -103,7 +103,7 @@ fn native_shell_serves_state_seeds_defaults_and_quits_cleanly() {
 
 #[test]
 fn dispatch_updates_state_and_screenshot_writes_a_png() {
-    let mut app = NativeHarness::builder().width(640).height(360).spawn();
+    let mut app = VmodvHarness::builder().width(640).height(360).spawn();
     app.wait_ready();
 
     let group = app.dispatch("groups/createGroup", json!({ "name": "E2E" }));
@@ -163,7 +163,7 @@ fn dispatch_updates_state_and_screenshot_writes_a_png() {
 
 #[test]
 fn control_socket_reports_errors_reconnects_and_logs() {
-    let mut app = NativeHarness::spawn();
+    let mut app = VmodvHarness::spawn();
     app.wait_ready();
 
     let error = app

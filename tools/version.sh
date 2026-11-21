@@ -3,7 +3,7 @@
 #
 # The git tags are the single source of truth for the version; no version
 # literal is kept in the tree. Precedence:
-#   1. $NATIVE_VERSION when set (explicit override, e.g. `NATIVE_VERSION=2.2.0 make build`)
+#   1. $VMODV_VERSION when set (explicit override, e.g. `VMODV_VERSION=2.2.0 make build`)
 #   2. the `vX.Y.Z` tag on HEAD, if any (a release checkout)
 #   3. the highest `vX.Y.Z` tag (local builds; matches the latest release)
 #   4. `0.0.0-dev` when no such tag exists or git is unavailable
@@ -13,8 +13,8 @@
 # this script.
 set -euo pipefail
 
-if [ -n "${NATIVE_VERSION:-}" ]; then
-  echo "$NATIVE_VERSION"
+if [ -n "${VMODV_VERSION:-}" ]; then
+  echo "$VMODV_VERSION"
   exit 0
 fi
 

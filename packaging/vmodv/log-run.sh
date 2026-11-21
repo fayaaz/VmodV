@@ -1,7 +1,7 @@
 #!/bin/sh
-# Run the native shell with its stderr copied into the shared daily log.
+# Run the VmodV shell with its stderr copied into the shared daily log.
 #
-# Electron writes `<userData>/logs/vmodv-YYYY-MM-DD.log`; the native shell only
+# Electron writes `<userData>/logs/vmodv-YYYY-MM-DD.log`; the VmodV shell only
 # writes to stderr, so the packaged launchers put this wrapper in front of the
 # real binary. stdout is deliberately untouched: `--bench`/`--headless` JSON
 # must stay machine-readable. The sh preamble re-execs the body under bash for
@@ -22,10 +22,10 @@ if [ -z "${MODV_LOG_RUN_BASH:-}" ]; then
     exec bash "$0" "$@"
 fi
 
-# The application's userData directory is `$MODV_USER_DATA` when the native
+# The application's userData directory is `$MODV_USER_DATA` when the VmodV
 # shell is told to use one, otherwise the Electron `app.setName("VmodV")`
 # path. `user_data_dir()` in crates/modv-app/src/window_state.rs is the source
-# of truth for the native side.
+# of truth for the VmodV side.
 if [ -n "${MODV_USER_DATA:-}" ]; then
     LOG_DIR="$MODV_USER_DATA/logs"
 else
@@ -44,7 +44,7 @@ if ! : >>"$LOG" 2>/dev/null; then
 fi
 
 ARGV=$(printf '%q ' "$@")
-printf '%s INFO [native-launch] pid=%s argv=%s\n' \
+printf '%s INFO [vmodv-launch] pid=%s argv=%s\n' \
     "$(date +%Y-%m-%dT%H:%M:%S%z)" "$$" "${ARGV% }" >>"$LOG" 2>/dev/null || true
 
 prune_logs() {

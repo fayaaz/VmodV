@@ -208,15 +208,15 @@ fn ci_workflow_builds_and_uploads_macos_bundle() {
         "tools/macos-portable.sh",
         "actions/upload-artifact@v4",
         "workflow_dispatch",
-        "vmodv-native-macos-x86_64-portable",
-        "VmodV-Native-macOS-x86_64-portable-",
+        "vmodv-macos-x86_64-portable",
+        "VmodV-macOS-x86_64-portable-",
         // arm64 is built alongside x86_64 via an explicit, pinned matrix.
         "arch: arm64",
         "runner: macos-15",
         "matrix.arch",
         "fail-fast: false",
-        "vmodv-native-macos-arm64-portable",
-        "VmodV-Native-macOS-arm64-portable-",
+        "vmodv-macos-arm64-portable",
+        "VmodV-macOS-arm64-portable-",
         "${{ runner.os }}-${{ matrix.arch }}-cargo-",
     ] {
         assert!(
@@ -234,15 +234,15 @@ fn ci_workflow_builds_and_uploads_macos_bundle() {
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", release_workflow.display()));
     for token in [
         "macos",
-        "vmodv-native-macos",
+        "vmodv-macos",
         "actions/download-artifact@v4",
         "dist-macos/*.zip",
-        "vmodv-native-macos-x86_64-portable",
+        "vmodv-macos-x86_64-portable",
         // The release publishes both architectures' portable bundles.
         "arch: arm64",
         "runner: macos-15",
         "matrix.arch",
-        "vmodv-native-macos-arm64-portable",
+        "vmodv-macos-arm64-portable",
     ] {
         assert!(
             release_text.contains(token),

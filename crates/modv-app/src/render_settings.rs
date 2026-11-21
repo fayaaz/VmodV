@@ -1,4 +1,4 @@
-//! The persisted "internal rendering resolution" for the native shell.
+//! The persisted "internal rendering resolution" for the VmodV shell.
 //!
 //! Every module, Group target, canvas and scene in the compositor renders at
 //! full output size, which is correct for a GPU with headroom but wasteful
@@ -11,13 +11,13 @@
 //!
 //! Everything here is pure or filesystem-simple so it is unit-testable:
 //! no GPU, no window, no egui. The JSON document lives in the shared userData
-//! directory as `<userData>/native-render.json` and is written atomically
+//! directory as `<userData>/vmodv-render.json` and is written atomically
 //! (tmp + rename), like [`crate::audio_settings`].
 
 use std::path::Path;
 
 /// The persisted render-scale choice inside the shared userData directory.
-pub const RENDER_SETTINGS_FILENAME: &str = "native-render.json";
+pub const RENDER_SETTINGS_FILENAME: &str = "vmodv-render.json";
 
 /// The smallest admitted scale. Below a quarter of the output resolution the
 /// scenes stop reading as 3D scenes at all, so it is not offered.
@@ -58,7 +58,8 @@ impl RenderSettings {
 
     /// Read the document, treating a missing file as "nothing saved".
     pub fn read_from(path: &Path) -> Result<Option<Self>, String> {
-        let text = match std::fs::read_to_string(path) {
+        let path = crate::settings_compat::read_path(path);
+        let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -92,6 +93,21 @@ impl RenderSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_native_render_filename_is_read_as_a_fallback() {
+        let path = temp_path("compat");
+        let directory = path.parent().expect("parent directory");
+        let legacy = directory.join("vmodv-render.json");
+        let saved = RenderSettings { scale: 0.5 };
+        saved.write_to(&legacy).expect("write legacy render");
+        let current = directory.join(RENDER_SETTINGS_FILENAME);
+        assert_eq!(
+            RenderSettings::read_from(&current).expect("read legacy render"),
+            Some(saved)
+        );
+        let _ = std::fs::remove_file(legacy);
+    }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(

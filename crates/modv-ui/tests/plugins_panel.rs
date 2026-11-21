@@ -1,6 +1,6 @@
 //! Kittest coverage for the opt-in JavaScript-plugin panel.
 //!
-//! The native Plugins tab replaces the old disabled placeholder: the master
+//! The VmodV Plugins tab replaces the old disabled placeholder: the master
 //! switch is gated by a consent dialog (the first enable never runs anything
 //! without confirmation), the discovered scripts are listed with their status,
 //! and prop edits become [`UiCommand::SetPluginProp`] commands the shell
@@ -66,7 +66,7 @@ fn the_first_enable_opens_the_consent_dialog_and_runs_nothing() {
     // The panel states the risk before anything can be switched on.
     harness.get_by_label("Advanced: JavaScript plugins");
     harness.get_by_label(
-        "Plugins are third-party JavaScript. In the native shell they run in a \
+        "Plugins are third-party JavaScript. In the VmodV shell they run in a \
          restricted Boa sandbox, not a security boundary.",
     );
     harness.get_by_label("Not running");

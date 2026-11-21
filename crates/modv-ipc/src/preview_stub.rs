@@ -3,7 +3,7 @@
 //! The preview ring is backed by a `tmpfs` file created with Unix positional
 //! I/O (`pwrite`/`pread`) and lives under `/dev/shm`. None of that exists on
 //! Windows, and the preview channel is only used by the headless engine path
-//! (not the native shell), so this stub keeps the public API compilable and
+//! (not the VmodV shell), so this stub keeps the public API compilable and
 //! reports an explicit "unsupported" error from the operations that would need
 //! real shared memory. Linux behaviour is unchanged: it uses `preview.rs`.
 

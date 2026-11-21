@@ -14,7 +14,7 @@
           "rust": [
             "crates/modv-ui/src/model.rs:the_audio_selection_view_exposes_the_system_audio_state"
           ],
-          "notes": "Native exposes the same facts as AudioSelectionView (source, device, capture rate, error, active label) instead of the worker mediaStream.systemAudio record; the view field contract is pinned by the model test."
+          "notes": "VmodV exposes the same facts as AudioSelectionView (source, device, capture rate, error, active label) instead of the worker mediaStream.systemAudio record; the view field contract is pinned by the model test."
         },
         {
           "name": "the renderer store lists the system audio source",
@@ -28,7 +28,7 @@
           "name": "the main process writes a log file into the config folder",
           "status": "covered",
           "rust": [
-            "tools/native-smoke.sh:packaged AppRun writes the dated log (check d)",
+            "tools/vmodv-smoke.sh:packaged AppRun writes the dated log (check d)",
             "crates/modv-app/tests/e2e_harness.rs:control_socket_reports_errors_reconnects_and_logs"
           ],
           "notes": ""
@@ -187,7 +187,7 @@
             "crates/modv-app/tests/e2e_process.rs:engine_skeleton_survives_sigkill_and_restores_state",
             "crates/modv-app/src/supervisor.rs:engine_shutdown_flushes_the_snapshot_and_requests_exit"
           ],
-          "notes": "The native shell is a single process with no separate supervised engine child: the process test renders, SIGKILLs the shell, relaunches over the same userData and asserts the saved snapshot (Group + frames) is restored. It covers the same kill-survival intent; the Electron supervisor restart budget is not recreated."
+          "notes": "The VmodV shell is a single process with no separate supervised engine child: the process test renders, SIGKILLs the shell, relaunches over the same userData and asserts the saved snapshot (Group + frames) is restored. It covers the same kill-survival intent; the Electron supervisor restart budget is not recreated."
         }
       ]
     },
@@ -200,7 +200,7 @@
           "rust": [
             "crates/modv-ui/tests/e2e_groups.rs:the_default_group_is_focused_by_default"
           ],
-          "notes": "Native selects the first live Group on startup; there is no Gallery Group to skip."
+          "notes": "VmodV selects the first live Group on startup; there is no Gallery Group to skip."
         }
       ]
     },
@@ -225,7 +225,7 @@
         {
           "name": "the idle Gallery group canvas is not repainted every frame",
           "status": "waived",
-          "notes": "Idle Gallery Group repaint avoidance is a worker-canvas optimisation; the native shell has no Gallery Group canvas to repaint. Preview caches are bounded/reset in the scene_preview tests."
+          "notes": "Idle Gallery Group repaint avoidance is a worker-canvas optimisation; the VmodV shell has no Gallery Group canvas to repaint. Preview caches are bounded/reset in the scene_preview tests."
         }
       ]
     },
@@ -323,7 +323,7 @@
         {
           "name": "module data commits are skipped when update returns the same object",
           "status": "waived",
-          "notes": "Vuex commit de-duplication in the worker loop. Native module data is updated in-place in Rust with no per-frame commit or mirror message to suppress."
+          "notes": "Vuex commit de-duplication in the worker loop. VmodV module data is updated in-place in Rust with no per-frame commit or mirror message to suppress."
         }
       ]
     },
@@ -351,7 +351,7 @@
             "crates/modv-app/tests/e2e_process.rs:renders_the_main_window_at_the_requested_size",
             "crates/modv-app/tests/e2e_harness.rs:dispatch_updates_state_and_screenshot_writes_a_png"
           ],
-          "notes": "The native process test waits for readiness and a presented frame, then asserts the requested 640x360 (16:9) window and a decoded screenshot."
+          "notes": "The VmodV process test waits for readiness and a presented frame, then asserts the requested 640x360 (16:9) window and a decoded screenshot."
         }
       ]
     },
@@ -429,10 +429,10 @@
           "name": "creates a default group",
           "status": "covered",
           "rust": [
-            "crates/modv-app/tests/e2e_process.rs:fresh_native_start_creates_exactly_one_default_group",
-            "crates/modv-app/tests/e2e_harness.rs:native_shell_serves_state_seeds_defaults_and_quits_cleanly"
+            "crates/modv-app/tests/e2e_process.rs:fresh_vmodv_start_creates_exactly_one_default_group",
+            "crates/modv-app/tests/e2e_harness.rs:vmodv_shell_serves_state_seeds_defaults_and_quits_cleanly"
           ],
-          "notes": "A fresh native userData seeds the same single New Group (there is no Gallery Group canvas); the process test asserts exactly one Group."
+          "notes": "A fresh VmodV userData seeds the same single New Group (there is no Gallery Group canvas); the process test asserts exactly one Group."
         }
       ]
     },
@@ -535,7 +535,7 @@
         {
           "name": "quitting the app leaves no orphaned process tree",
           "status": "waived",
-          "notes": "Asserts Chromium's main/renderer/GPU/utility child tree is gone after app.quit(). The native shell is one process with no such child tree; tools/native-smoke.sh already asserts windowed runs exit cleanly. An orphan-tree test here would only test Electron's process model."
+          "notes": "Asserts Chromium's main/renderer/GPU/utility child tree is gone after app.quit(). The VmodV shell is one process with no such child tree; tools/vmodv-smoke.sh already asserts windowed runs exit cleanly. An orphan-tree test here would only test Electron's process model."
         }
       ]
     },
@@ -550,7 +550,7 @@
             "crates/modv-app/src/window_state.rs:write_and_read_round_trips_through_an_atomic_file",
             "crates/modv-app/src/window_state.rs:bounds_clamp_into_the_display_area"
           ],
-          "notes": "The process test writes a placement, restarts the native shell and compares the restored bounds; serialisation and clamping stay covered by the window_state unit tests."
+          "notes": "The process test writes a placement, restarts the VmodV shell and compares the restored bounds; serialisation and clamping stay covered by the window_state unit tests."
         }
       ]
     },
@@ -560,7 +560,7 @@
         {
           "name": "the Linux bundle omits macOS-only and build-only payloads",
           "status": "waived",
-          "notes": "Asserts electron-builder bundle contents: app.asar.unpacked, hapticjs/grandiose native addons and Chromium locale .pak files. The native AppImage/.deb has separate packaging checks (tools/native-deb-check.sh, tools/native-smoke.sh) and contains none of these Electron payloads."
+          "notes": "Asserts electron-builder bundle contents: app.asar.unpacked, hapticjs/grandiose native addons and Chromium locale .pak files. The VmodV AppImage/.deb has separate packaging checks (tools/vmodv-deb-check.sh, tools/vmodv-smoke.sh) and contains none of these Electron payloads."
         }
       ]
     },
@@ -1029,7 +1029,7 @@
         {
           "name": "hovering an ISF grid cell keeps the live ISF layers rendering",
           "status": "waived",
-          "notes": "Regression for deleting the shared WebGL unit-quad vertex buffer when a preview ISF renderer is disposed. Native previews use separate wgpu module instances; the isolation/cache behaviour is covered by scene_preview.rs:cache_keeps_the_other_cells_instances_while_a_hover_moves."
+          "notes": "Regression for deleting the shared WebGL unit-quad vertex buffer when a preview ISF renderer is disposed. VmodV previews use separate wgpu module instances; the isolation/cache behaviour is covered by scene_preview.rs:cache_keeps_the_other_cells_instances_while_a_hover_moves."
         }
       ]
     },
@@ -1039,7 +1039,7 @@
         {
           "name": "hovering an ISF cell keeps the live ISF canvas at output size",
           "status": "waived",
-          "notes": "Asserts the live worker's shared ISF OffscreenCanvas keeps its output size during a hover. Native previews never resize the live surface; scene_preview tests cover isolated preview instances and cache invalidation."
+          "notes": "Asserts the live worker's shared ISF OffscreenCanvas keeps its output size during a hover. VmodV previews never resize the live surface; scene_preview tests cover isolated preview instances and cache invalidation."
         }
       ]
     },
@@ -1074,7 +1074,7 @@
           "rust": [
             "crates/modv-app/tests/e2e_scenes.rs:applying_a_row_scene_only_replaces_that_row"
           ],
-          "notes": "Native row applies mint a fresh Group id instead of reusing the outgoing id; the test asserts the applied row gets the Scene modules while the other row keeps its id and module list."
+          "notes": "VmodV row applies mint a fresh Group id instead of reusing the outgoing id; the test asserts the applied row gets the Scene modules while the other row keeps its id and module list."
         },
         {
           "name": "a column Scene apply clears a row the Scene does not define",
@@ -1178,7 +1178,7 @@
             "crates/modv-ui/tests/e2e_scenes_grid.rs:clearing_a_cell_asks_for_confirmation_first",
             "crates/modv-app/src/scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows"
           ],
-          "notes": "Deliberate waiver: native has no in-cell module-editor dialog. The same end state is reachable by double-clicking an empty cell (scenes/createSceneCellGroup), editing the live Group through the Gallery/Groups pane, then capturing the live row back into the cell (scenes/captureSceneRowToScene, asserted by capturing_the_live_row_saves_the_added_modules_into_the_cell) or clearing it (scenes/clearSceneCell, now confirmed). The store half is scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows."
+          "notes": "Deliberate waiver: VmodV has no in-cell module-editor dialog. The same end state is reachable by double-clicking an empty cell (scenes/createSceneCellGroup), editing the live Group through the Gallery/Groups pane, then capturing the live row back into the cell (scenes/captureSceneRowToScene, asserted by capturing_the_live_row_saves_the_added_modules_into_the_cell) or clearing it (scenes/clearSceneCell, now confirmed). The store half is scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows."
         },
         {
           "name": "clearing a grid cell removes its modules after confirmation",
@@ -1212,7 +1212,7 @@
             "crates/modv-ui/tests/e2e_scenes_grid.rs:editing_an_empty_cell_creates_a_group",
             "crates/modv-app/src/scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows"
           ],
-          "notes": "Native covers the create half with a double-click (scenes/createSceneCellGroup) and the save half through the live-row capture path; there is no editor dialog."
+          "notes": "VmodV covers the create half with a double-click (scenes/createSceneCellGroup) and the save half through the live-row capture path; there is no editor dialog."
         },
         {
           "name": "the cell editor can drag a module from its panel into the Group",
@@ -1220,7 +1220,7 @@
           "rust": [
             "crates/modv-ui/tests/gallery_drag_drop.rs:dragging_a_gallery_tile_onto_a_group_queues_the_add_action"
           ],
-          "notes": "Deliberate waiver: there is no editor module panel to drag from. Native has the equivalent drag already: a Gallery tile dropped on a Group block queues ui/addModuleToGroup (gallery_drag_drop.rs:dragging_a_gallery_tile_onto_a_group_queues_the_add_action), and a Library asset can be dragged onto its texture prop."
+          "notes": "Deliberate waiver: there is no editor module panel to drag from. VmodV has the equivalent drag already: a Gallery tile dropped on a Group block queues ui/addModuleToGroup (gallery_drag_drop.rs:dragging_a_gallery_tile_onto_a_group_queues_the_add_action), and a Library asset can be dragged onto its texture prop."
         }
       ]
     },
@@ -1356,7 +1356,7 @@
             "crates/modv-app/tests/e2e_scenes.rs:apply_scene_clears_the_focused_input_when_the_saved_id_is_missing",
             "crates/modv-app/tests/e2e_scenes.rs:a_scoped_row_apply_leaves_midi_and_the_focused_input_untouched"
           ],
-          "notes": "The native test round-trips groups/modules/inputs/expressions/tweens/MIDI/focusedInput and remaps ids; the companion tests pin full-state MIDI/focus restore, missing-focus clearing and the scoped row-apply early return."
+          "notes": "The VmodV test round-trips groups/modules/inputs/expressions/tweens/MIDI/focusedInput and remaps ids; the companion tests pin full-state MIDI/focus restore, missing-focus clearing and the scoped row-apply early return."
         },
         {
           "name": "exports all Scenes as a playlist and imports it",
@@ -1383,7 +1383,7 @@
             "crates/modv-app/tests/e2e_process.rs:a_scene_json_opened_like_a_preset_is_applied_as_a_scene",
             "crates/modv-app/src/media_dialogs.rs:opening_detects_and_loads_a_preset_scene_and_playlist"
           ],
-          "notes": "The native media-dialog open now applies the Scene (apply=true on the open path), closing the earlier default-apply gap."
+          "notes": "The VmodV media-dialog open now applies the Scene (apply=true on the open path), closing the earlier default-apply gap."
         },
         {
           "name": "a legacy Scene with an object tweens map still applies",
@@ -1399,7 +1399,7 @@
           "rust": [
             "crates/modv-app/tests/e2e_scenes.rs:a_scene_json_can_be_loaded_directly"
           ],
-          "notes": "loadSceneFromJson applies by default natively, matching the JS default apply=true."
+          "notes": "loadSceneFromJson applies by default in VmodV, matching the JS default apply=true."
         },
         {
           "name": "Scenes saved from preset-style Groups apply without swap flags",

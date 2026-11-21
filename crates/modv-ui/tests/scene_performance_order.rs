@@ -1,7 +1,7 @@
 //! Kittest coverage for the Scenes performance bar's Scene-order control.
 //!
 //! Electron's `Scenes.vue` exposes `performance.order` as a "Scene order"
-//! select (In order / Random). The native bar shows the same control and
+//! select (In order / Random). The VmodV bar shows the same control and
 //! dispatches the same `scenes/updatePerformance` payload.
 
 use egui_kittest::Harness;

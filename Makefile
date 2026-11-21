@@ -1,27 +1,27 @@
-# VmodV Native — Rust-only build entry points.
+# VmodV — Rust-only build entry points.
 #
 # Every command runs in Docker: the host needs only Docker (with Buildx) and
 # make. There is no Node, Yarn or Electron in this tree.
 #
 # Common targets:
-#   make build            native AppImage + .deb into dist/ (clean first)
-#   make appimage-native  native AppImage only
-#   make native-deb       native .deb (runs native-deb-check.sh)
-#   make native-deb-check re-check an existing .deb
-#   make dev              native shell (release; MODV_UI is gone)
-#   make native-debug     native shell, debug profile
+#   make build            VmodV AppImage + .deb into dist/ (clean first)
+#   make appimage-vmodv  VmodV AppImage only
+#   make vmodv-deb       VmodV .deb (runs vmodv-deb-check.sh)
+#   make vmodv-deb-check re-check an existing .deb
+#   make dev              VmodV shell (release; MODV_UI is gone)
+#   make vmodv-debug     VmodV shell, debug profile
 #   make engine           release workspace build
 #   make engine-test      cargo test (pass ARGS="..." to narrow)
 #   make engine-lint      clippy -D warnings + rustfmt --check
-#   make test-e2e-native  the real-binary e2e harness and parity tests
+#   make test-e2e-vmodv  the real-binary e2e harness and parity tests
 #   make shell            interactive shell in the Rust toolchain
 #   make docker-package   build both installers via Dockerfile `artifacts`
 
 # The version baked into the installers is not kept in the tree. It comes
-# from $NATIVE_VERSION when set, otherwise from the git tags via
+# from $VMODV_VERSION when set, otherwise from the git tags via
 # tools/version.sh: the tag on HEAD when this checkout is tagged, else the
 # highest vX.Y.Z tag. `make version` prints the value in effect.
-NATIVE_VERSION ?= $(shell "$(CURDIR)/tools/version.sh")
+VMODV_VERSION ?= $(shell "$(CURDIR)/tools/version.sh")
 # Dev-only asset tooling: the wordcodec is a small Node script run in a
 # throwaway container (no Node is needed for the app build/tests).
 NODE_IMAGE ?= node:24-slim
@@ -40,7 +40,7 @@ WAYLAND_DISPLAY ?= wayland-0
 WAYLAND_SOCKET ?= $(XDG_RUNTIME_DIR)/$(WAYLAND_DISPLAY)
 # Containers run as the host UID/GID and do not inherit supplementary groups,
 # so the GPU device nodes stay unreadable unless their GIDs are added. The
-# native shell needs the render node for Vulkan (and falls back to lavapipe
+# VmodV shell needs the render node for Vulkan (and falls back to lavapipe
 # when no hardware adapter is available).
 DRI_GIDS ?= $(shell stat -c '%g' /dev/dri/card0 2>/dev/null) $(shell stat -c '%g' /dev/dri/renderD128 2>/dev/null)
 DRI_GROUPS ?= $(foreach gid,$(sort $(DRI_GIDS)),--group-add $(gid))
@@ -81,7 +81,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-native native-deb native-deb-check clean dev native native-debug lint format test-e2e test-e2e-native engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean version
+.PHONY: build appimage appimage-vmodv vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean version
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -110,63 +110,63 @@ clean:
 version:
 	@"$(CURDIR)/tools/version.sh"
 
-# Build the native AppImage and Debian package. This is the release entry
+# Build the VmodV AppImage and Debian package. This is the release entry
 # point; there is no Electron fallback build.
-build: clean appimage-native native-deb
+build: clean appimage-vmodv vmodv-deb
 
-# Native AppImage: reusable Rust toolchain image + cargo cache, no Electron.
-appimage-native: disk-guard docker-cargo-volume
+# VmodV AppImage: reusable Rust toolchain image + cargo cache, no Electron.
+appimage-vmodv: disk-guard docker-cargo-volume
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		-e HOME=/tmp \
 		-e CARGO_HOME=/cargo \
-		-e APP_VERSION=$(NATIVE_VERSION) \
+		-e APP_VERSION=$(VMODV_VERSION) \
 		-v "$(CURDIR)":/app \
 		-v "$(CARGO_VOLUME)":/cargo \
 		-w /app \
 		$(RUST_IMAGE) \
-		bash /app/tools/native-appimage.sh
+		bash /app/tools/vmodv-appimage.sh
 
 # Backwards-compatible alias for the only AppImage build that exists.
-appimage: appimage-native
+appimage: appimage-vmodv
 
-# Native Debian package. Reuses the cargo cache; the script builds the release
+# VmodV Debian package. Reuses the cargo cache; the script builds the release
 # `modv` binary, assembles the package tree and verifies the result with
-# tools/native-deb-check.sh.
-native-deb: disk-guard docker-cargo-volume
+# tools/vmodv-deb-check.sh.
+vmodv-deb: disk-guard docker-cargo-volume
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		-e HOME=/tmp \
 		-e CARGO_HOME=/cargo \
-		-e APP_VERSION=$(NATIVE_VERSION) \
+		-e APP_VERSION=$(VMODV_VERSION) \
 		-e DIST_DIR=$(DIST_DIR) \
 		-v "$(CURDIR)":/app \
 		-v "$(CARGO_VOLUME)":/cargo \
 		-w /app \
 		$(RUST_IMAGE) \
-		bash /app/tools/native-deb.sh
+		bash /app/tools/vmodv-deb.sh
 
 # Re-run the metadata/file-list/binary checks on an already-built package.
-native-deb-check: docker-rust
+vmodv-deb-check: docker-rust
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \
-		-e APP_VERSION=$(NATIVE_VERSION) \
+		-e APP_VERSION=$(VMODV_VERSION) \
 		-e DIST_DIR=$(DIST_DIR) \
 		-v "$(CURDIR)":/app \
 		-w /app \
 		$(RUST_IMAGE) \
-		bash /app/tools/native-deb-check.sh
+		bash /app/tools/vmodv-deb-check.sh
 
 docker-package: disk-guard
 	mkdir -p "$(DIST_DIR)"
 	docker buildx build \
-		--build-arg "NATIVE_VERSION=$(NATIVE_VERSION)" \
+		--build-arg "VMODV_VERSION=$(VMODV_VERSION)" \
 		--target artifacts \
 		--output type=local,dest="$(DIST_DIR)" \
 		$(DOCKER_BUILD_ARGS) .
@@ -198,16 +198,16 @@ define run-cargo
 		cargo $(1)
 endef
 
-# Native shell. Release by default so frame pacing matches the packaged app;
-# use `native-debug` for iteration.
-dev: native
+# VmodV shell. Release by default so frame pacing matches the packaged app;
+# use `vmodv-debug` for iteration.
+dev: vmodv
 
-native: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
-native: docker-cargo-volume
+vmodv: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
+vmodv: docker-cargo-volume
 	$(call run-cargo,run --release -p modv-app --bin modv -- $(ARGS))
 
-native-debug: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
-native-debug: docker-cargo-volume
+vmodv-debug: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
+vmodv-debug: docker-cargo-volume
 	$(call run-cargo,run -p modv-app --bin modv -- $(ARGS))
 
 engine: docker-cargo-volume
@@ -240,8 +240,8 @@ format: docker-cargo-volume
 # Real-binary e2e: the process harness plus the Scene/defaults/manifest parity
 # tests. One worker at a time because a process owns a virtual display and the
 # software GPU is shared.
-test-e2e-native: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
-test-e2e-native: docker-cargo-volume
+test-e2e-vmodv: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
+test-e2e-vmodv: docker-cargo-volume
 	$(call run-cargo,test -p modv-app \
 		--test e2e_harness \
 		--test e2e_process \
@@ -250,7 +250,7 @@ test-e2e-native: docker-cargo-volume
 		--test e2e_manifest \
 		-- --test-threads=1)
 
-test-e2e: test-e2e-native
+test-e2e: test-e2e-vmodv
 
 shell: docker-cargo-volume
 	$(DOCKER) run --rm -it --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \

@@ -1,8 +1,8 @@
-//! The native shell's persisted audio-source choice and live-switch policy.
+//! The VmodV shell's persisted audio-source choice and live-switch policy.
 //!
-//! Electron has an Audio/Video settings panel; the native shell only had the
+//! Electron has an Audio/Video settings panel; the VmodV shell only had the
 //! startup `--audio-source`/`--audio-device` flags. The picker's choice is
-//! stored in `<userData>/native-audio.json` so it survives a restart, while an
+//! stored in `<userData>/vmodv-audio.json` so it survives a restart, while an
 //! explicit CLI flag or `MODV_AUDIO_SOURCE`/`MODV_AUDIO_DEVICE` keeps winning
 //! over it.
 //!
@@ -19,7 +19,7 @@ use modv_ui::AudioDeviceView;
 use crate::cli::AudioSourceSelection;
 
 /// The persisted audio choice inside the shared userData directory.
-pub const AUDIO_SETTINGS_FILENAME: &str = "native-audio.json";
+pub const AUDIO_SETTINGS_FILENAME: &str = "vmodv-audio.json";
 
 /// One persisted capture choice (`pipewire`, or `input` with an optional
 /// device id; `None` is the host default input).
@@ -39,9 +39,9 @@ impl AudioSettings {
         }
     }
 
-    /// The selection this document names, if the native shell can capture it.
+    /// The selection this document names, if the VmodV shell can capture it.
     ///
-    /// `renderer` is not a native capture source, so a stale document naming it
+    /// `renderer` is not a VmodV capture source, so a stale document naming it
     /// is ignored rather than silently muting the engine.
     pub fn selection(&self) -> Option<AudioSourceSelection> {
         match self.source.as_str() {
@@ -72,7 +72,8 @@ impl AudioSettings {
 
     /// Read the document, treating a missing file as "nothing saved".
     pub fn read_from(path: &Path) -> Result<Option<Self>, String> {
-        let text = match std::fs::read_to_string(path) {
+        let path = crate::settings_compat::read_path(path);
+        let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -113,7 +114,7 @@ impl AudioSettings {
 /// The saved choice, unless an explicit CLI flag or environment variable owns
 /// the capture selection.
 ///
-/// An invalid/legacy document (for example `renderer`, which the native shell
+/// An invalid/legacy document (for example `renderer`, which the VmodV shell
 /// cannot capture) resolves to `None` so the built-in fallback runs.
 pub fn resolve(cli_explicit: bool, persisted: Option<&AudioSettings>) -> Option<&AudioSettings> {
     if cli_explicit {
@@ -348,6 +349,20 @@ pub fn decide_switch<T>(had_active_feed: bool, opened: Result<T, String>) -> Swi
 mod tests {
     use super::*;
 
+    #[test]
+    fn legacy_native_audio_filename_is_read_as_a_fallback() {
+        let (directory, _path) = temp_path();
+        let legacy = directory.join("vmodv-audio.json");
+        let saved = settings("input", Some("alsa:usb"));
+        saved.write_to(&legacy).expect("write legacy audio");
+        let current = directory.join(AUDIO_SETTINGS_FILENAME);
+        assert_eq!(
+            AudioSettings::read_from(&current).expect("read legacy audio"),
+            Some(saved)
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
     fn settings(source: &str, device: Option<&str>) -> AudioSettings {
         AudioSettings {
             source: source.to_string(),
@@ -396,7 +411,7 @@ mod tests {
         assert_eq!(
             resolve(false, Some(&legacy)),
             None,
-            "renderer is not a native capture source"
+            "renderer is not a VmodV capture source"
         );
     }
 

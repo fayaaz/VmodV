@@ -1,4 +1,4 @@
-//! Read models the native UI renders.
+//! Read models the VmodV UI renders.
 //!
 //! `modv-app` builds one [`EngineSnapshot`] per frame from the authoritative
 //! `Store`. The UI only reads this snapshot and emits actions; it never holds
@@ -86,7 +86,7 @@ pub struct EngineSnapshot {
     pub media: MediaSnapshot,
     /// The active profile's image/video/palette library (the Library tab).
     pub library: MediaLibraryView,
-    /// Native MIDI input state.
+    /// VmodV MIDI input state.
     pub midi: MidiSnapshot,
     /// The opt-in JavaScript plugin runtime (the Plugins panel).
     ///
@@ -94,7 +94,7 @@ pub struct EngineSnapshot {
     /// authoritative); it is refreshed at 1 Hz while the panel is visible and
     /// immediately after a plugin command.
     pub plugins: PluginView,
-    /// Native NDI availability, output sender, discovery and receivers.
+    /// VmodV NDI availability, output sender, discovery and receivers.
     pub ndi: NdiSnapshot,
     /// OSC listeners and the latest received address values.
     pub osc: OscSnapshot,
@@ -102,11 +102,11 @@ pub struct EngineSnapshot {
     pub audio_devices: Vec<AudioDeviceView>,
     /// The active media project profile and every profile on disk.
     pub project: ProjectView,
-    /// The live native capture selection (the Audio panel's active choice).
+    /// The live VmodV capture selection (the Audio panel's active choice).
     pub audio_selection: AudioSelectionView,
 }
 
-/// Native NDI state for the NDI panel.
+/// VmodV NDI state for the NDI panel.
 ///
 /// `modv-app` fills this from the engine's `NdiRuntime` read accessors
 /// (`config`, `sender_status`, `sources`, `receivers`), the same state
@@ -386,7 +386,7 @@ impl OscAddressView {
     }
 }
 
-/// Most address rows the native OSC panel lists (the engine store can hold
+/// Most address rows the VmodV OSC panel lists (the engine store can hold
 /// thousands; the panel is a monitor, not a table view).
 pub const MAX_OSC_ADDRESS_ROWS: usize = 512;
 
@@ -484,7 +484,7 @@ impl AudioDeviceView {
     }
 }
 
-/// The native shell's live audio capture selection.
+/// The VmodV shell's live audio capture selection.
 ///
 /// `source` mirrors `AudioSourceSelection::as_str` (`pipewire` or `input`).
 /// `input` with no `device` means the host default input device, exactly like
@@ -707,7 +707,7 @@ pub fn un_premultiply_rgba(pixels: &mut [u8]) {
     }
 }
 
-/// The native MediaHub's camera and running-source state.
+/// The VmodV MediaHub's camera and running-source state.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MediaSnapshot {
     pub available: bool,
@@ -730,7 +730,7 @@ pub struct VideoSourceProblemView {
     pub message: String,
 }
 
-/// The native shell's portal screen capture.
+/// The VmodV shell's portal screen capture.
 ///
 /// The shell owns the portal session (the PipeWire node dies with it), so the
 /// panel only renders this read model and queues [`MediaAction`]s. At most one
@@ -796,7 +796,7 @@ pub struct ScreenSourceView {
 
 /// A media-library folder: the three asset kinds the active profile owns.
 ///
-/// The native Library panel browses `<media>/<profile>/image|video|palette`
+/// The VmodV Library panel browses `<media>/<profile>/image|video|palette`
 /// recursively; documents (presets, Scenes, modules) stay in the File menu.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LibraryKind {
@@ -1301,7 +1301,7 @@ impl MediaSourceView {
     }
 }
 
-/// Native MIDI availability and devices.
+/// VmodV MIDI availability and devices.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MidiSnapshot {
     pub available: bool,
@@ -2653,7 +2653,7 @@ mod tests {
         assert!(!selection.matches_device(&device("alsa:usb", "USB Microphone")));
     }
 
-    /// The native equivalent of the worker's `mediaStream.systemAudio` record
+    /// The VmodV equivalent of the worker's `mediaStream.systemAudio` record
     /// (`{ supported, active, label, error }`, systemAudio.spec.js:11-21):
     /// `AudioSelectionView` carries the source, the live rate and the error,
     /// and its banner resolves to a human label. Pin that field contract so

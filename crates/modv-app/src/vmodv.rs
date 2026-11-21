@@ -1,4 +1,4 @@
-//! The native single-process shell (`modv` binary): winit + egui + the
+//! The VmodV single-process shell (`modv` binary): winit + egui + the
 //! in-process engine.
 //!
 //! One egui UI window and one compositor-owned output window sharing a single
@@ -54,7 +54,7 @@ use crate::media_settings::{CameraMode, MediaSettings, plan_restore, resolve_mod
 use crate::media_watch::{MediaFolder, MediaWatcher};
 use crate::midi::MidiClient;
 use crate::pacing::FramePacer;
-use crate::plugin_runtime::{self, NativeStateReader, PluginRuntime};
+use crate::plugin_runtime::{self, PluginRuntime, VmodvStateReader};
 use crate::report::AdapterSummary;
 use crate::scene_transition::SceneTransitionInfo;
 use crate::screen_share::{
@@ -72,7 +72,7 @@ use modv_engine::engine_state::{
 use modv_engine::tweens::TweenDescriptor;
 use modv_media::video::{PortalError, PortalStream, ScreenSupport, TestPattern, VideoSourceConfig};
 
-/// The native shell's run loop.
+/// The VmodV shell's run loop.
 pub fn run(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Result<(), String> {
     let event_loop =
         EventLoop::new().map_err(|error| format!("failed to create event loop: {error}"))?;
@@ -92,10 +92,10 @@ pub fn run(cli: Cli, engine: Engine, adapter: AdapterSummary) -> Result<(), Stri
         }
         None => None,
     };
-    let mut app = NativeApp::new(cli, engine, adapter, control);
+    let mut app = VmodvApp::new(cli, engine, adapter, control);
     event_loop
         .run_app(&mut app)
-        .map_err(|error| format!("native event loop failed: {error}"))?;
+        .map_err(|error| format!("VmodV event loop failed: {error}"))?;
     app.shutdown();
     Ok(())
 }
@@ -150,7 +150,7 @@ struct PendingUiFrame {
     free: Vec<egui::TextureId>,
 }
 
-/// The negotiated analysis rate of the running native capture feed.
+/// The negotiated analysis rate of the running VmodV capture feed.
 ///
 /// Every rate readout in the shell — the Audio panel's active banner and
 /// picker, the status bar, the Tempo window and the Info panel — reads this
@@ -189,7 +189,7 @@ fn negotiated_sample_rate(feed_rate: f32) -> Option<u32> {
 ///
 /// Electron creates the same `0.0.0.0:3333` server at startup
 /// (`application/index.js:471`); without it OSC Input Links never receive in
-/// native mode. A failure (port in use, no network) is logged once and is not
+/// VmodV mode. A failure (port in use, no network) is logged once and is not
 /// fatal — the rest of the shell keeps working.
 fn start_default_osc_listener(store: &mut Store) -> Vec<OscServerView> {
     match start_osc_listener(store, DEFAULT_OSC_HOST, DEFAULT_OSC_PORT) {
@@ -342,14 +342,14 @@ struct PendingScreenAnswer {
     rx: std::sync::mpsc::Receiver<Result<PortalStream, PortalError>>,
 }
 
-/// The native application state.
-pub struct NativeApp {
+/// The VmodV application state.
+pub struct VmodvApp {
     cli: Cli,
     engine: Option<Engine>,
     adapter: AdapterSummary,
     store: Store,
     /// Opt-in JSON-lines control socket (`--socket`), served by a dedicated
-    /// thread and drained once per frame in [`NativeApp::draw_frame`].
+    /// thread and drained once per frame in [`VmodvApp::draw_frame`].
     control: Option<ControlServer>,
     /// `<userData>` and the shared media tree it owns.
     user_data: PathBuf,
@@ -436,7 +436,7 @@ pub struct NativeApp {
     audio_switch_error: Option<String>,
     audio_settings_path: PathBuf,
     /// The internal rendering resolution scale (persisted in
-    /// `<userData>/native-render.json`, applied to the compositor at startup
+    /// `<userData>/vmodv-render.json`, applied to the compositor at startup
     /// and on every Preferences change).
     render_scale: f32,
     render_settings_path: PathBuf,
@@ -496,7 +496,7 @@ pub struct NativeApp {
     last_error: Option<String>,
 }
 
-impl NativeApp {
+impl VmodvApp {
     /// The opt-in JavaScript plugin runtime (the future Plugins panel model).
     pub fn plugins(&self) -> &PluginRuntime {
         &self.plugin_runtime
@@ -554,16 +554,16 @@ impl NativeApp {
         let profiles = prepared.profiles;
         let extra_isf_dirs = project_settings.isf_dirs.clone();
         let user_isf_dirs = user_isf_dirs(&media_root, &active_profile, &extra_isf_dirs);
-        let NativeStoreBootstrap {
+        let VmodvStoreBootstrap {
             mut store,
             restored_snapshot,
-        } = build_native_store(
+        } = build_vmodv_store(
             cli.state.as_deref(),
             &user_data,
             isf_dir.as_deref(),
             &user_isf_dirs,
         );
-        // The native shell has no renderer to forward the media manager's
+        // The VmodV shell has no renderer to forward the media manager's
         // path, so it dispatches `media/setMediaDirectoryPath` itself; the
         // compositor resolves texture props and library images under it.
         dispatch_media_root(&mut store, &media_root);
@@ -578,7 +578,7 @@ impl NativeApp {
             &project_settings_path,
         );
         eprintln!(
-            "ui: INFO native shell ready ({} groups, {} modules, {} scenes, {} registered)",
+            "ui: INFO VmodV shell ready ({} groups, {} modules, {} scenes, {} registered)",
             store.state().groups.len(),
             store.state().modules.len(),
             store.scenes_state().scenes.len(),
@@ -590,7 +590,7 @@ impl NativeApp {
         );
 
         // Electron binds the default OSC listener at startup
-        // (`application/index.js:186-189`); native mode must do the same or
+        // (`application/index.js:186-189`); VmodV mode must do the same or
         // OSC Input Links can never receive. A bind failure is reported and
         // the shell keeps running without that listener.
         let osc_servers = start_default_osc_listener(&mut store);
@@ -631,7 +631,7 @@ impl NativeApp {
         // The legacy renderer creates one enabled user Group at boot, after a
         // restored engine state and before it signals ready
         // (`application/index.js:446-456`, `groups/createsADefaultGroup`). The
-        // native shell owns the store instead, so it seeds the same Group only
+        // VmodV shell owns the store instead, so it seeds the same Group only
         // when the startup flow left the live stack untouched and empty.
         if !restored_snapshot && !startup_live_stack_replaced && !startup_scene_applied {
             seed_default_group(&mut store);
@@ -641,7 +641,7 @@ impl NativeApp {
         // Audio capture selection: explicit `--audio-source`/`--audio-device`
         // (or their MODV_* environment fallbacks) wins, then the choice saved
         // by the Audio panel, then the PipeWire monitor → default input
-        // fallback the native shell has always used.
+        // fallback the VmodV shell has always used.
         let audio_settings_path = user_data.join(crate::audio_settings::AUDIO_SETTINGS_FILENAME);
         let audio_explicit = crate::audio_settings::audio_cli_explicit(
             &std::env::args().collect::<Vec<_>>(),
@@ -673,7 +673,7 @@ impl NativeApp {
             audio_explicit,
             persisted_audio.as_ref(),
         );
-        let (audio_feed, audio_selection, audio_device) = match open_native_audio(&audio_plan) {
+        let (audio_feed, audio_selection, audio_device) = match open_vmodv_audio(&audio_plan) {
             Some((feed, selection, device)) => (Some(feed), selection, device),
             None => (
                 None,
@@ -711,8 +711,8 @@ impl NativeApp {
         }
 
         // Webcam selection: Electron persists `mediaStream` (ordered
-        // `selectedVideoSources` + per-device `videoSettings`). The native
-        // shell stores the same thing in `<userData>/native-media.json` and
+        // `selectedVideoSources` + per-device `videoSettings`). The VmodV
+        // shell stores the same thing in `<userData>/vmodv-media.json` and
         // restores the saved order/modes once a camera enumeration sees the
         // device, including cameras that are (re)plugged in later.
         let media_settings_path = user_data.join(crate::media_settings::MEDIA_SETTINGS_FILENAME);
@@ -777,7 +777,7 @@ impl NativeApp {
         );
         plugin_runtime.set_frame_inputs(
             plugin_runtime::features_from_store(&store),
-            Rc::new(NativeStateReader::from_store(&store)),
+            Rc::new(VmodvStateReader::from_store(&store)),
         );
         plugin_runtime.start();
         let discovered_plugins = plugin_runtime.plugins().len();
@@ -796,7 +796,7 @@ impl NativeApp {
         let egui_ctx = egui::Context::default();
         modv_ui::theme::apply(&egui_ctx);
         let target_fps = store.target_fps();
-        let state_path = crate::cli::native_state_path(cli.state.as_deref(), &user_data);
+        let state_path = crate::cli::vmodv_state_path(cli.state.as_deref(), &user_data);
 
         Self {
             bench_deadline: cli.bench_deadline(),
@@ -912,7 +912,7 @@ impl NativeApp {
         };
 
         let mut attributes = WindowAttributes::default()
-            .with_title("modV Native")
+            .with_title("VmodV")
             .with_inner_size(PhysicalSize::new(
                 self.cli.width.max(480),
                 self.cli.height.max(320),
@@ -1145,7 +1145,7 @@ impl NativeApp {
         // thread; the finder and receivers run on their own threads, so this
         // only drains a finished result and never blocks the frame.
         self.store.poll_ndi();
-        // Native has no Vuex mirror: the delta stream only exists for the IPC
+        // VmodV has no Vuex mirror: the delta stream only exists for the IPC
         // bridge, which this shell does not run. Drop the records instead of
         // letting OSC traffic and meter updates grow the queue for the whole
         // session.
@@ -1167,9 +1167,9 @@ impl NativeApp {
         self.store.update_input_links(&audio, self.start.elapsed());
     }
 
-    /// Pump the native engine-owned audio feed and publish it into the store.
+    /// Pump the VmodV engine-owned audio feed and publish it into the store.
     ///
-    /// The Electron path defaults to the renderer's WebAudio pump; native has
+    /// The Electron path defaults to the renderer's WebAudio pump; VmodV has
     /// no renderer, so it opens PipeWire's default monitor (the system-audio
     /// loopback) and falls back to the default input. A capture failure logs
     /// once, stops the feed and leaves the engine silent instead of killing
@@ -1192,7 +1192,7 @@ impl NativeApp {
         };
         if !self.audio_error_logged {
             self.audio_error_logged = true;
-            eprintln!("ui: WARN native audio capture stopped ({error}); engine is silent");
+            eprintln!("ui: WARN VmodV audio capture stopped ({error}); engine is silent");
         }
         self.audio_feed = None;
         self.audio_capture_rate.stopped();
@@ -1211,7 +1211,7 @@ impl NativeApp {
         }
         self.plugin_runtime.set_frame_inputs(
             plugin_runtime::features_from_store(&self.store),
-            Rc::new(NativeStateReader::from_store(&self.store)),
+            Rc::new(VmodvStateReader::from_store(&self.store)),
         );
         self.plugin_runtime.pre_frame();
     }
@@ -1574,7 +1574,7 @@ impl NativeApp {
         let mut encoder = engine
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("modv-native-frame"),
+                label: Some("modv-vmodv-frame"),
             });
 
         if let Some((output_frame, _)) = &output_frame
@@ -1610,7 +1610,7 @@ impl NativeApp {
                 .create_view(&wgpu::TextureViewDescriptor::default());
             {
                 let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("modv-native-ui"),
+                    label: Some("modv-vmodv-ui"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
                         depth_slice: None,
@@ -2666,12 +2666,12 @@ impl NativeApp {
         self.open_folder(&path);
     }
 
-    /// Switch native audio capture live.
+    /// Switch VmodV audio capture live.
     ///
     /// The replacement feed opens before the current one stops, so a bad
     /// selection (unplugged device, busy PipeWire node) leaves the running
     /// capture untouched and only reports the error. A successful choice is
-    /// persisted to `<userData>/native-audio.json` for the next launch.
+    /// persisted to `<userData>/vmodv-audio.json` for the next launch.
     fn set_audio_source(&mut self, source: &str, device: Option<&str>) {
         let selection = match source {
             "pipewire" => AudioSourceSelection::Pipewire,
@@ -3756,7 +3756,7 @@ impl NativeApp {
         let path = self
             .preset_path
             .clone()
-            .unwrap_or_else(|| self.user_data.join("native-preset.json"));
+            .unwrap_or_else(|| self.user_data.join("vmodv-preset.json"));
         match media_dialogs::save_preset_file(&path, &self.store) {
             Ok(()) => eprintln!("ui: INFO preset saved to {}", path.display()),
             Err(error) => {
@@ -3805,7 +3805,7 @@ impl NativeApp {
         let fps = self.frames as f64 / elapsed;
         self.fps = fps as f32;
         eprintln!(
-            "native: frames={} fps={fps:.2} resolution={}x{} output={}",
+            "vmodv: frames={} fps={fps:.2} resolution={}x{} output={}",
             self.frames,
             self.preview_size.0,
             self.preview_size.1,
@@ -4417,7 +4417,7 @@ fn apply_startup_scene(store: &mut Store, query: Option<&str>) -> bool {
     }
 }
 
-/// Create Electron's default user Group on a fresh native start.
+/// Create Electron's default user Group on a fresh VmodV start.
 ///
 /// Mirrors the renderer's boot dispatch (`application/index.js:446-456`):
 /// `groups/createGroup` with only `enabled: GROUP_ENABLED`, so the name falls
@@ -4456,29 +4456,29 @@ fn start_cli_performance(store: &mut Store, requested: bool) {
     }
 }
 
-/// The native shell's store plus what the startup flow needs to know about it.
-struct NativeStoreBootstrap {
+/// The VmodV shell's store plus what the startup flow needs to know about it.
+struct VmodvStoreBootstrap {
     store: Store,
     /// A saved `engine-state.json` was restored, so the live stack belongs to
     /// the user and must not gain a default Group.
     restored_snapshot: bool,
 }
 
-/// Build the native shell's store: restore the shared engine snapshot, then
+/// Build the VmodV shell's store: restore the shared engine snapshot, then
 /// hydrate/seed the Scene list beside it.
 ///
-/// The native shell has no Electron supervisor, so an absent `--state` must
+/// The VmodV shell has no Electron supervisor, so an absent `--state` must
 /// resolve to the supervisor's `<userData>/engine-state.json`
-/// ([`crate::cli::native_state_path`]); otherwise the store has no Scene path
+/// ([`crate::cli::vmodv_state_path`]); otherwise the store has no Scene path
 /// and `<userData>/scenes.json` — the authoritative list shared with
 /// Electron — is never read, leaving only the seeded defaults.
-fn build_native_store(
+fn build_vmodv_store(
     explicit_state: Option<&Path>,
     user_data: &Path,
     isf_dir: Option<&Path>,
     user_isf_dirs: &[PathBuf],
-) -> NativeStoreBootstrap {
-    let state_path = crate::cli::native_state_path(explicit_state, user_data);
+) -> VmodvStoreBootstrap {
+    let state_path = crate::cli::vmodv_state_path(explicit_state, user_data);
     let mut store = Store::with_state_path_and_isf_dirs(Some(&state_path), isf_dir, user_isf_dirs);
     let mut restored_snapshot = false;
     match store.restore_from_file(&state_path) {
@@ -4509,7 +4509,7 @@ fn build_native_store(
     if let Err(error) = store.dispatch("scenes/ensureDefaultScenes", serde_json::json!({})) {
         eprintln!("ui: WARN could not seed default Scenes: {error}");
     }
-    NativeStoreBootstrap {
+    VmodvStoreBootstrap {
         store,
         restored_snapshot,
     }
@@ -4518,7 +4518,7 @@ fn build_native_store(
 /// Point the store's media root at the shell's `<userData>/media` tree.
 ///
 /// Electron's renderer forwards the media manager path as
-/// `media/setMediaDirectoryPath`; the native shell has no renderer, so it must
+/// `media/setMediaDirectoryPath`; the VmodV shell has no renderer, so it must
 /// dispatch the action itself, or [`crate::texture_sources::ImageTextures`]
 /// falls back to `$MODV_MEDIA_DIR` and Electron's default userData (the wrong
 /// tree under `MODV_USER_DATA`).
@@ -4539,7 +4539,7 @@ fn dispatch_media_root(store: &mut Store, media_root: &Path) {
 /// The legacy media manager keeps third-party shaders in
 /// `<media>/<profile>/isf`; the active profile plus explicit extra folders
 /// form the user corpus. The flat `<media>/isf` folder is kept for installs
-/// created by older native builds. `MODV_USER_ISF_DIR` overrides all of it.
+/// created by older VmodV builds. `MODV_USER_ISF_DIR` overrides all of it.
 fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("MODV_USER_ISF_DIR").map(PathBuf::from) {
         return vec![dir];
@@ -4602,7 +4602,7 @@ fn clamp_saved_to_monitor(saved: SavedWindow, event_loop: &ActiveEventLoop) -> S
 /// (including a persisted Audio-panel choice) is
 /// [`crate::audio_settings::initial_plan`].
 #[cfg(test)]
-fn native_audio_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelection> {
+fn vmodv_audio_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelection> {
     crate::audio_settings::default_sources(selection)
 }
 
@@ -4611,7 +4611,7 @@ fn native_audio_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelec
 /// Returns the feed together with the selection that actually started, so the
 /// Audio panel marks the live source even when a persisted device was
 /// unplugged and a fallback took over.
-fn open_native_audio(
+fn open_vmodv_audio(
     plan: &[(AudioSourceSelection, Option<String>)],
 ) -> Option<(AudioFeed, AudioSourceSelection, Option<String>)> {
     for (selection, device) in plan {
@@ -4639,7 +4639,7 @@ fn open_native_audio(
             }
         }
     }
-    eprintln!("ui: WARN no native audio source started; engine runs silent");
+    eprintln!("ui: WARN no VmodV audio source started; engine runs silent");
     None
 }
 
@@ -4664,7 +4664,7 @@ fn resolve_isf_dir_from(explicit: Option<&Path>) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_dir())
 }
 
-impl FilePicker for NativeApp {
+impl FilePicker for VmodvApp {
     fn open_document(&mut self, path: &Path) -> Result<DocumentKind, String> {
         let kind = media_dialogs::open_document(&mut self.store, path)?;
         // Electron remembers the opened preset as the Save target. A Scene or
@@ -4708,7 +4708,7 @@ impl FilePicker for NativeApp {
     }
 }
 
-impl ApplicationHandler for NativeApp {
+impl ApplicationHandler for VmodvApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.ui_window.is_some() || self.failed {
             return;
@@ -4865,7 +4865,7 @@ mod tests {
 
     fn plugin_temp_dir(prefix: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "modv-native-{prefix}-{}-{}",
+            "modv-vmodv-{prefix}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4878,7 +4878,7 @@ mod tests {
 
     fn inline_isf_dir(source: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "modv-native-inline-isf-{}-{}",
+            "modv-vmodv-inline-isf-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -5292,17 +5292,17 @@ module.exports = {
     }
 
     #[test]
-    fn native_audio_defaults_to_the_system_monitor_then_input() {
+    fn vmodv_audio_defaults_to_the_system_monitor_then_input() {
         assert_eq!(
-            native_audio_sources(AudioSourceSelection::Renderer),
+            vmodv_audio_sources(AudioSourceSelection::Renderer),
             vec![AudioSourceSelection::Pipewire, AudioSourceSelection::Input]
         );
         assert_eq!(
-            native_audio_sources(AudioSourceSelection::Input),
+            vmodv_audio_sources(AudioSourceSelection::Input),
             vec![AudioSourceSelection::Input]
         );
         assert_eq!(
-            native_audio_sources(AudioSourceSelection::Pipewire),
+            vmodv_audio_sources(AudioSourceSelection::Pipewire),
             vec![AudioSourceSelection::Pipewire]
         );
     }
@@ -5310,7 +5310,7 @@ module.exports = {
     #[test]
     fn an_empty_audio_plan_starts_no_feed() {
         assert!(
-            open_native_audio(&[]).is_none(),
+            open_vmodv_audio(&[]).is_none(),
             "no plan entry means no capture attempt"
         );
     }
@@ -5409,7 +5409,7 @@ module.exports = {
             .expect("add module");
 
         let path = std::env::temp_dir().join(format!(
-            "modv-native-preset-{}-{}.json",
+            "modv-vmodv-preset-{}-{}.json",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -5505,12 +5505,12 @@ module.exports = {
     }
 
     #[test]
-    fn native_media_root_resolves_library_images_under_the_shell_tree() {
-        // Regression: the native shell never dispatched
+    fn vmodv_media_root_resolves_library_images_under_the_shell_tree() {
+        // Regression: the VmodV shell never dispatched
         // `media/setMediaDirectoryPath`, so `ImageTextures` fell back to
         // `$MODV_MEDIA_DIR`/Electron's default `<userData>/media` and a
         // `MODV_USER_DATA` profile's images failed to resolve.
-        let root = temp_dir("modv-native-media-root");
+        let root = temp_dir("modv-vmodv-media-root");
         let user_data = root.join("user-data");
         let media_root = user_data.join("media");
         std::fs::create_dir_all(media_root.join("default/image")).expect("image folder");
@@ -5590,11 +5590,11 @@ module.exports = {
     }
 
     #[test]
-    fn native_store_reads_scenes_json_beside_the_default_state_path() {
-        // Regression: the native shell used to pass `cli.state` straight
+    fn vmodv_store_reads_scenes_json_beside_the_default_state_path() {
+        // Regression: the VmodV shell used to pass `cli.state` straight
         // through, so without `--state` the store had no Scene path and only
         // the 62 seeded defaults appeared — the user's own Scenes were lost.
-        let user_data = temp_dir("modv-native-scenes");
+        let user_data = temp_dir("modv-vmodv-scenes");
         write_scenes(
             &user_data,
             vec![
@@ -5603,7 +5603,7 @@ module.exports = {
             ],
         );
 
-        let store = build_native_store(None, &user_data, None, &[]).store;
+        let store = build_vmodv_store(None, &user_data, None, &[]).store;
 
         assert_eq!(
             scene_names(&store),
@@ -5614,12 +5614,12 @@ module.exports = {
     }
 
     #[test]
-    fn native_store_restores_the_saved_row_names() {
+    fn vmodv_store_restores_the_saved_row_names() {
         // The real install's `scenes.json` carries
         // `performance.rowNames: ["WEBCAM","Background","Foreground","Effects",""]`.
-        // Building the native store must keep those names through hydration and
+        // Building the VmodV store must keep those names through hydration and
         // the default-seeding pass (and write them back unchanged).
-        let user_data = temp_dir("modv-native-row-names");
+        let user_data = temp_dir("modv-vmodv-row-names");
         let names = serde_json::json!(["WEBCAM", "Background", "Foreground", "Effects", ""]);
         let document = serde_json::json!({
             "version": 1,
@@ -5635,12 +5635,12 @@ module.exports = {
         )
         .expect("write scenes.json");
 
-        let store = build_native_store(None, &user_data, None, &[]).store;
+        let store = build_vmodv_store(None, &user_data, None, &[]).store;
 
         assert_eq!(
             store.row_names(),
             vec!["WEBCAM", "Background", "Foreground", "Effects", ""],
-            "the native grid labels the saved rows"
+            "the VmodV grid labels the saved rows"
         );
         let saved: serde_json::Value = serde_json::from_slice(
             &std::fs::read(user_data.join("scenes.json")).expect("scenes.json"),
@@ -5655,8 +5655,8 @@ module.exports = {
     }
 
     #[test]
-    fn native_store_keeps_an_explicit_state_path() {
-        let root = temp_dir("modv-native-explicit");
+    fn vmodv_store_keeps_an_explicit_state_path() {
+        let root = temp_dir("modv-vmodv-explicit");
         let explicit_dir = root.join("explicit");
         let user_data = root.join("user-data");
         std::fs::create_dir_all(&explicit_dir).expect("explicit dir");
@@ -5664,7 +5664,7 @@ module.exports = {
         write_scenes(&explicit_dir, vec![simple_scene("scene-a", "Explicit")]);
         write_scenes(&user_data, vec![simple_scene("scene-b", "UserData")]);
 
-        let store = build_native_store(
+        let store = build_vmodv_store(
             Some(&explicit_dir.join("engine-state.json")),
             &user_data,
             None,
@@ -6134,8 +6134,8 @@ module.exports = {
 
     #[test]
     fn the_default_state_path_round_trips_live_groups() {
-        let dir = temp_dir("modv-native-state");
-        let path = crate::cli::native_state_path(None, &dir);
+        let dir = temp_dir("modv-vmodv-state");
+        let path = crate::cli::vmodv_state_path(None, &dir);
         let mut store = Store::with_state_path(Some(&path));
         store
             .dispatch(

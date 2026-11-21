@@ -1,4 +1,4 @@
-//! Process-level native scenarios ported from the Electron e2e suite.
+//! Process-level VmodV scenarios ported from the Electron e2e suite.
 //!
 //! Run with:
 //!
@@ -11,7 +11,7 @@
 //! `userData` tree via [`e2e::temp_root`], so state, Scenes and window
 //! placement survive a process boundary exactly like an app relaunch.
 //! Supervisor parity and the deliberate differences are described in
-//! `docs/native-e2e.md`.
+//! `docs/vmodv-e2e.md`.
 
 #![cfg(unix)] // the control harness uses Unix-domain sockets
 
@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use e2e::NativeHarness;
+use e2e::VmodvHarness;
 
 fn scene_document() -> Value {
     json!({
@@ -74,16 +74,16 @@ fn png_bytes(path: &Path) -> Vec<u8> {
 /// relaunched over the same userData from its last snapshot.
 ///
 /// The Rust supervisor has no test seam for a real `MODV_ENGINE` child, so the
-/// native single-process shell stands in: it saves the same snapshot the
+/// VmodV single-process shell stands in: it saves the same snapshot the
 /// supervisor restores and proves the killed process can be replaced without a
 /// stale state/lock.
 #[test]
 fn engine_skeleton_survives_sigkill_and_restores_state() {
-    let root = e2e::temp_root("native-process-skeleton");
+    let root = e2e::temp_root("vmodv-process-skeleton");
     let user_data = root.join("userData");
     fs::create_dir_all(&user_data).expect("create userData");
 
-    let mut first = NativeHarness::builder()
+    let mut first = VmodvHarness::builder()
         .width(640)
         .height(360)
         .user_data(&user_data)
@@ -124,7 +124,7 @@ fn engine_skeleton_survives_sigkill_and_restores_state() {
     assert_eq!(status.signal(), Some(9), "SIGKILL expected: {status}");
     assert_eq!(status.code(), None, "SIGKILL expected: {status}");
 
-    let mut second = NativeHarness::builder()
+    let mut second = VmodvHarness::builder()
         .width(640)
         .height(360)
         .user_data(&user_data)
@@ -160,7 +160,7 @@ fn engine_skeleton_survives_sigkill_and_restores_state() {
 /// the compositor presents a frame at the requested 16:9 size.
 #[test]
 fn renders_the_main_window_at_the_requested_size() {
-    let mut app = NativeHarness::builder().width(640).height(360).spawn();
+    let mut app = VmodvHarness::builder().width(640).height(360).spawn();
     app.wait_ready();
     let state = app.wait_for_state(Duration::from_secs(20), |state| {
         state["runtime"]["frames"].as_u64().unwrap_or(0) > 0
@@ -194,12 +194,12 @@ fn renders_the_main_window_at_the_requested_size() {
 /// `groups/createsADefaultGroup.spec.js`: a fresh shell has one enabled user
 /// Group, and relaunching over its snapshot does not create another.
 #[test]
-fn fresh_native_start_creates_exactly_one_default_group() {
-    let root = e2e::temp_root("native-process-default-group");
+fn fresh_vmodv_start_creates_exactly_one_default_group() {
+    let root = e2e::temp_root("vmodv-process-default-group");
     let user_data = root.join("userData");
     fs::create_dir_all(&user_data).expect("create userData");
 
-    let mut first = NativeHarness::builder().user_data(&user_data).spawn();
+    let mut first = VmodvHarness::builder().user_data(&user_data).spawn();
     first.wait_ready();
     let state = first.state();
     assert_eq!(
@@ -222,7 +222,7 @@ fn fresh_native_start_creates_exactly_one_default_group() {
 
     // The snapshot now holds two Groups; a second boot must restore both and
     // not stack a second "New Group" on top.
-    let mut second = NativeHarness::builder().user_data(&user_data).spawn();
+    let mut second = VmodvHarness::builder().user_data(&user_data).spawn();
     second.wait_ready();
     let state = second.state();
     let groups = state["groups"].as_array().expect("groups array");
@@ -262,11 +262,11 @@ fn fresh_native_start_creates_exactly_one_default_group() {
 /// and honoured on the next launch, even when new CLI dimensions are passed.
 #[test]
 fn window_state_survives_a_restart() {
-    let root = e2e::temp_root("native-process-window-state");
+    let root = e2e::temp_root("vmodv-process-window-state");
     let user_data = root.join("userData");
     fs::create_dir_all(&user_data).expect("create userData");
 
-    let mut first = NativeHarness::builder()
+    let mut first = VmodvHarness::builder()
         .width(720)
         .height(405)
         .user_data(&user_data)
@@ -307,7 +307,7 @@ fn window_state_survives_a_restart() {
 
     // Different requested dimensions must lose to the saved placement; the
     // output window restores its saved size too.
-    let mut second = NativeHarness::builder()
+    let mut second = VmodvHarness::builder()
         .width(800)
         .height(600)
         .user_data(&user_data)
@@ -333,7 +333,7 @@ fn window_state_survives_a_restart() {
 /// (the JS `loadSceneFromJson` default).
 #[test]
 fn a_scene_json_opened_like_a_preset_is_applied_as_a_scene() {
-    let root = e2e::temp_root("native-process-scene-open");
+    let root = e2e::temp_root("vmodv-process-scene-open");
     let user_data = root.join("userData");
     fs::create_dir_all(&user_data).expect("create userData");
     let scene_path = root.join("opened-scene.json");
@@ -343,7 +343,7 @@ fn a_scene_json_opened_like_a_preset_is_applied_as_a_scene() {
     )
     .expect("write the Scene document");
 
-    let mut app = NativeHarness::builder()
+    let mut app = VmodvHarness::builder()
         .width(640)
         .height(360)
         .user_data(&user_data)
@@ -556,7 +556,7 @@ fn cell_drop_target(scenes: &[Value]) -> Option<CellDropTarget> {
 /// Groups it replaces, so a cell is only settled once one Group carries its
 /// Scene id and row.
 fn wait_for_live_cells(
-    harness: &mut NativeHarness,
+    harness: &mut VmodvHarness,
     target: &CellDropTarget,
     module: &str,
     group_module: &str,
@@ -607,7 +607,7 @@ fn scene_cell_module_and_group_drops_apply_and_survive_a_restart() {
     const DROPPED_MODULE: &str = "Ball";
     const GROUP_MODULE: &str = "Bands";
 
-    let mut first = NativeHarness::builder()
+    let mut first = VmodvHarness::builder()
         .width(640)
         .height(360)
         .user_data(&user_data)
@@ -850,7 +850,7 @@ fn scene_cell_module_and_group_drops_apply_and_survive_a_restart() {
     );
 
     // — — a second process over the same userData restores and re-applies — —
-    let mut second = NativeHarness::builder()
+    let mut second = VmodvHarness::builder()
         .width(640)
         .height(360)
         .user_data(&user_data)

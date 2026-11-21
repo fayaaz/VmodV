@@ -92,7 +92,7 @@
 //! A descriptor may carry an optional `keyframeTimes: [0, 0.35, 1]`: the
 //! normalised progress of every `data` row, strictly increasing, with the
 //! first at 0 and the last at 1. Electron ignores the key, so it stays
-//! Electron-readable; the native editor uses it to drag keyframes on both
+//! Electron-readable; the VmodV editor uses it to drag keyframes on both
 //! axes. Valid times replace anime's even keyframe spacing (including the
 //! leading hold) with a segment between each pair of times, easing the local
 //! progress with the descriptor's easing/`steps`. With no times, or with an
@@ -419,7 +419,7 @@ impl TweenDescriptor {
 
 /// Whether `times` is a usable free keyframe list for a `rows`-row tween.
 ///
-/// The contract the native editor writes: one entry per `data` row, finite,
+/// The contract the VmodV editor writes: one entry per `data` row, finite,
 /// strictly increasing, first 0 and last 1. Anything else is ignored for
 /// sampling (even spacing / anime keyframes) rather than failing the document.
 fn valid_keyframe_times(times: &[f64], rows: usize) -> bool {
