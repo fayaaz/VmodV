@@ -32,5 +32,5 @@ pub use preset::{
 };
 
 pub use eel::{
-    CompiledEquations, EelError, Globals, GlobalState, Rng, VarPool, compile, run_frame, run_pixel,
+    CompiledEquations, EelError, GlobalState, Globals, Rng, VarPool, compile, run_frame, run_pixel,
 };

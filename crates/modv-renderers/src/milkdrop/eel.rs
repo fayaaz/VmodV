@@ -20,9 +20,16 @@
 //!   so evaluation is reproducible in tests.
 
 #![forbid(unsafe_code)]
+// The RED test assertions spell out `x >= lo && x < hi` explicitly; keep the
+// whole module (including its test harness) clean under `-D warnings`.
+#![allow(clippy::manual_range_contains)]
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Mutex};
+
+/// Comparison epsilon: values within this distance compare as equal.
+const EPS: f32 = 1e-4;
 
 /// Compiled, owned form of one EEL equation set.
 ///
@@ -30,9 +37,9 @@ use std::fmt;
 /// representation (AST or bytecode) is an implementation detail; callers only
 /// rely on it being `Clone` + `Send` and owning all of its data.
 #[derive(Clone, Debug, Default)]
-#[allow(dead_code)]
 pub struct CompiledEquations {
-    source: String,
+    program: Vec<Stmt>,
+    version: u8,
 }
 
 /// Typed failures produced by compiling or running EEL.
@@ -73,25 +80,33 @@ pub const MEGABUF_SIZE: usize = 1_048_576;
 /// truncated integer form. Two generators built from the same seed produce
 /// identical sequences.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct Rng {
-    seed: u64,
+    state: u64,
 }
 
 impl Rng {
     /// Build a generator from a seed.
     pub fn new(seed: u64) -> Self {
-        Rng { seed }
+        Rng { state: seed }
     }
 
-    /// Next pseudo-random `f32` in `[0.0, 1.0)`.
+    /// Advance the splitmix64 state and return one 64-bit word.
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Next pseudo-random `f32` in `[0.0, 1.0)` (24 bits of mantissa).
     pub fn next_f32(&mut self) -> f32 {
-        0.0
+        ((self.next_u64() >> 40) as f32) / ((1u64 << 24) as f32)
     }
 
     /// Next pseudo-random integer.
     pub fn next_int(&mut self) -> i32 {
-        0
+        self.next_u64() as i32
     }
 }
 
@@ -99,16 +114,39 @@ impl Rng {
 ///
 /// Cloning a `GlobalState` produces another handle to the *same* buffer, which
 /// is how two [`VarPool`]s (two presets) share `gmegabuf`.
-#[derive(Clone, Debug, Default)]
-#[allow(dead_code)]
+#[derive(Clone, Debug)]
 pub struct GlobalState {
-    seed: u64,
+    buf: Arc<Mutex<Vec<f32>>>,
+}
+
+impl Default for GlobalState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GlobalState {
-    /// A fresh, empty global buffer.
+    /// A fresh, empty global buffer. Clones share the same storage.
     pub fn new() -> Self {
-        GlobalState { seed: 0 }
+        GlobalState {
+            buf: Arc::new(Mutex::new(vec![0.0; MEGABUF_SIZE])),
+        }
+    }
+
+    fn read(&self, index: usize) -> f32 {
+        if index >= MEGABUF_SIZE {
+            return 0.0;
+        }
+        self.buf.lock().map(|b| b[index]).unwrap_or(0.0)
+    }
+
+    fn write(&self, index: usize, value: f32) {
+        if index >= MEGABUF_SIZE {
+            return;
+        }
+        if let Ok(mut b) = self.buf.lock() {
+            b[index] = value;
+        }
     }
 }
 
@@ -161,10 +199,10 @@ impl Default for Globals {
 /// current `q1..q32` as the per-frame reset baseline captured from init
 /// equations. [`VarPool::set_global_state`] attaches a shared [`GlobalState`].
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct VarPool {
     vars: HashMap<String, f32>,
-    megabuf: HashMap<usize, f32>,
+    q_baseline: Option<HashMap<String, f32>>,
+    megabuf: Vec<f32>,
     global: Option<GlobalState>,
     rng: Rng,
 }
@@ -184,7 +222,8 @@ impl VarPool {
     pub fn with_rng(rng: Rng) -> Self {
         VarPool {
             vars: HashMap::new(),
-            megabuf: HashMap::new(),
+            q_baseline: None,
+            megabuf: vec![0.0; MEGABUF_SIZE],
             global: None,
             rng,
         }
@@ -206,51 +245,1068 @@ impl VarPool {
     }
 
     /// Capture the current `q1..q32` as the per-frame reset baseline.
-    pub fn snapshot_q(&mut self) {}
+    pub fn snapshot_q(&mut self) {
+        let mut snap = HashMap::with_capacity(32);
+        for i in 1..=32 {
+            let key = format!("q{i}");
+            let value = self.vars.get(&key).copied().unwrap_or(0.0);
+            snap.insert(key, value);
+        }
+        self.q_baseline = Some(snap);
+    }
+
+    /// Restore `q1..q32` to a previously captured baseline (if any).
+    fn reset_q(&mut self) {
+        if let Some(snap) = &self.q_baseline {
+            for (key, value) in snap.iter() {
+                self.vars.insert(key.clone(), *value);
+            }
+        }
+    }
 
     /// Read a `megabuf` slot.
-    pub fn megabuf(&self, _index: usize) -> f32 {
-        0.0
+    pub fn megabuf(&self, index: usize) -> f32 {
+        self.megabuf.get(index).copied().unwrap_or(0.0)
     }
 
     /// Write a `megabuf` slot directly.
-    pub fn set_megabuf(&mut self, _index: usize, _value: f32) {}
+    pub fn set_megabuf(&mut self, index: usize, value: f32) {
+        if index < MEGABUF_SIZE {
+            self.megabuf[index] = value;
+        }
+    }
 
     /// Read a `gmegabuf` slot from the attached [`GlobalState`].
-    pub fn gmegabuf(&self, _index: usize) -> f32 {
-        0.0
+    pub fn gmegabuf(&self, index: usize) -> f32 {
+        self.global.as_ref().map(|g| g.read(index)).unwrap_or(0.0)
     }
 
     /// Write a `gmegabuf` slot directly.
-    pub fn set_gmegabuf(&mut self, _index: usize, _value: f32) {}
+    pub fn set_gmegabuf(&mut self, index: usize, value: f32) {
+        if let Some(g) = &self.global {
+            g.write(index, value);
+        }
+    }
+}
+
+impl Default for VarPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lexer
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+enum Tok {
+    Num(f32),
+    Ident(String),
+    Assign,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    ModAssign,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Bang,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    AndAnd,
+    OrOr,
+    Amp,
+    Pipe,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Comma,
+    Semi,
+    Newline,
+    Eof,
+}
+
+/// Tokenize EEL source. Newlines are separators at top level (and inside
+/// braces) but are skipped inside parentheses/brackets so expressions may be
+/// wrapped across lines.
+fn lex(src: &str) -> Result<Vec<Tok>, EelError> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    let mut nesting = 0i32;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            b' ' | b'\t' | b'\r' => i += 1,
+            b'\n' => {
+                if nesting == 0 {
+                    out.push(Tok::Newline);
+                }
+                i += 1;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                if i + 1 >= bytes.len() {
+                    return Err(EelError::ParseError("unterminated comment".into()));
+                }
+                i += 2;
+            }
+            b'0'..=b'9' | b'.' => {
+                let start = i;
+                let mut saw_dot = false;
+                while i < bytes.len() {
+                    let d = bytes[i];
+                    if d.is_ascii_digit() {
+                        i += 1;
+                    } else if d == b'.' && !saw_dot {
+                        saw_dot = true;
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+                    let exp_start = i;
+                    i += 1;
+                    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+                        i += 1;
+                    }
+                    let digits = i;
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    if i == digits {
+                        i = exp_start;
+                    }
+                }
+                let text = std::str::from_utf8(&bytes[start..i])
+                    .map_err(|_| EelError::ParseError("bad number literal".into()))?;
+                let value: f32 = text
+                    .parse()
+                    .map_err(|_| EelError::ParseError(format!("bad number literal: {text}")))?;
+                out.push(Tok::Num(value));
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+                let start = i;
+                i += 1;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                let text = std::str::from_utf8(&bytes[start..i])
+                    .map_err(|_| EelError::ParseError("bad identifier".into()))?;
+                out.push(Tok::Ident(text.to_string()));
+            }
+            b'=' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::Eq);
+                    i += 2;
+                } else {
+                    out.push(Tok::Assign);
+                    i += 1;
+                }
+            }
+            b'!' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::Ne);
+                    i += 2;
+                } else {
+                    out.push(Tok::Bang);
+                    i += 1;
+                }
+            }
+            b'<' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::Le);
+                    i += 2;
+                } else {
+                    out.push(Tok::Lt);
+                    i += 1;
+                }
+            }
+            b'>' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::Ge);
+                    i += 2;
+                } else {
+                    out.push(Tok::Gt);
+                    i += 1;
+                }
+            }
+            b'&' => {
+                if bytes.get(i + 1) == Some(&b'&') {
+                    out.push(Tok::AndAnd);
+                    i += 2;
+                } else {
+                    out.push(Tok::Amp);
+                    i += 1;
+                }
+            }
+            b'|' => {
+                if bytes.get(i + 1) == Some(&b'|') {
+                    out.push(Tok::OrOr);
+                    i += 2;
+                } else {
+                    out.push(Tok::Pipe);
+                    i += 1;
+                }
+            }
+            b'+' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::AddAssign);
+                    i += 2;
+                } else {
+                    out.push(Tok::Plus);
+                    i += 1;
+                }
+            }
+            b'-' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::SubAssign);
+                    i += 2;
+                } else {
+                    out.push(Tok::Minus);
+                    i += 1;
+                }
+            }
+            b'*' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::MulAssign);
+                    i += 2;
+                } else {
+                    out.push(Tok::Star);
+                    i += 1;
+                }
+            }
+            b'/' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::DivAssign);
+                    i += 2;
+                } else {
+                    out.push(Tok::Slash);
+                    i += 1;
+                }
+            }
+            b'%' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(Tok::ModAssign);
+                    i += 2;
+                } else {
+                    out.push(Tok::Percent);
+                    i += 1;
+                }
+            }
+            b'(' => {
+                nesting += 1;
+                out.push(Tok::LParen);
+                i += 1;
+            }
+            b')' => {
+                nesting -= 1;
+                out.push(Tok::RParen);
+                i += 1;
+            }
+            b'[' => {
+                nesting += 1;
+                out.push(Tok::LBracket);
+                i += 1;
+            }
+            b']' => {
+                nesting -= 1;
+                out.push(Tok::RBracket);
+                i += 1;
+            }
+            b'{' => {
+                out.push(Tok::LBrace);
+                i += 1;
+            }
+            b'}' => {
+                out.push(Tok::RBrace);
+                i += 1;
+            }
+            b',' => {
+                out.push(Tok::Comma);
+                i += 1;
+            }
+            b';' => {
+                out.push(Tok::Semi);
+                i += 1;
+            }
+            _ => {
+                return Err(EelError::ParseError(format!(
+                    "unexpected character '{}'",
+                    c as char
+                )));
+            }
+        }
+    }
+    out.push(Tok::Eof);
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// AST
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+enum UnOp {
+    Neg,
+    Not,
+}
+
+#[derive(Clone, Debug)]
+enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    BitAnd,
+    BitOr,
+    And,
+    Or,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AssignOp {
+    Set,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
+#[derive(Clone, Debug)]
+enum Expr {
+    Num(f32),
+    Var(String),
+    Unary(UnOp, Box<Expr>),
+    Binary(BinOp, Box<Expr>, Box<Expr>),
+    Assign(AssignOp, String, Box<Expr>),
+    Index {
+        global: bool,
+        index: Box<Expr>,
+    },
+    IndexAssign {
+        global: bool,
+        index: Box<Expr>,
+        op: AssignOp,
+        value: Box<Expr>,
+    },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum Stmt {
+    Expr(Expr),
+    If {
+        cond: Expr,
+        then_body: Vec<Stmt>,
+        else_body: Vec<Stmt>,
+    },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
+    Loop {
+        count: Expr,
+        body: Vec<Stmt>,
+    },
+}
+
+/// Minimum argument count for each supported function. Unknown names are
+/// rejected here at compile time (as `UnknownIdentifier`).
+fn check_function(name: &str, argc: usize) -> Result<(), EelError> {
+    let min_args = match name {
+        "int" | "floor" | "abs" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp"
+        | "sqr" | "sqrt" | "log" | "log10" | "sign" | "rand" | "bnot" | "sigmoid" => 1,
+        "atan2" | "pow" | "bor" | "band" | "equal" | "above" | "below" | "min" | "max"
+        | "exec2" => 2,
+        "if" | "exec3" => 3,
+        _ => return Err(EelError::UnknownIdentifier(name.to_string())),
+    };
+    if argc < min_args {
+        return Err(EelError::ParseError(format!(
+            "{name} expects at least {min_args} argument(s)"
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Recursive-descent parser
+// ---------------------------------------------------------------------------
+
+struct Parser {
+    toks: Vec<Tok>,
+    pos: usize,
+}
+
+impl Parser {
+    fn new(toks: Vec<Tok>) -> Self {
+        Parser { toks, pos: 0 }
+    }
+
+    fn peek(&self) -> &Tok {
+        self.toks.get(self.pos).unwrap_or(&Tok::Eof)
+    }
+
+    fn peek2(&self) -> &Tok {
+        self.toks.get(self.pos + 1).unwrap_or(&Tok::Eof)
+    }
+
+    fn is_ident(&self, name: &str) -> bool {
+        matches!(self.peek(), Tok::Ident(s) if s == name)
+    }
+
+    fn skip_seps(&mut self) {
+        while matches!(self.peek(), Tok::Semi | Tok::Newline) {
+            self.pos += 1;
+        }
+    }
+
+    fn expect(&mut self, want: &Tok) -> Result<(), EelError> {
+        if self.peek() == want {
+            self.pos += 1;
+            Ok(())
+        } else {
+            Err(EelError::ParseError(format!(
+                "expected {want:?}, found {:?}",
+                self.peek()
+            )))
+        }
+    }
+
+    fn parse_program(&mut self) -> Result<Vec<Stmt>, EelError> {
+        let mut stmts = Vec::new();
+        loop {
+            self.skip_seps();
+            if matches!(self.peek(), Tok::Eof) {
+                break;
+            }
+            stmts.push(self.parse_stmt()?);
+        }
+        Ok(stmts)
+    }
+
+    fn parse_block(&mut self) -> Result<Vec<Stmt>, EelError> {
+        self.expect(&Tok::LBrace)?;
+        let mut stmts = Vec::new();
+        loop {
+            self.skip_seps();
+            match self.peek() {
+                Tok::RBrace => {
+                    self.pos += 1;
+                    break;
+                }
+                Tok::Eof => return Err(EelError::ParseError("unbalanced braces".into())),
+                _ => stmts.push(self.parse_stmt()?),
+            }
+        }
+        Ok(stmts)
+    }
+
+    fn parse_stmt(&mut self) -> Result<Stmt, EelError> {
+        if self.is_ident("if") && matches!(self.peek2(), Tok::LParen) {
+            self.pos += 2; // consume `if` `(`
+            let cond = self.parse_expr()?;
+            self.expect(&Tok::RParen)?;
+            let then_body = self.parse_block()?;
+            let else_body = if self.is_ident("else") {
+                self.pos += 1;
+                self.parse_block()?
+            } else {
+                Vec::new()
+            };
+            return Ok(Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            });
+        }
+        if self.is_ident("while") && matches!(self.peek2(), Tok::LParen) {
+            self.pos += 2;
+            let cond = self.parse_expr()?;
+            self.expect(&Tok::RParen)?;
+            let body = self.parse_block()?;
+            return Ok(Stmt::While { cond, body });
+        }
+        if self.is_ident("loop") && matches!(self.peek2(), Tok::LParen) {
+            self.pos += 2;
+            let count = self.parse_expr()?;
+            self.expect(&Tok::RParen)?;
+            let body = self.parse_block()?;
+            return Ok(Stmt::Loop { count, body });
+        }
+        Ok(Stmt::Expr(self.parse_expr()?))
+    }
+
+    fn parse_expr(&mut self) -> Result<Expr, EelError> {
+        self.parse_assign()
+    }
+
+    fn parse_assign(&mut self) -> Result<Expr, EelError> {
+        let left = self.parse_or()?;
+        let op = match self.peek() {
+            Tok::Assign => Some(AssignOp::Set),
+            Tok::AddAssign => Some(AssignOp::Add),
+            Tok::SubAssign => Some(AssignOp::Sub),
+            Tok::MulAssign => Some(AssignOp::Mul),
+            Tok::DivAssign => Some(AssignOp::Div),
+            Tok::ModAssign => Some(AssignOp::Mod),
+            _ => None,
+        };
+        if let Some(op) = op {
+            self.pos += 1;
+            let value = Box::new(self.parse_assign()?);
+            match left {
+                Expr::Var(name) => Ok(Expr::Assign(op, name, value)),
+                Expr::Index { global, index } => Ok(Expr::IndexAssign {
+                    global,
+                    index,
+                    op,
+                    value,
+                }),
+                _ => Err(EelError::ParseError("invalid assignment target".into())),
+            }
+        } else {
+            Ok(left)
+        }
+    }
+
+    fn parse_or(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_and()?;
+        while matches!(self.peek(), Tok::OrOr) {
+            self.pos += 1;
+            let r = self.parse_and()?;
+            e = Expr::Binary(BinOp::Or, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_and(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_bitor()?;
+        while matches!(self.peek(), Tok::AndAnd) {
+            self.pos += 1;
+            let r = self.parse_bitor()?;
+            e = Expr::Binary(BinOp::And, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_bitor(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_bitand()?;
+        while matches!(self.peek(), Tok::Pipe) {
+            self.pos += 1;
+            let r = self.parse_bitand()?;
+            e = Expr::Binary(BinOp::BitOr, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_bitand(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_equality()?;
+        while matches!(self.peek(), Tok::Amp) {
+            self.pos += 1;
+            let r = self.parse_equality()?;
+            e = Expr::Binary(BinOp::BitAnd, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_equality(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_comparison()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Eq => BinOp::Eq,
+                Tok::Ne => BinOp::Ne,
+                _ => break,
+            };
+            self.pos += 1;
+            let r = self.parse_comparison()?;
+            e = Expr::Binary(op, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_add()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Lt => BinOp::Lt,
+                Tok::Gt => BinOp::Gt,
+                Tok::Le => BinOp::Le,
+                Tok::Ge => BinOp::Ge,
+                _ => break,
+            };
+            self.pos += 1;
+            let r = self.parse_add()?;
+            e = Expr::Binary(op, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_add(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_mul()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Plus => BinOp::Add,
+                Tok::Minus => BinOp::Sub,
+                _ => break,
+            };
+            self.pos += 1;
+            let r = self.parse_mul()?;
+            e = Expr::Binary(op, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_mul(&mut self) -> Result<Expr, EelError> {
+        let mut e = self.parse_unary()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Star => BinOp::Mul,
+                Tok::Slash => BinOp::Div,
+                Tok::Percent => BinOp::Mod,
+                _ => break,
+            };
+            self.pos += 1;
+            let r = self.parse_unary()?;
+            e = Expr::Binary(op, Box::new(e), Box::new(r));
+        }
+        Ok(e)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr, EelError> {
+        match self.peek() {
+            Tok::Minus => {
+                self.pos += 1;
+                Ok(Expr::Unary(UnOp::Neg, Box::new(self.parse_unary()?)))
+            }
+            Tok::Bang => {
+                self.pos += 1;
+                Ok(Expr::Unary(UnOp::Not, Box::new(self.parse_unary()?)))
+            }
+            Tok::Plus => {
+                self.pos += 1;
+                self.parse_unary()
+            }
+            _ => self.parse_primary(),
+        }
+    }
+
+    fn parse_primary(&mut self) -> Result<Expr, EelError> {
+        match self.peek().clone() {
+            Tok::Num(v) => {
+                self.pos += 1;
+                Ok(Expr::Num(v))
+            }
+            Tok::LParen => {
+                self.pos += 1;
+                let e = self.parse_expr()?;
+                self.expect(&Tok::RParen)?;
+                Ok(e)
+            }
+            Tok::Ident(name) => {
+                self.pos += 1;
+                if matches!(self.peek(), Tok::LParen) {
+                    self.pos += 1;
+                    let mut args = Vec::new();
+                    if !matches!(self.peek(), Tok::RParen) {
+                        loop {
+                            args.push(self.parse_expr()?);
+                            if matches!(self.peek(), Tok::Comma) {
+                                self.pos += 1;
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RParen)?;
+                    check_function(&name, args.len())?;
+                    Ok(Expr::Call { name, args })
+                } else if matches!(self.peek(), Tok::LBracket) {
+                    self.pos += 1;
+                    let index = Box::new(self.parse_expr()?);
+                    self.expect(&Tok::RBracket)?;
+                    if name == "megabuf" || name == "gmegabuf" {
+                        Ok(Expr::Index {
+                            global: name == "gmegabuf",
+                            index,
+                        })
+                    } else {
+                        Err(EelError::ParseError(format!(
+                            "cannot index identifier {name}"
+                        )))
+                    }
+                } else {
+                    Ok(Expr::Var(name))
+                }
+            }
+            other => Err(EelError::ParseError(format!("unexpected token {other:?}"))),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Evaluator
+// ---------------------------------------------------------------------------
+
+const ITERATION_LIMIT: u64 = MEGABUF_SIZE as u64;
+
+struct EvalCtx<'a> {
+    pool: &'a mut VarPool,
+    version: u8,
+    iterations: u64,
+}
+
+impl EvalCtx<'_> {
+    fn bump(&mut self) -> Result<(), EelError> {
+        if self.iterations >= ITERATION_LIMIT {
+            Err(EelError::IterationLimitExceeded)
+        } else {
+            self.iterations += 1;
+            Ok(())
+        }
+    }
+}
+
+/// Convert an evaluated index to a checked buffer slot.
+fn checked_index(value: f32) -> Result<usize, EelError> {
+    let i = value as i64;
+    if i < 0 || i >= MEGABUF_SIZE as i64 {
+        Err(EelError::MegabufOutOfBounds(i))
+    } else {
+        Ok(i as usize)
+    }
+}
+
+fn apply_assign(op: AssignOp, cur: f32, rhs: f32) -> Result<f32, EelError> {
+    match op {
+        AssignOp::Set => Ok(rhs),
+        AssignOp::Add => Ok(cur + rhs),
+        AssignOp::Sub => Ok(cur - rhs),
+        AssignOp::Mul => Ok(cur * rhs),
+        AssignOp::Div => {
+            if rhs == 0.0 {
+                Err(EelError::DivisionByZero)
+            } else {
+                Ok(cur / rhs)
+            }
+        }
+        AssignOp::Mod => {
+            if rhs == 0.0 {
+                Err(EelError::DivisionByZero)
+            } else {
+                Ok(cur % rhs)
+            }
+        }
+    }
+}
+
+fn eval_expr(expr: &Expr, ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
+    match expr {
+        Expr::Num(v) => Ok(*v),
+        Expr::Var(name) => Ok(ctx.pool.get(name)),
+        Expr::Unary(op, e) => {
+            let v = eval_expr(e, ctx)?;
+            match op {
+                UnOp::Neg => Ok(-v),
+                UnOp::Not => Ok(if v == 0.0 { 1.0 } else { 0.0 }),
+            }
+        }
+        Expr::Binary(op, l, r) => {
+            if matches!(op, BinOp::And | BinOp::Or) {
+                let a = eval_expr(l, ctx)?;
+                match op {
+                    BinOp::And if a == 0.0 => return Ok(0.0),
+                    BinOp::Or if a != 0.0 => return Ok(1.0),
+                    _ => {}
+                }
+                let b = eval_expr(r, ctx)?;
+                return Ok(if b != 0.0 { 1.0 } else { 0.0 });
+            }
+            let a = eval_expr(l, ctx)?;
+            let b = eval_expr(r, ctx)?;
+            match op {
+                BinOp::Add => Ok(a + b),
+                BinOp::Sub => Ok(a - b),
+                BinOp::Mul => Ok(a * b),
+                BinOp::Div => {
+                    if b == 0.0 {
+                        Err(EelError::DivisionByZero)
+                    } else {
+                        Ok(a / b)
+                    }
+                }
+                BinOp::Mod => {
+                    if b == 0.0 {
+                        Err(EelError::DivisionByZero)
+                    } else {
+                        Ok(a % b)
+                    }
+                }
+                BinOp::Eq => Ok(if (a - b).abs() <= EPS { 1.0 } else { 0.0 }),
+                BinOp::Ne => Ok(if (a - b).abs() <= EPS { 0.0 } else { 1.0 }),
+                BinOp::Lt => Ok(if b - a > EPS { 1.0 } else { 0.0 }),
+                BinOp::Gt => Ok(if a - b > EPS { 1.0 } else { 0.0 }),
+                BinOp::Le => Ok(if a - b <= EPS { 1.0 } else { 0.0 }),
+                BinOp::Ge => Ok(if b - a <= EPS { 1.0 } else { 0.0 }),
+                BinOp::BitAnd => Ok(((a as i32) & (b as i32)) as f32),
+                BinOp::BitOr => Ok(((a as i32) | (b as i32)) as f32),
+                BinOp::And | BinOp::Or => unreachable!("handled above"),
+            }
+        }
+        Expr::Assign(op, name, value) => {
+            let rhs = eval_expr(value, ctx)?;
+            let new = apply_assign(*op, ctx.pool.get(name), rhs)?;
+            ctx.pool.set(name, new);
+            Ok(new)
+        }
+        Expr::Index { global, index } => {
+            let idx = checked_index(eval_expr(index, ctx)?)?;
+            if *global {
+                Ok(ctx.pool.gmegabuf(idx))
+            } else {
+                Ok(ctx.pool.megabuf(idx))
+            }
+        }
+        Expr::IndexAssign {
+            global,
+            index,
+            op,
+            value,
+        } => {
+            let idx = checked_index(eval_expr(index, ctx)?)?;
+            let rhs = eval_expr(value, ctx)?;
+            let cur = if *global {
+                ctx.pool.gmegabuf(idx)
+            } else {
+                ctx.pool.megabuf(idx)
+            };
+            let new = apply_assign(*op, cur, rhs)?;
+            if *global {
+                ctx.pool.set_gmegabuf(idx, new);
+            } else {
+                ctx.pool.set_megabuf(idx, new);
+            }
+            Ok(new)
+        }
+        Expr::Call { name, args } => eval_call(name, args, ctx),
+    }
+}
+
+fn eval_call(name: &str, args: &[Expr], ctx: &mut EvalCtx<'_>) -> Result<f32, EelError> {
+    if name == "if" {
+        // Ternary form: evaluate only the selected branch.
+        let cond = eval_expr(&args[0], ctx)?;
+        return if cond != 0.0 {
+            eval_expr(&args[1], ctx)
+        } else {
+            eval_expr(&args[2], ctx)
+        };
+    }
+    let mut v = [0.0f32; 8];
+    for (i, arg) in args.iter().enumerate() {
+        v[i.min(7)] = eval_expr(arg, ctx)?;
+    }
+    let a = v[0];
+    let b = v[1];
+    Ok(match name {
+        "int" => a.trunc(),
+        "floor" => a.floor(),
+        "abs" => a.abs(),
+        "sin" => a.sin(),
+        "cos" => a.cos(),
+        "tan" => a.tan(),
+        "asin" => a.asin(),
+        "acos" => a.acos(),
+        "atan" => a.atan(),
+        "exp" => a.exp(),
+        "sqr" => a * a,
+        "sqrt" => a.sqrt(),
+        "log" => a.ln(),
+        "log10" => a.log10(),
+        "sign" => {
+            if a > 0.0 {
+                1.0
+            } else if a < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }
+        "rand" => {
+            let r = ctx.pool.rng.next_f32();
+            if ctx.version >= 2 {
+                r * a
+            } else {
+                (r * a) as i32 as f32
+            }
+        }
+        "bnot" => (!(a as i32)) as f32,
+        "atan2" => a.atan2(b),
+        "pow" => a.powf(b),
+        "min" => a.min(b),
+        "max" => a.max(b),
+        "sigmoid" => 1.0 / (1.0 + (-a).exp()),
+        "bor" => ((a as i32) | (b as i32)) as f32,
+        "band" => ((a as i32) & (b as i32)) as f32,
+        "equal" => {
+            if (a - b).abs() <= EPS {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        "above" => {
+            if a - b > EPS {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        "below" => {
+            if b - a > EPS {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        "exec2" => v[1],
+        "exec3" => v[2],
+        _ => 0.0, // names are validated at compile time
+    })
+}
+
+fn exec_block(stmts: &[Stmt], ctx: &mut EvalCtx<'_>) -> Result<(), EelError> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Expr(e) => {
+                eval_expr(e, ctx)?;
+            }
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                if eval_expr(cond, ctx)? != 0.0 {
+                    exec_block(then_body, ctx)?;
+                } else {
+                    exec_block(else_body, ctx)?;
+                }
+            }
+            Stmt::While { cond, body } => loop {
+                if eval_expr(cond, ctx)? == 0.0 {
+                    break;
+                }
+                ctx.bump()?;
+                exec_block(body, ctx)?;
+            },
+            Stmt::Loop { count, body } => {
+                let n = eval_expr(count, ctx)? as i64;
+                if n < 0 {
+                    continue;
+                }
+                if n > ITERATION_LIMIT as i64 {
+                    return Err(EelError::IterationLimitExceeded);
+                }
+                for _ in 0..n {
+                    ctx.bump()?;
+                    exec_block(body, ctx)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Compile EEL source (`version` is 1 or 2).
-pub fn compile(src: &str, _version: u8) -> Result<CompiledEquations, EelError> {
-    Ok(CompiledEquations {
-        source: src.to_string(),
-    })
+pub fn compile(src: &str, version: u8) -> Result<CompiledEquations, EelError> {
+    let toks = lex(src)?;
+    let mut parser = Parser::new(toks);
+    let program = parser.parse_program()?;
+    Ok(CompiledEquations { program, version })
 }
 
 /// Evaluate a compiled equation set for one frame.
 pub fn run_frame(
-    _eq: &CompiledEquations,
-    _pool: &mut VarPool,
-    _globals: &Globals,
+    eq: &CompiledEquations,
+    pool: &mut VarPool,
+    globals: &Globals,
 ) -> Result<(), EelError> {
-    Ok(())
+    pool.reset_q();
+    pool.set("time", globals.time);
+    pool.set("fps", globals.fps);
+    pool.set("frame", globals.frame);
+    pool.set("bass", globals.bass);
+    pool.set("bass_att", globals.bass_att);
+    pool.set("mid", globals.mid);
+    pool.set("mid_att", globals.mid_att);
+    pool.set("treb", globals.treb);
+    pool.set("treb_att", globals.treb_att);
+    pool.set("meshx", globals.meshx);
+    pool.set("meshy", globals.meshy);
+    pool.set("pixelsx", globals.pixelsx);
+    pool.set("pixelsy", globals.pixelsy);
+    pool.set("aspectx", globals.aspectx);
+    pool.set("aspecty", globals.aspecty);
+    let mut ctx = EvalCtx {
+        pool,
+        version: eq.version,
+        iterations: 0,
+    };
+    exec_block(&eq.program, &mut ctx)
 }
 
 /// Evaluate a compiled equation set for one pixel/point.
 pub fn run_pixel(
-    _eq: &CompiledEquations,
-    _pool: &mut VarPool,
-    _x: f32,
-    _y: f32,
-    _rad: f32,
-    _ang: f32,
+    eq: &CompiledEquations,
+    pool: &mut VarPool,
+    x: f32,
+    y: f32,
+    rad: f32,
+    ang: f32,
 ) -> Result<(), EelError> {
-    Ok(())
+    pool.reset_q();
+    pool.set("x", x);
+    pool.set("y", y);
+    pool.set("rad", rad);
+    pool.set("ang", ang);
+    let mut ctx = EvalCtx {
+        pool,
+        version: eq.version,
+        iterations: 0,
+    };
+    exec_block(&eq.program, &mut ctx)
 }
 
 #[cfg(test)]
@@ -515,7 +1571,10 @@ mod tests {
 
         // No input, however malformed, may panic the compiler.
         let panic_free = std::panic::catch_unwind(|| compile("}}} $$$ ((( &&&", 2));
-        assert!(panic_free.is_ok(), "compile must not panic on hostile input");
+        assert!(
+            panic_free.is_ok(),
+            "compile must not panic on hostile input"
+        );
     }
 
     #[test]
