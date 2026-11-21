@@ -305,7 +305,10 @@ use modv_render::{TexturePool, TexturePoolKey, UsageClass};
 use modv_renderers::isf::{
     CompiledIsf, IsfDocument, IsfFrameUniforms, IsfRuntime, IsfValue, IsfValues,
 };
-use modv_renderers::milkdrop::{MilkInstance, MilkRuntime};
+use modv_renderers::milkdrop::{
+    MilkAudio, MilkFrameInfo, MilkGpuTargets, MilkInstance, MilkRuntime, begin_frame,
+    compile_preset, evaluate_mesh, new_instance,
+};
 use modv_renderers::point10::audio_bridge::{
     AudioBridge, BandPayload, RawBands, ResponsivenessLevers,
 };
@@ -562,6 +565,23 @@ struct IsfInstance {
     /// transparent group canvas stays transparent (Vignette/Edge Blur and co.
     /// write alpha 1 and would otherwise black out every group below).
     masked: Option<OutputTexture>,
+}
+
+/// One MilkDrop module's live CPU/GPU state, mirroring [`IsfInstance`].
+///
+/// The runtime keeps one compiled preset + variable pool per module id (the
+/// analogue of the JS `Milkdrop` renderer instance). The GPU targets own the
+/// warp/comp/blur intermediates and resize themselves only on a size change;
+/// the output target is the module-sized texture registered in the frame graph.
+struct MilkdropInstance {
+    /// Compiled equations and the persistent variable pool.
+    instance: MilkInstance,
+    /// Warp/comp/blur intermediate targets.
+    gpu: MilkGpuTargets,
+    /// The module-sized output target, rebuilt on resize.
+    target: Option<OutputTexture>,
+    /// Size the target was allocated for.
+    size: Option<(u32, u32)>,
 }
 
 /// The two ISF audio input textures (`ISFAudio.js`).
@@ -827,7 +847,6 @@ pub struct Compositor {
     registry: Arc<ModuleRegistry>,
     isf_runtime: IsfRuntime,
     /// Per-compositor MilkDrop runtime (preset failure cache + GPU caches).
-    #[allow(dead_code)]
     milkdrop_runtime: MilkRuntime,
     size: (u32, u32),
     /// Linear scale of the internal render targets (default 1.0 = full
@@ -880,11 +899,9 @@ pub struct Compositor {
     /// frame.
     failed_isf: HashSet<String>,
     /// Live MilkDrop instances keyed by module id.
-    #[allow(dead_code)]
-    milkdrop: HashMap<String, MilkInstance>,
+    milkdrop: HashMap<String, MilkdropInstance>,
     /// MilkDrop module ids whose preset failed; skipped without retrying each
     /// frame.
-    #[allow(dead_code)]
     failed_milkdrop: HashSet<String>,
     /// Uploaded video frames keyed by media source id (WS-10).
     media_textures: HashMap<String, MediaTexture>,
@@ -1051,8 +1068,11 @@ impl Compositor {
             surfaces: TextureSurfaces::new(),
             registry,
             isf_runtime: IsfRuntime::new(device.clone(), queue.clone(), 4),
-            // RED stub: GREEN replaces this with a device-backed MilkRuntime::new(..).
-            milkdrop_runtime: MilkRuntime::default(),
+            milkdrop_runtime: MilkRuntime::new(
+                Arc::new(device.clone()),
+                Arc::new(queue.clone()),
+                4,
+            ),
             size: (0, 0),
             render_scale: 1.0,
             main: None,
@@ -1102,8 +1122,8 @@ impl Compositor {
         self.registry = registry;
         self.failed_modules.clear();
         self.failed_isf.clear();
-        // RED stub: GREEN also clears `failed_milkdrop` and the MilkDrop
-        // runtime's failure cache so a previously broken preset can be retried.
+        self.failed_milkdrop.clear();
+        self.milkdrop_runtime.clear_failures();
     }
 
     /// Resize the output. Every output-sized texture is dropped and lazily
@@ -1145,6 +1165,13 @@ impl Compositor {
             instance.target = None;
             instance.size = None;
         }
+        // MilkDrop targets are output-sized too. `MilkGpuTargets` resizes its
+        // own intermediates inside `render`, so only the module target is
+        // dropped here.
+        for instance in self.milkdrop.values_mut() {
+            instance.target = None;
+            instance.size = None;
+        }
     }
 
     /// Drop all GPU-side state (used after `engine/restore`).
@@ -1172,6 +1199,15 @@ impl Compositor {
         self.failed_point10.clear();
         self.isf.clear();
         self.failed_isf.clear();
+        self.milkdrop.clear();
+        self.failed_milkdrop.clear();
+        // Drop cached MilkDrop pipelines/failures too: a restored state can
+        // reference different presets.
+        self.milkdrop_runtime = MilkRuntime::new(
+            Arc::new(self.device.clone()),
+            Arc::new(self.queue.clone()),
+            4,
+        );
         // Drop translated pipelines too: a restored state can reference
         // different shaders, and the cache is bounded but never expired.
         self.isf_runtime = IsfRuntime::new(self.device.clone(), self.queue.clone(), 4);
@@ -2407,20 +2443,201 @@ impl Compositor {
     /// Render one MilkDrop `.mlk` preset into its module target and composite
     /// the result onto the group target (mirrors [`Self::render_isf_module`]).
     ///
-    /// RED stub: GREEN implements the full path — registry lookup, target
-    /// allocation/registering under [`milkdrop_texture_id`], `MilkInstance`
-    /// compile + per-frame CPU evaluation, `MilkRuntime::render` and the
-    /// meta-alpha/compositeOperation composite. Failures disable only this
-    /// module instance via [`Self::failed_milkdrop`].
-    #[allow(dead_code)]
+    /// The definition's parsed `MilkDocument` is compiled once on the module's
+    /// first draw and kept for its lifetime. Every frame the EEL state is
+    /// advanced ([`begin_frame`], [`evaluate_mesh`]) and the warp → blur → comp
+    /// → output graph runs into the module target. `sampler_main` reads the
+    /// group canvas (the previous composited frame). Failures disable only
+    /// this module instance via [`Self::failed_milkdrop`], never the frame.
     fn render_milkdrop_module(
         &mut self,
-        _module: &ModuleInstance,
-        _module_id: &str,
-        _target: &TextureId,
-        _frame: &FrameInfo,
+        module: &ModuleInstance,
+        module_id: &str,
+        target: &TextureId,
+        frame: &FrameInfo,
     ) -> Result<(), CompositorError> {
-        Ok(())
+        if self.failed_milkdrop.contains(module_id) {
+            return Ok(());
+        }
+
+        // Clone the `Arc` so the definition borrow is independent of the
+        // mutable borrows of `self` below (the ISF path does the same).
+        let registry = Arc::clone(&self.registry);
+        let Some(definition) = registry.milkdrop_definition(&module.module_name) else {
+            self.warn_once(
+                format!("unregistered-milkdrop:{}", module.module_name),
+                &format!(
+                    "engine: WARN MilkDrop preset '{}' is not in the registry; skipping \
+                     (was the preset directory missing?)",
+                    module.module_name
+                ),
+            );
+            self.failed_milkdrop.insert(module_id.to_string());
+            return Ok(());
+        };
+
+        // `loop.js:410-412`: alpha and composite operation come from the meta.
+        let alpha = module
+            .meta
+            .get("alpha")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0);
+        let blend_token = module
+            .meta
+            .get("compositeOperation")
+            .and_then(Value::as_str)
+            .unwrap_or("normal")
+            .to_string();
+        let blend = self.render_blend_mode(&blend_token);
+
+        let (width, height) = self.module_target_size(module);
+        let texture_id = milkdrop_texture_id(module_id);
+
+        // The group canvas is the previous composited frame — the warp pass
+        // samples it through `sampler_main`. This is the MilkDrop analogue of
+        // the canvas view the ISF path passes to its image inputs.
+        let Some(group_texture) = self.surfaces.get(target).cloned() else {
+            return Ok(());
+        };
+        let previous = group_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Compile + instantiate lazily, once per module id. `compile_preset`
+        // records its own failure in the runtime's shared cache; a failure
+        // here disables only this instance.
+        if !self.milkdrop.contains_key(module_id) {
+            let compiled = match compile_preset(
+                &definition.name,
+                &definition.document,
+                &self.milkdrop_runtime.failures,
+            ) {
+                Ok(compiled) => compiled,
+                Err(error) => {
+                    eprintln!(
+                        "engine: WARN MilkDrop preset '{}' failed to compile: {error:?}",
+                        definition.name
+                    );
+                    self.failed_milkdrop.insert(module_id.to_string());
+                    return Ok(());
+                }
+            };
+            let instance = new_instance(compiled, 1);
+            let gpu = MilkGpuTargets::new(&self.device, width, height);
+            self.milkdrop.insert(
+                module_id.to_string(),
+                MilkdropInstance {
+                    instance,
+                    gpu,
+                    target: None,
+                    size: None,
+                },
+            );
+        }
+
+        // The module target is output-sized and rebuilt only on a size change.
+        let needs_target = self
+            .milkdrop
+            .get(module_id)
+            .map(|milk| milk.target.is_none() || milk.size != Some((width, height)))
+            .unwrap_or(true);
+        let new_target = if needs_target {
+            let texture =
+                self.create_output_texture(&format!("modv-milkdrop-{module_id}"), width, height);
+            self.clear_texture(&texture.texture, "milkdrop-allocate");
+            Some(texture)
+        } else {
+            None
+        };
+
+        // The gate holds an owned view clone so `new_target` can be moved into
+        // the instance inside the borrow-split block below.
+        let output_view = match &new_target {
+            Some(texture) => Some(texture.view.clone()),
+            None => self
+                .milkdrop
+                .get(module_id)
+                .and_then(|milk| milk.target.as_ref())
+                .map(|texture| texture.view.clone()),
+        };
+        let Some(output_view) = output_view else {
+            return Ok(());
+        };
+
+        // Map the engine frame + audio onto the runtime's frame contract.
+        // `FrameInfo` has no fps field, so the engine's conventional 60 fps is
+        // used for the EEL `fps` global; the mesh grid uses MilkDrop's usual
+        // 32×24 defaults (the UV grid is not uploaded in this cycle).
+        let milk_frame = MilkFrameInfo {
+            time_seconds: frame.time_seconds as f64,
+            frame_index: frame.frame_index as u32,
+            fps: 60.0,
+            width,
+            height,
+            meshx: 32,
+            meshy: 24,
+            audio: MilkAudio {
+                bass: frame.audio.bass,
+                mid: frame.audio.mid,
+                treble: frame.audio.treble,
+                wave: frame.audio.wave.to_vec(),
+                byte_frequency_data: frame.audio.byte_frequency_data.to_vec(),
+            },
+        };
+
+        // Split the borrows: the instance lives in `milkdrop`, the runtime in
+        // `milkdrop_runtime` (exactly like the ISF draw block). A `String`
+        // error keeps the failure path independent of `CompositorError`.
+        let render_result: Result<(), String> = (|| {
+            let Self {
+                milkdrop,
+                milkdrop_runtime,
+                ..
+            } = self;
+            let Some(milk) = milkdrop.get_mut(module_id) else {
+                return Ok(());
+            };
+            if let Some(texture) = new_target {
+                milk.target = Some(texture);
+                milk.size = Some((width, height));
+            }
+            begin_frame(&mut milk.instance, &milk_frame)
+                .map_err(|error| format!("frame: {error:?}"))?;
+            let mesh = evaluate_mesh(&mut milk.instance, &milk_frame)
+                .map_err(|error| format!("mesh: {error:?}"))?;
+            milkdrop_runtime
+                .render(
+                    &mut milk.instance,
+                    &milk_frame,
+                    &mesh,
+                    &previous,
+                    &mut milk.gpu,
+                    &output_view,
+                )
+                .map_err(|error| format!("draw: {error:?}"))
+        })();
+
+        if let Err(error) = render_result {
+            eprintln!(
+                "engine: WARN MilkDrop preset '{}' failed to render: {error}",
+                definition.name
+            );
+            self.failed_milkdrop.insert(module_id.to_string());
+            self.milkdrop.remove(module_id);
+            self.surfaces.remove(&texture_id);
+            return Ok(());
+        }
+
+        // Register the module target so the frame-graph composite can sample
+        // it, then blend onto the group canvas with the meta alpha/blend.
+        let Some(target_texture) = self
+            .milkdrop
+            .get(module_id)
+            .and_then(|milk| milk.target.as_ref())
+            .map(|texture| texture.texture.clone())
+        else {
+            return Ok(());
+        };
+        self.surfaces.insert(texture_id.clone(), target_texture);
+        self.composite(texture_id, target.clone(), alpha, blend)
     }
 
     /// Render one ISF shader into its module target and composite the result
@@ -2895,6 +3112,7 @@ impl Compositor {
             .chain(self.two_d.keys())
             .chain(self.point10.keys())
             .chain(self.isf.keys())
+            .chain(self.milkdrop.keys())
             .filter(|id| {
                 !live_modules.contains(id.as_str()) && !retained.modules.contains(id.as_str())
             })
@@ -2912,6 +3130,9 @@ impl Compositor {
             live_modules.contains(id.as_str()) || retained.modules.contains(id.as_str())
         });
         self.failed_isf.retain(|id| {
+            live_modules.contains(id.as_str()) || retained.modules.contains(id.as_str())
+        });
+        self.failed_milkdrop.retain(|id| {
             live_modules.contains(id.as_str()) || retained.modules.contains(id.as_str())
         });
     }
@@ -2941,6 +3162,8 @@ impl Compositor {
             self.surfaces.remove(&point10_texture_id(&id));
             self.isf.remove(&id);
             self.surfaces.remove(&isf_texture_id(&id));
+            self.milkdrop.remove(&id);
+            self.surfaces.remove(&milkdrop_texture_id(&id));
         }
     }
 
@@ -2959,7 +3182,11 @@ impl Compositor {
     /// Number of live module instances (any renderer kind) — cache diagnostics.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn live_module_instances(&self) -> usize {
-        self.slots.len() + self.two_d.len() + self.point10.len() + self.isf.len()
+        self.slots.len()
+            + self.two_d.len()
+            + self.point10.len()
+            + self.isf.len()
+            + self.milkdrop.len()
     }
 
     /// Set up (once) and return the shader pipeline slot for a module id.
@@ -7565,11 +7792,7 @@ void main(void) {
             point10_texture_id(id),
             "collides with the Point10 target id"
         );
-        assert_ne!(
-            milk,
-            two_d_texture_id(id),
-            "collides with the 2D canvas id"
-        );
+        assert_ne!(milk, two_d_texture_id(id), "collides with the 2D canvas id");
         assert_eq!(milk, milkdrop_texture_id(id), "the id is stable per module");
         assert_ne!(milk, milkdrop_texture_id("module-b"), "one id per module");
     }

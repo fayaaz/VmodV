@@ -116,7 +116,7 @@ use modv_renderers::isf::{
     IsfDocument, IsfMeta, IsfProp, IsfPropType, meta_from_document, parse_isf, synthesise_props,
 };
 use modv_renderers::milkdrop::{
-    MilkMeta, MilkProp, meta_from_document as milk_meta_from_document, parse_milk,
+    MilkDocument, MilkMeta, MilkProp, meta_from_document as milk_meta_from_document, parse_milk,
     synthesise_props as milk_synthesise_props,
 };
 use modv_renderers::point10::chromatic::line::ChromaticLine;
@@ -249,6 +249,9 @@ pub struct MilkdropDefinition {
     /// Synthesised props (currently empty: presets are EEL-driven), keyed by
     /// prop name in declaration order — the value returned by `synthesise_props`.
     pub props: IndexMap<String, MilkProp>,
+    /// The parsed preset, kept so the compositor can compile a
+    /// `MilkCompiledPreset` on first draw without re-reading the source file.
+    pub document: MilkDocument,
 }
 
 /// The app-side wrapper around the concrete Point10 scenes.
@@ -1892,7 +1895,12 @@ fn collect_milkdrop_definitions(user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition
             }
             let meta = milk_meta_from_document(&document);
             let props = milk_synthesise_props(&document);
-            definitions.push(MilkdropDefinition { name, meta, props });
+            definitions.push(MilkdropDefinition {
+                name,
+                meta,
+                props,
+                document,
+            });
         }
     }
     definitions
