@@ -11,6 +11,7 @@
 //! | [`eel`] | EEL2/NSEEL equation text → owned compiled form, evaluated against a mutable variable pool (no `eval`/JS) |
 //! | [`translate`] | warp/comp shader body → desktop GLSL 450 → naga → owned WGSL ([`CompiledMilkShader`]) |
 //! | [`props`] | preset → module metadata ([`MilkMeta`]) and prop table ([`MilkProp`]), mirroring `isf/props.rs` |
+//! | [`runtime`] | CPU runtime core (Layer 5a): compile preset → [`MilkCompiledPreset`], per-frame globals/audio/followers, [`MilkMesh`] UV grid, [`MilkFailureCache`] (device attaches in 5b) |
 //!
 //! # Layering
 //!
@@ -41,6 +42,7 @@
 pub mod eel;
 pub mod preset;
 pub mod props;
+pub mod runtime;
 pub mod translate;
 
 pub use preset::{
@@ -57,3 +59,8 @@ pub use translate::{
 };
 
 pub use props::{MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise_props};
+
+pub use runtime::{
+    MilkAudio, MilkCompiledPreset, MilkFailureCache, MilkFrameInfo, MilkInstance, MilkMesh,
+    MilkRuntimeError, MilkRuntime, begin_frame, compile_preset, evaluate_mesh, new_instance,
+};
