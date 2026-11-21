@@ -114,6 +114,9 @@ use modv_engine::props::PropSchema;
 use modv_renderers::isf::{
     IsfDocument, IsfMeta, IsfProp, IsfPropType, meta_from_document, parse_isf, synthesise_props,
 };
+// RED stub: GREEN also imports `parse_milk`, `MilkDocument`,
+// `meta_from_document`/`synthesise_props` (aliased) for the real scanner.
+use modv_renderers::milkdrop::{MilkMeta, MilkProp};
 use modv_renderers::point10::chromatic::line::ChromaticLine;
 use modv_renderers::point10::chromatic::wave::ChromaticWave;
 use modv_renderers::point10::scenes::around_plus::AroundPlus;
@@ -167,6 +170,9 @@ pub enum ModuleKind {
     /// `meta.type: "isf"` and rendered through the ISF runtime into its own
     /// target texture (`IsfRuntime::draw`), then composited onto the group.
     Isf,
+    /// A MilkDrop `.mlk` preset (`modv-renderers::milkdrop`), registered with
+    /// `meta.type: "milkdrop"` following the ISF arm.
+    Milkdrop,
 }
 
 /// A registered 2D module: its static metadata and prop descriptors, factored
@@ -228,6 +234,24 @@ impl IsfDefinition {
             .find(|(prop_name, _)| prop_name == name)
             .map(|(_, prop)| prop)
     }
+}
+
+/// A registered MilkDrop `.mlk` preset: its display name, derived metadata and
+/// synthesised prop table.
+///
+/// RED stub: `props` is a `Vec<(String, MilkProp)>` here because `modv-app` has
+/// no direct `indexmap` dependency. GREEN replaces it with
+/// `IndexMap<String, MilkProp>` (the type returned by `synthesise_props`) and
+/// adds `indexmap = { version = "2", features = ["serde"] }` to
+/// `crates/modv-app/Cargo.toml`. The tests never name the field type.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MilkdropDefinition {
+    /// Module name: the `.mlk` file stem.
+    pub name: String,
+    /// Metadata derived with `milkdrop::meta_from_document`.
+    pub meta: MilkMeta,
+    /// Synthesised props (currently empty: presets are EEL-driven).
+    pub props: Vec<(String, MilkProp)>,
 }
 
 /// The app-side wrapper around the concrete Point10 scenes.
@@ -695,6 +719,7 @@ pub struct ModuleRegistry {
     two_d: Vec<TwoDDefinition>,
     point10: Vec<Point10Definition>,
     isf: Vec<IsfDefinition>,
+    milkdrop: Vec<MilkdropDefinition>,
 }
 
 impl ModuleRegistry {
@@ -725,6 +750,18 @@ impl ModuleRegistry {
     /// reported once at startup. This is the native app's third-party ISF path
     /// (the media watcher calls it again when a `.fs` file changes).
     pub fn build_with_extra(isf_dir: Option<&Path>, extra_dirs: &[PathBuf]) -> Self {
+        Self::build_with_milkdrop(isf_dir, extra_dirs, &[])
+    }
+
+    /// Build the registry with the ISF corpus plus user MilkDrop directories.
+    ///
+    /// RED stub: `milkdrop_dirs` is ignored (no scanning yet); GREEN calls
+    /// [`collect_milkdrop_definitions`] with it.
+    pub fn build_with_milkdrop(
+        isf_dir: Option<&Path>,
+        extra_isf_dirs: &[PathBuf],
+        milkdrop_dirs: &[PathBuf],
+    ) -> Self {
         let shader = all_shader_modules();
         // `all_modules()` builds one default instance per module (all cheap,
         // no GPU work) so the descriptors can be copied out once.
@@ -744,7 +781,7 @@ impl ModuleRegistry {
                 props: scene.props(),
             })
             .collect();
-        let (isf, duplicates) = collect_isf_definitions(isf_dir, extra_dirs);
+        let (isf, duplicates) = collect_isf_definitions(isf_dir, extra_isf_dirs);
         for duplicate in &duplicates {
             let ignored: Vec<String> = duplicate
                 .ignored
@@ -758,11 +795,13 @@ impl ModuleRegistry {
                 ignored.join(", ")
             );
         }
+        let milkdrop = collect_milkdrop_definitions(milkdrop_dirs);
         Self {
             shader,
             two_d,
             point10,
             isf,
+            milkdrop,
         }
     }
 
@@ -807,6 +846,18 @@ impl ModuleRegistry {
         self.isf.iter().find(|definition| definition.name == name)
     }
 
+    /// The MilkDrop preset definitions, in file-name order.
+    pub fn milkdrop_definitions(&self) -> &[MilkdropDefinition] {
+        &self.milkdrop
+    }
+
+    /// Look up a MilkDrop definition by the preset's file stem.
+    pub fn milkdrop_definition(&self, name: &str) -> Option<&MilkdropDefinition> {
+        self.milkdrop
+            .iter()
+            .find(|definition| definition.name == name)
+    }
+
     /// Which renderer owns `name`, or `None` when it is not registered.
     pub fn kind(&self, name: &str) -> Option<ModuleKind> {
         if self
@@ -833,6 +884,12 @@ impl ModuleRegistry {
             .any(|definition| definition.name == name)
         {
             Some(ModuleKind::Isf)
+        } else if self
+            .milkdrop_definitions()
+            .iter()
+            .any(|definition| definition.name == name)
+        {
+            Some(ModuleKind::Milkdrop)
         } else {
             None
         }
@@ -947,6 +1004,24 @@ impl ModuleRegistry {
                 }
                 Some(meta)
             }
+            ModuleKind::Milkdrop => {
+                let definition = self.milkdrop_definition(name)?;
+                let mut meta = Map::new();
+                meta.insert("name".to_string(), json!(definition.name));
+                meta.insert("type".to_string(), json!("milkdrop"));
+                meta.insert("category".to_string(), json!(definition.meta.category));
+                meta.insert("author".to_string(), json!(definition.meta.author));
+                meta.insert("version".to_string(), json!(definition.meta.version));
+                meta.insert(
+                    "description".to_string(),
+                    json!(definition.meta.description),
+                );
+                meta.insert(
+                    "previewWithOutput".to_string(),
+                    json!(definition.meta.preview_with_output),
+                );
+                Some(meta)
+            }
         }
     }
 
@@ -1025,6 +1100,9 @@ impl ModuleRegistry {
         for definition in &self.isf {
             names.push(&definition.name);
         }
+        for definition in &self.milkdrop {
+            names.push(&definition.name);
+        }
         names.sort_unstable();
         names.dedup();
 
@@ -1078,6 +1156,10 @@ impl ModuleRegistry {
                 .chain(std::iter::once(QUALITY_PROP.to_string()))
                 .collect();
         }
+        if let Some(_definition) = self.milkdrop_definition(module_name) {
+            // MilkDrop presets expose no format-specific props yet.
+            return Vec::new();
+        }
         Vec::new()
     }
 
@@ -1103,6 +1185,12 @@ impl ModuleRegistry {
                 props.insert(QUALITY_PROP.to_string(), quality_default());
             }
             return Some(Value::Object(props));
+        }
+
+        if let Some(_definition) = self.milkdrop_definition(module_name) {
+            // No format-specific props yet; caller-style defaults are added by
+            // the store/preview builder exactly as they are for ISF modules.
+            return Some(Value::Object(Map::new()));
         }
 
         let definition = self.point10_definition(module_name)?;
@@ -1715,6 +1803,16 @@ fn scan_isf_directory(dir: &Path, limits: IsfScanLimits) -> Vec<ScannedIsf> {
         failed
     );
     definitions
+}
+
+/// Collect MilkDrop presets from user directories.
+///
+/// RED stub: returns no definitions. GREEN implements the real scanner here
+/// (case-insensitive `.mlk`, bounded recursion reusing `USER_ISF_MAX_DEPTH`/
+/// `USER_ISF_MAX_ENTRIES`, sorted paths, `is_ignored_media_name` skips, no
+/// symlinks, first sorted path wins duplicates, `parse_milk` + logs on error).
+fn collect_milkdrop_definitions(_user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -2601,6 +2699,206 @@ void main() { gl_FragColor = vec4(1.0); }
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // ————————————————— MilkDrop presets (integration 1) —————————————————
+
+    /// A minimal parsable `.mlk` preset. The title uses the `Name - Author`
+    /// convention so `meta_from_document` recovers the author; the file stem
+    /// is the module name (the same contract ISF uses).
+    fn write_milk_preset(path: &Path, name: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("milk preset parent");
+        }
+        std::fs::write(path, format!("[preset00]\ntitle={name} - Test Author\n"))
+            .expect("write test milk preset");
+    }
+
+    #[test]
+    fn milkdrop_preset_is_discovered_as_a_module() {
+        let dir = registry_temp_dir("modv-milk-registry");
+        write_milk_preset(&dir.join("Preset Name.mlk"), "Preset Name");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+
+        assert_eq!(registry.kind("Preset Name"), Some(ModuleKind::Milkdrop));
+        assert!(
+            registry.milkdrop_definition("Preset Name").is_some(),
+            "the preset has a MilkDrop definition"
+        );
+        assert_eq!(registry.milkdrop_definitions().len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn milkdrop_scan_is_case_insensitive_and_extension_scoped() {
+        let dir = registry_temp_dir("modv-milk-extension");
+        write_milk_preset(&dir.join("Upper Preset.MLK"), "Upper Preset");
+        write_milk_preset(&dir.join("Mixed Preset.Mlk"), "Mixed Preset");
+        write_milk_preset(&dir.join("Not A Preset.txt"), "Not A Preset");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+
+        assert_eq!(registry.kind("Upper Preset"), Some(ModuleKind::Milkdrop));
+        assert_eq!(registry.kind("Mixed Preset"), Some(ModuleKind::Milkdrop));
+        assert_eq!(
+            registry.kind("Not A Preset"),
+            None,
+            "non-.mlk is not scanned"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn milkdrop_meta_fields_map_to_the_js_module_meta() {
+        let dir = registry_temp_dir("modv-milk-meta");
+        write_milk_preset(&dir.join("Preset Name.mlk"), "Preset Name");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+        let meta = registry.meta_fields("Preset Name").expect("registered");
+
+        assert_eq!(meta["name"], json!("Preset Name"));
+        assert_eq!(meta["type"], json!("milkdrop"));
+        assert_eq!(meta["category"], json!("effects"));
+        assert_eq!(meta["author"], json!("Test Author"));
+        assert_eq!(meta["version"], json!(1));
+        assert_eq!(meta["previewWithOutput"], json!(false));
+        assert_eq!(meta["description"], json!(""));
+
+        // Caller-style defaults are not registry meta fields, exactly like the
+        // ISF arm (see `build_preview_module` in `module_preview.rs`).
+        assert!(meta.get("alpha").is_none());
+        assert!(meta.get("enabled").is_none());
+        assert!(meta.get("compositeOperation").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn milkdrop_format_props_are_empty() {
+        let dir = registry_temp_dir("modv-milk-props");
+        write_milk_preset(&dir.join("Preset Name.mlk"), "Preset Name");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+
+        assert_eq!(registry.prop_names("Preset Name"), Vec::<String>::new());
+        assert!(registry.prop_schema("Preset Name", "anything").is_none());
+        assert!(registry.prop_schema("Preset Name", QUALITY_PROP).is_none());
+        assert_eq!(
+            registry
+                .default_props("Preset Name")
+                .expect("empty prop defaults still resolve"),
+            json!({})
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn milkdrop_scan_ignores_hidden_temp_and_symlink_entries() {
+        let dir = registry_temp_dir("modv-milk-ignored");
+        write_milk_preset(&dir.join("Visible.mlk"), "Visible");
+        write_milk_preset(&dir.join(".Hidden.mlk"), "Hidden");
+        write_milk_preset(&dir.join(".hidden-dir/Nested.mlk"), "Nested");
+        write_milk_preset(&dir.join("Backup.mlk~"), "Backup");
+        write_milk_preset(&dir.join("Swap.mlk.tmp"), "Swap");
+        std::os::unix::fs::symlink(dir.join("Visible.mlk"), dir.join("Link.mlk"))
+            .expect("symlinked preset");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+        let names: Vec<&str> = registry
+            .milkdrop_definitions()
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect();
+
+        assert_eq!(names, vec!["Visible"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn milkdrop_scan_respects_the_shared_depth_cap() {
+        let dir = registry_temp_dir("modv-milk-depth");
+        let mut deep = dir.join("a");
+        for _ in 1..USER_ISF_MAX_DEPTH {
+            deep.push("d");
+        }
+        write_milk_preset(&deep.join("At Limit.mlk"), "At Limit");
+        write_milk_preset(&deep.join("one-more/Too Deep.mlk"), "Too Deep");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+
+        assert!(registry.milkdrop_definition("At Limit").is_some());
+        assert!(
+            registry.milkdrop_definition("Too Deep").is_none(),
+            "folders below USER_ISF_MAX_DEPTH are not scanned"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn milkdrop_duplicate_stems_keep_the_first_sorted_path() {
+        let root = registry_temp_dir("modv-milk-duplicate");
+        std::fs::create_dir_all(root.join("a-pack")).expect("a-pack");
+        std::fs::create_dir_all(root.join("b-pack")).expect("b-pack");
+        std::fs::write(
+            root.join("a-pack/Shared.mlk"),
+            "[preset00]\ntitle=Shared - From A\n",
+        )
+        .expect("a-pack preset");
+        std::fs::write(
+            root.join("b-pack/Shared.mlk"),
+            "[preset00]\ntitle=Shared - From B\n",
+        )
+        .expect("b-pack preset");
+
+        // Supplied in reverse order on purpose: the scan sorts the roots.
+        let registry = ModuleRegistry::build_with_milkdrop(
+            None,
+            &[],
+            &[root.join("b-pack"), root.join("a-pack")],
+        );
+
+        let definition = registry
+            .milkdrop_definition("Shared")
+            .expect("duplicate stem still registers once");
+        assert_eq!(definition.meta.author, "From A");
+        assert_eq!(registry.milkdrop_definitions().len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn milkdrop_malformed_preset_is_skipped_without_panic() {
+        let dir = registry_temp_dir("modv-milk-malformed");
+        std::fs::write(dir.join("Broken.mlk"), "not a preset\nfoo=1\n").expect("malformed preset");
+        write_milk_preset(&dir.join("Good.mlk"), "Good");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+
+        assert!(registry.milkdrop_definition("Broken").is_none());
+        assert!(registry.milkdrop_definition("Good").is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn registered_modules_includes_the_milkdrop_bucket() {
+        let dir = registry_temp_dir("modv-milk-registered");
+        write_milk_preset(&dir.join("Preset Name.mlk"), "Preset Name");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+        let registered = registry.registered_modules();
+        let map = registered.as_object().expect("registered is an object");
+
+        let entry = map.get("Preset Name").expect("MilkDrop module registered");
+        assert_eq!(
+            entry["meta"],
+            json!(registry.meta_fields("Preset Name").expect("meta fields"))
+        );
+        assert_eq!(entry["props"], json!({}), "no format-specific props yet");
+
+        // Existing kinds are still registered alongside the new bucket.
+        for name in ["Bands", "Ball", "Point10 Chromatic Line"] {
+            assert!(map.contains_key(name), "{name} is missing");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The committed registry snapshot generated from the legacy worker's
     /// `import.meta.glob` registrations. See `tests/unit/module-parity.test.js`
     /// for the generator/regenerator and the JS-side half of this guard.
@@ -2692,12 +2990,20 @@ void main() { gl_FragColor = vec4(1.0); }
             manifest["counts"]["isf"].as_u64().unwrap_or(0) as usize,
             "ISF corpus"
         );
+        let milkdrop_count = manifest["counts"]["milkdrop"]
+            .as_u64()
+            .expect("milkdrop count in the parity fixture") as usize;
+        assert_eq!(
+            registry.milkdrop_definitions().len(),
+            milkdrop_count,
+            "MilkDrop presets"
+        );
         assert_eq!(
             registry
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            433,
+            36 + 16 + 27 + 354 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -2733,18 +3039,27 @@ void main() { gl_FragColor = vec4(1.0); }
             .iter()
             .map(|definition| definition.name.clone())
             .collect();
+        let milkdrop: Vec<String> = registry
+            .milkdrop_definitions()
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect();
 
         assert_same_module_names("2D", two_d, manifest_names(&manifest, "twoD"));
         assert_same_module_names("Point10", point10, manifest_names(&manifest, "point10"));
         assert_same_module_names("shader", shader, manifest_names(&manifest, "shader"));
         assert_same_module_names("ISF", isf, manifest_names(&manifest, "isf"));
+        assert_same_module_names("MilkDrop", milkdrop, manifest_names(&manifest, "milkdrop"));
 
+        let milkdrop_count = manifest["counts"]["milkdrop"]
+            .as_u64()
+            .expect("milkdrop count in the parity fixture") as usize;
         assert_eq!(
             registry
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            433,
+            36 + 16 + 27 + 354 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
@@ -2763,10 +3078,11 @@ void main() { gl_FragColor = vec4(1.0); }
         // The legacy manifest is the authority: a default Scene naming a
         // module legacy cannot register would render differently in engine
         // mode even if the Rust registry happens to know it.
-        let legacy: std::collections::HashSet<String> = ["twoD", "point10", "shader", "isf"]
-            .iter()
-            .flat_map(|group| manifest_names(&manifest, group))
-            .collect();
+        let legacy: std::collections::HashSet<String> =
+            ["twoD", "point10", "shader", "isf", "milkdrop"]
+                .iter()
+                .flat_map(|group| manifest_names(&manifest, group))
+                .collect();
 
         let mut unresolved = Vec::new();
         let mut not_in_legacy = Vec::new();

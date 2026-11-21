@@ -5,8 +5,10 @@
     "point10": 27,
     "shader": 36,
     "isf": 354,
+    "milkdrop": 0,
     "total": 433
   },
+  "milkdrop": [],
   "twoD": [
     "Ball",
     "Bar",

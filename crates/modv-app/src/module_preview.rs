@@ -790,6 +790,13 @@ impl ModulePreviews {
                     last_time: None,
                 }
             }
+            // RED stub: adding `ModuleKind::Milkdrop` makes this match
+            // exhaustive again. GREEN wires a real MilkDrop preview state.
+            ModuleKind::Milkdrop => {
+                return Err(PreviewError::Render(format!(
+                    "MilkDrop preview is not implemented yet (\"{module_name}\")"
+                )));
+            }
         };
 
         self.slots.insert(
