@@ -753,8 +753,10 @@ impl ModuleRegistry {
     /// Build the registry with the ISF corpus plus user MilkDrop directories.
     ///
     /// `milkdrop_dirs` are scanned recursively by
-    /// [`collect_milkdrop_definitions`], following the same rules as user ISF
-    /// folders (sorted paths, hidden/symlink skips, bounded depth/entries).
+    /// [`collect_milkdrop_definitions`]: case-insensitive `.mlk` files, sorted
+    /// paths, hidden/temporary and symlink entries skipped, and the first
+    /// sorted path winning a duplicate file stem. The walk shares the user-ISF
+    /// caps [`USER_ISF_MAX_DEPTH`] and [`USER_ISF_MAX_ENTRIES`].
     pub fn build_with_milkdrop(
         isf_dir: Option<&Path>,
         extra_isf_dirs: &[PathBuf],
@@ -1518,7 +1520,8 @@ const USER_ISF_MAX_DEPTH: usize = 8;
 /// Upper bound on directory entries visited under one user ISF root.
 const USER_ISF_MAX_ENTRIES: usize = 4096;
 
-/// Limits for one ISF directory walk.
+/// Limits for one module-directory walk, shared by the ISF and MilkDrop
+/// scanners.
 #[derive(Clone, Copy, Debug)]
 struct IsfScanLimits {
     recursive: bool,
@@ -1559,29 +1562,41 @@ struct ScannedIsf {
     definition: IsfDefinition,
 }
 
-/// One sorted, bounded walk of a user directory.
+/// One sorted, bounded walk of a user module directory.
 ///
-/// `extension` selects which files are collected (case-insensitively); the
-/// walker itself is shared by the ISF (`.fs`) and MilkDrop (`.mlk`) scanners so
-/// both honour the same hidden/symlink skips and depth/entry caps.
-struct IsfScan {
+/// `extension` selects which files are collected (case-insensitively) and
+/// `label` names the module kind in warning messages. The walker is shared by
+/// the ISF (`.fs`) and MilkDrop (`.mlk`) scanners so both honour identical
+/// hidden/temporary/symlink skips and the depth/entry caps carried by
+/// [`IsfScanLimits`] (the user caps reuse [`USER_ISF_MAX_DEPTH`] and
+/// [`USER_ISF_MAX_ENTRIES`]).
+struct ModuleFileScan {
     limits: IsfScanLimits,
     extension: &'static str,
+    label: &'static str,
     files: Vec<PathBuf>,
     visited: usize,
     depth_limited: bool,
     entry_limited: bool,
 }
 
-impl IsfScan {
+impl ModuleFileScan {
+    /// The ISF scanner: case-insensitive `.fs`, labelled "ISF" in warnings.
     fn collect(root: &Path, limits: IsfScanLimits) -> Self {
-        Self::collect_with_extension(root, limits, "fs")
+        Self::collect_with_extension(root, limits, "fs", "ISF")
     }
 
-    fn collect_with_extension(root: &Path, limits: IsfScanLimits, extension: &'static str) -> Self {
+    /// A generic scanner for the given extension and warning label.
+    fn collect_with_extension(
+        root: &Path,
+        limits: IsfScanLimits,
+        extension: &'static str,
+        label: &'static str,
+    ) -> Self {
         let mut scan = Self {
             limits,
             extension,
+            label,
             files: Vec::new(),
             visited: 0,
             depth_limited: false,
@@ -1593,14 +1608,16 @@ impl IsfScan {
         scan.files.sort();
         if scan.depth_limited {
             eprintln!(
-                "engine: WARN ISF scan depth limit ({}) reached under {}; deeper folders were skipped",
+                "engine: WARN {} scan depth limit ({}) reached under {}; deeper folders were skipped",
+                scan.label,
                 limits.max_depth,
                 root.display()
             );
         }
         if scan.entry_limited {
             eprintln!(
-                "engine: WARN ISF scan entry limit ({}) reached under {}; remaining files were skipped",
+                "engine: WARN {} scan entry limit ({}) reached under {}; remaining files were skipped",
+                scan.label,
                 limits.max_entries,
                 root.display()
             );
@@ -1612,14 +1629,15 @@ impl IsfScan {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(error) => {
+                let suffix = if depth == 0 {
+                    format!("; no {} modules registered from it", self.label)
+                } else {
+                    "; skipping that folder".to_owned()
+                };
                 eprintln!(
-                    "engine: WARN ISF directory {} is not readable: {error}{}",
-                    dir.display(),
-                    if depth == 0 {
-                        "; no ISF modules registered from it"
-                    } else {
-                        "; skipping that folder"
-                    }
+                    "engine: WARN {} directory {} is not readable: {error}{suffix}",
+                    self.label,
+                    dir.display()
                 );
                 return;
             }
@@ -1660,7 +1678,7 @@ impl IsfScan {
                 continue;
             }
             // Symlinks are deliberately not followed: a link cycle must not
-            // turn a user ISF folder into an unbounded walk.
+            // turn a user module folder into an unbounded walk.
             if !file_type.is_file() {
                 continue;
             }
@@ -1677,7 +1695,7 @@ impl IsfScan {
 
 /// The `*.fs` files under `dir`, sorted by path and bounded by `limits`.
 fn scan_isf_paths(dir: &Path, limits: IsfScanLimits) -> Vec<PathBuf> {
-    IsfScan::collect(dir, limits).files
+    ModuleFileScan::collect(dir, limits).files
 }
 
 /// Scan the corpus and every extra user directory, then resolve duplicate
@@ -1815,17 +1833,19 @@ fn scan_isf_directory(dir: &Path, limits: IsfScanLimits) -> Vec<ScannedIsf> {
 
 /// The `.mlk` files under `dir`, sorted by path and bounded by `limits`.
 fn scan_milk_paths(dir: &Path, limits: IsfScanLimits) -> Vec<PathBuf> {
-    IsfScan::collect_with_extension(dir, limits, "mlk").files
+    ModuleFileScan::collect_with_extension(dir, limits, "mlk", "MilkDrop").files
 }
 
 /// Collect MilkDrop presets from user directories.
 ///
-/// Mirrors the ISF scan: roots are sorted before walking, the walk is sorted,
-/// bounded by [`USER_ISF_MAX_DEPTH`]/[`USER_ISF_MAX_ENTRIES`], skips hidden and
-/// temporary entries and symlinks, and the first sorted path wins a duplicate
-/// file stem. Each preset is parsed header-only with [`parse_milk`]; an
-/// unreadable or unparsable file is logged and skipped. The module name is the
-/// file stem, exactly like the ISF arm.
+/// Roots are sorted and deduplicated before walking. Each root is scanned with
+/// the same bounded walker as user ISF folders (see [`ModuleFileScan`]):
+/// case-insensitive `.mlk` matches, sorted paths, hidden/temporary entries and
+/// symlinks skipped, recursion capped by [`USER_ISF_MAX_DEPTH`] and
+/// [`USER_ISF_MAX_ENTRIES`]. The first sorted path wins a duplicate file stem;
+/// later duplicates are logged and skipped. Each preset is parsed header-only
+/// with [`parse_milk`]; an unreadable or unparsable file is likewise logged and
+/// skipped. The module name is the file stem, exactly like the ISF arm.
 fn collect_milkdrop_definitions(user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition> {
     let mut dirs: Vec<&Path> = user_dirs.iter().map(PathBuf::as_path).collect();
     dirs.sort_unstable();
