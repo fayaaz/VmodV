@@ -10,6 +10,7 @@
 //! | [`preset`] | `.mlk` text → [`MilkDocument`] (base vals, EEL equation text, wave/shape sections, warp/composite shader text) |
 //! | [`eel`] | EEL2/NSEEL equation text → owned compiled form, evaluated against a mutable variable pool (no `eval`/JS) |
 //! | [`translate`] | warp/comp shader body → desktop GLSL 450 → naga → owned WGSL ([`CompiledMilkShader`]) |
+//! | [`props`] | preset → module metadata ([`MilkMeta`]) and prop table ([`MilkProp`]), mirroring `isf/props.rs` |
 //!
 //! # Layering
 //!
@@ -39,6 +40,7 @@
 
 pub mod eel;
 pub mod preset;
+pub mod props;
 pub mod translate;
 
 pub use preset::{
@@ -52,4 +54,8 @@ pub use eel::{
 
 pub use translate::{
     CompiledMilkShader, MilkShaderStage, TranslateError, translate_milk_shader, wrap_milk_shader,
+};
+
+pub use props::{
+    MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise_props,
 };
