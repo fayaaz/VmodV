@@ -26,6 +26,14 @@ use serde_json::Value;
 use crate::isf::props::EnumMember;
 use crate::milkdrop::MilkDocument;
 
+/// Category assigned to every MilkDrop module.
+const CATEGORY: &str = "effects";
+/// Fallback author when a preset name has no `Name - Author` suffix; a person
+/// is never invented.
+const UNKNOWN_AUTHOR: &str = "unknown";
+/// Separator recognised by the common `Name - Author` naming convention.
+const AUTHOR_SEPARATOR: &str = " - ";
+
 /// The prop type a synthesised MilkDrop prop becomes.
 ///
 /// These mirror [`crate::isf::props::IsfPropType`] so the two renderer
@@ -44,6 +52,7 @@ pub enum MilkPropType {
 }
 
 impl MilkPropType {
+    /// The `dataTypes` key the engine's prop panels expect for this type.
     pub fn as_str(self) -> &'static str {
         match self {
             MilkPropType::Float => "float",
@@ -61,12 +70,19 @@ impl MilkPropType {
 /// [`crate::isf::props::IsfProp`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct MilkProp {
+    /// Prop type.
     pub type_: MilkPropType,
+    /// Panel label.
     pub label: String,
+    /// Initial value, when one is synthesised.
     pub default: Option<Value>,
+    /// Minimum value, when applicable.
     pub min: Option<f64>,
+    /// Maximum value, when applicable.
     pub max: Option<f64>,
+    /// Slider step, when applicable.
     pub step: Option<f64>,
+    /// Enum members, when the prop is an enum.
     pub enum_members: Option<Vec<EnumMember>>,
 }
 
@@ -87,40 +103,55 @@ pub struct MilkMeta {
     pub preview_with_output: bool,
 }
 
-/// Derive module metadata from a parsed preset.
+/// Split a preset display name into `(name, author)` using the common
+/// `Name - Author` convention.
 ///
-/// The author is recovered from the common `Name - Author` convention in
-/// [`MilkDocument::name`] (which, thanks to the parser, is either the preset's
-/// title line or the file stem). When that convention is absent, the author is
-/// the literal `"unknown"` — a person is never invented.
-pub fn meta_from_document(doc: &MilkDocument) -> MilkMeta {
-    let mut name = doc.name.trim().to_string();
-    let mut author = "unknown".to_string();
-
-    if let Some((name_part, author_part)) = doc.name.rsplit_once(" - ") {
+/// The parser folds the preset's `title`/`presetname` line (or, failing that,
+/// the file stem) into [`MilkDocument::name`]. When that string contains
+/// [`AUTHOR_SEPARATOR`] with a non-empty half on each side, the left half is
+/// the display name and the right half is the author. Otherwise the whole
+/// trimmed string is the name and [`UNKNOWN_AUTHOR`] is used for the author.
+/// Requiring both halves to be non-empty avoids an empty name for an input
+/// such as `" - Author"`.
+fn split_name_and_author(raw: &str) -> (&str, &str) {
+    if let Some((name_part, author_part)) = raw.rsplit_once(AUTHOR_SEPARATOR) {
         let name_part = name_part.trim();
         let author_part = author_part.trim();
         if !name_part.is_empty() && !author_part.is_empty() {
-            name = name_part.to_string();
-            author = author_part.to_string();
+            return (name_part, author_part);
         }
     }
+    (raw.trim(), UNKNOWN_AUTHOR)
+}
 
+/// Derive module metadata from a parsed preset.
+///
+/// The author is recovered from the common `Name - Author` convention in
+/// [`MilkDocument::name`] via [`split_name_and_author`]; when that convention
+/// is absent the author is [`UNKNOWN_AUTHOR`]. The category is always
+/// [`CATEGORY`] and `preview_with_output` is always `false` because MilkDrop
+/// presets are self-contained effects that never sample the previous frame as
+/// a visible input texture.
+pub fn meta_from_document(doc: &MilkDocument) -> MilkMeta {
+    let (name, author) = split_name_and_author(&doc.name);
     MilkMeta {
-        name,
-        author,
+        name: name.to_string(),
+        author: author.to_string(),
         description: String::new(),
         version: doc.version,
-        category: "effects".to_string(),
+        category: CATEGORY.to_string(),
         preview_with_output: false,
     }
 }
 
 /// Synthesise the module prop table from a parsed preset.
 ///
-/// MilkDrop currently exposes no user-facing props, so the table is empty.
-/// Kept as a function so later layers can add per-preset props without
-/// changing callers.
+/// MilkDrop presets currently expose no user-facing props: their parameters
+/// are driven by EEL equations evaluated each frame rather than by editable
+/// inputs, so the returned ordered map is intentionally empty. The function
+/// exists so the module registry can share one `document -> props` conversion
+/// between ISF and MilkDrop modules; later layers may populate per-preset
+/// props without changing any caller.
 pub fn synthesise_props(_doc: &MilkDocument) -> IndexMap<String, MilkProp> {
     IndexMap::new()
 }
