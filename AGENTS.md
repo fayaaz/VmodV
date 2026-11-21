@@ -46,6 +46,14 @@ Workflow for every change:
 - Keep regression tests for bugs fixed; the failing test must reproduce the reported behaviour before the fix.
 - Tests must be committed alongside the change — a change without its test is incomplete.
 
+## Rust 3D VJing TDD Rules (subagent-enforced)
+
+- Always run `cargo test --lib` for unit tests and `cargo test --test '*'` for integration tests.
+- Never mock `wgpu` GPU hardware contexts unless necessary; isolate pure math, FFT audio analysis, and state machines into testable structs.
+- Every task must follow RED -> GREEN -> REFACTOR. Never write production code without a failing test first.
+
+> This repo has no host Rust toolchain: run those cargo commands in Docker via `make engine-test ARGS="-p <crate> --lib <filter>"` (unit) or `make engine-test ARGS="-p <crate> --test <name>"` (integration), and lint with `make engine-lint`. The "Test-driven development" section above remains authoritative for suite scoping. When you invoke `/tdd`, the `orchestrator` agent enforces these rules via worktree-isolated `tdd-tester`, `tdd-implementer` and `tdd-reviewer` subagents.
+
 ## Architecture (single process)
 
 The `modv` binary (`crates/modv-app/src/bin/modv.rs` → `src/native.rs`) owns `Store` + `Compositor` + `MediaHub` in-process. There is no IPC boundary, no Vuex mirror and no web view. The headless `modv-engine` binary (`crates/modv-app/src/main.rs`) shares the engine crates for CLI/engine-only use (`--headless`, `--screenshot`, `--state`, `--isf-dir`, `--socket`).
@@ -61,6 +69,23 @@ Crates (`crates/Cargo.toml`):
 - `modv-app` — the binaries, plus the native shell (`native.rs`), window/surface management, the quit coordinator, media dialogs/imports/watchers, the `MediaHub` integration, MIDI/NDI/audio settings, UI layout persistence, preset load/save, ISF hot-reload (`notify`, 500 ms debounce) and the plugin runtime.
 
 Key wiring: the UI reads an `EngineSnapshot` built from the authoritative `Store` and emits `UiAction`s that are dispatched before the next render. The compositor's main texture is registered with `egui-wgpu` as a native texture — the live preview has no readback. Gallery tiles and Scene hover cells render through the engine's isolated preview caches (one preview answered per frame, LRU-cached, uploaded to a bounded egui texture LRU); volumetric Point10 scenes cache a static RGBA8 poster. Each performance-mode row's gutter shows a slow-cadence snapshot of its live Group (GPU-GPU blit, no readback).
+
+## Code map — where to start
+
+Each crate's `lib.rs` opens with a `//!` module map; `crates/modv-engine/src/lib.rs` is the most detailed (it maps modules to their legacy JS origins). Read it before changing a subsystem.
+
+| Task | Open first |
+| --- | --- |
+| State model, props, inputs, presets, expressions | `crates/modv-engine/src/{engine_state,props,inputs,preset,expressions}.rs` |
+| Scenes: timing, rows/cells, capture, playlists, defaults | `crates/modv-engine/src/scene_*.rs`, `scenes_playlist.rs`, `default_scenes.rs` |
+| UI → engine data flow | `crates/modv-ui/src/state.rs` (`UiAction`/`UiCommand`), `crates/modv-ui/src/model.rs` (`EngineSnapshot`), `crates/modv-app/src/native.rs` (dispatch), `crates/modv-app/src/compositor.rs` (render) |
+| Audio analysis / capture | `crates/modv-media/src/audio/` (`analyser`, `bands`, `beat_detektor`, `tempo`, `phrase`, `features`, `capture`, `pipewire`); app settings in `crates/modv-app/src/audio*.rs` |
+| Video / MIDI / OSC / NDI | `crates/modv-media/src/video/`, `midi.rs`, `osc.rs`, `ndi.rs` |
+| ISF / WGSL / 2D / Point10 | `crates/modv-renderers/src/{isf,shader,two_d,point10}/`; corpus in `resources/isf/` |
+| GPU device, frame graph, textures | `crates/modv-render/src/{device,frame_graph,texture_pool,surface}.rs` |
+| Control socket | `crates/modv-ipc/src/` (headless) vs `crates/modv-app/src/control_socket.rs` (native) |
+
+Non-obvious invariants: the UI never mutates the `Store` (it emits `UiAction`s dispatched in `native.rs`); GPU/kittest suites share one lavapipe device so tests are serial; run `make` from the worktree so Docker bind-mounts it at `/app`.
 
 ## Persistence (userData)
 
