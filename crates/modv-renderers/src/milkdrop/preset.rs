@@ -1,8 +1,5 @@
 //! MilkDrop `.mlk` preset parser.
 //!
-//! RED-phase scaffolding: the public API below is fixed by the tests in
-//! [`tests`]; GREEN replaces the stub bodies with the real parser.
-//!
 //! The parser is extension-agnostic. It normalises CRLF, finds the
 //! `[preset00]` section, splits base-value lines from equation/shader lines,
 //! lowercases and compatibility-renames keys, concatenates numbered lines in
@@ -11,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// Errors from [`parse_milk`].
@@ -153,29 +151,422 @@ pub struct MilkDocument {
 impl MilkDocument {
     /// Enabled wave sections, in index order.
     pub fn active_waves(&self) -> Vec<&MilkWave> {
-        // STUB (RED): the real implementation filters by `enabled`.
-        Vec::new()
+        self.waves.iter().filter(|w| w.enabled).collect()
     }
 
     /// Enabled shape sections, in index order.
     pub fn active_shapes(&self) -> Vec<&MilkShape> {
-        // STUB (RED): the real implementation filters by `enabled`.
-        Vec::new()
+        self.shapes.iter().filter(|s| s.enabled).collect()
     }
+}
+
+/// Canonical MilkDrop base values applied before any file overrides.
+fn default_base_vals() -> MilkBaseVals {
+    MilkBaseVals {
+        decay: 1.0,
+        gammaadj: 2.0,
+        zoom: 1.0,
+        zoomexp: 1.0,
+        warp: 1.0,
+        rot: 0.0,
+        cx: 0.5,
+        cy: 0.5,
+        dx: 0.0,
+        dy: 0.0,
+        sx: 1.0,
+        sy: 1.0,
+        echo_zoom: 1.0,
+        echo_alpha: 1.0,
+        echo_orient: 0,
+        wave_mode: 0,
+        additivewave: false,
+        wave_dots: false,
+        wave_thick: false,
+        wave_brighten: true,
+        wrap: false,
+        darken_center: true,
+        red_blue: false,
+        brighten: false,
+        darken: false,
+        solarize: false,
+        invert: false,
+        wave_a: 1.0,
+        wave_scale: 1.0,
+        wave_smoothing: 0.0,
+        wave_mystery: 1.0,
+        modwavealphastart: 0.0,
+        modwavealphaend: 1.0,
+        warpanimspeed: 1.0,
+        warpscale: 1.0,
+        mv_x: 0,
+        mv_y: 0,
+        mv_a: 1.0,
+        mv_r: 0.0,
+        mv_g: 0.0,
+        mv_b: 0.0,
+        mv_len: 0.0,
+        ob_size: 0.02,
+        ob_a: 1.0,
+        ib_size: 0.02,
+        ib_a: 1.0,
+        b1n: 0.0,
+        b2n: 0.0,
+        b3n: 0.0,
+        brightness: 1.0,
+    }
+}
+
+fn parse_f64(value: &str) -> f64 {
+    value.trim().parse::<f64>().unwrap_or(0.0)
+}
+
+fn parse_i64(value: &str) -> i64 {
+    value.trim().parse::<i64>().unwrap_or(0)
+}
+
+fn parse_bool(value: &str) -> bool {
+    let value = value.trim();
+    value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+/// Apply one `key=value` base val to `base`. `key` is already lowercased;
+/// MilkDrop compatibility aliases are folded onto canonical field names here.
+/// Unrecognised keys are appended to `diagnostics` rather than dropped.
+fn apply_base_val(base: &mut MilkBaseVals, key: &str, value: &str, diagnostics: &mut Vec<String>) {
+    match key {
+        "decay" | "fdecay" => base.decay = parse_f64(value),
+        "gammaadj" | "fgammaadj" => base.gammaadj = parse_f64(value),
+        "zoom" | "fzoom" => base.zoom = parse_f64(value),
+        "zoomexp" | "fzoomexponent" => base.zoomexp = parse_f64(value),
+        "warp" | "fwarp" => base.warp = parse_f64(value),
+        "rot" | "frot" => base.rot = parse_f64(value),
+        "cx" | "fcx" => base.cx = parse_f64(value),
+        "cy" | "fcy" => base.cy = parse_f64(value),
+        "dx" | "fdx" => base.dx = parse_f64(value),
+        "dy" | "fdy" => base.dy = parse_f64(value),
+        "sx" | "fsx" => base.sx = parse_f64(value),
+        "sy" | "fsy" => base.sy = parse_f64(value),
+        "echo_zoom" | "fvideoechozoom" => base.echo_zoom = parse_f64(value),
+        "echo_alpha" | "fvideoechoalpha" => base.echo_alpha = parse_f64(value),
+        "echo_orient" | "nvideoechoorientation" => base.echo_orient = parse_i64(value),
+        "wave_mode" | "nwavemode" => base.wave_mode = parse_i64(value),
+        "additivewave" | "badditivewaves" => base.additivewave = parse_bool(value),
+        "wave_dots" | "bwavedots" => base.wave_dots = parse_bool(value),
+        "wave_thick" | "bwavethick" => base.wave_thick = parse_bool(value),
+        "wave_brighten" | "bmaximizewavecolor" => base.wave_brighten = parse_bool(value),
+        "wrap" | "btexwrap" => base.wrap = parse_bool(value),
+        "darken_center" | "bdarkencenter" => base.darken_center = parse_bool(value),
+        "red_blue" | "bredbluestereo" => base.red_blue = parse_bool(value),
+        "brighten" | "bbrighten" => base.brighten = parse_bool(value),
+        "darken" | "bdarken" => base.darken = parse_bool(value),
+        "solarize" | "bsolarize" => base.solarize = parse_bool(value),
+        "invert" | "binvert" => base.invert = parse_bool(value),
+        "wave_a" | "fwavealpha" => base.wave_a = parse_f64(value),
+        "wave_scale" | "fwavescale" => base.wave_scale = parse_f64(value),
+        "wave_smoothing" | "fwavesmoothing" => base.wave_smoothing = parse_f64(value),
+        "wave_mystery" | "fwaveparam" => base.wave_mystery = parse_f64(value),
+        "modwavealphastart" | "fmodwavealphastart" => base.modwavealphastart = parse_f64(value),
+        "modwavealphaend" | "fmodwavealphaend" => base.modwavealphaend = parse_f64(value),
+        "warpanimspeed" | "fwarpanimspeed" => base.warpanimspeed = parse_f64(value),
+        "warpscale" | "fwarpscale" => base.warpscale = parse_f64(value),
+        "mv_x" | "nmotionvectorsx" => base.mv_x = parse_i64(value),
+        "mv_y" | "nmotionvectorsy" => base.mv_y = parse_i64(value),
+        "mv_a" => base.mv_a = parse_f64(value),
+        "mv_r" => base.mv_r = parse_f64(value),
+        "mv_g" => base.mv_g = parse_f64(value),
+        "mv_b" => base.mv_b = parse_f64(value),
+        "mv_len" => base.mv_len = parse_f64(value),
+        "ob_size" => base.ob_size = parse_f64(value),
+        "ob_a" => base.ob_a = parse_f64(value),
+        "ib_size" => base.ib_size = parse_f64(value),
+        "ib_a" => base.ib_a = parse_f64(value),
+        "b1n" | "fb1n" => base.b1n = parse_f64(value),
+        "b2n" | "fb2n" => base.b2n = parse_f64(value),
+        "b3n" | "fb3n" => base.b3n = parse_f64(value),
+        "brightness" | "fbrightness" => base.brightness = parse_f64(value),
+        // Metadata keys are recognised but carry no scalar state.
+        "milkdrop_preset_version"
+        | "frating"
+        | "fshader"
+        | "fpreview"
+        | "author"
+        | "desc"
+        | "description" => {}
+        _ => diagnostics.push(format!("unknown base val: {key}={value}")),
+    }
+}
+
+/// Collect numbered `prefix_N` lines and join their values in numeric order.
+#[derive(Default)]
+struct EqLines {
+    lines: BTreeMap<usize, String>,
+}
+
+impl EqLines {
+    fn push(&mut self, index: usize, value: &str) {
+        self.lines.insert(index, value.to_string());
+    }
+
+    fn into_source(self) -> String {
+        self.lines.into_values().collect::<Vec<_>>().join("\n")
+    }
+}
+
+/// Accumulator for one wave or shape section.
+#[derive(Default)]
+struct SectionAcc {
+    enabled: bool,
+    base: MilkBaseVals,
+    init: EqLines,
+    frame: EqLines,
+    point: EqLines,
+}
+
+impl SectionAcc {
+    fn new() -> Self {
+        Self {
+            base: default_base_vals(),
+            ..Default::default()
+        }
+    }
+}
+
+/// If `key` is `prefix` or `prefix_N`, return its numeric index (bare → 0).
+fn numbered_index(key: &str, prefix: &str) -> Option<usize> {
+    if key == prefix {
+        return Some(0);
+    }
+    key.strip_prefix(prefix)?
+        .strip_prefix('_')?
+        .parse::<usize>()
+        .ok()
+}
+
+/// Parse `wavecode_<i>_<prop>` / `shapecode_<i>_<prop>`; `i` is 1-based.
+fn parse_section_prop(rest: &str) -> Option<(usize, &str)> {
+    let (num, prop) = rest.split_once('_')?;
+    let i = num.parse::<usize>().ok()?;
+    if i == 0 || i > 4 {
+        return None;
+    }
+    Some((i - 1, prop))
+}
+
+/// Parse `wave_<i>_<kind>[_N]` / `shape_<i>_<kind>[_N]`.
+fn parse_section_eq(rest: &str) -> Option<(usize, &str, usize)> {
+    let (num, tail) = rest.split_once('_')?;
+    let i = num.parse::<usize>().ok()?;
+    if i == 0 || i > 4 {
+        return None;
+    }
+    let (kind, index) = match tail.rsplit_once('_') {
+        Some((kind, n)) => (kind, n.parse::<usize>().ok()?),
+        None => (tail, 0),
+    };
+    Some((i - 1, kind, index))
+}
+
+/// Drop noise-sampler redeclaration lines, keeping their use sites.
+fn strip_noise_decls(text: &str) -> String {
+    text.split('\n')
+        .filter(|line| {
+            let lower = line.to_lowercase();
+            !(lower.contains("sampler2d")
+                && (lower.contains("sampler_pw_noise_lq") || lower.contains("sampler_pw_noise_hq")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Return the text between the first `{` after `from` and its matching `}`.
+fn brace_interior(from: &str) -> Option<&str> {
+    let open = from.find('{')?;
+    let mut depth = 0usize;
+    for (offset, ch) in from[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&from[open + 1..open + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Split assembled shader text at `shader_body`, returning the declaration
 /// prelude and the braces' interior, with `sampler_pw_noise_lq/hq`
 /// redeclarations removed.
-pub fn extract_shader_body(_src: &str) -> MilkShader {
-    // STUB (RED).
-    MilkShader::default()
+pub fn extract_shader_body(src: &str) -> MilkShader {
+    let Some(pos) = src.to_lowercase().find("shader_body") else {
+        return MilkShader {
+            prelude: strip_noise_decls(src),
+            body: String::new(),
+        };
+    };
+    let prelude = strip_noise_decls(&src[..pos]);
+    let after = &src[pos + "shader_body".len()..];
+    let body = strip_noise_decls(brace_interior(after).unwrap_or(after));
+    MilkShader { prelude, body }
 }
 
 /// Parse a MilkDrop preset from `src`. The file extension is irrelevant.
-pub fn parse_milk(_src: &str, _file_stem: &str) -> Result<MilkDocument, MilkParseError> {
-    // STUB (RED) — enough for the tests to compile and fail on assertions.
-    Ok(MilkDocument::default())
+pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseError> {
+    let normalized = src.replace("\r\n", "\n");
+
+    let section_start = normalized
+        .lines()
+        .position(|line| line.trim().eq_ignore_ascii_case("[preset00]"))
+        .ok_or(MilkParseError::PresetSectionMissing)?;
+
+    let version = if normalized
+        .to_lowercase()
+        .contains("milkdrop_preset_version=201")
+    {
+        2
+    } else {
+        1
+    };
+
+    let mut doc = MilkDocument {
+        version,
+        name: file_stem.to_string(),
+        base: default_base_vals(),
+        waves: std::array::from_fn(|_| MilkWave::default()),
+        shapes: std::array::from_fn(|_| MilkShape::default()),
+        ..Default::default()
+    };
+
+    let mut init_eqs = EqLines::default();
+    let mut frame_eqs = EqLines::default();
+    let mut pixel_eqs = EqLines::default();
+    let mut warp_lines = EqLines::default();
+    let mut comp_lines = EqLines::default();
+    let mut wave_acc: [SectionAcc; 4] = std::array::from_fn(|_| SectionAcc::new());
+    let mut shape_acc: [SectionAcc; 4] = std::array::from_fn(|_| SectionAcc::new());
+
+    for line in normalized.lines().skip(section_start + 1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with(';')
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('[')
+        {
+            continue;
+        }
+        let Some((raw_key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let key = raw_key.trim().to_lowercase();
+        // `value` deliberately keeps leading whitespace: EEL/shader lines rely
+        // on indentation; scalar parsers trim locally.
+
+        if key == "title" || key == "presetname" {
+            if !value.trim().is_empty() {
+                doc.name = value.trim().to_string();
+            }
+            continue;
+        }
+
+        if let Some(index) = numbered_index(&key, "per_frame_init") {
+            init_eqs.push(index, value);
+            continue;
+        }
+        if let Some(index) = numbered_index(&key, "per_frame") {
+            frame_eqs.push(index, value);
+            continue;
+        }
+        if let Some(index) = numbered_index(&key, "per_pixel") {
+            pixel_eqs.push(index, value);
+            continue;
+        }
+        if let Some(index) = numbered_index(&key, "warp") {
+            warp_lines.push(index, value);
+            continue;
+        }
+        if let Some(index) = numbered_index(&key, "comp") {
+            comp_lines.push(index, value);
+            continue;
+        }
+
+        if let Some(rest) = key.strip_prefix("wavecode_")
+            && let Some((i, prop)) = parse_section_prop(rest)
+        {
+            let section = &mut wave_acc[i];
+            if prop == "enabled" {
+                section.enabled = parse_bool(value);
+            } else {
+                apply_base_val(&mut section.base, prop, value, &mut doc.diagnostics);
+            }
+            continue;
+        }
+        if let Some(rest) = key.strip_prefix("shapecode_")
+            && let Some((i, prop)) = parse_section_prop(rest)
+        {
+            let section = &mut shape_acc[i];
+            if prop == "enabled" {
+                section.enabled = parse_bool(value);
+            } else {
+                apply_base_val(&mut section.base, prop, value, &mut doc.diagnostics);
+            }
+            continue;
+        }
+        if let Some(rest) = key.strip_prefix("wave_")
+            && let Some((i, kind, index)) = parse_section_eq(rest)
+        {
+            let section = &mut wave_acc[i];
+            match kind {
+                "init" => section.init.push(index, value),
+                "per_frame" => section.frame.push(index, value),
+                "per_point" => section.point.push(index, value),
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(rest) = key.strip_prefix("shape_")
+            && let Some((i, kind, index)) = parse_section_eq(rest)
+        {
+            let section = &mut shape_acc[i];
+            match kind {
+                "init" => section.init.push(index, value),
+                "per_frame" => section.frame.push(index, value),
+                _ => {}
+            }
+            continue;
+        }
+
+        apply_base_val(&mut doc.base, &key, value, &mut doc.diagnostics);
+    }
+
+    doc.init_eqs = init_eqs.into_source();
+    doc.frame_eqs = frame_eqs.into_source();
+    doc.pixel_eqs = pixel_eqs.into_source();
+    doc.warp = strip_noise_decls(&warp_lines.into_source());
+    doc.comp = strip_noise_decls(&comp_lines.into_source());
+
+    for (i, section) in wave_acc.into_iter().enumerate() {
+        doc.waves[i] = MilkWave {
+            enabled: section.enabled,
+            base: section.base,
+            init_eqs: section.init.into_source(),
+            frame_eqs: section.frame.into_source(),
+            point_eqs: section.point.into_source(),
+        };
+    }
+    for (i, section) in shape_acc.into_iter().enumerate() {
+        doc.shapes[i] = MilkShape {
+            enabled: section.enabled,
+            base: section.base,
+            init_eqs: section.init.into_source(),
+            frame_eqs: section.frame.into_source(),
+        };
+    }
+
+    Ok(doc)
 }
 
 #[cfg(test)]
@@ -211,13 +602,19 @@ per_frame_1=wave_y = 0.5;
         let doc = parse_milk(V2, "v2_preset").expect("v2 preset parses");
         assert_eq!(doc.version, 2, "MILKDROP_PRESET_VERSION=201 means v2");
         assert_eq!(doc.name, "v2_preset");
-        assert!((doc.base.decay - 1.0).abs() < 1e-9, "defaults still apply in v2");
+        assert!(
+            (doc.base.decay - 1.0).abs() < 1e-9,
+            "defaults still apply in v2"
+        );
     }
 
     #[test]
     fn missing_preset_section_is_a_typed_error() {
         let result = parse_milk("fDecay=0.9\nper_frame_1=x=1;\n", "no_section");
-        assert!(result.is_err(), "a file without [preset00] must be rejected");
+        assert!(
+            result.is_err(),
+            "a file without [preset00] must be rejected"
+        );
         assert!(matches!(
             result.err(),
             Some(MilkParseError::PresetSectionMissing)
@@ -319,7 +716,9 @@ shader_body\n\
         let src = "[preset00]\nfDecay=0.9\nfUnknownFutureKey=42\nper_frame_1=x=1;\n";
         let doc = parse_milk(src, "unknown_key").expect("parses");
         assert!(
-            doc.diagnostics.iter().any(|d| d.to_lowercase().contains("unknownfuturekey")),
+            doc.diagnostics
+                .iter()
+                .any(|d| d.to_lowercase().contains("unknownfuturekey")),
             "unknown key must be recorded, got {:?}",
             doc.diagnostics
         );
