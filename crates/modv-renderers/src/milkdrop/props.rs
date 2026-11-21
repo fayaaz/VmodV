@@ -89,16 +89,37 @@ pub struct MilkMeta {
 
 /// Derive module metadata from a parsed preset.
 ///
-/// RED phase: returns the empty default; GREEN replaces this with the real
-/// `Name - Author` split described in the module docs.
-pub fn meta_from_document(_doc: &MilkDocument) -> MilkMeta {
-    MilkMeta::default()
+/// The author is recovered from the common `Name - Author` convention in
+/// [`MilkDocument::name`] (which, thanks to the parser, is either the preset's
+/// title line or the file stem). When that convention is absent, the author is
+/// the literal `"unknown"` — a person is never invented.
+pub fn meta_from_document(doc: &MilkDocument) -> MilkMeta {
+    let mut name = doc.name.trim().to_string();
+    let mut author = "unknown".to_string();
+
+    if let Some((name_part, author_part)) = doc.name.rsplit_once(" - ") {
+        let name_part = name_part.trim();
+        let author_part = author_part.trim();
+        if !name_part.is_empty() && !author_part.is_empty() {
+            name = name_part.to_string();
+            author = author_part.to_string();
+        }
+    }
+
+    MilkMeta {
+        name,
+        author,
+        description: String::new(),
+        version: doc.version,
+        category: "effects".to_string(),
+        preview_with_output: false,
+    }
 }
 
 /// Synthesise the module prop table from a parsed preset.
 ///
-/// RED phase: MilkDrop currently exposes no user-facing props, so the table is
-/// empty. Kept as a function so later layers can add per-preset props without
+/// MilkDrop currently exposes no user-facing props, so the table is empty.
+/// Kept as a function so later layers can add per-preset props without
 /// changing callers.
 pub fn synthesise_props(_doc: &MilkDocument) -> IndexMap<String, MilkProp> {
     IndexMap::new()

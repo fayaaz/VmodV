@@ -56,6 +56,4 @@ pub use translate::{
     CompiledMilkShader, MilkShaderStage, TranslateError, translate_milk_shader, wrap_milk_shader,
 };
 
-pub use props::{
-    MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise_props,
-};
+pub use props::{MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise_props};
