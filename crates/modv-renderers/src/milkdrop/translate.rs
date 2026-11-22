@@ -225,11 +225,11 @@ fn q_uniform_block_glsl() -> String {
 const HLSL_MACROS: &str = "\
 #define tex2D(s, uv) texture(s, uv)
 #define tex3D(s, uv) texture(s, uv)
-#define GetMain(uv) texture(sampler_main, uv)
-#define GetPixel(uv) texture(sampler_fw_main, uv)
-#define GetBlur1(uv) texture(sampler_blur1, uv)
-#define GetBlur2(uv) texture(sampler_blur2, uv)
-#define GetBlur3(uv) texture(sampler_blur3, uv)
+#define GetMain(uv) texture(sampler_main, uv).rgb
+#define GetPixel(uv) texture(sampler_fw_main, uv).rgb
+#define GetBlur1(uv) texture(sampler_blur1, uv).rgb
+#define GetBlur2(uv) texture(sampler_blur2, uv).rgb
+#define GetBlur3(uv) texture(sampler_blur3, uv).rgb
 #define lum(c) dot((c).rgb, vec3(0.2126, 0.7152, 0.0722))
 #define lerp mix
 #define saturate(x) clamp((x), 0.0, 1.0)
