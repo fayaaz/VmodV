@@ -1183,4 +1183,86 @@ shape_1_per_point_1=`ignored = 1;
             doc.diagnostics
         );
     }
+
+    /// Real v1 presets carry a bare `warp=<scalar>` / `comp=<scalar>` base val.
+    /// `numbered_index` currently maps a bare key equal to the prefix to index
+    /// 0, so the scalar leaks into `warp_lines[0]`/`comp_lines[0]` and becomes
+    /// the first line of the assembled shader source (invalid GLSL).
+    #[test]
+    fn warp_and_comp_base_val_scalars_do_not_become_shader_source() {
+        let v1 = "[preset00]\nwarp=0.01\ncomp=0.02\nper_frame_1=x=1;\n";
+        let doc = parse_milk(v1, "v1_bare_scalars").expect("v1 preset parses");
+
+        assert!(
+            doc.warp.is_empty(),
+            "bare warp=<scalar> is a base val, not shader source, got {:?}",
+            doc.warp
+        );
+        assert!(
+            doc.comp.is_empty(),
+            "bare comp=<scalar> is a base val, not shader source, got {:?}",
+            doc.comp
+        );
+        assert_eq!(doc.frame_eqs, "x=1;", "unrelated equations still parse");
+
+        // Real v2 presets have both a bare scalar and numbered shader lines.
+        let v2 = concat!(
+            "[preset00]\n",
+            "MILKDROP_PRESET_VERSION=201\n",
+            "warp=0.0\n",
+            "warp_1=shader_body\n",
+            "warp_2={\n",
+            "warp_3=  ret = float3(1.0);\n",
+            "warp_4=}\n",
+        );
+        let doc2 = parse_milk(v2, "v2_warp_scalar").expect("v2 preset parses");
+        assert!(
+            doc2.warp.contains("shader_body"),
+            "numbered warp lines must survive, got {:?}",
+            doc2.warp
+        );
+        assert!(
+            !doc2.warp.lines().any(|line| line.trim() == "0.0"),
+            "the bare scalar must not become a bare source line, got {:?}",
+            doc2.warp
+        );
+        assert!(
+            doc2.warp.starts_with("shader_body"),
+            "assembled warp must start with the first numbered line, got {:?}",
+            doc2.warp
+        );
+    }
+
+    /// Real v2 preset `Bioluminescent Abyss.milk` has `wavecode_0_*` keys.
+    /// `section_index("0")` eagerly evaluates `i - 1` in `.then_some(...)`,
+    /// underflowing in debug builds. Index 0 is invalid (1-based sections) but
+    /// must be ignored gracefully, never panic.
+    #[test]
+    fn zero_indexed_wavecode_and_shapecode_do_not_panic() {
+        let src = concat!(
+            "[preset00]\n",
+            "wavecode_0_enabled=1\n",
+            "wavecode_0_r=1.0\n",
+            "shapecode_0_enabled=1\n",
+            "wavecode_1_enabled=1\n",
+            "shapecode_1_enabled=1\n",
+        );
+
+        let result = std::panic::catch_unwind(|| parse_milk(src, "zero_index"));
+        let doc = match result {
+            Ok(doc) => doc.expect("zero-indexed keys must still parse"),
+            Err(_) => panic!("parse_milk must not panic on 0-indexed wavecode/shapecode keys"),
+        };
+
+        assert_eq!(
+            doc.active_waves().len(),
+            1,
+            "only the valid wave 1 section is active"
+        );
+        assert_eq!(
+            doc.active_shapes().len(),
+            1,
+            "only the valid shape 1 section is active"
+        );
+    }
 }
