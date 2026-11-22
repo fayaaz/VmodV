@@ -1736,4 +1736,148 @@ out = q1 + q2 + acc + megabuf[10];
         approx!(a.get("j"), b.get("j"), "rand is deterministic with a seed");
         approx!(a.get("out"), b.get("out"), "whole fixture is deterministic");
     }
+
+    // ------------------------------------------------------------------
+    // MilkDrop 2 EEL2 control-flow compatibility (RED)
+    // ------------------------------------------------------------------
+
+    /// Run an arbitrary statement list on a seeded pool with explicit globals.
+    fn run_src_with_globals(src: &str, globals: Globals) -> VarPool {
+        let eq = compile(src, 2).expect("source compiles");
+        let mut pool = VarPool::with_seed(0xC0FFEE);
+        run_frame(&eq, &mut pool, &globals).expect("source runs");
+        pool
+    }
+
+    #[test]
+    fn braceless_if_and_else_select_the_correct_branch() {
+        // Real v2 presets omit braces around a single-statement if/else body.
+        let src = "x = 0; if (bass > 1.0) x = 2; else x = 3;";
+        let hi = Globals {
+            bass: 1.2,
+            ..Globals::default()
+        };
+        let lo = Globals {
+            bass: 0.5,
+            ..Globals::default()
+        };
+        let p_hi = run_src_with_globals(src, hi);
+        let p_lo = run_src_with_globals(src, lo);
+        approx!(p_hi.get("x"), 2.0, "then branch when bass=1.2");
+        approx!(p_lo.get("x"), 3.0, "else branch when bass=0.5");
+    }
+
+    #[test]
+    fn braceless_if_statement_can_be_nested_as_the_then_body() {
+        let src = "x = 0; if (a) if (b) x = 7; else x = 8;";
+        let eq = compile(src, 2).expect("nested braceless if compiles");
+        let run = |a: f32, b: f32| {
+            let mut pool = VarPool::with_seed(1);
+            pool.set("a", a);
+            pool.set("b", b);
+            run_frame(&eq, &mut pool, &Globals::default()).expect("runs");
+            pool.get("x")
+        };
+        approx!(run(1.0, 1.0), 7.0, "inner then");
+        approx!(run(1.0, 0.0), 8.0, "inner else");
+        approx!(run(0.0, 1.0), 0.0, "outer false leaves x seeded");
+    }
+
+    #[test]
+    fn braceless_else_if_chain_selects_the_correct_branch() {
+        let eq = compile("if (a) x=1; else if (b) x=2; else x=3;", 2)
+            .expect("else-if chain compiles");
+        let run = |a: f32, b: f32| {
+            let mut pool = VarPool::with_seed(1);
+            pool.set("a", a);
+            pool.set("b", b);
+            run_frame(&eq, &mut pool, &Globals::default()).expect("runs");
+            pool.get("x")
+        };
+        approx!(run(1.0, 0.0), 1.0, "first branch");
+        approx!(run(0.0, 1.0), 2.0, "else-if branch");
+        approx!(run(1.0, 1.0), 1.0, "first branch wins");
+        approx!(run(0.0, 0.0), 3.0, "final else branch");
+    }
+
+    #[test]
+    fn braceless_while_and_loop_bodies_iterate_and_keep_the_hard_bound() {
+        let p = run_src("i=0; while(i<3) i=i+1;");
+        approx!(p.get("i"), 3.0, "brace-less while body");
+
+        let p = run_src("x=0; loop(3) x=x+1;");
+        approx!(p.get("x"), 3.0, "brace-less loop body");
+
+        // A brace-less infinite loop still returns a typed error, never panics.
+        let eq = compile("i=0; while(1) i=i+1;", 2).expect("compiles");
+        let res = run_frame(&eq, &mut VarPool::new(), &Globals::default());
+        assert!(matches!(res, Err(EelError::IterationLimitExceeded)));
+    }
+
+    #[test]
+    fn c_style_block_comments_span_lines_without_breaking_statements() {
+        let src = "\
+x = 1; /* a block
+comment spanning
+multiple lines */
+y = 2;
+// a line comment still works
+z = x + y; /* trailing block comment */
+";
+        let p = run_src(src);
+        approx!(p.get("x"), 1.0);
+        approx!(p.get("y"), 2.0);
+        approx!(p.get("z"), 3.0, "comments do not merge statements");
+    }
+
+    #[test]
+    fn realistic_v2_per_frame_fixture_compiles_and_is_deterministic() {
+        const PER_FRAME: &str = "\
+q1 = q1 + 0.1; q2 = q2*0.9 + 0.1*bass;
+q3 = if(above(bass, 0.5), if(above(mid, 0.3), pow(bass, 2.0), bass), q3*0.95);
+q4 = min(max(q4 + exp(-1.0*sqr(frame/50.0)), 0.0), 10.0);
+if (above(bass, 0.5)) q5 = 1.0; else q5 = 0.0;
+megabuf[5] = min(max(megabuf[5] + 0.01, 0.0), 1.0);
+r = rand(1.0);
+out = q1 + q2 + q3 + q4 + q5 + megabuf[5];
+";
+        let eq = compile(PER_FRAME, 2).expect("real v2 per_frame fixture compiles");
+        let globals = Globals {
+            bass: 0.8,
+            mid: 0.4,
+            ..Globals::default()
+        };
+        let run_once = || {
+            let mut pool = VarPool::with_seed(0xFEED);
+            pool.snapshot_q();
+            run_frame(&eq, &mut pool, &globals).expect("fixture runs");
+            pool
+        };
+
+        let a = run_once();
+        let b = run_once();
+        approx!(a.get("q1"), 0.1, "q accumulator");
+        approx!(a.get("q3"), 0.8_f32.powf(2.0), "nested if(above(...), pow(...))");
+        approx!(a.get("q5"), 1.0, "brace-less if driven by above()");
+        approx!(a.megabuf(5), 0.01, "min/max clamped megabuf write");
+        assert!(a.get("out").is_finite(), "outputs must be finite");
+        approx!(a.get("out"), b.get("out"), "seeded run is deterministic");
+        approx!(a.get("r"), b.get("r"), "seeded rand is deterministic");
+    }
+
+    #[test]
+    fn malformed_braceless_if_stays_a_typed_parse_error_without_panicking() {
+        // An empty body (`;`) is not a statement: even with brace-less support
+        // this must remain a typed ParseError, never a panic.
+        let res = std::panic::catch_unwind(|| compile("if (x>0) ;", 2));
+        assert!(res.is_ok(), "compile must not panic on malformed braceless if");
+        assert!(
+            matches!(res.expect("no panic"), Err(EelError::ParseError(_))),
+            "expected a typed ParseError"
+        );
+
+        let res = std::panic::catch_unwind(|| compile("while (x<1) ;", 2));
+        assert!(res.is_ok(), "compile must not panic on malformed braceless while");
+        assert!(matches!(res.expect("no panic"), Err(EelError::ParseError(_))));
+    }
 }
