@@ -123,7 +123,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::isf::runtime::BoundedCache;
 use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool, compile, run_frame, run_pixel};
-use crate::milkdrop::preset::{MilkBaseVals, MilkDocument, extract_shader_body};
+use crate::milkdrop::preset::{MilkBaseVals, MilkDocument, MilkShader, extract_shader_body};
 use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_milk_shader};
 
 /// MilkDrop scales each raw audio band by two before exposing it to EEL.
@@ -1565,6 +1565,19 @@ impl MilkRuntime {
 /// frame at the mesh UV makes warp and comp pass-through stages.
 const DEFAULT_SHADER_BODY: &str = "float3 ret = tex2D(sampler_main, uv_orig).rgb;\n";
 
+/// The body to translate for one stage: the preset's own body verbatim, or the
+/// identity body when it is empty. v1 presets carry no `shader_body`, so without
+/// this substitution `ret` would be undeclared and the translated shader would
+/// fail naga validation. Sampling the previous frame keeps such stages as
+/// pass-through instead.
+fn effective_shader_body(shader: &MilkShader) -> &str {
+    if shader.body.trim().is_empty() {
+        DEFAULT_SHADER_BODY
+    } else {
+        &shader.body
+    }
+}
+
 /// Compile a parsed preset into an owned handle.
 ///
 /// On a shader/equation error the offending `name` is recorded in `failures`
@@ -1589,26 +1602,20 @@ pub fn compile_preset(
         compile(&doc.pixel_eqs, doc.version).map_err(|e| fail(format!("pixel equations: {e}")))?;
 
     let warp_src = extract_shader_body(&doc.warp);
-    // A preset with no `shader_body` (v1, or otherwise empty) yields an empty
-    // body that would leave `ret` undeclared. Substitute the identity body so it
-    // still compiles and samples the previous frame. Presets with a body are
-    // translated verbatim.
-    let warp_body = if warp_src.body.trim().is_empty() {
-        DEFAULT_SHADER_BODY
-    } else {
-        &warp_src.body
-    };
-    let warp = translate_milk_shader(&warp_src.prelude, warp_body, MilkShaderStage::Warp)
-        .map_err(|e| fail(format!("warp shader: {e}")))?;
+    let warp = translate_milk_shader(
+        &warp_src.prelude,
+        effective_shader_body(&warp_src),
+        MilkShaderStage::Warp,
+    )
+    .map_err(|e| fail(format!("warp shader: {e}")))?;
 
     let comp_src = extract_shader_body(&doc.comp);
-    let comp_body = if comp_src.body.trim().is_empty() {
-        DEFAULT_SHADER_BODY
-    } else {
-        &comp_src.body
-    };
-    let comp = translate_milk_shader(&comp_src.prelude, comp_body, MilkShaderStage::Comp)
-        .map_err(|e| fail(format!("comp shader: {e}")))?;
+    let comp = translate_milk_shader(
+        &comp_src.prelude,
+        effective_shader_body(&comp_src),
+        MilkShaderStage::Comp,
+    )
+    .map_err(|e| fail(format!("comp shader: {e}")))?;
 
     // Layer 5c: compile one program per enabled wave/shape section. A malformed
     // section is recorded and skipped individually so one broken overlay never

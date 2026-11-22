@@ -354,19 +354,19 @@ struct SamplerBinding {
 /// samplers are skipped as user declarations so the wrapper stays the single
 /// declaration naga sees. A noise sampler the body never uses is bound
 /// anonymously at its reserved slot, keeping binding indices stable.
-fn samplers_for_prelude(prelude: &str, body: &str) -> Vec<SamplerBinding> {
-    // Scan the *retained* prelude, not the raw text: that keeps sampler use
-    // sites inside prelude helper functions while dropping top-level
-    // declarations (which must not, on their own, earn a named binding). This
-    // lets a noise sampler referenced only from a helper get a real named
-    // binding instead of an anonymous slot the helper cannot refer to.
-    let retained = retained_prelude(prelude);
+///
+/// `retained` is the prelude text that actually survives into the shader (see
+/// [`retained_prelude`]); passing it in lets a noise sampler referenced only
+/// from a prelude helper earn a named binding instead of an anonymous slot the
+/// helper cannot refer to. The raw `prelude` is still needed for user sampler
+/// declarations.
+fn samplers_for_prelude(prelude: &str, retained: &str, body: &str) -> Vec<SamplerBinding> {
     let mut samplers: Vec<SamplerBinding> = BUILTIN_SAMPLERS
         .iter()
         .map(|name| SamplerBinding {
             name: (!NOISE_SAMPLERS.contains(name)
                 || contains_ident(body, name)
-                || contains_ident(&retained, name))
+                || contains_ident(retained, name))
             .then(|| name.to_string()),
         })
         .collect();
@@ -526,10 +526,15 @@ fn retained_prelude(prelude: &str) -> String {
 /// `vec4(ret.xyz, 1.0)` (component-wise so both `float3` and `float4` bodies
 /// work).
 pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> String {
-    let samplers = samplers_for_prelude(prelude, body);
+    // Compute the retained prelude once: it is both emitted before `main` and
+    // scanned for noise-sampler use sites inside helper functions. Scanning the
+    // retained (rather than raw) text keeps top-level declarations from earning
+    // a named binding while preserving use sites inside helper bodies.
+    let retained = retained_prelude(prelude);
+    let samplers = samplers_for_prelude(prelude, &retained, body);
     let body = rewrite_hlsl_types(body);
 
-    let mut out = String::with_capacity(body.len() + 4096);
+    let mut out = String::with_capacity(body.len() + 4096 + retained.len());
     out.push_str("#version 450\n\n");
     out.push_str(&format!("// MilkDrop {stage:?} shader\n"));
     out.push_str(HLSL_MACROS);
@@ -543,7 +548,7 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     out.push_str("layout(location = 0) in vec2 uv_orig;\n");
     out.push_str(&sampler_bindings_glsl(&samplers));
     out.push_str("layout(location = 0) out vec4 milk_FragColor;\n\n");
-    out.push_str(&retained_prelude(prelude));
+    out.push_str(&retained);
     out.push_str("void main() {\n");
     out.push_str(&body);
     if !body.ends_with('\n') {
