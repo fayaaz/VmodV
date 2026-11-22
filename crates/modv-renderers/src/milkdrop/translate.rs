@@ -544,4 +544,143 @@ ret += GetMain(uv).rgb;\n";
             compiled.wgsl
         );
     }
+
+    // --- MilkDrop 2 real-format compatibility (RED) -------------------------
+
+    /// A real v2 shader puts helper functions in the prelude, before
+    /// `shader_body`. The wrapper must keep them (rewriting HLSL vector types)
+    /// instead of dropping every non-uniform prelude line.
+    #[test]
+    fn prelude_helper_functions_are_preserved_and_rewritten() {
+        let prelude = "\
+float4 helper(float2 p) {\n\
+  return float4(p, 0.0, 1.0);\n\
+}\n";
+        let body = "float3 ret = helper(uv_orig).rgb;\n";
+
+        let wrapped = wrap_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            wrapped.contains("vec4 helper(vec2 p)"),
+            "wrapped GLSL must preserve and rewrite the helper signature, got {wrapped:?}"
+        );
+        assert!(
+            wrapped.contains("return vec4(p, 0.0, 1.0);"),
+            "wrapped GLSL must preserve and rewrite the helper body, got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader(prelude, body, MilkShaderStage::Comp)
+            .unwrap_or_else(|error| panic!("prelude helper must translate: {error}"));
+        assert!(
+            compiled.wgsl.contains("helper"),
+            "WGSL must preserve the helper function, got {:?}",
+            compiled.wgsl
+        );
+    }
+
+    /// `static` globals are legal in MilkDrop's HLSL-flavoured prelude but not
+    /// at GLSL 450 global scope, so the qualifier must be stripped while the
+    /// declaration itself is retained.
+    #[test]
+    fn static_globals_are_preserved_without_static_qualifier() {
+        let prelude = "static float yh = 0.66;\n";
+        let body = "float3 ret = vec3(yh);\n";
+
+        let wrapped = wrap_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            wrapped.contains("float yh = 0.66;"),
+            "wrapped GLSL must keep the static global declaration, got {wrapped:?}"
+        );
+        assert!(
+            !wrapped.contains("static float yh"),
+            "wrapped GLSL must strip the `static` qualifier, got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader(prelude, body, MilkShaderStage::Comp)
+            .unwrap_or_else(|error| panic!("static global prelude must translate: {error}"));
+        assert!(
+            compiled.wgsl.contains("fn main"),
+            "WGSL must have a main entry point, got {:?}",
+            compiled.wgsl
+        );
+    }
+
+    /// HLSL builtins `lerp`/`saturate`/`frac` have no GLSL 450 spelling; the
+    /// wrapper must define or rewrite them to `mix`/`clamp`/`fract`.
+    #[test]
+    fn hlsl_builtins_lerp_saturate_frac_are_rewritten_to_glsl() {
+        let body = "\
+float a = 0.1;\n\
+float b = 0.9;\n\
+float t = 0.5;\n\
+float x = 0.75;\n\
+float3 ret = vec3(lerp(a, b, t), saturate(x), frac(x));\n\
+ret += vec3(smoothstep(0.0, 1.0, x), step(0.5, x), 0.0);\n";
+
+        let wrapped = wrap_milk_shader("", body, MilkShaderStage::Comp);
+        for expansion in ["mix", "clamp", "fract"] {
+            assert!(
+                wrapped.contains(expansion),
+                "wrapped GLSL must contain HLSL builtin expansion `{expansion}`, got {wrapped:?}"
+            );
+        }
+
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp)
+            .unwrap_or_else(|error| panic!("HLSL builtin body must translate: {error}"));
+        assert!(
+            compiled.wgsl.contains("fn main"),
+            "WGSL must have a main entry point, got {:?}",
+            compiled.wgsl
+        );
+    }
+
+    /// Real v2 bodies declare `ret` either as `float4` or `float3`; the final
+    /// assignment must accept both via a component-wise `ret.xyz` write.
+    #[test]
+    fn float4_and_float3_ret_both_translate_with_component_wise_assignment() {
+        let float4_body = "float4 ret = float4(0.0);\n";
+        let float3_body = "float3 ret = vec3(0.0);\n";
+
+        let wrapped = wrap_milk_shader("", float4_body, MilkShaderStage::Comp);
+        assert!(
+            wrapped.contains("milk_FragColor = vec4(ret.xyz, 1.0);"),
+            "wrapper final assignment must accept both float3 and float4 ret, got {wrapped:?}"
+        );
+
+        for (body, label) in [(float4_body, "float4"), (float3_body, "float3")] {
+            translate_milk_shader("", body, MilkShaderStage::Comp)
+                .unwrap_or_else(|error| panic!("{label} ret body must translate: {error}"));
+        }
+    }
+
+    /// Regression fixture mirroring the structure of a real v2 warp preset:
+    /// a multi-statement prelude helper with HLSL vector types, a `static`
+    /// global, HLSL builtins in the body, `tex2D` sampling and a `float3 ret`.
+    #[test]
+    fn combined_real_world_warp_prelude_translates_with_helper_and_sampling() {
+        let prelude = "\
+static float yh = 0.66;\n\
+float4 helper(float2 p) {\n\
+  float2 q = p * 3.0;\n\
+  q = q - floor(q);\n\
+  return float4(q, 0.0, 1.0);\n\
+}\n";
+        let body = "\
+float2 uv = uv_orig;\n\
+float3 t = helper(uv).rgb;\n\
+float3 ret = lerp(t, tex2D(sampler_main, uv).rgb, 0.5);\n\
+ret = saturate(ret) * frac(t);\n";
+
+        let compiled = translate_milk_shader(prelude, body, MilkShaderStage::Warp)
+            .unwrap_or_else(|error| panic!("combined warp fixture must translate: {error}"));
+        assert!(
+            compiled.wgsl.contains("fn helper"),
+            "WGSL must preserve the prelude helper function, got {:?}",
+            compiled.wgsl
+        );
+        assert!(
+            compiled.wgsl.contains("textureSample"),
+            "tex2D must become a textureSample in WGSL, got {:?}",
+            compiled.wgsl
+        );
+    }
 }
