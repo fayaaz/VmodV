@@ -194,6 +194,31 @@ const UNIFORM_MEMBERS: &[(&str, &str)] = &[
     ("vec2", "ang"),
 ];
 
+/// The per-frame EEL `q1..q32` variables exposed to shader bodies.
+///
+/// Real v2 presets read these directly in warp/comp code (`vec3(q1, q4,
+/// q32)`, `float t = q4;`, …). They live in a dedicated uniform block at
+/// binding 27 — the first free binding after the 13 sampler pairs at
+/// `1..=26` — so `MilkUniforms`' byte offsets and binding 0 stay untouched.
+const Q_UNIFORM_MEMBERS: [&str; 32] = [
+    "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13", "q14", "q15",
+    "q16", "q17", "q18", "q19", "q20", "q21", "q22", "q23", "q24", "q25", "q26", "q27", "q28",
+    "q29", "q30", "q31", "q32",
+];
+
+/// A GLSL uniform block holding the 32 scalar q variables (128 bytes).
+///
+/// The main `MilkUniforms` block stays at binding 0 with all of its existing
+/// offsets; this block is purely additive so no preset layout changes.
+fn q_uniform_block_glsl() -> String {
+    let mut out = String::from("layout(binding = 27) uniform MilkQUniforms {\n");
+    for name in Q_UNIFORM_MEMBERS {
+        out.push_str(&format!("  float {name};\n"));
+    }
+    out.push_str("};\n\n");
+    out
+}
+
 /// GLSL definitions of the HLSL/MilkDrop compatibility shorthands.
 ///
 /// Samplers are declared as object-like macros expanding to naga's
@@ -438,6 +463,11 @@ fn uniform_block_glsl(prelude: &str) -> String {
         if ty == "sampler2D" || is_reserved_sampler(name) {
             continue;
         }
+        // q1..q32 live in their own `MilkQUniforms` block at binding 27; a
+        // prelude that redeclares one must not also add it to binding 0.
+        if Q_UNIFORM_MEMBERS.contains(&name) {
+            continue;
+        }
         if !members.iter().any(|(_, existing)| *existing == name) {
             members.push((ty, name));
         }
@@ -543,6 +573,7 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     out.push_str(HLSL_MACROS);
     out.push('\n');
     out.push_str(&uniform_block_glsl(prelude));
+    out.push_str(&q_uniform_block_glsl());
     // `uv_orig` is a per-pixel varying from the full-screen vertex stage
     // (`FULLSCREEN_VERTEX_WGSL`, @location(0)). Both warp and comp are fragment
     // stages, so this single declaration serves them and makes texture samples

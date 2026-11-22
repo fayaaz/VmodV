@@ -226,6 +226,13 @@ impl Default for MilkNoise {
 /// `translate::BUILTIN_SAMPLERS` by a unit test.
 pub(crate) const MILK_RUNTIME_SAMPLER_PAIRS: usize = 13;
 
+/// `@group(0)` binding of the additive `MilkQUniforms` block: the next free
+/// slot after the main uniform (0) and the 13 sampler pairs (1..=26).
+pub(crate) const MILK_Q_BINDING: u32 = 27;
+
+/// Byte size of the `MilkQUniforms` block: 32 `f32` values (`q1..q32`).
+pub const MILK_Q_STRIDE: usize = 32 * 4;
+
 // --- GPU pass shaders (Layer 5b) -------------------------------------------
 //
 // The warp/comp fragment stages come from `translate::translate_milk_shader`
@@ -529,6 +536,20 @@ impl MilkGpuCache {
         }
     }
 
+    /// The 128-byte `MilkQUniforms` binding visible to the fragment stage.
+    fn q_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(MILK_Q_STRIDE as u64),
+            },
+            count: None,
+        }
+    }
+
     /// A small (one `vec4`) uniform binding, used for the blur radius.
     fn small_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         wgpu::BindGroupLayoutEntry {
@@ -627,7 +648,7 @@ impl MilkGpuCache {
         if self.milk_layout.is_none() {
             // Binding 0 is the uniform; the rest are `MILK_RUNTIME_SAMPLER_PAIRS`
             // (texture, sampler) pairs in `BUILTIN_SAMPLERS` order (1..=26).
-            let mut entries = Vec::with_capacity(1 + MILK_RUNTIME_SAMPLER_PAIRS * 2);
+            let mut entries = Vec::with_capacity(2 + MILK_RUNTIME_SAMPLER_PAIRS * 2);
             entries.push(Self::uniform_entry(0));
             for binding in 1..=(MILK_RUNTIME_SAMPLER_PAIRS as u32) * 2 {
                 entries.push(if binding % 2 == 1 {
@@ -636,6 +657,8 @@ impl MilkGpuCache {
                     Self::sampler_entry(binding)
                 });
             }
+            // The additive q block takes the next free binding (27).
+            entries.push(Self::q_uniform_entry(MILK_Q_BINDING));
             self.milk_layout = Some(device.create_bind_group_layout(
                 &wgpu::BindGroupLayoutDescriptor {
                     label: Some("modV MilkDrop shader layout"),
@@ -1195,6 +1218,34 @@ impl MilkUniforms {
     }
 }
 
+/// Serialized `MilkQUniforms` payload for one frame.
+///
+/// Real v2 presets keep their per-frame `q1..q32` values in the EEL
+/// [`VarPool`]. Those are read from the live instance and packed into a
+/// dedicated 128-byte block (32 `f32`s, `qN` at float index `N-1`) uploaded to
+/// `@group(0) @binding(27)` each frame. This block is independent of
+/// [`MilkUniforms`], so none of its byte offsets or the sampler layout move.
+pub struct MilkQUniforms {
+    bytes: Vec<u8>,
+}
+
+impl MilkQUniforms {
+    /// Read `q1..q32` from `instance`'s live variable pool into GPU bytes.
+    pub fn from_instance(instance: &MilkInstance) -> Self {
+        let mut bytes = vec![0u8; MILK_Q_STRIDE];
+        for index in 0..32 {
+            let key = format!("q{}", index + 1);
+            write_f32(&mut bytes, index * 4, instance.pool.get(&key));
+        }
+        Self { bytes }
+    }
+
+    /// The bytes to upload into `@group(0) @binding(27)` (always 128 bytes).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+}
+
 /// Off-screen render targets owned by the MilkDrop GPU path.
 ///
 /// The warp, composite and three blur passes render into these textures; the
@@ -1409,6 +1460,17 @@ impl MilkRuntime {
             mapped_at_creation: false,
         });
         queue.write_buffer(&uniform_buffer, 0, &uniform_bytes);
+        // The 128-byte q block carries the instance's live `q1..q32` values to
+        // `@group(0) @binding(27)`. Kept separate from the main uniform so none
+        // of its byte offsets or the sampler bindings change.
+        let q_bytes = MilkQUniforms::from_instance(instance).to_bytes();
+        let q_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("modV MilkDrop q uniform buffer"),
+            size: MILK_Q_STRIDE as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&q_uniform_buffer, 0, &q_bytes);
         // One small uniform per blur level carries the radius (in texels)
         // derived from the `b1n`/`b2n`/`b3n` base-val minima. The kernel is a
         // normalized 5x5 Gaussian in `BLUR_FRAGMENT_WGSL`, so a non-zero
@@ -1508,10 +1570,22 @@ impl MilkRuntime {
             blur: blur_refs,
             noise: noise_refs,
         };
-        let warp_bind =
-            milk_bind_group(device, &milk_layout, &uniform_buffer, &sampler, warp_views);
-        let comp_bind =
-            milk_bind_group(device, &milk_layout, &uniform_buffer, &sampler, comp_views);
+        let warp_bind = milk_bind_group(
+            device,
+            &milk_layout,
+            &uniform_buffer,
+            &q_uniform_buffer,
+            &sampler,
+            warp_views,
+        );
+        let comp_bind = milk_bind_group(
+            device,
+            &milk_layout,
+            &uniform_buffer,
+            &q_uniform_buffer,
+            &sampler,
+            comp_views,
+        );
         let output_bind = output_bind_group(
             device,
             &output_layout,
@@ -2406,6 +2480,18 @@ fn uniform_bind_entry(buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     }
 }
 
+/// Uniform-buffer entry at binding 27 for the 128-byte `MilkQUniforms` block.
+fn q_uniform_bind_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry {
+        binding,
+        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer,
+            offset: 0,
+            size: wgpu::BufferSize::new(MILK_Q_STRIDE as u64),
+        }),
+    }
+}
+
 fn texture_bind(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry {
         binding,
@@ -2438,10 +2524,11 @@ fn milk_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     uniform: &wgpu::Buffer,
+    q_uniform: &wgpu::Buffer,
     sampler: &wgpu::Sampler,
     views: MilkSamplerViews<'_>,
 ) -> wgpu::BindGroup {
-    let mut entries = Vec::with_capacity(1 + MILK_RUNTIME_SAMPLER_PAIRS * 2);
+    let mut entries = Vec::with_capacity(2 + MILK_RUNTIME_SAMPLER_PAIRS * 2);
     entries.push(uniform_bind_entry(uniform));
     let textures: [&wgpu::TextureView; MILK_RUNTIME_SAMPLER_PAIRS] = [
         views.main,
@@ -2463,6 +2550,7 @@ fn milk_bind_group(
         entries.push(texture_bind(base, view));
         entries.push(sampler_bind(base + 1, sampler));
     }
+    entries.push(q_uniform_bind_entry(MILK_Q_BINDING, q_uniform));
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("modV MilkDrop shader bind group"),
         layout,
