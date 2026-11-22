@@ -939,6 +939,54 @@ shader_body\n\
         );
     }
 
+    /// Real presets such as `Aderrasi - Agitator.milk` set the legacy
+    /// top-level wave keys. They must be recognised canonical base vals, not
+    /// silently dropped into `diagnostics` as "unknown base val".
+    #[test]
+    fn wave_rgbxy_are_parsed_as_canonical_base_vals() {
+        let src = "\
+[preset00]
+wave_r=0.2
+wave_g=0.4
+wave_b=0.6
+wave_x=0.3
+wave_y=0.7
+";
+        let doc = parse_milk(src, "wave_base_vals").expect("parses");
+        assert!(
+            (doc.base.wave_r - 0.2).abs() < 1e-9,
+            "wave_r must be parsed as a canonical base val, got {}",
+            doc.base.wave_r
+        );
+        assert!(
+            (doc.base.wave_g - 0.4).abs() < 1e-9,
+            "wave_g must be parsed as a canonical base val, got {}",
+            doc.base.wave_g
+        );
+        assert!(
+            (doc.base.wave_b - 0.6).abs() < 1e-9,
+            "wave_b must be parsed as a canonical base val, got {}",
+            doc.base.wave_b
+        );
+        assert!(
+            (doc.base.wave_x - 0.3).abs() < 1e-9,
+            "wave_x must be parsed as a canonical base val, got {}",
+            doc.base.wave_x
+        );
+        assert!(
+            (doc.base.wave_y - 0.7).abs() < 1e-9,
+            "wave_y must be parsed as a canonical base val, got {}",
+            doc.base.wave_y
+        );
+        for key in ["wave_r", "wave_g", "wave_b", "wave_x", "wave_y"] {
+            assert!(
+                !doc.diagnostics.iter().any(|d| d.contains(key)),
+                "{key} must not produce an 'unknown base val' diagnostic, got {:?}",
+                doc.diagnostics
+            );
+        }
+    }
+
     // ---- Real MilkDrop 2 `.milk` format compatibility (RED) -----------------
 
     /// Real v2 presets escape every raw shader line by prefixing it with a

@@ -3459,6 +3459,42 @@ ret = uv;\n\
         f
     }
 
+    /// `begin_frame` must seed the frame-level wave variables from `doc.base`
+    /// *before* the per-frame equations run. The self-referential equation
+    /// `wave_r = wave_r + 0.1;` therefore accumulates from the configured base
+    /// (0.5 -> 0.6), not from the pool's zero default.
+    #[test]
+    fn begin_frame_seeds_wave_vars_from_base() {
+        let mut doc = doc_with("", "wave_r = wave_r + 0.1;", "", "", "");
+        doc.version = 1;
+        doc.base.wave_r = 0.5;
+        doc.base.wave_g = 0.25;
+        doc.base.wave_b = 0.75;
+        doc.base.wave_x = 0.3;
+        doc.base.wave_y = 0.7;
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("seed-wave-base", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 7);
+        let f = frame(0.0, 0.0, 0.0, 1, 0.016);
+
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        for (name, expected) in [
+            ("wave_r", 0.6), // 0.5 base + 0.1 self-referential increment
+            ("wave_g", 0.25),
+            ("wave_b", 0.75),
+            ("wave_x", 0.3),
+            ("wave_y", 0.7),
+        ] {
+            let got = instance.pool.get(name);
+            assert!(
+                (got - expected).abs() < 1e-6,
+                "{name} must be seeded from the base val (expected {expected}), got {got}"
+            );
+        }
+    }
+
     #[test]
     fn builtin_wave_is_generated_when_no_custom_waves_and_wave_a_positive() {
         let cache = MilkFailureCache::new();
@@ -4566,6 +4602,50 @@ mod gpu_tests {
         let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
         let off_pixels = render_pixels_with_frame(&device, &queue, &runtime, off, sine_gpu_frame());
         assert_pixels_near(&off_pixels, [0, 0, 0], 4, "wave_a == 0 control");
+    }
+
+    /// A built-in wave whose only frame equation is a self-reference must keep
+    /// the colour seeded from `doc.base` instead of starting from zero and
+    /// clamping to black. `wave_r = 0.6` over a black comp with identity output
+    /// paints a peak red channel of ~153 (0.6 * 255), not 0.
+    #[test]
+    fn gpu_builtin_wave_uses_wave_base_color() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_builtin_wave_uses_wave_base_color: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let mut doc = doc_with_comp("float3 ret = vec3(0.0);");
+        doc.version = 1;
+        doc.name = "v1-builtin-wave-base-color".to_string();
+        doc.frame_eqs = "wave_r = wave_r + 0.0;".to_string();
+        doc.base.wave_a = 1.0;
+        doc.base.wave_r = 0.6;
+        doc.base.wave_g = 0.0;
+        doc.base.wave_b = 0.0;
+        identity_output(&mut doc);
+        assert!(doc.active_waves().is_empty(), "fixture has no custom waves");
+
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let pixels = render_pixels_with_frame(&device, &queue, &runtime, doc, sine_gpu_frame());
+
+        assert_eq!(
+            pixels.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        let max_red = pixels.chunks_exact(4).map(|p| p[0]).max().unwrap_or(0);
+        assert!(
+            (145..=161).contains(&max_red),
+            "built-in wave red channel must be ~153 (0.6 * 255) from the seeded base, \
+             got peak red {max_red} (first 8 RGBA: {:?})",
+            pixels.as_chunks::<4>().0.iter().take(8).collect::<Vec<_>>()
+        );
     }
 
     /// Custom compiled waves keep priority: with one enabled `wavecode_*`
