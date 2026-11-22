@@ -43,6 +43,57 @@
 //! `tools/vmodv-deb-check.sh`) deliberately stays as it is: host `Depends` is
 //! the correct model for a distro package. Only the AppImage becomes fat.
 //!
+//! ## The application plugin closure (slug `appimage-trim`)
+//!
+//! The first fat AppImage staged the *entire* distro GStreamer plugin set
+//! (259 plugins / 371 shared libraries) even though the app loads only a small
+//! part of it. `tools/vmodv-appimage.sh::collect_plugins()` must therefore
+//! filter `*.so` files down to the application plugin allowlist below, in BOTH
+//! real and `--dry-run` modes, and fail with a readable message if the filter
+//! leaves zero plugins. `build_library_closure()` and `build_package_list()`
+//! keep consuming that filtered `PLUGIN_FILES`, so the library closure and the
+//! audit manifest shrink with it; the rest of the staging pipeline is unchanged.
+//! `libgstlibav.so` stays in the allowlist deliberately: dropping it loses
+//! Debian's ffmpeg dependency chain and with it full codec coverage, so the
+//! compressed image is expected around 107-110 MiB (still above Windows'
+//! 100.6 MiB, which is accepted). No size budget is asserted.
+//!
+//! The allowlist (registry probe in `modv-rust:local`, GStreamer 1.26.2) and
+//! the element facts that justify each entry:
+//!
+//! ```text
+//! libgstcoreelements.so        queue / typefind / fakesink / filesrc
+//! libgstplayback.so            uridecodebin / decodebin / decodebin3
+//! libgstapp.so                 appsink
+//! libgsttypefindfunctions.so   typefind helpers
+//! libgstvideoconvertscale.so   videoconvert / videoscale (merged in 1.26)
+//! libgstvideorate.so           videorate
+//! libgstvideotestsrc.so        videotestsrc
+//! libgstvideo4linux2.so        v4l2src
+//! libgstpipewire.so            pipewiresrc
+//! libgstlibav.so               avdec_* / avdemux_*  (kept for full codecs)
+//! libgstisomp4.so              MP4/M4A demuxer
+//! libgstmatroska.so            MKV/WebM demuxer
+//! libgstavi.so                 AVI demuxer
+//! libgstmpegtsdemux.so         MPEG-TS demuxer
+//! libgstogg.so                 Ogg demuxer
+//! libgstflac.so                FLAC decoder
+//! libgstwavparse.so            WAV demuxer
+//! libgstid3demux.so            ID3 demuxer
+//! libgstaudioparsers.so        raw audio parsers
+//! libgstvideoparsersbad.so     H.264/H.265/etc. video parsers
+//! libgstvorbis.so              Vorbis (avdec_vorbis does not exist)
+//! libgsttheora.so              Theora (avdec_theora does not exist)
+//! libgstopus.so                Opus decoder
+//! libgstopusparse.so           Opus parser
+//! ```
+//!
+//! The checker's old `>= 100` plugin-count floor was replaced by a NAMED set
+//! assertion: every allowlisted name must be present and no name outside the
+//! allowlist may be present. A count alone let heavy, untested plugins (ONNX,
+//! GTK Wayland, Flite, LADSPA, WebRTC, ...) into the bundle without failing the
+//! gate. The plugin count stays in the printed summary.
+//!
 //! ## The `--dry-run` contract the GREEN phase must implement
 //!
 //! `tools/vmodv-appimage.sh` gains a `--dry-run` mode modelled on
@@ -126,8 +177,10 @@
 //! missing behaviour):
 //!
 //! * `usr/bin/modv` and `AppRun` are present and executable;
-//! * at least **100** plugin `*.so` files under `usr/lib/gstreamer-1.0/` (this
-//!   exact floor is the documented contract);
+//! * exactly the named application plugin allowlist under
+//!   `usr/lib/gstreamer-1.0/`: every one of the 24 names is present and no
+//!   plugin outside the allowlist is present (the old `>= 100` count floor is
+//!   gone — see the `appimage-trim` section above); the count is still printed;
 //! * `usr/libexec/gstreamer-1.0/gst-plugin-scanner` is present;
 //! * `usr/lib/` holds `libgstreamer-1.0.so*` plus at least one of
 //!   `libgstbase-1.0.so*`, `libgstvideo-1.0.so*`, `libgstaudio-1.0.so*`,
@@ -279,21 +332,52 @@ const PACKAGES: [(&str, &str); 26] = [
     ("libfontconfig1", "2.15.0-2.3"),
 ];
 
-/// Plugin stubs standing in for the bundled GStreamer plugins: the real file
-/// names the container's `/usr/lib/x86_64-linux-gnu/gstreamer-1.0/` holds for
-/// the elements `crates/modv-media/src/video/pipeline.rs` requires (note that
-/// GStreamer 1.26 merged videoconvert+scale into `libgstvideoconvertscale.so`,
-/// and that `v4l2src` lives in `libgstvideo4linux2.so`, not `libgstv4l2.so`).
-const PLUGINS: [&str; 9] = [
+/// The authoritative application plugin allowlist, established by a registry
+/// probe in `modv-rust:local` (GStreamer 1.26.2). These are exactly the plugins
+/// whose elements `crates/modv-media/src/video/pipeline.rs` loads; see the
+/// `appimage-trim` section of the module doc for the element-to-plugin facts.
+/// `libgstlibav.so` is kept deliberately for full codec coverage.
+const ALLOWED_PLUGINS: [&str; 24] = [
     "libgstcoreelements.so",
+    "libgstplayback.so",
+    "libgstapp.so",
     "libgsttypefindfunctions.so",
     "libgstvideoconvertscale.so",
-    "libgstvideoparsersbad.so",
+    "libgstvideorate.so",
+    "libgstvideotestsrc.so",
     "libgstvideo4linux2.so",
-    "libgstrtsp.so",
-    "libgstmpegtsdemux.so",
     "libgstpipewire.so",
     "libgstlibav.so",
+    "libgstisomp4.so",
+    "libgstmatroska.so",
+    "libgstavi.so",
+    "libgstmpegtsdemux.so",
+    "libgstogg.so",
+    "libgstflac.so",
+    "libgstwavparse.so",
+    "libgstid3demux.so",
+    "libgstaudioparsers.so",
+    "libgstvideoparsersbad.so",
+    "libgstvorbis.so",
+    "libgsttheora.so",
+    "libgstopus.so",
+    "libgstopusparse.so",
+];
+
+/// The fake plugin stubs used by the shared fixture: exactly the allowlist, so
+/// every existing staging test keeps checking plugins the trimmed bundle must
+/// ship (the old 9-name fixture contained `libgstrtsp.so`, which the trim
+/// deliberately drops).
+const PLUGINS: [&str; 24] = ALLOWED_PLUGINS;
+
+/// Heavy distro plugins that are deliberately NOT in the application closure.
+/// Their presence in a `--plugin-root` must not leak into the staged AppDir.
+const PLUGIN_DECOYS: [&str; 5] = [
+    "libgstonnx.so",
+    "libgstgtkwayland.so",
+    "libgstflite.so",
+    "libgstladspa.so",
+    "libgstwebrtc.so",
 ];
 
 /// Userspace runtime libraries standing in for the transitive closure: the real
@@ -1456,12 +1540,16 @@ fn dry_run_never_stages_libc6_owned_runtime_libraries() {
 #[test]
 fn dry_run_leaves_the_host_display_stack_host_side() {
     let toolchain = FakeToolchain::new();
-    let plugin = "libgstwayland-1.0.so";
+    // Over-exclusion guard: an allowlisted plugin that would have resolved the
+    // excluded host stack must still ship. (The old fixture used the Wayland
+    // plugin, but that plugin is now an intentional decoy outside the trim
+    // allowlist; use libgstpipewire.so, which the app's pipelines really need.)
+    let plugin = "libgstpipewire.so";
     fs::write(
         toolchain.plugin_root.join(plugin),
         format!("fake GStreamer plugin {plugin}\n"),
     )
-    .expect("write the fake GStreamer Wayland plugin");
+    .expect("write the fake GStreamer plugin");
 
     let appdir = toolchain.staged();
 
@@ -1492,8 +1580,8 @@ fn dry_run_leaves_the_host_display_stack_host_side() {
     let staged_plugin = appdir.join("usr/lib/gstreamer-1.0").join(plugin);
     assert!(
         staged_plugin.is_file(),
-        "{} is not a file: excluding the host Wayland stack must not drop the GStreamer Wayland \
-         plugin, which resolves libwayland from the user's machine",
+        "{} is not a file: excluding the host Wayland/GLVND libraries must not drop an \
+         allowlisted plugin (libgstpipewire.so) that the app's pipelines need",
         staged_plugin.display()
     );
 }
@@ -1625,11 +1713,6 @@ fn dry_run_aborts_when_patchelf_reports_failure() {
 // The bundle-check gate: tools/vmodv-appimage-check.sh (slug appimage-ci-check).
 // ---------------------------------------------------------------------------
 
-/// The exact plugin `*.so` count floor the checker enforces under
-/// `usr/lib/gstreamer-1.0/`. Documented in the module comment so GREEN
-/// implements exactly this contract.
-const CHECKER_MIN_PLUGINS: usize = 100;
-
 /// The standalone bundle checker the canonical build and both workflows must
 /// run on the fat AppImage / AppDir.
 const CHECKER_SCRIPT: &str = "tools/vmodv-appimage-check.sh";
@@ -1746,8 +1829,10 @@ fn copy_checked_bundle(toolchain: &FakeToolchain, label: &str) -> PathBuf {
 
 /// Stage a bundle the checker must ACCEPT: the normal dry-run AppDir (manifest,
 /// licences, AppRun, payload) with its text stubs replaced by real ELFs carrying
-/// `$ORIGIN`-relative RUNPATHs, and enough plugins to clear the documented
-/// floor of 100.
+/// `$ORIGIN`-relative RUNPATHs, and exactly the 24 allowlisted plugins. The old
+/// fixture padded this with arbitrary `libgstbundledNNN.so` stubs to clear a
+/// `>= 100` count floor; that floor is gone, and padding now makes the bundle
+/// invalid because every non-allowlisted plugin is rejected by the gate.
 fn stage_checked_bundle() -> FakeToolchain {
     let toolchain = FakeToolchain::new();
     let appdir = toolchain.staged();
@@ -1817,13 +1902,11 @@ fn stage_checked_bundle() -> FakeToolchain {
             plugin_count += 1;
         }
     }
-    for index in plugin_count..(CHECKER_MIN_PLUGINS + 5) {
-        let path = plugin_dir.join(format!("libgstbundled{index:03}.so"));
-        fs::copy(&plugin_elf, &path)
-            .unwrap_or_else(|error| panic!("cannot write {}: {error}", path.display()));
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", path.display()));
-    }
+    assert_eq!(
+        plugin_count,
+        ALLOWED_PLUGINS.len(),
+        "stage_checked_bundle must stage exactly the allowlisted plugins, found {plugin_count}"
+    );
 
     let binary = appdir.join("usr/bin/modv");
     fs::copy(&binary_elf, &binary)
@@ -2027,8 +2110,8 @@ fn checker_rejects_malformed_manifest_json() {
 
 /// One absolute (non-`$ORIGIN`) component in a sampled plugin's RUNPATH must fail
 /// the gate. The checker samples the first sorted `*.so` plugin (in this fixture
-/// a `libgstbundled*` one), so replacing that file guarantees the sample sees
-/// the bad RUNPATH.
+/// the first allowlisted name, `libgstapp.so`), so replacing that file
+/// guarantees the sample sees the bad RUNPATH.
 #[test]
 fn checker_rejects_absolute_plugin_runpath() {
     let toolchain = stage_checked_bundle();
@@ -2046,7 +2129,7 @@ fn checker_rejects_absolute_plugin_runpath() {
     let target = plugins
         .into_iter()
         .next()
-        .expect("stage_checked_bundle plants at least 100 plugins");
+        .expect("stage_checked_bundle plants the 24 allowlisted plugins");
     let mixed = compile_runpath_elf(
         &toolchain.holder.path().join("checker-absolute-elf-work"),
         "libabsolute-runpath.so",
@@ -2108,4 +2191,189 @@ fn ci_and_release_workflows_run_the_bundle_check() {
         release.contains("vmodv-appimage-check"),
         "release.yml's publish job does not run the bundle check before publishing the AppImage"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The trim contract (slug appimage-trim): only the application plugin closure
+// is staged, and the checker enforces the NAMED set rather than a bare count.
+// ---------------------------------------------------------------------------
+
+/// The core RED failure: a plugin root containing the 24 allowlisted stubs plus
+/// the real closure's heavy offenders must stage ONLY the allowlist. The
+/// existing staging tests cover the positive half (every allowlisted plugin is
+/// present); this one pins the negative half (no decoy leaks in) and the exact
+/// count of 24.
+#[test]
+fn dry_run_stages_only_the_application_plugin_allowlist() {
+    let toolchain = FakeToolchain::new();
+    for name in PLUGIN_DECOYS {
+        fs::write(
+            toolchain.plugin_root.join(name),
+            format!("fake decoy GStreamer plugin {name}\n"),
+        )
+        .unwrap_or_else(|error| panic!("cannot plant decoy plugin {name}: {error}"));
+    }
+    for name in PLUGINS {
+        assert!(
+            toolchain.plugin_root.join(name).is_file(),
+            "the fixture does not plant allowlisted plugin {name}"
+        );
+    }
+
+    let appdir = toolchain.staged();
+    let plugin_dir = appdir.join("usr/lib/gstreamer-1.0");
+    let mut staged: Vec<String> = fs::read_dir(&plugin_dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", plugin_dir.display()))
+        .map(|entry| entry.expect("read a staged plugin").path())
+        .filter(|path| {
+            path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("so")
+        })
+        .map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .expect("a staged plugin has a UTF-8 name")
+                .to_string()
+        })
+        .collect();
+    staged.sort();
+    let mut expected: Vec<String> = ALLOWED_PLUGINS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    expected.sort();
+
+    assert_eq!(
+        staged,
+        expected,
+        "the staged AppDir must contain exactly the {} application plugin allowlist, nothing \
+         more and nothing less: the fat bundle shipped 259 distro plugins and the trim must \
+         remove every plugin the app never loads",
+        ALLOWED_PLUGINS.len(),
+    );
+    assert_eq!(
+        staged.len(),
+        24,
+        "the trimmed bundle must stage exactly 24 plugins, got {}",
+        staged.len()
+    );
+    for name in PLUGIN_DECOYS {
+        assert!(
+            !plugin_dir.join(name).exists(),
+            "decoy plugin {name} was staged into {}: plugins outside the application allowlist \
+             must never enter the trimmed bundle",
+            plugin_dir.display()
+        );
+    }
+}
+
+/// The gate must fail when a required plugin is missing, NAMING that plugin.
+/// A count floor cannot do this: with 23 plugins it failed without saying which
+/// pipeline element would break. Pin the three most safety-critical entries —
+/// libav (codecs), playback (decodebin) and videotestsrc.
+#[test]
+fn checker_requires_every_allowlisted_plugin() {
+    let toolchain = stage_checked_bundle();
+    for name in [
+        "libgstlibav.so",
+        "libgstplayback.so",
+        "libgstvideotestsrc.so",
+    ] {
+        let appdir = copy_checked_bundle(&toolchain, &format!("missing-{name}"));
+        fs::remove_file(appdir.join("usr/lib/gstreamer-1.0").join(name))
+            .unwrap_or_else(|error| panic!("cannot remove required plugin {name}: {error}"));
+        assert_checker_rejects(
+            &appdir,
+            name,
+            &format!("an AppDir missing the required allowlisted plugin {name}"),
+        );
+    }
+}
+
+/// The gate must also fail the other direction: a plugin added to the bundle
+/// that is not on the allowlist must be named, so a future untested plugin
+/// addition fails until both lists are updated deliberately.
+#[test]
+fn checker_rejects_plugins_outside_the_allowlist() {
+    let toolchain = stage_checked_bundle();
+    let appdir = copy_checked_bundle(&toolchain, "extra-decoy-plugins");
+    let plugin_dir = appdir.join("usr/lib/gstreamer-1.0");
+    let source = plugin_dir.join("libgstcoreelements.so");
+    for name in PLUGIN_DECOYS {
+        let decoy = plugin_dir.join(name);
+        // Copy an allowlisted ELF so the decoy has a valid RUNPATH: the only
+        // defect under test is that this plugin is not allowlisted.
+        fs::copy(&source, &decoy)
+            .unwrap_or_else(|error| panic!("cannot stage decoy {name}: {error}"));
+        fs::set_permissions(&decoy, fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("cannot chmod decoy {name}: {error}"));
+        assert_checker_rejects(
+            &appdir,
+            name,
+            &format!("an AppDir with the non-allowlisted plugin {name}"),
+        );
+        fs::remove_file(&decoy)
+            .unwrap_or_else(|error| panic!("cannot remove decoy {name}: {error}"));
+    }
+}
+
+/// `collect_plugins()` is shared by real and dry-run modes, so the allowlist
+/// filter must live there (not in a dry-run-only branch), and the library
+/// closure / package-list builders must keep consuming the filtered
+/// `PLUGIN_FILES`. Text-level assertion, as elsewhere in this file.
+#[test]
+fn collect_plugins_filters_to_the_allowlist_in_both_modes() {
+    let script = fs::read_to_string(repo_root().join("tools/vmodv-appimage.sh"))
+        .unwrap_or_else(|error| panic!("cannot read tools/vmodv-appimage.sh: {error}"));
+
+    // The authoritative allowlist is encoded in the script, not just in tests.
+    for name in ALLOWED_PLUGINS {
+        assert!(
+            script.contains(name),
+            "tools/vmodv-appimage.sh does not encode the allowlisted plugin {name}: \
+             collect_plugins() cannot filter to the application plugin closure"
+        );
+    }
+
+    // Extract a shell function's body (they all end with a bare `}` line).
+    let function_body = |name: &str| -> String {
+        let start = script
+            .find(&format!("{name}() {{"))
+            .unwrap_or_else(|| panic!("tools/vmodv-appimage.sh has no {name}() function"));
+        let rest = &script[start..];
+        let end = rest
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("{name}() has no closing brace"));
+        rest[..end].to_string()
+    };
+
+    let collect = function_body("collect_plugins");
+    assert!(
+        collect.contains("PLUGIN_FILES"),
+        "collect_plugins() does not build PLUGIN_FILES"
+    );
+    assert!(
+        collect.contains("PLUGIN_FILES=(") || collect.contains("PLUGIN_FILES+=("),
+        "collect_plugins() does not (re)assign PLUGIN_FILES from a filtered set: staging must \
+         consume only the allowlisted plugins"
+    );
+    let collect_lower = collect.to_ascii_lowercase();
+    assert!(
+        collect_lower.contains("allow"),
+        "collect_plugins() does not apply an allowlist: it must filter the distro's *.so files \
+         down to the application plugin closure in both real and --dry-run modes"
+    );
+    assert!(
+        collect_lower.contains("fail") && collect_lower.contains("allow"),
+        "collect_plugins() must fail with a readable message when the allowlist yields zero \
+         plugins"
+    );
+
+    for consumer in ["build_library_closure", "build_package_list"] {
+        let body = function_body(consumer);
+        assert!(
+            body.contains("PLUGIN_FILES"),
+            "{consumer}() no longer consumes the filtered PLUGIN_FILES: the library closure and \
+             the audit manifest must shrink with the trimmed plugin set"
+        );
+    }
 }
