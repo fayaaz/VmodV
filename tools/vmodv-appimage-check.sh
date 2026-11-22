@@ -62,11 +62,54 @@ esac
 [ -f "$APPDIR/AppRun" ] || fail "AppRun is missing: the AppImage has no launcher"
 [ -x "$APPDIR/AppRun" ] || fail "AppRun is not executable: the AppImage cannot launch"
 
-# --- 2. the bundled GStreamer plugin set (the documented floor of 100) ------
+# --- 2. the bundled GStreamer plugin set (the application plugin closure) ---
 PLUGIN_DIR="$APPDIR/usr/lib/gstreamer-1.0"
 [ -d "$PLUGIN_DIR" ] || fail "usr/lib/gstreamer-1.0 plugin directory is missing: camera/file/screen pipelines would be empty"
 PLUGIN_COUNT="$(find "$PLUGIN_DIR" -maxdepth 1 -type f -name '*.so' | wc -l)"
-[ "$PLUGIN_COUNT" -ge 100 ] || fail "only $PLUGIN_COUNT GStreamer plugin *.so files under usr/lib/gstreamer-1.0 (need at least 100): the bundle is thin"
+
+# The authoritative application plugin allowlist (registry probe in
+# modv-rust:local, GStreamer 1.26.2). Every one must ship, and nothing outside
+# it may ship: a bare count let heavy, untested distro plugins through. Keep the
+# list in step with tools/vmodv-appimage.sh::ALLOWED_PLUGINS.
+ALLOWED_PLUGINS=(
+    libgstcoreelements.so
+    libgstplayback.so
+    libgstapp.so
+    libgsttypefindfunctions.so
+    libgstvideoconvertscale.so
+    libgstvideorate.so
+    libgstvideotestsrc.so
+    libgstvideo4linux2.so
+    libgstpipewire.so
+    libgstlibav.so
+    libgstisomp4.so
+    libgstmatroska.so
+    libgstavi.so
+    libgstmpegtsdemux.so
+    libgstogg.so
+    libgstflac.so
+    libgstwavparse.so
+    libgstid3demux.so
+    libgstaudioparsers.so
+    libgstvideoparsersbad.so
+    libgstvorbis.so
+    libgsttheora.so
+    libgstopus.so
+    libgstopusparse.so
+)
+for name in "${ALLOWED_PLUGINS[@]}"; do
+    [ -f "$PLUGIN_DIR/$name" ] || \
+        fail "required allowlisted GStreamer plugin $name is missing from usr/lib/gstreamer-1.0: the application pipelines would break"
+done
+declare -A allowed_plugins=()
+for name in "${ALLOWED_PLUGINS[@]}"; do
+    allowed_plugins["$name"]=1
+done
+while IFS= read -r plugin; do
+    name="${plugin##*/}"
+    [ -n "${allowed_plugins[$name]:-}" ] || \
+        fail "GStreamer plugin $name under usr/lib/gstreamer-1.0 is outside the application plugin allowlist: it must not be bundled"
+done < <(find "$PLUGIN_DIR" -maxdepth 1 -type f -name '*.so')
 
 # --- 3. the flattened plugin scanner ----------------------------------------
 SCANNER="$APPDIR/usr/libexec/gstreamer-1.0/gst-plugin-scanner"

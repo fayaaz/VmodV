@@ -260,12 +260,57 @@ discover_scanner() {
     return 1
 }
 
-# Flatten every plugin under $PLUGIN_ROOT into PLUGIN_FILES / PLUGIN_NAMES.
+# The application plugin closure: exactly the plugins whose elements
+# crates/modv-media/src/video/pipeline.rs loads (registry probe in
+# modv-rust:local, GStreamer 1.26.2). libgstlibav.so stays deliberately for full
+# codec coverage. Both real and --dry-run modes stage only these names.
+ALLOWED_PLUGINS=(
+    libgstcoreelements.so
+    libgstplayback.so
+    libgstapp.so
+    libgsttypefindfunctions.so
+    libgstvideoconvertscale.so
+    libgstvideorate.so
+    libgstvideotestsrc.so
+    libgstvideo4linux2.so
+    libgstpipewire.so
+    libgstlibav.so
+    libgstisomp4.so
+    libgstmatroska.so
+    libgstavi.so
+    libgstmpegtsdemux.so
+    libgstogg.so
+    libgstflac.so
+    libgstwavparse.so
+    libgstid3demux.so
+    libgstaudioparsers.so
+    libgstvideoparsersbad.so
+    libgstvorbis.so
+    libgsttheora.so
+    libgstopus.so
+    libgstopusparse.so
+)
+
+# Flatten only the allowlisted plugins under $PLUGIN_ROOT into PLUGIN_FILES /
+# PLUGIN_NAMES. The distro installs far more plugins than the app ever loads;
+# staging all of them bloats the image and pulls unused codec stacks into the
+# library closure. The same filtered list feeds the closure walk and the
+# package/manifest builders, so both shrink with the plugin set.
 collect_plugins() {
-    mapfile -d '' -t PLUGIN_FILES < <(find "$PLUGIN_ROOT" -type f -name '*.so' -print0)
+    local file name
+    local -A allowed=()
+    for name in "${ALLOWED_PLUGINS[@]}"; do
+        allowed["$name"]=1
+    done
+    PLUGIN_FILES=()
+    while IFS= read -r -d '' file; do
+        name="${file##*/}"
+        [ -n "${allowed[$name]:-}" ] || continue
+        PLUGIN_FILES+=("$file")
+    done < <(find "$PLUGIN_ROOT" -type f -name '*.so' -print0)
     [ "${#PLUGIN_FILES[@]}" -gt 0 ] || \
-        fail "no GStreamer plugin *.so files found under $PLUGIN_ROOT"
-    local file
+        fail "allowlist yielded zero GStreamer plugin *.so files under $PLUGIN_ROOT: the bundle would have no usable pipelines"
+    PLUGIN_NAMES=()
     for file in "${PLUGIN_FILES[@]}"; do
         PLUGIN_NAMES["${file##*/}"]=1
     done
