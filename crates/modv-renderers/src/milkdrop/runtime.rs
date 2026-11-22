@@ -1814,6 +1814,58 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
     }
 }
 
+/// Synthesise the MilkDrop v1 built-in wave for presets that have no custom
+/// `wavecode_*` sections but still request a waveform through `wave_a > 0`.
+///
+/// The overlay reuses the exact same surface as a compiled custom wave — a
+/// [`WaveOverlay`] with a colour/additive frame pool and one [`WavePoint`] per
+/// audio sample — so the existing GPU wave pass draws it without any changes.
+/// Point positions are derived purely from the audio samples and the preset's
+/// base values, which makes identical inputs produce byte-identical overlays.
+fn evaluate_builtin_wave(
+    instance: &MilkInstance,
+    frame: &MilkFrameInfo,
+    samples: usize,
+) -> WaveOverlay {
+    let base = &instance.compiled.doc.base;
+    let mut pool = VarPool::new();
+
+    // `wave_r/g/b` are per-frame EEL variables written by the preset's frame
+    // equations (and captured in the instance pool by `begin_frame`). Alpha
+    // comes from the `wave_a` base value and is clamped into [0, 1] before it
+    // reaches the GPU colour pass; `additive` selects the blend state.
+    pool.set("r", instance.pool.get("wave_r"));
+    pool.set("g", instance.pool.get("wave_g"));
+    pool.set("b", instance.pool.get("wave_b"));
+    pool.set("a", (base.wave_a as f32).clamp(0.0, 1.0));
+    pool.set("additive", if base.additivewave { 1.0 } else { 0.0 });
+
+    let wave_y = instance.pool.get("wave_y");
+    let wave_scale = base.wave_scale as f32;
+    let mut points = Vec::with_capacity(samples);
+    for index in 0..samples {
+        let t = if samples > 1 {
+            index as f32 / (samples - 1) as f32
+        } else {
+            0.5
+        };
+        let audio_value = frame.audio.wave.get(index).copied().unwrap_or(0.0);
+        points.push(WavePoint {
+            x: t,
+            y: wave_y + audio_value * wave_scale,
+            sample: t,
+            value1: audio_value,
+            value2: 0.0,
+        });
+    }
+
+    WaveOverlay {
+        pool,
+        points,
+        enabled: true,
+    }
+}
+
 /// Evaluate every enabled wave/shape overlay for `frame`.
 ///
 /// Contract:
@@ -1877,6 +1929,15 @@ pub fn evaluate_overlays(
             Ok(overlay) => result.waves.push(overlay),
             Err(message) => eprintln!("MilkDrop: skipping wave {index}: {message}"),
         }
+    }
+    // A v1 preset can request the classic built-in waveform purely through
+    // base values, with no compiled `wavecode_*` section. Synthesise it only
+    // when no custom wave program exists, so an enabled custom wave keeps
+    // priority and the two are never drawn on top of each other.
+    if wave_count == 0 && instance.compiled.doc.base.wave_a > 0.0 {
+        result
+            .waves
+            .push(evaluate_builtin_wave(instance, frame, samples));
     }
     for index in 0..shape_count {
         match evaluate_one_shape(
