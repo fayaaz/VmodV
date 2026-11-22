@@ -5304,4 +5304,189 @@ mod gpu_tests {
             "two renders of the same GetMain vec3 shader must be byte-identical"
         );
     }
+
+    // --- Layer 5c: render() must evaluate overlays itself (RED) -------------
+
+    /// Render a preset with the same ordinary flow the compositor uses in
+    /// production: `begin_frame → evaluate_mesh → render`, with NO explicit
+    /// `evaluate_overlays()` call. `explicit_evaluate` toggles whether the
+    /// caller additionally evaluates overlays first; `render()` itself must
+    /// behave identically either way once the wiring fix lands.
+    fn render_pixels_overlay_wiring(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        runtime: &MilkRuntime,
+        doc: MilkDocument,
+        frame: MilkFrameInfo,
+        explicit_evaluate: bool,
+    ) -> Vec<u8> {
+        let name = doc.name.clone();
+        let compiled = compile_preset(&name, &doc, &runtime.failures).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 7);
+        begin_frame(&mut instance, &frame).expect("begin_frame");
+        let mesh = evaluate_mesh(&mut instance, &frame).expect("evaluate_mesh");
+
+        let previous = test_texture(device, WIDTH, HEIGHT, "milkdrop overlay-wiring previous");
+        clear_to(device, queue, &previous, [0.0, 0.0, 0.0, 1.0]);
+        let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+        let output = test_texture(device, WIDTH, HEIGHT, "milkdrop overlay-wiring output");
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut targets = MilkGpuTargets::new(device, WIDTH, HEIGHT);
+
+        if explicit_evaluate {
+            let _ = evaluate_overlays(&mut instance, &frame).expect("evaluate_overlays");
+        }
+        // Deliberately no evaluate_overlays() on the false path: render() is
+        // the only remaining opportunity for overlays to reach the framebuffer.
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &output_view,
+            )
+            .expect("render");
+        read_texture(device, queue, &output).expect("read back")
+    }
+
+    /// One enabled custom wave whose frame equations paint solid green, over a
+    /// black comp with identity output.
+    fn custom_green_wave_gpu_doc() -> MilkDocument {
+        let mut doc = doc_with_comp("float3 ret = vec3(0.0);");
+        doc.name = "custom-green-wave-overlay-wiring".to_string();
+        identity_output(&mut doc);
+        doc.waves[0].enabled = true;
+        doc.waves[0].frame_eqs = "r = 0; g = 1; b = 0; a = 1;".to_string();
+        doc.waves[0].point_eqs = "y = value1;".to_string();
+        doc
+    }
+
+    /// A v1 preset's built-in wave must reach the framebuffer through a plain
+    /// `render()` call: no explicit `evaluate_overlays()` from the caller. The
+    /// output must contain red-dominant wave pixels and be deterministic.
+    #[test]
+    fn gpu_render_evaluates_builtin_wave_without_explicit_call() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_render_evaluates_builtin_wave_without_explicit_call: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let render_once = || {
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            render_pixels_overlay_wiring(
+                &device,
+                &queue,
+                &runtime,
+                builtin_wave_gpu_doc(),
+                sine_gpu_frame(),
+                false,
+            )
+        };
+
+        let first = render_once();
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        assert!(
+            red_dominant_count(&first) > 0,
+            "render() alone must evaluate and draw the built-in red wave without an explicit evaluate_overlays() call (got {} red-dominant pixels; first 8 RGBA: {:?})",
+            red_dominant_count(&first),
+            first.as_chunks::<4>().0.iter().take(8).collect::<Vec<_>>()
+        );
+        let second = render_once();
+        assert_eq!(
+            first, second,
+            "two renders of the same built-in wave via render() alone must be byte-identical"
+        );
+    }
+
+    /// A custom wave section must likewise reach the framebuffer through a
+    /// plain `render()` call with no explicit `evaluate_overlays()`.
+    #[test]
+    fn gpu_render_evaluates_custom_wave_without_explicit_call() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_render_evaluates_custom_wave_without_explicit_call: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let pixels = render_pixels_overlay_wiring(
+            &device,
+            &queue,
+            &runtime,
+            custom_green_wave_gpu_doc(),
+            sine_gpu_frame(),
+            false,
+        );
+        assert_eq!(
+            pixels.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        assert!(
+            green_dominant_count(&pixels) > 0,
+            "render() alone must evaluate and draw the custom green wave without an explicit evaluate_overlays() call (got {} green-dominant pixels; first 8 RGBA: {:?})",
+            green_dominant_count(&pixels),
+            pixels.as_chunks::<4>().0.iter().take(8).collect::<Vec<_>>()
+        );
+    }
+
+    /// Evaluating overlays explicitly before `render()` must be harmless: the
+    /// resulting framebuffer must be byte-identical to letting `render()` do
+    /// the evaluation itself (no missing or doubled overlay geometry).
+    #[test]
+    fn gpu_explicit_evaluate_then_render_is_not_double_drawn() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_explicit_evaluate_then_render_is_not_double_drawn: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let with_explicit = render_pixels_overlay_wiring(
+            &device,
+            &queue,
+            &runtime,
+            builtin_wave_gpu_doc(),
+            sine_gpu_frame(),
+            true,
+        );
+        let without_explicit = render_pixels_overlay_wiring(
+            &device,
+            &queue,
+            &runtime,
+            builtin_wave_gpu_doc(),
+            sine_gpu_frame(),
+            false,
+        );
+
+        // Sanity: the explicitly evaluated path really does draw the wave, so
+        // the equality below is about idempotence rather than two flat frames.
+        assert!(
+            red_dominant_count(&with_explicit) > 0,
+            "the explicitly evaluated control must draw the built-in red wave"
+        );
+        assert_eq!(
+            with_explicit, without_explicit,
+            "explicit evaluate_overlays() + render() must be byte-identical to render() alone (no double-draw)"
+        );
+    }
 }
