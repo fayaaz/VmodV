@@ -222,6 +222,12 @@ fn q_uniform_block_glsl() -> String {
 /// `sampler2D(texture, sampler)` constructor (see [`sampler_bindings_glsl`]), so
 /// the function-like sampling macros work unchanged. All of these are valid for
 /// naga's preprocessor (no `##` token pasting — `pp-rs` does not support it).
+///
+/// The `GetMain`/`GetPixel`/`GetBlur1..3` colour samplers append `.rgb` so they
+/// yield a `vec3`: real v2 presets assign them straight into `vec3` colour
+/// locals, and GLSL/WGSL has no implicit `vec4` → `vec3` conversion. Chaining an
+/// extra `.rgb` (as older preset bodies do) stays legal — swizzling a `vec3`
+/// with `.rgb` simply yields the same `vec3`.
 const HLSL_MACROS: &str = "\
 #define tex2D(s, uv) texture(s, uv)
 #define tex3D(s, uv) texture(s, uv)
