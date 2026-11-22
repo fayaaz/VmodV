@@ -1266,4 +1266,58 @@ float3 ret = vec3(p, 0.0);\n";
             "a prelude-helper body with bare `ret` must translate, got {compiled:?}"
         );
     }
+
+    // --- Get* colour-sampler macros return vec3 (RED) ----------------------
+
+    /// Real v2 presets (M0Rf30 - Bioluminescent Abyss / Nebula Forge) assign
+    /// the `Get*` colour-sampler macros directly to a `vec3`:
+    /// `vec3 b1 = GetBlur1(uvs);`. The macros currently expand to
+    /// `texture(...)` (a vec4), which naga rejects with `InvalidStoreTypes`
+    /// because GLSL/WGSL has no implicit vec4 -> vec3 conversion. Each of the
+    /// five colour-sampler macros must expand to `texture(...).rgb` so direct
+    /// assignment works.
+    #[test]
+    fn get_sampler_macros_return_vec3_for_direct_assignment() {
+        let body = "\
+vec3 m = GetMain(uv_orig);\n\
+vec3 b1 = GetBlur1(uv_orig);\n\
+vec3 b2 = GetBlur2(uv_orig);\n\
+vec3 b3 = GetBlur3(uv_orig);\n\
+vec3 ret = m + b1 + b2 + b3;\n";
+
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "assigning a Get* colour-sampler macro directly to vec3 must translate (real v2 preset pattern), got {compiled:?}"
+        );
+
+        let wrapped = wrap_milk_shader("", body, MilkShaderStage::Comp);
+        for expected_macro in [
+            "#define GetMain(uv) texture(sampler_main, uv).rgb",
+            "#define GetPixel(uv) texture(sampler_fw_main, uv).rgb",
+            "#define GetBlur1(uv) texture(sampler_blur1, uv).rgb",
+            "#define GetBlur2(uv) texture(sampler_blur2, uv).rgb",
+            "#define GetBlur3(uv) texture(sampler_blur3, uv).rgb",
+        ] {
+            assert!(
+                wrapped.contains(expected_macro),
+                "wrapped GLSL colour-sampler macro must return vec3 via `.rgb`, missing `{expected_macro}`, got {wrapped:?}"
+            );
+        }
+    }
+
+    /// Guards against double-swizzle breakage: our existing fixtures chain
+    /// `.rgb` onto `GetMain`/`GetBlur1`. Swizzling a vec3 with `.rgb` is legal,
+    /// so those usages must keep translating once the macros return vec3.
+    #[test]
+    fn existing_swizzle_usage_still_translates() {
+        let body = "float3 ret = GetMain(uv).rgb + GetBlur1(uv).rgb;\n";
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp)
+            .unwrap_or_else(|error| panic!("swizzled Get* usage must still translate: {error}"));
+        assert!(
+            compiled.wgsl.contains("textureSample"),
+            "swizzled Get* macros must become a real textureSample in WGSL, got {:?}",
+            compiled.wgsl
+        );
+    }
 }

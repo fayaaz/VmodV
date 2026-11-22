@@ -4838,4 +4838,74 @@ mod gpu_tests {
             "two renders with q4 = 0.75 must be byte-identical"
         );
     }
+
+    /// A real v2 comp body assigning `GetMain` directly to a `vec3` must
+    /// compile, render a non-black 160x90 output from a non-black previous
+    /// frame, and be deterministic. This is the GPU counterpart of the
+    /// `vec3 b1 = GetBlur1(uvs);` pattern that currently fails WGSL validation
+    /// with `InvalidStoreTypes`. Skips without an adapter.
+    #[test]
+    fn gpu_get_sampler_direct_vec3_assignment_renders() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_get_sampler_direct_vec3_assignment_renders: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let render_once = || -> Vec<u8> {
+            let mut doc = doc_with_comp("vec3 c = GetMain(uv_orig); float3 ret = c;");
+            doc.name = "getmain-vec3-comp".to_string();
+            identity_output(&mut doc);
+            // decay < 1 makes the warp pass resample `previous` into
+            // `sampler_main`, which the comp's `GetMain` reads.
+            doc.base.decay = 0.5;
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                previous,
+                _previous_view,
+                output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc);
+            // A non-black previous frame so the directly-assigned vec3 is
+            // non-black too.
+            clear_to(&device, &queue, &previous, [0.25, 0.5, 0.75, 1.0]);
+            let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("a comp assigning GetMain to vec3 must compile and render");
+            read_texture(&device, &queue, &output).expect("read output back")
+        };
+
+        let first = render_once();
+        let second = render_once();
+
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        assert!(
+            first.iter().any(|&channel| channel != 0),
+            "the GetMain vec3 output must not be entirely black"
+        );
+        assert_eq!(
+            first, second,
+            "two renders of the same GetMain vec3 shader must be byte-identical"
+        );
+    }
 }
