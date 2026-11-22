@@ -548,14 +548,14 @@ impl SectionAcc {
     }
 }
 
-/// If `key` is `prefix_N`, return its numeric index.
+/// Return the numeric index of a numbered `prefix_N` key, or `None` when the
+/// key does not have that exact shape.
 ///
-/// A bare key equal to `prefix` is a base val (e.g. `warp=0.01`), not a
-/// numbered shader line, so it is ignored here and left to base-val parsing.
+/// The trailing `_N` suffix is required: a bare key equal to `prefix` leaves
+/// nothing after the separator, so the chain below returns `None` and the
+/// caller falls through to base-val parsing (e.g. `warp=0.01`). This is what
+/// keeps a bare warp/comp scalar out of the assembled shader accumulators.
 fn numbered_index(key: &str, prefix: &str) -> Option<usize> {
-    if key == prefix {
-        return None;
-    }
     key.strip_prefix(prefix)?
         .strip_prefix('_')?
         .parse::<usize>()
@@ -573,11 +573,15 @@ fn push_numbered(key: &str, value: &str, sets: &mut [(&str, &mut EqLines)]) -> b
     false
 }
 
-/// Convert a 1-based section number into a 0-based slot index.
+/// Convert a 1-based `wavecode_*` / `shapecode_*` section number into a 0-based
+/// slot index, returning `None` for `0` or an out-of-range value.
+///
+/// MilkDrop numbers sections from 1, hence the `i - 1`. The range check runs
+/// before the subtraction, and [`bool::then`] evaluates its closure lazily, so
+/// a malformed `*_0_*` key can never underflow `usize`.
 fn section_index(num: &str) -> Option<usize> {
     let i = num.parse::<usize>().ok()?;
-    // `then` evaluates `i - 1` lazily, so an out-of-range `0` never underflows.
-    (i > 0 && i <= SECTION_COUNT).then(|| i - 1)
+    (1..=SECTION_COUNT).contains(&i).then(|| i - 1)
 }
 
 /// Parse `wavecode_<i>_<prop>` / `shapecode_<i>_<prop>`; `i` is 1-based.
