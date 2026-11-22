@@ -3160,6 +3160,73 @@ mod gpu_tests {
         queue.submit(Some(encoder.finish()));
     }
 
+    /// A black RGBA8 texture carrying one opaque white rectangular patch at its
+    /// centre. Fed in as the `previous` frame so a blur pass has a localized
+    /// energy source whose spilled neighbours can be measured after read-back.
+    fn patch_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        label: &str,
+    ) -> wgpu::Texture {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let padded = (width as usize * 4).div_ceil(align) * align;
+        let mut bytes = vec![0u8; padded * height as usize];
+        let cx = width / 2;
+        let cy = height / 2;
+        for row in 0..height as usize {
+            for col in 0..width as usize {
+                bytes[row * padded + col * 4 + 3] = 255;
+            }
+        }
+        for row in cy.saturating_sub(2)..=(cy + 2).min(height - 1) {
+            for col in cx.saturating_sub(3)..=(cx + 3).min(width - 1) {
+                let offset = row as usize * padded + col as usize * 4;
+                bytes[offset] = 255;
+                bytes[offset + 1] = 255;
+                bytes[offset + 2] = 255;
+                bytes[offset + 3] = 255;
+            }
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        texture
+    }
+
     /// Every pixel's RGB channels must land within `tolerance` of `expected`.
     fn assert_pixels_near(pixels: &[u8], expected: [u8; 3], tolerance: u8, context: &str) {
         let (chunks, _) = pixels.as_chunks::<4>();
@@ -3810,6 +3877,265 @@ mod gpu_tests {
         assert_eq!(
             first, second,
             "two renders of the same noise comp must be byte-identical"
+        );
+    }
+
+    // --- MilkDrop 2 output fidelity (RED) ----------------------------------
+
+    /// A real blur level must move energy outside the source footprint, not just
+    /// copy the previous frame into `GetBlur1`. The fixture asks for a blur by
+    /// setting `b1n`/`b2n`/`b3n` and having the comp sample `GetBlur1`, seeds a
+    /// single white patch in `previous`, then reads blur target 0 back directly.
+    #[test]
+    fn gpu_blur_spreads_energy_from_bright_patch() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_blur_spreads_energy_from_bright_patch: no GPU adapter");
+                return;
+            }
+        };
+
+        let make_doc = || {
+            let mut doc = doc_with_comp("float3 ret = GetBlur1(uv_orig).rgb;");
+            doc.name = "blur-spread".to_string();
+            identity_output(&mut doc);
+            // Non-zero blur minima request real blur levels from the runtime.
+            doc.base.b1n = 0.5;
+            doc.base.b2n = 0.5;
+            doc.base.b3n = 0.5;
+            doc
+        };
+
+        let render_blur = || -> Vec<u8> {
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                _previous,
+                _previous_view,
+                _output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, make_doc());
+            let previous = patch_texture(&device, &queue, WIDTH, HEIGHT, "milkdrop blur patch");
+            let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("blur render");
+            let blur = targets.blur_texture(0).expect("blur1 target exists");
+            read_texture(&device, &queue, blur).expect("read blur1 target back")
+        };
+
+        let first = render_blur();
+        let second = render_blur();
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 blur target must be read back"
+        );
+        assert_eq!(
+            first, second,
+            "two identical blur renders must be byte-identical"
+        );
+
+        let cx = WIDTH as usize / 2;
+        let cy = HEIGHT as usize / 2;
+        let at = |pixels: &[u8], x: usize, y: usize| -> [u8; 3] {
+            let offset = (y * WIDTH as usize + x) * 4;
+            [pixels[offset], pixels[offset + 1], pixels[offset + 2]]
+        };
+
+        // Sanity: the source patch centre is still bright.
+        let centre = at(&first, cx, cy);
+        assert!(
+            centre[0] > 128 && centre[1] > 128 && centre[2] > 128,
+            "the seed patch centre must survive the blur, got {centre:?}"
+        );
+        // The patch spans columns cx-3..=cx+3; a texel immediately outside it is
+        // black for a plain copy but must receive energy from a real blur.
+        let outside_x = cx + 4;
+        let outside = at(&first, outside_x, cy);
+        assert!(
+            outside[0] > 0 || outside[1] > 0 || outside[2] > 0,
+            "blur1 must spread energy outside the seed patch: pixel ({outside_x}, {cy}) is {outside:?} \
+             (a copy-only blur target leaves it black)"
+        );
+    }
+
+    /// MilkDrop 2's classic composite filters are nonlinear, not fixed-strength
+    /// multiplies (milkdropfs.cpp): brighten = 1-(1-x)^2, darken = x^2 and
+    /// solarize = 2*x*(1-x). For a solid 0.25 comp these are 0.4375, 0.0625 and
+    /// 0.375 -> 112 / 16 / 96 in RGBA8, whereas a fixed 0.2 multiplier yields
+    /// 77 / 51 / 64. Each flag must move the pixels and land on the faithful
+    /// value; all flags off stays at 0.25 (64).
+    #[test]
+    fn gpu_post_processing_flags_use_faithful_filters() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_post_processing_flags_use_faithful_filters: no GPU adapter"
+                );
+                return;
+            }
+        };
+
+        let render_flag = |name: &str, set: &dyn Fn(&mut MilkDocument)| -> Vec<u8> {
+            let mut doc = doc_with_comp("float3 ret = float3(0.25, 0.25, 0.25);");
+            doc.name = name.to_string();
+            identity_output(&mut doc);
+            set(&mut doc);
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            render_pixels(&device, &queue, &runtime, doc)
+        };
+
+        let baseline = render_flag("post-baseline", &|_| {});
+        let brighten = render_flag("post-brighten", &|doc| doc.base.brighten = true);
+        let darken = render_flag("post-darken", &|doc| doc.base.darken = true);
+        let solarize = render_flag("post-solarize", &|doc| doc.base.solarize = true);
+
+        assert_pixels_near(&baseline, [64, 64, 64], 8, "all post flags off");
+        // Check the faithful values first (concise failures), then that each
+        // flag moves the pixels relative to the all-off baseline.
+        assert_pixels_near(&brighten, [112, 112, 112], 8, "brighten (1-(1-x)^2)");
+        assert_pixels_near(&darken, [16, 16, 16], 8, "darken (x^2)");
+        assert_pixels_near(&solarize, [96, 96, 96], 8, "solarize (2*x*(1-x))");
+        assert_ne!(brighten, baseline, "brighten must change the output pixels");
+        assert_ne!(darken, baseline, "darken must change the output pixels");
+        assert_ne!(solarize, baseline, "solarize must change the output pixels");
+    }
+
+    /// Guard the post-ops that are already exact: `red_blue` swaps R/B and
+    /// `gammaadj > 1` must not darken any channel. (invert is covered by
+    /// `gpu_blur_targets_allocated_and_invert_output_changes_pixels`.)
+    #[test]
+    fn gpu_red_blue_and_gamma_post_processing_remain_exact() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_red_blue_and_gamma_post_processing_remain_exact: no GPU adapter"
+                );
+                return;
+            }
+        };
+
+        let render_flag = |name: &str, set: &dyn Fn(&mut MilkDocument)| -> Vec<u8> {
+            let mut doc = doc_with_comp("float3 ret = float3(0.2, 0.4, 0.6);");
+            doc.name = name.to_string();
+            identity_output(&mut doc);
+            set(&mut doc);
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            render_pixels(&device, &queue, &runtime, doc)
+        };
+
+        let baseline = render_flag("post-exact-base", &|_| {});
+        assert_pixels_near(&baseline, [51, 102, 153], 8, "post baseline comp");
+        let red_blue = render_flag("post-exact-redblue", &|doc| doc.base.red_blue = true);
+        assert_pixels_near(&red_blue, [153, 102, 51], 8, "red_blue swaps R and B");
+        let gamma = render_flag("post-exact-gamma", &|doc| doc.base.gammaadj = 2.0);
+        assert_ne!(gamma, baseline, "gammaadj must change the output pixels");
+        let (base_pixels, _) = baseline.as_chunks::<4>();
+        let (gamma_pixels, _) = gamma.as_chunks::<4>();
+        for (index, (before, after)) in base_pixels.iter().zip(gamma_pixels).enumerate() {
+            for channel in 0..3 {
+                assert!(
+                    after[channel] >= before[channel],
+                    "gammaadj > 1 must not darken channel {channel} at pixel {index}: \
+                     {} -> {}",
+                    before[channel],
+                    after[channel]
+                );
+            }
+        }
+    }
+
+    /// With `decay < 1` a non-zero previous frame must influence the output even
+    /// when the comp shader is fixed; `decay == 1` must ignore it. Rendering the
+    /// same setup twice must be byte-identical. The comp samples `sampler_main`
+    /// and adds a constant so the signal is observable whether the faithful
+    /// implementation applies feedback in the warp or in the output pass.
+    #[test]
+    fn gpu_decay_feedback_depends_on_previous_frame() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_decay_feedback_depends_on_previous_frame: no GPU adapter");
+                return;
+            }
+        };
+
+        let render = |name: &str, decay: f64, previous: [f64; 4]| -> Vec<u8> {
+            let mut doc =
+                doc_with_comp("float3 ret = tex2D(sampler_main, uv_orig).rgb * 0.5 + 0.25;");
+            doc.name = name.to_string();
+            identity_output(&mut doc);
+            doc.base.decay = decay;
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                previous_texture,
+                _previous_view,
+                output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc);
+            clear_to(&device, &queue, &previous_texture, previous);
+            let previous_view =
+                previous_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("decay render");
+            read_texture(&device, &queue, &output).expect("read output back")
+        };
+
+        let feedback = render("decay-on", 0.5, [0.9, 0.9, 0.9, 1.0]);
+        let no_feedback = render("decay-off", 1.0, [0.9, 0.9, 0.9, 1.0]);
+        let dark_previous = render("decay-dark", 0.5, [0.0, 0.0, 0.0, 1.0]);
+        let no_feedback_dark = render("decay-off-dark", 1.0, [0.0, 0.0, 0.0, 1.0]);
+
+        let first_rgb = |pixels: &[u8]| -> [u8; 3] { [pixels[0], pixels[1], pixels[2]] };
+        assert_ne!(
+            first_rgb(&feedback),
+            first_rgb(&no_feedback),
+            "decay < 1 must feed the previous frame into the output: first pixel {:?} vs {:?}",
+            first_rgb(&feedback),
+            first_rgb(&no_feedback)
+        );
+        assert_ne!(
+            feedback, no_feedback,
+            "every pixel: decay < 1 must feed the previous frame into the output"
+        );
+        assert_ne!(
+            feedback, dark_previous,
+            "with decay < 1 a bright previous frame must change the output"
+        );
+        assert_eq!(
+            no_feedback, no_feedback_dark,
+            "decay == 1 must make the output independent of the previous frame"
+        );
+        assert_eq!(
+            feedback,
+            render("decay-on-repeat", 0.5, [0.9, 0.9, 0.9, 1.0]),
+            "feedback renders must be byte-identical for the same inputs"
         );
     }
 }
