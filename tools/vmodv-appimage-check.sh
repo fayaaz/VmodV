@@ -96,6 +96,8 @@ ALLOWED_PLUGINS=(
     libgsttheora.so
     libgstopus.so
     libgstopusparse.so
+    libgstaom.so
+    libgstflv.so
 )
 for name in "${ALLOWED_PLUGINS[@]}"; do
     [ -f "$PLUGIN_DIR/$name" ] || \

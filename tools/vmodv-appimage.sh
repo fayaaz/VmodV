@@ -289,6 +289,8 @@ ALLOWED_PLUGINS=(
     libgsttheora.so
     libgstopus.so
     libgstopusparse.so
+    libgstaom.so
+    libgstflv.so
 )
 
 # Flatten only the allowlisted plugins under $PLUGIN_ROOT into PLUGIN_FILES /

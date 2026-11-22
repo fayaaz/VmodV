@@ -43,6 +43,18 @@
 //! `tools/vmodv-deb-check.sh`) deliberately stays as it is: host `Depends` is
 //! the correct model for a distro package. Only the AppImage becomes fat.
 //!
+//! ## Version-contract restoration (slug `trixie-av1-backport`)
+//!
+//! The build base is Debian trixie again. Ubuntu 26.04 raised the AppImage's
+//! host glibc floor to 2.43, which excludes Debian 13, Ubuntu 24.04, Fedora 43
+//! and RHEL 10; trixie's floor is 2.41. The package/version and soname fixtures
+//! below are restored verbatim to the trixie contract (GStreamer 1.26.2,
+//! FFmpeg 7.1.5, `libavcodec.so.61`, `libavutil.so.59`, `libavformat.so.61`)
+//! — a version-contract restoration, not a weakening: every assertion still
+//! pins the exact distro package version or soname. Both AV1/FLV plugins stay
+//! on the allowlist: `libgstaom.so` (av1dec) and `libgstflv.so` (flvdemux) ship
+//! in trixie's already-installed `gstreamer1.0-plugins-bad` / `-good` packages.
+//!
 //! ## The application plugin closure (slug `appimage-trim`)
 //!
 //! The first fat AppImage staged the *entire* distro GStreamer plugin set
@@ -86,6 +98,9 @@
 //! libgsttheora.so              Theora (avdec_theora does not exist)
 //! libgstopus.so                Opus decoder
 //! libgstopusparse.so           Opus parser
+//! libgstaom.so                 av1dec (AV1-in-MKV; GStreamer removed avdec_av1,
+//!                               and dav1ddec is not registered on either distro)
+//! libgstflv.so                 flvdemux (FLV / Sorenson Spark)
 //! ```
 //!
 //! The checker's old `>= 100` plugin-count floor was replaced by a NAMED set
@@ -178,7 +193,7 @@
 //!
 //! * `usr/bin/modv` and `AppRun` are present and executable;
 //! * exactly the named application plugin allowlist under
-//!   `usr/lib/gstreamer-1.0/`: every one of the 24 names is present and no
+//!   `usr/lib/gstreamer-1.0/`: every one of the 26 names is present and no
 //!   plugin outside the allowlist is present (the old `>= 100` count floor is
 //!   gone — see the `appimage-trim` section above); the count is still printed;
 //! * `usr/libexec/gstreamer-1.0/gst-plugin-scanner` is present;
@@ -334,10 +349,13 @@ const PACKAGES: [(&str, &str); 26] = [
 
 /// The authoritative application plugin allowlist, established by a registry
 /// probe in `modv-rust:local` (GStreamer 1.26.2). These are exactly the plugins
-/// whose elements `crates/modv-media/src/video/pipeline.rs` loads; see the
-/// `appimage-trim` section of the module doc for the element-to-plugin facts.
-/// `libgstlibav.so` is kept deliberately for full codec coverage.
-const ALLOWED_PLUGINS: [&str; 24] = [
+/// whose elements `crates/modv-media/src/video/pipeline.rs` loads;
+/// see the `appimage-trim` section of the module doc for the element-to-plugin
+/// facts. `libgstlibav.so` is kept deliberately for full codec coverage.
+/// `libgstaom.so` provides `av1dec` and `libgstflv.so` provides `flvdemux`
+/// (AV1-in-MKV and Sorenson Spark FLV playback); `avdec_av1` and `dav1ddec`
+/// are NOT registered on either distro, so they are deliberately not listed.
+const ALLOWED_PLUGINS: [&str; 26] = [
     "libgstcoreelements.so",
     "libgstplayback.so",
     "libgstapp.so",
@@ -362,13 +380,17 @@ const ALLOWED_PLUGINS: [&str; 24] = [
     "libgsttheora.so",
     "libgstopus.so",
     "libgstopusparse.so",
+    // av1dec (AV1-in-MKV) — not avdec_av1/dav1ddec, which GStreamer removed.
+    "libgstaom.so",
+    // flvdemux (FLV / Sorenson Spark).
+    "libgstflv.so",
 ];
 
 /// The fake plugin stubs used by the shared fixture: exactly the allowlist, so
 /// every existing staging test keeps checking plugins the trimmed bundle must
 /// ship (the old 9-name fixture contained `libgstrtsp.so`, which the trim
 /// deliberately drops).
-const PLUGINS: [&str; 24] = ALLOWED_PLUGINS;
+const PLUGINS: [&str; 26] = ALLOWED_PLUGINS;
 
 /// Heavy distro plugins that are deliberately NOT in the application closure.
 /// Their presence in a `--plugin-root` must not leak into the staged AppDir.
@@ -971,6 +993,43 @@ fn appimage_script_advertises_the_fat_bundle_dry_run_contract() {
             "tools/vmodv-appimage.sh does not accept {flag}: the fat AppImage (bundling the \
              container's GStreamer runtime) is not implemented. See the module doc comment of \
              crates/modv-app/tests/appimage_bundle.rs for the exact flag contract."
+        );
+    }
+}
+
+/// The build image must be Debian trixie, not Ubuntu 26.04: Ubuntu raised the
+/// AppImage's host glibc floor to 2.43, excluding Debian 13, Ubuntu 24.04,
+/// Fedora 43 and RHEL 10; trixie's floor is 2.41. PipeWire must keep its legacy
+/// `libpipewire-0.3-0` apt name. Every other apt package name in the `base` /
+/// `rust` stages is unchanged.
+#[test]
+fn dockerfile_builds_from_debian_trixie_with_legacy_pipewire_package() {
+    let dockerfile = repo_root().join("Dockerfile");
+    assert!(
+        dockerfile.is_file(),
+        "{} is missing: there is no build image to revert to Debian trixie",
+        dockerfile.display()
+    );
+    let text = fs::read_to_string(&dockerfile)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", dockerfile.display()));
+
+    for required in [
+        "ARG DEBIAN_RELEASE=trixie",
+        "FROM debian:${DEBIAN_RELEASE}-slim AS base",
+        "libpipewire-0.3-0 \\",
+    ] {
+        assert!(
+            text.contains(required),
+            "Dockerfile does not contain {required:?}: the build image must be Debian trixie \
+             with the legacy PipeWire runtime package name.\n{text}"
+        );
+    }
+
+    for forbidden in ["ubuntu:", "UBUNTU_RELEASE", "libpipewire-0.3-0t64"] {
+        assert!(
+            !text.contains(forbidden),
+            "Dockerfile still contains {forbidden:?}: the Ubuntu 26.04 base and the t64 \
+             PipeWire package name must be gone.\n{text}"
         );
     }
 }
@@ -1829,7 +1888,7 @@ fn copy_checked_bundle(toolchain: &FakeToolchain, label: &str) -> PathBuf {
 
 /// Stage a bundle the checker must ACCEPT: the normal dry-run AppDir (manifest,
 /// licences, AppRun, payload) with its text stubs replaced by real ELFs carrying
-/// `$ORIGIN`-relative RUNPATHs, and exactly the 24 allowlisted plugins. The old
+/// `$ORIGIN`-relative RUNPATHs, and exactly the 26 allowlisted plugins. The old
 /// fixture padded this with arbitrary `libgstbundledNNN.so` stubs to clear a
 /// `>= 100` count floor; that floor is gone, and padding now makes the bundle
 /// invalid because every non-allowlisted plugin is rejected by the gate.
@@ -2129,7 +2188,7 @@ fn checker_rejects_absolute_plugin_runpath() {
     let target = plugins
         .into_iter()
         .next()
-        .expect("stage_checked_bundle plants the 24 allowlisted plugins");
+        .expect("stage_checked_bundle plants the 26 allowlisted plugins");
     let mixed = compile_runpath_elf(
         &toolchain.holder.path().join("checker-absolute-elf-work"),
         "libabsolute-runpath.so",
@@ -2198,11 +2257,11 @@ fn ci_and_release_workflows_run_the_bundle_check() {
 // is staged, and the checker enforces the NAMED set rather than a bare count.
 // ---------------------------------------------------------------------------
 
-/// The core RED failure: a plugin root containing the 24 allowlisted stubs plus
+/// The core RED failure: a plugin root containing the 26 allowlisted stubs plus
 /// the real closure's heavy offenders must stage ONLY the allowlist. The
 /// existing staging tests cover the positive half (every allowlisted plugin is
 /// present); this one pins the negative half (no decoy leaks in) and the exact
-/// count of 24.
+/// count of 26.
 #[test]
 fn dry_run_stages_only_the_application_plugin_allowlist() {
     let toolchain = FakeToolchain::new();
@@ -2252,8 +2311,8 @@ fn dry_run_stages_only_the_application_plugin_allowlist() {
     );
     assert_eq!(
         staged.len(),
-        24,
-        "the trimmed bundle must stage exactly 24 plugins, got {}",
+        26,
+        "the trimmed bundle must stage exactly 26 plugins, got {}",
         staged.len()
     );
     for name in PLUGIN_DECOYS {
@@ -2403,7 +2462,7 @@ fn declared_allowlist(script: &Path) -> Vec<String> {
 }
 
 /// The producer (`tools/vmodv-appimage.sh`) and the gate
-/// (`tools/vmodv-appimage-check.sh`) each declare the 24-plugin allowlist as an
+/// (`tools/vmodv-appimage-check.sh`) each declare the 26-plugin allowlist as an
 /// independent literal array. They must stay identical: making the checker
 /// source the producer would turn a gate into a mirror (a producer bug would
 /// then pass the check), so the lists stay separate and this test catches drift
@@ -2460,4 +2519,43 @@ fn collect_plugins_fails_readably_when_no_allowlisted_plugin_matches() {
         stderr.contains("allowlist") && stderr.contains("zero"),
         "the zero-match failure must be readable and name the allowlist, got:\n{stderr}"
     );
+}
+
+/// AV1 and FLV playback need two extra GStreamer plugins on the Debian trixie
+/// build: `av1dec` is provided by `libgstaom.so` (GStreamer removed `avdec_av1`
+/// and `dav1ddec` is not registered on either distro), while `flvdemux` is
+/// provided by `libgstflv.so`. Both producer and checker allowlists must name
+/// them, and a dry run must stage both into the AppDir.
+#[test]
+fn av1dec_via_libgstaom_and_flvdemux_via_libgstflv_are_allowed_and_staged() {
+    let root = repo_root();
+    for (element, plugin) in [("av1dec", "libgstaom.so"), ("flvdemux", "libgstflv.so")] {
+        for script in [
+            root.join("tools/vmodv-appimage.sh"),
+            root.join("tools/vmodv-appimage-check.sh"),
+        ] {
+            let text = fs::read_to_string(&script)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", script.display()));
+            assert!(
+                text.contains(plugin),
+                "{} does not allowlist {plugin}, the GStreamer plugin that provides {element}: \
+                 AV1/FLV playback would be missing from the AppImage",
+                script.display(),
+            );
+        }
+    }
+
+    let toolchain = FakeToolchain::new();
+    let appdir = toolchain.staged();
+    let plugin_dir = appdir.join("usr/lib/gstreamer-1.0");
+    for (element, plugin) in [("av1dec", "libgstaom.so"), ("flvdemux", "libgstflv.so")] {
+        let staged = plugin_dir.join(plugin);
+        assert!(
+            staged.is_file(),
+            "{} was not staged into {}: {plugin} provides {element} and must be part of the \
+             trimmed GStreamer plugin set",
+            staged.display(),
+            appdir.display(),
+        );
+    }
 }
