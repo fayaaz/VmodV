@@ -18,6 +18,23 @@
 //!   shared by every preset through a cloneable [`GlobalState`].
 //! * [`Rng`] is injected via [`VarPool::with_rng`] / [`VarPool::with_seed`]
 //!   so evaluation is reproducible in tests.
+//!
+//! # Control-flow grammar
+//!
+//! Equation text accepts `if (cond) <body> [else <body>]`, `while (cond) <body>`
+//! and `loop(n) <body>`. A `<body>` is normally a braced `{ ... }`
+//! block, but real MilkDrop 2 presets very often omit the braces around a
+//! single statement, so any one statement (including another `if`) is also a
+//! valid brace-less body. `;` and newlines are EEL separators: the parser
+//! skips them before a body and around `else`, which is why a brace-less
+//! body's own trailing `;` may be left for the caller to consume.
+//!
+//! `else` binds to the nearest preceding unmatched `if` (C-style dangling
+//! else): the recursive parse of a then-body gives any nested `if` first
+//! refusal on the `else`, so `else if` chains and nested brace-less `if`s
+//! behave as in C. `while` and `loop` share a hard iteration cap so a
+//! malformed preset returns a typed [`EelError`] instead of hanging a frame;
+//! choosing a braced or brace-less body does not change that bound.
 
 #![forbid(unsafe_code)]
 // The fixed RED test suite spells out ranges as `x >= lo && x < hi` (see
@@ -858,9 +875,22 @@ impl Parser {
         Ok(stmts)
     }
 
-    /// Parse a control-flow body: either a braced `{ ... }` block or, as real
+    /// Consume a `keyword ( expr )` control-flow header. Callers must have
+    /// already confirmed that the next two tokens are the keyword and `(`.
+    fn parse_header_expr(&mut self) -> Result<Expr, EelError> {
+        self.pos += 2; // consume the keyword and `(`
+        let expr = self.parse_expr()?;
+        self.expect(&Tok::RParen)?;
+        Ok(expr)
+    }
+
+    /// Parse a control-flow body: a braced `{ ... }` block or, as real
     /// MilkDrop 2 presets commonly write it, a single brace-less statement.
-    /// Both forms yield a `Vec<Stmt>` so the evaluator can reuse `exec_block`.
+    ///
+    /// Leading separators are skipped, so the body may start on a later line;
+    /// a brace-less body's own trailing `;` is intentionally left unconsumed
+    /// for the caller. Both forms yield a `Vec<Stmt>` so the evaluator can
+    /// reuse `exec_block` unchanged.
     fn parse_body(&mut self) -> Result<Vec<Stmt>, EelError> {
         self.skip_seps();
         if matches!(self.peek(), Tok::LBrace) {
@@ -872,13 +902,12 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, EelError> {
         if self.is_ident("if") && matches!(self.peek2(), Tok::LParen) {
-            self.pos += 2; // consume `if` `(`
-            let cond = self.parse_expr()?;
-            self.expect(&Tok::RParen)?;
+            let cond = self.parse_header_expr()?;
             let then_body = self.parse_body()?;
-            // A brace-less body leaves its trailing `;` unconsumed, so skip
-            // separators before deciding whether an `else` follows. This also
-            // binds a dangling `else` to the nearest (innermost) `if`.
+            // Skip a brace-less body's trailing `;` (and any newlines) before
+            // looking for `else`. Parsing the body recursively has already
+            // given any nested `if` first refusal on the `else` (C-style
+            // dangling-else binding).
             self.skip_seps();
             let else_body = if self.is_ident("else") {
                 self.pos += 1;
@@ -893,16 +922,12 @@ impl Parser {
             });
         }
         if self.is_ident("while") && matches!(self.peek2(), Tok::LParen) {
-            self.pos += 2;
-            let cond = self.parse_expr()?;
-            self.expect(&Tok::RParen)?;
+            let cond = self.parse_header_expr()?;
             let body = self.parse_body()?;
             return Ok(Stmt::While { cond, body });
         }
         if self.is_ident("loop") && matches!(self.peek2(), Tok::LParen) {
-            self.pos += 2;
-            let count = self.parse_expr()?;
-            self.expect(&Tok::RParen)?;
+            let count = self.parse_header_expr()?;
             let body = self.parse_body()?;
             return Ok(Stmt::Loop { count, body });
         }
