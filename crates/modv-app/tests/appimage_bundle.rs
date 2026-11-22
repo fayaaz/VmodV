@@ -2377,3 +2377,87 @@ fn collect_plugins_filters_to_the_allowlist_in_both_modes() {
         );
     }
 }
+
+/// Read the literal `ALLOWED_PLUGINS=( ... )` array out of a script. Neither
+/// script sources the other — the producer stages from its own list and the
+/// checker gates against its own — so this parser is the only place the two
+/// independent declarations are compared.
+fn declared_allowlist(script: &Path) -> Vec<String> {
+    let text = fs::read_to_string(script)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", script.display()));
+    let start = text
+        .find("ALLOWED_PLUGINS=(")
+        .unwrap_or_else(|| panic!("{} has no ALLOWED_PLUGINS array", script.display()));
+    let body = &text[start..];
+    let end = body.find("\n)").unwrap_or_else(|| {
+        panic!(
+            "{} ALLOWED_PLUGINS array has no closing )",
+            script.display()
+        )
+    });
+    body[..end]
+        .split_whitespace()
+        .filter(|token| token.ends_with(".so"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The producer (`tools/vmodv-appimage.sh`) and the gate
+/// (`tools/vmodv-appimage-check.sh`) each declare the 24-plugin allowlist as an
+/// independent literal array. They must stay identical: making the checker
+/// source the producer would turn a gate into a mirror (a producer bug would
+/// then pass the check), so the lists stay separate and this test catches drift
+/// when someone renames/adds/removes an entry in only one of them.
+#[test]
+fn producer_and_checker_allowlists_stay_identical() {
+    let root = repo_root();
+    let producer = declared_allowlist(&root.join("tools/vmodv-appimage.sh"));
+    let checker = declared_allowlist(&root.join("tools/vmodv-appimage-check.sh"));
+
+    assert_eq!(
+        producer.len(),
+        ALLOWED_PLUGINS.len(),
+        "the producer allowlist must have exactly {} plugins, got {producer:?}",
+        ALLOWED_PLUGINS.len()
+    );
+    assert_eq!(
+        checker.len(),
+        ALLOWED_PLUGINS.len(),
+        "the checker allowlist must have exactly {} plugins, got {checker:?}",
+        ALLOWED_PLUGINS.len()
+    );
+    assert_eq!(
+        producer, checker,
+        "the producer and checker allowlists have drifted apart: the bundle would stage one \
+         set of plugins but the gate would require another"
+    );
+}
+
+/// If a distro renames or splits an allowlisted plugin (e.g. GStreamer 1.26's
+/// merged `libgstvideoconvertscale.so` splits back into two), `collect_plugins()`
+/// must fail with a readable message instead of staging a silently broken
+/// bundle. A plugin root with only decoys exercises the zero-match path.
+#[test]
+fn collect_plugins_fails_readably_when_no_allowlisted_plugin_matches() {
+    let toolchain = FakeToolchain::new();
+    let decoy_root = toolchain.holder.path().join("decoy-plugin-root");
+    fs::create_dir_all(&decoy_root).expect("create a decoy plugin root");
+    for name in PLUGIN_DECOYS {
+        fs::write(decoy_root.join(name), format!("decoy {name}\n"))
+            .unwrap_or_else(|error| panic!("cannot plant decoy {name}: {error}"));
+    }
+
+    let output = toolchain.stage_with(|command| {
+        command.arg("--plugin-root").arg(&decoy_root);
+    });
+    assert!(
+        !output.status.success(),
+        "tools/vmodv-appimage.sh --dry-run must fail when --plugin-root contains no allowlisted \
+         plugin (staging an empty plugin set would give the app no usable pipelines)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("allowlist") && stderr.contains("zero"),
+        "the zero-match failure must be readable and name the allowlist, got:\n{stderr}"
+    );
+}
