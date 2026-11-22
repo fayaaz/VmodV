@@ -3309,6 +3309,44 @@ ret = uv;\n\
             );
         }
     }
+
+    /// Real v2 presets keep the per-frame `q1..q32` values in the EEL `VarPool`.
+    /// They must be serialized into a dedicated 128-byte GPU payload (32 f32s)
+    /// so the translated shader's q uniforms can be uploaded each frame. This
+    /// block is separate from the 256-byte `MilkUniforms` buffer so none of the
+    /// existing byte offsets or the sampler binding layout change.
+    #[test]
+    fn q_values_from_pool_are_serialized_to_gpu_bytes() {
+        let doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("q-uniform-bytes", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 7);
+        let f = frame(0.5, 0.25, 1.0, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        // Set AFTER begin_frame so the q-baseline restore cannot overwrite them.
+        instance.pool.set("q4", 3.5);
+        instance.pool.set("q1", 1.25);
+
+        let bytes = MilkQUniforms::from_instance(&instance).to_bytes();
+        assert_eq!(
+            bytes.len(),
+            32 * 4,
+            "the q uniform block must hold exactly 32 f32 values (128 bytes)"
+        );
+
+        // Slot i holds q(i+1): q1 is the first f32, q4 is the fourth.
+        let read = |index: usize| {
+            f32::from_ne_bytes([
+                bytes[index * 4],
+                bytes[index * 4 + 1],
+                bytes[index * 4 + 2],
+                bytes[index * 4 + 3],
+            ])
+        };
+        approx!(read(0), 1.25, "q1 is serialized at the first f32 slot");
+        approx!(read(3), 3.5, "q4 is serialized at the fourth f32 slot");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4587,6 +4625,68 @@ mod gpu_tests {
         assert_eq!(
             first, second,
             "two renders of the same v2 contract shader must be byte-identical"
+        );
+    }
+
+    /// Real v2 comp shaders read EEL `q` variables directly
+    /// (`float3 ret = vec3(q4, 0.0, 0.0);`). The runtime must translate the
+    /// shader AND upload the instance's current q value each frame so the
+    /// sampled colour reflects the pool value.
+    #[test]
+    fn gpu_shader_using_q_variables_renders_correct_value() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_shader_using_q_variables_renders_correct_value: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let render_once = || -> Vec<u8> {
+            let mut doc = doc_with_comp("float3 ret = vec3(q4, 0.0, 0.0);");
+            doc.name = "q-uniform-comp".to_string();
+            identity_output(&mut doc);
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                _previous,
+                previous_view,
+                output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc);
+            // The instance's live pool value must reach the shader this frame.
+            instance.pool.set("q4", 0.75);
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("a comp shader reading q4 must compile and render");
+            read_texture(&device, &queue, &output).expect("read output back")
+        };
+
+        let first = render_once();
+        let second = render_once();
+
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        // q4 = 0.75 -> 0.75 * 255 = 191.25 -> 191 in Rgba8Unorm.
+        assert_pixels_near(&first, [191, 0, 0], 8, "comp reading q4");
+        assert_eq!(
+            first, second,
+            "two renders with q4 = 0.75 must be byte-identical"
         );
     }
 }

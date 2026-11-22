@@ -1086,4 +1086,50 @@ float3 ret = vec3(p, 0.0);\n";
             "a fixture declaring its own local `uv` must still translate, got {local:?}"
         );
     }
+
+    /// Real v2 presets read the EEL per-frame variables `q1..q32` directly in
+    /// warp/comp shader bodies (`float t = q4;`, `vec3(q1, q4, q32)`, ...).
+    /// Those are not declared by the current wrapper, so naga rejects the body
+    /// with "Unknown variable". The wrapper must declare them as uniforms
+    /// (e.g. in a `MilkQUniforms` block) without shifting the existing offsets.
+    #[test]
+    fn q_variables_are_declared_in_wrapper_uniforms() {
+        let body = "float3 ret = vec3(q1, q4, q32);\n";
+
+        let wrapped = wrap_milk_shader("", body, MilkShaderStage::Comp);
+        for name in ["q1", "q4", "q32"] {
+            assert!(
+                wrapped.contains(&format!("float {name};")),
+                "wrapped GLSL must declare `{name}` as a uniform so a v2 body can read it, got {wrapped:?}"
+            );
+        }
+
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "a v2 body reading q1/q4/q32 must translate, got {compiled:?}"
+        );
+    }
+
+    /// The q uniforms must live at a binding distinct from the main
+    /// `@group(0) @binding(0)` `MilkUniforms` block (bindings 1..26 are the
+    /// 13 texture/sampler pairs). The next free binding is 27, so the generated
+    /// WGSL must carry a `@binding(27)` for the q block alongside `q1`.
+    #[test]
+    fn q_variable_wgsl_binding_is_distinct_from_main_uniform() {
+        let body = "float3 ret = vec3(q1, 0.0, 0.0);\n";
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp)
+            .unwrap_or_else(|error| panic!("a body reading q1 must translate: {error}"));
+
+        assert!(
+            compiled.wgsl.contains("q1"),
+            "WGSL must expose the q1 uniform, got {:?}",
+            compiled.wgsl
+        );
+        assert!(
+            compiled.wgsl.contains("@binding(27)") || compiled.wgsl.contains("@binding(27u)"),
+            "the q uniform block must use the next free binding 27, distinct from binding 0, got {:?}",
+            compiled.wgsl
+        );
+    }
 }
