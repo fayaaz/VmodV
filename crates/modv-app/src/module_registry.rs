@@ -104,6 +104,16 @@
 //!   registered so the UI can show it. The compositor resolves assigned image
 //!   props through `texture_sources` and keeps the group canvas for unassigned
 //!   inputs (the JS default at `renderers/isf/index.js:84-91`).
+//!
+//! ## MilkDrop presets
+//!
+//! User MilkDrop directories supplied through
+//! [`ModuleRegistry::build_with_milkdrop`] are scanned recursively with the
+//! same bounded walker as user ISF folders. Both the legacy `.mlk` and the
+//! conventional `.milk` extension are accepted case-insensitively; the module
+//! name is the file stem, and a duplicate stem keeps the first sorted path.
+//! Presets are parsed header-only so startup stays fast (see
+//! [`collect_milkdrop_definitions`]).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1528,6 +1538,11 @@ const USER_ISF_MAX_DEPTH: usize = 8;
 /// Upper bound on directory entries visited under one user ISF root.
 const USER_ISF_MAX_ENTRIES: usize = 4096;
 
+/// Shader extensions (case-insensitive) collected by the ISF scanner.
+const ISF_EXTENSIONS: &[&str] = &["fs"];
+/// Preset extensions (case-insensitive) collected by the MilkDrop scanner.
+const MILKDROP_EXTENSIONS: &[&str] = &["mlk", "milk"];
+
 /// Limits for one module-directory walk, shared by the ISF and MilkDrop
 /// scanners.
 #[derive(Clone, Copy, Debug)]
@@ -1577,7 +1592,8 @@ struct ScannedIsf {
 /// the ISF (`.fs`) and MilkDrop (`.mlk`/`.milk`) scanners so both honour
 /// identical hidden/temporary/symlink skips and the depth/entry caps carried by
 /// [`IsfScanLimits`] (the user caps reuse [`USER_ISF_MAX_DEPTH`] and
-/// [`USER_ISF_MAX_ENTRIES`]).
+/// [`USER_ISF_MAX_ENTRIES`]). Every extension is matched in the same pass, so
+/// those caps count each directory entry once rather than once per extension.
 struct ModuleFileScan {
     limits: IsfScanLimits,
     extensions: &'static [&'static str],
@@ -1590,8 +1606,14 @@ struct ModuleFileScan {
 
 impl ModuleFileScan {
     /// The ISF scanner: case-insensitive `.fs`, labelled "ISF" in warnings.
-    fn collect(root: &Path, limits: IsfScanLimits) -> Self {
-        Self::collect_with_extensions(root, limits, &["fs"], "ISF")
+    fn collect_isf(root: &Path, limits: IsfScanLimits) -> Self {
+        Self::collect_with_extensions(root, limits, ISF_EXTENSIONS, "ISF")
+    }
+
+    /// The MilkDrop scanner: case-insensitive `.mlk`/`.milk`, labelled
+    /// "MilkDrop" in warnings.
+    fn collect_milkdrop(root: &Path, limits: IsfScanLimits) -> Self {
+        Self::collect_with_extensions(root, limits, MILKDROP_EXTENSIONS, "MilkDrop")
     }
 
     /// A generic scanner for the given extensions and warning label.
@@ -1707,7 +1729,7 @@ impl ModuleFileScan {
 
 /// The `*.fs` files under `dir`, sorted by path and bounded by `limits`.
 fn scan_isf_paths(dir: &Path, limits: IsfScanLimits) -> Vec<PathBuf> {
-    ModuleFileScan::collect(dir, limits).files
+    ModuleFileScan::collect_isf(dir, limits).files
 }
 
 /// Scan the corpus and every extra user directory, then resolve duplicate
@@ -1845,15 +1867,15 @@ fn scan_isf_directory(dir: &Path, limits: IsfScanLimits) -> Vec<ScannedIsf> {
 
 /// The `.mlk`/`.milk` files under `dir`, sorted by path and bounded by `limits`.
 fn scan_milk_paths(dir: &Path, limits: IsfScanLimits) -> Vec<PathBuf> {
-    ModuleFileScan::collect_with_extensions(dir, limits, &["mlk", "milk"], "MilkDrop").files
+    ModuleFileScan::collect_milkdrop(dir, limits).files
 }
 
 /// Collect MilkDrop presets from user directories.
 ///
 /// Roots are sorted and deduplicated before walking. Each root is scanned with
 /// the same bounded walker as user ISF folders (see [`ModuleFileScan`]):
-/// case-insensitive `.mlk`/`.milk` matches, sorted paths, hidden/temporary entries and
-/// symlinks skipped, recursion capped by [`USER_ISF_MAX_DEPTH`] and
+/// case-insensitive `.mlk`/`.milk` matches, sorted paths, hidden/temporary
+/// entries and symlinks skipped, recursion capped by [`USER_ISF_MAX_DEPTH`] and
 /// [`USER_ISF_MAX_ENTRIES`]. The first sorted path wins a duplicate file stem;
 /// later duplicates are logged and skipped. Each preset is parsed header-only
 /// with [`parse_milk`]; an unreadable or unparsable file is likewise logged and
