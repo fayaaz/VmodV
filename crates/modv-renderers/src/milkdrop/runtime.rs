@@ -245,9 +245,13 @@ fn vs_main(@builtin(vertex_index) index: u32) -> MilkVertexOut {
 /// Warp-pass vertex stage driven by the uploaded mesh grid.
 ///
 /// `@location(0)` is the grid's fixed NDC position, `@location(1)` the CPU
-/// computed warped sampling UV. The latter is forwarded as the `@location(0)`
+/// computed warped sampling UV; these match the two attributes declared by
+/// [`mesh_vertex_layout`]. The latter is forwarded as the `@location(0)`
 /// varying read by the translated warp fragment shader, so `sampler_main` is
 /// sampled at each vertex's warped UV instead of the full-screen `uv_orig`.
+/// Grid cells are assembled into two triangles each by
+/// [`mesh_triangle_indices`], so this stage runs once per mesh vertex rather
+/// than once per output pixel.
 const MESH_VERTEX_WGSL: &str = r#"
 struct MeshVertexOut {
     @builtin(position) position: vec4<f32>,
@@ -365,6 +369,21 @@ enum MilkLayout {
     Pass,
     /// The output pass: uniform + one texture + one sampler.
     Output,
+}
+
+/// Vertex-stage configuration shared by the cached render pipelines.
+///
+/// Both variants use the same bind-group layout and `Rgba8Unorm` fragment
+/// target; they differ only in vertex module, primitive topology and whether a
+/// vertex buffer is bound. Keeping the choice in one place lets [`MilkGpuCache`]
+/// share the cache/failure bookkeeping and pipeline construction between the
+/// full-screen and mesh warp passes.
+#[derive(Clone, Copy)]
+enum MilkVertexMode {
+    /// Full-screen triangle generated from `vertex_index`; no vertex buffers.
+    Fullscreen,
+    /// Indexed mesh whose vertices carry a grid position plus a warped UV.
+    Mesh,
 }
 
 /// The four deterministic noise fields, uploaded once and kept alive by their
@@ -573,24 +592,30 @@ impl MilkGpuCache {
         }
     }
 
-    /// Fetch a cached pipeline or build it once. Invalid WGSL is reported as a
-    /// typed `Draw` error and remembered so it is not compiled again.
+    /// Build (and cache) a render pipeline for one translated WGSL pass.
     ///
-    /// Validation uses naga's `parse_str` rather than a wgpu error scope. The
-    /// shader source is either produced by our own translator (syntactically
-    /// valid by construction) or supplied at runtime by a caller; a parse
-    /// failure catches the latter (e.g. an empty or truncated `main`) and keeps
-    /// the failure path synchronous. Semantic faults that only wgpu can see are
-    /// reported through the device's normal validation-error handling; adding
-    /// an error scope here would require blocking on `pop_error_scope()` inside
-    /// the cache mutex for no test-visible benefit in this cycle.
-    fn pipeline(
+    /// [`Self::pipeline`] and [`Self::mesh_pipeline`] both funnel through here:
+    /// cache/failure bookkeeping, bind-group layout, fragment module and target
+    /// format are shared, while `vertex_mode` selects the vertex stage,
+    /// primitive topology and vertex-buffer binding.
+    ///
+    /// Invalid WGSL is reported as a typed `Draw` error and remembered so it is
+    /// not compiled again. Validation uses naga's `parse_str` rather than a wgpu
+    /// error scope. The shader source is either produced by our own translator
+    /// (syntactically valid by construction) or supplied at runtime by a caller;
+    /// a parse failure catches the latter (e.g. an empty or truncated `main`)
+    /// and keeps the failure path synchronous. Semantic faults that only wgpu
+    /// can see are reported through the device's normal validation-error
+    /// handling; adding an error scope here would require blocking on
+    /// `pop_error_scope()` inside the cache mutex for no test-visible benefit.
+    fn pipeline_impl(
         &mut self,
         device: &wgpu::Device,
         key: String,
         source: &str,
         entry: &str,
         kind: MilkLayout,
+        vertex_mode: MilkVertexMode,
     ) -> Result<wgpu::RenderPipeline, MilkRuntimeError> {
         if let Some(pipeline) = self.pipelines.get(&key) {
             return Ok(pipeline.clone());
@@ -614,10 +639,14 @@ impl MilkGpuCache {
             MilkLayout::Output => self.output_layout.clone(),
         }
         .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop bind group layout missing".into()))?;
-        let vertex = self
-            .vertex
-            .clone()
-            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop vertex module missing".into()))?;
+        let (vertex, vertex_error) = match vertex_mode {
+            MilkVertexMode::Fullscreen => (self.vertex.clone(), "MilkDrop vertex module missing"),
+            MilkVertexMode::Mesh => (
+                self.mesh_vertex.clone(),
+                "MilkDrop mesh vertex module missing",
+            ),
+        };
+        let vertex = vertex.ok_or_else(|| MilkRuntimeError::Draw(vertex_error.into()))?;
         let fragment = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("modV MilkDrop fragment"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -627,6 +656,18 @@ impl MilkGpuCache {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
+        let mesh_buffers = [Some(mesh_vertex_layout())];
+        let empty_buffers: &[Option<wgpu::VertexBufferLayout<'static>>] = &[];
+        let (buffers, primitive) = match vertex_mode {
+            MilkVertexMode::Fullscreen => (empty_buffers, wgpu::PrimitiveState::default()),
+            MilkVertexMode::Mesh => (
+                &mesh_buffers[..],
+                wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+            ),
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("modV MilkDrop pipeline"),
             layout: Some(&pipeline_layout),
@@ -634,9 +675,9 @@ impl MilkGpuCache {
                 module: &vertex,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
+                buffers,
             },
-            primitive: wgpu::PrimitiveState::default(),
+            primitive,
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
@@ -656,12 +697,24 @@ impl MilkGpuCache {
         Ok(pipeline)
     }
 
+    /// Fetch (or build once) a full-screen-triangle pipeline.
+    fn pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        key: String,
+        source: &str,
+        entry: &str,
+        kind: MilkLayout,
+    ) -> Result<wgpu::RenderPipeline, MilkRuntimeError> {
+        self.pipeline_impl(device, key, source, entry, kind, MilkVertexMode::Fullscreen)
+    }
+
     /// Fetch (or build once) the warp pipeline driven by the uploaded mesh.
     ///
-    /// This is the [`Self::pipeline`] recipe with the mesh vertex module (grid
-    /// position + warped UV) and a triangle-list primitive instead of the
-    /// full-screen triangle. The fragment stage is still the translated warp
-    /// WGSL, so it samples `sampler_main` at the forwarded warped UV varying.
+    /// Same bind layout and translated warp fragment as [`Self::pipeline`], but
+    /// the mesh vertex module supplies grid position + warped UV through an
+    /// indexed triangle list, so `sampler_main` is sampled at each vertex's
+    /// warped UV (see [`MESH_VERTEX_WGSL`] and [`mesh_vertex_layout`]).
     fn mesh_pipeline(
         &mut self,
         device: &wgpu::Device,
@@ -669,67 +722,14 @@ impl MilkGpuCache {
         source: &str,
         entry: &str,
     ) -> Result<wgpu::RenderPipeline, MilkRuntimeError> {
-        if let Some(pipeline) = self.pipelines.get(&key) {
-            return Ok(pipeline.clone());
-        }
-        if self.failed.contains(&key) {
-            return Err(MilkRuntimeError::Draw(format!(
-                "cached invalid MilkDrop WGSL for {entry}"
-            )));
-        }
-        if naga::front::wgsl::parse_str(source).is_err() {
-            self.failed.insert(key);
-            return Err(MilkRuntimeError::Draw(format!(
-                "invalid WGSL for MilkDrop {entry} pass"
-            )));
-        }
-        let layout = self
-            .milk_layout
-            .clone()
-            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop bind group layout missing".into()))?;
-        let vertex = self
-            .mesh_vertex
-            .clone()
-            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop mesh vertex module missing".into()))?;
-        let fragment = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("modV MilkDrop warp fragment"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("modV MilkDrop mesh pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("modV MilkDrop mesh warp pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &vertex,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(mesh_vertex_layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &fragment,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        self.pipelines.insert(key, pipeline.clone());
-        Ok(pipeline)
+        self.pipeline_impl(
+            device,
+            key,
+            source,
+            entry,
+            MilkLayout::WarpComp,
+            MilkVertexMode::Mesh,
+        )
     }
 
     /// Fetch (or build once) the overlay `LineList` pipeline. The only
@@ -2013,6 +2013,12 @@ pub struct MilkMeshGpu {
 
 impl MilkMeshGpu {
     /// Upload `mesh`'s warped UV grid and triangle indices to `device`.
+    ///
+    /// Called once per frame: the UVs are time-varying (zoom/rot/warp and the
+    /// per-frame variables feeding [`warped_uv`]), so caching the vertex buffer
+    /// across frames would reuse stale samples. The index buffer is rebuilt
+    /// alongside it for simplicity — its contents depend only on the grid
+    /// dimensions and are small compared with the vertices.
     pub fn new(device: &wgpu::Device, mesh: &MilkMesh) -> Self {
         use wgpu::util::DeviceExt;
 
@@ -2105,6 +2111,11 @@ pub(crate) fn mesh_triangle_indices(width: u32, height: u32) -> Vec<u32> {
 
 /// Vertex layout for the interleaved `[grid x, grid y, warped u, warped v]`
 /// mesh buffer consumed by [`MESH_VERTEX_WGSL`].
+///
+/// Four `f32`s per vertex give a 16-byte stride: the NDC grid position occupies
+/// bytes `0..8` (`shader_location(0)`) and the warped sampling UV bytes `8..16`
+/// (`shader_location(1)`). The layout is `&'static` because the attribute slice
+/// is a compile-time constant, so it can be borrowed by every mesh pipeline.
 fn mesh_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         array_stride: 16,
@@ -2322,14 +2333,17 @@ fn output_bind_group(
     })
 }
 
-fn encode_fullscreen_pass(
-    encoder: &mut wgpu::CommandEncoder,
+/// Begin a pass that clears a single colour target to transparent black.
+///
+/// Shared by the full-screen and mesh warp passes: both replace the target's
+/// contents completely, unlike the overlay pass which loads what is already
+/// there. The returned pass borrows `encoder` for its whole lifetime.
+fn begin_clear_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
     label: &str,
     view: &wgpu::TextureView,
-    pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
-) {
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view,
@@ -2344,7 +2358,17 @@ fn encode_fullscreen_pass(
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
-    });
+    })
+}
+
+fn encode_fullscreen_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+) {
+    let mut pass = begin_clear_pass(encoder, label, view);
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);
     pass.draw(0..3, 0..1);
@@ -2352,10 +2376,11 @@ fn encode_fullscreen_pass(
 
 /// Draw the uploaded mesh as an indexed triangle list into `view`.
 ///
-/// The vertex buffer supplies the grid position and per-vertex warped UV; the
-/// index buffer covers each cell with two triangles. When no buffers were
-/// uploaded (e.g. a default-constructed [`MilkMeshGpu`]) the pass falls back to
-/// the full-screen triangle so the warp target is still fully covered.
+/// The vertex buffer supplies the grid position and per-vertex warped UV (see
+/// [`MESH_VERTEX_WGSL`] and [`mesh_vertex_layout`]); the index buffer from
+/// [`mesh_triangle_indices`] covers each grid cell with two triangles. When no
+/// buffers were uploaded (e.g. a default-constructed [`MilkMeshGpu`]) the pass
+/// falls back to the full-screen triangle so the warp target stays covered.
 fn encode_mesh_pass(
     encoder: &mut wgpu::CommandEncoder,
     label: &str,
@@ -2364,22 +2389,7 @@ fn encode_mesh_pass(
     bind_group: &wgpu::BindGroup,
     mesh: &MilkMeshGpu,
 ) {
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(label),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
+    let mut pass = begin_clear_pass(encoder, label, view);
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);
     if let (Some(vertex_buffer), Some(index_buffer)) = (&mesh.vertex_buffer, &mesh.index_buffer) {
@@ -3214,7 +3224,9 @@ mod gpu_tests {
         let (device, _queue) = match gpu() {
             Some(pair) => pair,
             None => {
-                eprintln!("skipping mesh_gpu_buffer_reports_grid_dimensions_and_counts: no GPU adapter in this environment");
+                eprintln!(
+                    "skipping mesh_gpu_buffer_reports_grid_dimensions_and_counts: no GPU adapter in this environment"
+                );
                 return;
             }
         };
@@ -3326,10 +3338,17 @@ mod gpu_tests {
             identity_output(&mut doc);
             doc.base.zoom = zoom;
             doc.base.zoomexp = 1.0; // zoom_factor = zoom^1 = zoom
-            let runtime =
-                MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
-            let (mut instance, frame, mesh, _previous, _previous_view, _output, output_view, mut targets) =
-                render_fixture(&device, &queue, &runtime, doc);
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                _previous,
+                _previous_view,
+                _output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc);
             let previous = gradient_texture(&device, &queue, WIDTH, HEIGHT);
             let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
             runtime
