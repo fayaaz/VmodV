@@ -55,6 +55,20 @@
 //! on the allowlist: `libgstaom.so` (av1dec) and `libgstflv.so` (flvdemux) ship
 //! in trixie's already-installed `gstreamer1.0-plugins-bad` / `-good` packages.
 //!
+//! ## Overridable build base (slug `ubuntu-deb-matrix`)
+//!
+//! The Dockerfile is now parameterised: it keeps
+//! `ARG DEBIAN_RELEASE=trixie` as the default (and therefore keeps the
+//! AppImage's glibc floor at 2.41), but the `FROM` line reads
+//! `ARG BASE_IMAGE=debian:${DEBIAN_RELEASE}-slim` /
+//! `FROM ${BASE_IMAGE} AS base`. Only the release workflow's Ubuntu `.deb`
+//! matrix overrides that base with `--build-arg BASE_IMAGE=ubuntu:...`; the
+//! AppImage default stays trixie. The apt package names do not change —
+//! Ubuntu's t64 packages provide the legacy `libpipewire-0.3-0` name — so this
+//! test still pins the default base and the legacy PipeWire name, and still
+//! forbids any Ubuntu base literal, `UBUNTU_RELEASE` or t64 PipeWire rename in
+//! the Dockerfile.
+//!
 //! ## The application plugin closure (slug `appimage-trim`)
 //!
 //! The first fat AppImage staged the *entire* distro GStreamer plugin set
@@ -997,11 +1011,13 @@ fn appimage_script_advertises_the_fat_bundle_dry_run_contract() {
     }
 }
 
-/// The build image must be Debian trixie, not Ubuntu 26.04: Ubuntu raised the
-/// AppImage's host glibc floor to 2.43, excluding Debian 13, Ubuntu 24.04,
-/// Fedora 43 and RHEL 10; trixie's floor is 2.41. PipeWire must keep its legacy
-/// `libpipewire-0.3-0` apt name. Every other apt package name in the `base` /
-/// `rust` stages is unchanged.
+/// The build image defaults to Debian trixie, not Ubuntu 26.04: Ubuntu raised
+/// the AppImage's host glibc floor to 2.43, excluding Debian 13, Ubuntu 24.04,
+/// Fedora 43 and RHEL 10; trixie's floor is 2.41. The `FROM` line now goes
+/// through an overridable `BASE_IMAGE` so the Ubuntu `.deb` matrix can build
+/// per-distro packages, but the default stays trixie. PipeWire must keep its
+/// legacy `libpipewire-0.3-0` apt name. Every other apt package name in the
+/// `base` / `rust` stages is unchanged.
 #[test]
 fn dockerfile_builds_from_debian_trixie_with_legacy_pipewire_package() {
     let dockerfile = repo_root().join("Dockerfile");
@@ -1015,13 +1031,15 @@ fn dockerfile_builds_from_debian_trixie_with_legacy_pipewire_package() {
 
     for required in [
         "ARG DEBIAN_RELEASE=trixie",
-        "FROM debian:${DEBIAN_RELEASE}-slim AS base",
+        "ARG BASE_IMAGE=debian:${DEBIAN_RELEASE}-slim",
+        "FROM ${BASE_IMAGE} AS base",
         "libpipewire-0.3-0 \\",
     ] {
         assert!(
             text.contains(required),
-            "Dockerfile does not contain {required:?}: the build image must be Debian trixie \
-             with the legacy PipeWire runtime package name.\n{text}"
+            "Dockerfile does not contain {required:?}: the default build image must be Debian \
+             trixie (overridable via BASE_IMAGE for the Ubuntu deb matrix) with the legacy \
+             PipeWire runtime package name.\n{text}"
         );
     }
 
