@@ -170,6 +170,9 @@ const HLSL_MACROS: &str = "\
 #define GetBlur2(uv) texture(sampler_blur2, uv)
 #define GetBlur3(uv) texture(sampler_blur3, uv)
 #define lum(c) dot((c).rgb, vec3(0.2126, 0.7152, 0.0722))
+#define lerp mix
+#define saturate(x) clamp((x), 0.0, 1.0)
+#define frac fract
 #define M_PI 3.14159265358979323846
 #define M_PI_2 1.57079632679489661923
 #define M_INV_PI_2 0.63661977236758134308
@@ -342,10 +345,68 @@ fn uniform_block_glsl(prelude: &str) -> String {
     out
 }
 
+/// True when a prelude line merely declares (rather than uses) a sampler the
+/// wrapper already binds — a built-in or a positional noise sampler. Such a
+/// redeclaration would expand into a duplicate binding and break naga.
+fn declares_reserved_sampler(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.ends_with(';') || trimmed.contains('(') {
+        return false;
+    }
+    let lower = trimmed.to_lowercase();
+    BUILTIN_SAMPLERS
+        .iter()
+        .chain(NOISE_SAMPLERS.iter())
+        .any(|name| {
+            let mut search: &str = &lower;
+            while let Some(index) = search.find(name) {
+                let before_ok = search[..index]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !is_ident_char(c));
+                let after = &search[index + name.len()..];
+                let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
+                if before_ok && after_ok {
+                    return true;
+                }
+                search = after;
+            }
+            false
+        })
+}
+
+/// The non-uniform prelude lines that must appear before `main`: helper
+/// functions, `static` globals and other declarations. Uniform declarations are
+/// folded into the uniform block / sampler bindings above, and reserved sampler
+/// redeclarations are dropped, so neither is emitted twice.
+///
+/// HLSL vector types are rewritten to GLSL and the HLSL-only `static` storage
+/// qualifier is stripped (it is illegal at GLSL 450 global scope).
+fn retained_prelude(prelude: &str) -> String {
+    let mut out = String::new();
+    for line in prelude.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || !parse_uniform_line(line).is_empty()
+            || declares_reserved_sampler(line)
+        {
+            continue;
+        }
+        let indent_len = line.len() - trimmed.len();
+        let content = strip_qualifier(trimmed, "static").unwrap_or(trimmed);
+        out.push_str(&line[..indent_len]);
+        out.push_str(content);
+        out.push('\n');
+    }
+    rewrite_hlsl_types(&out)
+}
+
 /// Wrap a MilkDrop `prelude`/`body` pair in a complete desktop-GLSL 450 shader.
 ///
-/// Emits the MilkDrop uniform prelude, HLSL compatibility macros, the body, and
-/// a `main` entry point returning `vec4(ret, 1.0)`.
+/// Emits the MilkDrop uniform prelude, HLSL compatibility macros, the retained
+/// prelude declarations, the body, and a `main` entry point returning
+/// `vec4(ret.xyz, 1.0)` (component-wise so both `float3` and `float4` bodies
+/// work).
 pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> String {
     let samplers = samplers_for_prelude(prelude);
     let body = rewrite_hlsl_types(body);
@@ -358,12 +419,13 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     out.push_str(&uniform_block_glsl(prelude));
     out.push_str(&sampler_bindings_glsl(&samplers));
     out.push_str("layout(location = 0) out vec4 milk_FragColor;\n\n");
+    out.push_str(&retained_prelude(prelude));
     out.push_str("void main() {\n");
     out.push_str(&body);
     if !body.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str("  milk_FragColor = vec4(ret, 1.0);\n");
+    out.push_str("  milk_FragColor = vec4(ret.xyz, 1.0);\n");
     out.push_str("}\n");
     out
 }
