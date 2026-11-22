@@ -1155,4 +1155,87 @@ float3 ret = vec3(p, 0.0);\n";
             compiled.wgsl
         );
     }
+
+    /// Count local `ret` declarations in wrapped GLSL. Bare assignments such
+    /// as `ret = ...;` and `ret += ...;` do not count; declaration lines like
+    /// `vec3 ret = ...;` / `float4 ret = ...;` do.
+    fn count_ret_declarations(glsl: &str) -> usize {
+        glsl.lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                ["vec3 ret", "vec4 ret", "float3 ret", "float4 ret"]
+                    .iter()
+                    .any(|prefix| trimmed.starts_with(prefix) && trimmed.contains('='))
+            })
+            .count()
+    }
+
+    /// Real MilkDrop 2 preset shaders commonly write `ret = ...;` without ever
+    /// declaring `ret` (MilkDrop injects the output variable). The wrapper must
+    /// inject a local `vec3 ret` so the body compiles instead of naga rejecting
+    /// it with "Unknown variable: ret".
+    #[test]
+    fn bare_ret_assignment_gets_an_injected_declaration() {
+        let body = "ret = vec3(0.2, 0.4, 0.6);\n";
+
+        let wrapped = wrap_milk_shader("", body, MilkShaderStage::Comp);
+        assert_eq!(
+            count_ret_declarations(&wrapped),
+            1,
+            "a bare `ret = ...;` body must get exactly one injected local declaration, got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "a body with a bare `ret = ...;` assignment must translate, got {compiled:?}"
+        );
+    }
+
+    /// When the body already declares `ret` (HLSL `float3`/`float4`), injecting
+    /// a second declaration would produce a duplicate-declaration error. The
+    /// wrapper must leave such bodies alone so they keep translating.
+    #[test]
+    fn declared_ret_is_not_redeclared() {
+        let body = "float3 ret = vec3(0.1);\nret += vec3(0.2);\n";
+
+        let wrapped = wrap_milk_shader("", body, MilkShaderStage::Comp);
+        assert_eq!(
+            count_ret_declarations(&wrapped),
+            1,
+            "an already-declared `ret` must appear exactly once (no injected duplicate), got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "a body declaring `float3 ret` must keep translating, got {compiled:?}"
+        );
+    }
+
+    /// A real v2 prelude helper can compute the colour while the body only does
+    /// a bare `ret = helper();` assignment. Injection must still happen and the
+    /// helper call must survive into the generated WGSL.
+    #[test]
+    fn mixed_ret_usage_in_prelude_helper() {
+        let prelude = "float3 helper() { return vec3(0.5); }\n";
+        let body = "ret = helper();\n";
+
+        let wrapped = wrap_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            wrapped.contains("vec3 helper()"),
+            "the HLSL helper must be retained and rewritten, got {wrapped:?}"
+        );
+        assert_eq!(
+            count_ret_declarations(&wrapped),
+            1,
+            "a bare `ret = helper();` body must get one injected declaration, got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "a prelude-helper body with bare `ret` must translate, got {compiled:?}"
+        );
+    }
 }

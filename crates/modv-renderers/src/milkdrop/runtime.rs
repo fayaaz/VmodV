@@ -3911,6 +3911,65 @@ mod gpu_tests {
         assert_pixels_near(&pixels, [51, 102, 153], 6, "solid comp");
     }
 
+    /// Real v2 preset shaders assign to bare `ret` without declaring it. The
+    /// wrapper must inject a local `vec3 ret` so such a comp shader compiles
+    /// and renders the expected solid colour, deterministically.
+    #[test]
+    fn gpu_bare_ret_assignment_renders() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_bare_ret_assignment_renders: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let render_once = || -> Vec<u8> {
+            let mut doc = doc_with_comp("ret = vec3(0.2, 0.4, 0.6);");
+            doc.name = "bare-ret-comp".to_string();
+            identity_output(&mut doc);
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                _previous,
+                previous_view,
+                output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc);
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("a comp shader assigning bare `ret` must compile and render");
+            read_texture(&device, &queue, &output).expect("read the output back")
+        };
+
+        let first = render_once();
+        let second = render_once();
+
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        // 0.2/0.4/0.6 in Rgba8Unorm -> 51/102/153.
+        assert_pixels_near(&first, [51, 102, 153], 8, "bare-ret comp");
+        assert_eq!(
+            first, second,
+            "two renders of the same bare-ret comp must be byte-identical"
+        );
+    }
+
     #[test]
     fn gpu_warp_passthrough_samples_previous_frame() {
         let (device, queue) = match gpu() {
