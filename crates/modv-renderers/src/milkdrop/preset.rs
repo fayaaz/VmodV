@@ -6,6 +6,14 @@
 //! numeric order, and records unrecognised keys in [`MilkDocument::diagnostics`]
 //! instead of dropping them silently.
 //!
+//! Real MilkDrop 2 `.milk` files add a few conventions this parser accepts:
+//! they may start with a UTF-8 BOM, every `key=value` line escapes its value
+//! with exactly one leading backtick, and they carry `psversion*` metadata
+//! keys that are recognised but hold no scalar state (like the rating,
+//! shader and preview keys). Only the first backtick is an escape: any
+//! indentation, mid-line backticks or further leading backticks belong to the
+//! EEL/shader source and are preserved verbatim.
+//!
 //! [`MilkDocument::warp`] and [`MilkDocument::comp`] keep the assembled source
 //! (with the `shader_body` sentinel and braces intact, noise-sampler
 //! redeclarations removed). [`extract_shader_body`] is the canonical way for
@@ -455,6 +463,11 @@ static BASE_VALS: &[BaseVal] = &[
 ];
 
 /// Metadata keys that are valid in a preset but carry no scalar state.
+///
+/// `milkdrop_preset_version` and the `fRating`/`fShader`/`fPreview` fields are
+/// legacy v1 metadata; the `psversion*` trio is the v2 equivalent (shader
+/// model versions for the main, warp and composite paths). All are accepted
+/// without contributing to [`MilkBaseVals`] or to diagnostics.
 static METADATA_KEYS: &[&str] = &[
     "milkdrop_preset_version",
     "frating",
@@ -627,6 +640,14 @@ pub fn extract_shader_body(src: &str) -> MilkShader {
     MilkShader { prelude, body }
 }
 
+/// Remove the single leading backtick a real MilkDrop 2 preset uses to escape
+/// each `key=value` line. The backtick is a file-format escape, never part of
+/// the EEL/shader source: only one is removed, so indentation, mid-line
+/// backticks and any further leading backticks are preserved verbatim.
+fn unescape_preset_value(raw_value: &str) -> &str {
+    raw_value.strip_prefix('`').unwrap_or(raw_value)
+}
+
 /// Parse a MilkDrop preset from `src`. The file extension is irrelevant.
 pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseError> {
     let owned = src.replace("\r\n", "\n");
@@ -673,10 +694,7 @@ pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseE
             continue;
         };
         let key = raw_key.trim().to_lowercase();
-        // Real v2 presets escape each value line with exactly one leading
-        // backtick. Strip one; keep indentation and every other character
-        // (mid-line backticks and any additional leading ones survive).
-        let value = raw_value.strip_prefix('`').unwrap_or(raw_value);
+        let value = unescape_preset_value(raw_value);
         // `value` deliberately keeps leading whitespace: EEL/shader lines rely
         // on indentation; scalar parsers trim locally.
 
@@ -977,9 +995,7 @@ comp_4=`}
             shader.prelude
         );
         assert!(
-            shader
-                .body
-                .contains("float3 ret = helper(uv_orig).rgb;"),
+            shader.body.contains("float3 ret = helper(uv_orig).rgb;"),
             "body keeps the helper call site, got {:?}",
             shader.body
         );
@@ -1084,21 +1100,33 @@ nMotionVectorsY=3
         let doc = parse_milk(src, "header").expect("parses");
         assert_eq!(doc.version, 2);
         assert!((doc.base.decay - 0.98).abs() < 1e-9, "fDecay -> decay");
-        assert!((doc.base.gammaadj - 1.5).abs() < 1e-9, "fGammaAdj -> gammaadj");
+        assert!(
+            (doc.base.gammaadj - 1.5).abs() < 1e-9,
+            "fGammaAdj -> gammaadj"
+        );
         assert!(
             (doc.base.echo_zoom - 1.25).abs() < 1e-9,
             "fVideoEchoZoom -> echo_zoom"
         );
         assert_eq!(doc.base.wave_mode, 8, "nWaveMode -> wave_mode");
-        assert!((doc.base.wave_a - 0.75).abs() < 1e-9, "fWaveAlpha -> wave_a");
-        assert!((doc.base.zoomexp - 1.3).abs() < 1e-9, "fZoomExponent -> zoomexp");
+        assert!(
+            (doc.base.wave_a - 0.75).abs() < 1e-9,
+            "fWaveAlpha -> wave_a"
+        );
+        assert!(
+            (doc.base.zoomexp - 1.3).abs() < 1e-9,
+            "fZoomExponent -> zoomexp"
+        );
         assert_eq!(doc.base.mv_x, 2, "nMotionVectorsX -> mv_x");
         assert_eq!(doc.base.mv_y, 3, "nMotionVectorsY -> mv_y");
         // Canonical defaults for omitted fields.
         assert!((doc.base.zoom - 1.0).abs() < 1e-9, "default zoom");
         assert!((doc.base.warp - 1.0).abs() < 1e-9, "default warp");
         assert!((doc.base.cx - 0.5).abs() < 1e-9, "default cx");
-        assert!((doc.base.brightness - 1.0).abs() < 1e-9, "default brightness");
+        assert!(
+            (doc.base.brightness - 1.0).abs() < 1e-9,
+            "default brightness"
+        );
     }
 
     /// `[preset00]` detection is case-insensitive, tolerates surrounding
