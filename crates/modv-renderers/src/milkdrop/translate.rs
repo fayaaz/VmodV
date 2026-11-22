@@ -49,6 +49,11 @@
 //! * **`ret` of either width** — v2 bodies declare `float3 ret` or
 //!   `float4 ret`; [`wrap_milk_shader`] writes `vec4(ret.xyz, 1.0)` so both
 //!   compile.
+//! * **bare `ret`** — many v2 bodies just assign `ret = ...;` without ever
+//!   declaring it, because MilkDrop itself injects the output variable. Our
+//!   wrapper cannot rely on that injection, so when the body mentions `ret`
+//!   without declaring it, [`wrap_milk_shader`] declares a local `vec3 ret`
+//!   for it (see [`body_declares_ret`]).
 //!
 //! Uniforms and samplers are owned by `uniform_block_glsl` /
 //! `sampler_bindings_glsl`; `retained_prelude` skips those top-level
@@ -285,35 +290,19 @@ fn rewrite_hlsl_types(body: &str) -> String {
     replace_ident(&body, "float4", "vec4")
 }
 
-/// True when `source` contains `<ty> <name>` as a pair of whole identifiers
-/// (so `vec3 ret` matches but `vec3 retval` does not).
-fn contains_type_name(source: &str, ty: &str, name: &str) -> bool {
-    let pattern = format!("{ty} {name}");
-    let mut rest = source;
-    while let Some(index) = rest.find(&pattern) {
-        let before_ok = rest[..index]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !is_ident_char(c));
-        let after = &rest[index + pattern.len()..];
-        let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
-        if before_ok && after_ok {
-            return true;
-        }
-        rest = after;
-    }
-    false
-}
-
 /// True when `body` already declares a local `ret`, either with HLSL
 /// (`float3/4 ret`) or GLSL (`vec3/4 ret`) types. Such bodies must not receive
 /// an injected declaration, or naga rejects the duplicate identifier.
 fn body_declares_ret(body: &str) -> bool {
     body.lines().any(|line| {
         let code = line.split("//").next().unwrap_or(line);
+        // `rewrite_hlsl_types` has already run, so HLSL spellings are normally
+        // GLSL by now; the `float*` forms stay for defensiveness. Passing the
+        // `<type> ret` pair to `contains_ident` as one whole-identifier pattern
+        // makes `vec3 ret` match while `vec3 retval` does not.
         ["vec3", "vec4", "float3", "float4"]
             .iter()
-            .any(|ty| contains_type_name(code, ty, "ret"))
+            .any(|ty| contains_ident(code, &format!("{ty} ret")))
     })
 }
 
