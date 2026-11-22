@@ -34,6 +34,11 @@
 //!   256-byte stride if dynamic offsets are needed).
 //! * Textures/samplers follow in a fixed order: built-ins first, then user
 //!   samplers in declaration order.
+//! * `@group(0) @binding(27)` — additive `MilkQUniforms` block carrying the
+//!   per-frame EEL `q1..q32` values (see the private `q_uniforms` module). It
+//!   is the first free slot after binding 0 and the 13 built-in sampler pairs
+//!   (1..=26), derived from the sampler count so emission and binding cannot
+//!   drift apart.
 //! * Entry point `main`, returning `@location(0) vec4<f32>`; a full-screen
 //!   triangle drives comp, while warp consumes the mesh's warped UVs.
 
@@ -44,6 +49,8 @@ pub mod preset;
 pub mod props;
 pub mod runtime;
 pub mod translate;
+
+mod q_uniforms;
 
 pub use preset::{
     MilkBaseVals, MilkDocument, MilkEquationSet, MilkParseError, MilkShader, MilkShape, MilkWave,

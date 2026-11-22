@@ -124,7 +124,12 @@ use std::sync::{Arc, Mutex};
 use crate::isf::runtime::BoundedCache;
 use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool, compile, run_frame, run_pixel};
 use crate::milkdrop::preset::{MilkBaseVals, MilkDocument, MilkShader, extract_shader_body};
+use crate::milkdrop::q_uniforms::{MILK_Q_BINDING, Q_UNIFORM_MEMBERS};
 use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_milk_shader};
+
+// Re-exported here so the public path `runtime::MILK_Q_STRIDE` (and the crate
+// root re-export) stays unchanged; the definition lives with the shared layout.
+pub use crate::milkdrop::q_uniforms::MILK_Q_STRIDE;
 
 /// MilkDrop scales each raw audio band by two before exposing it to EEL.
 const AUDIO_GAIN: f32 = 2.0;
@@ -225,13 +230,6 @@ impl Default for MilkNoise {
 /// the eight original built-ins plus the five noise samplers. Guarded against
 /// `translate::BUILTIN_SAMPLERS` by a unit test.
 pub(crate) const MILK_RUNTIME_SAMPLER_PAIRS: usize = 13;
-
-/// `@group(0)` binding of the additive `MilkQUniforms` block: the next free
-/// slot after the main uniform (0) and the 13 sampler pairs (1..=26).
-pub(crate) const MILK_Q_BINDING: u32 = 27;
-
-/// Byte size of the `MilkQUniforms` block: 32 `f32` values (`q1..q32`).
-pub const MILK_Q_STRIDE: usize = 32 * 4;
 
 // --- GPU pass shaders (Layer 5b) -------------------------------------------
 //
@@ -536,7 +534,7 @@ impl MilkGpuCache {
         }
     }
 
-    /// The 128-byte `MilkQUniforms` binding visible to the fragment stage.
+    /// The `MilkQUniforms` binding visible to the fragment stage.
     fn q_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         wgpu::BindGroupLayoutEntry {
             binding,
@@ -657,7 +655,7 @@ impl MilkGpuCache {
                     Self::sampler_entry(binding)
                 });
             }
-            // The additive q block takes the next free binding (27).
+            // The additive q block takes the first binding after the samplers.
             entries.push(Self::q_uniform_entry(MILK_Q_BINDING));
             self.milk_layout = Some(device.create_bind_group_layout(
                 &wgpu::BindGroupLayoutDescriptor {
@@ -1222,8 +1220,8 @@ impl MilkUniforms {
 ///
 /// Real v2 presets keep their per-frame `q1..q32` values in the EEL
 /// [`VarPool`]. Those are read from the live instance and packed into a
-/// dedicated 128-byte block (32 `f32`s, `qN` at float index `N-1`) uploaded to
-/// `@group(0) @binding(27)` each frame. This block is independent of
+/// dedicated block (one `f32` per name in [`Q_UNIFORM_MEMBERS`]) uploaded to
+/// `@group(0)` at [`MILK_Q_BINDING`] each frame. This block is independent of
 /// [`MilkUniforms`], so none of its byte offsets or the sampler layout move.
 pub struct MilkQUniforms {
     bytes: Vec<u8>,
@@ -1233,14 +1231,17 @@ impl MilkQUniforms {
     /// Read `q1..q32` from `instance`'s live variable pool into GPU bytes.
     pub fn from_instance(instance: &MilkInstance) -> Self {
         let mut bytes = vec![0u8; MILK_Q_STRIDE];
-        for index in 0..32 {
-            let key = format!("q{}", index + 1);
-            write_f32(&mut bytes, index * 4, instance.pool.get(&key));
+        for (index, name) in Q_UNIFORM_MEMBERS.iter().enumerate() {
+            write_f32(
+                &mut bytes,
+                index * std::mem::size_of::<f32>(),
+                instance.pool.get(name),
+            );
         }
         Self { bytes }
     }
 
-    /// The bytes to upload into `@group(0) @binding(27)` (always 128 bytes).
+    /// The bytes to upload into the q binding (always [`MILK_Q_STRIDE`] bytes).
     pub fn to_bytes(&self) -> Vec<u8> {
         self.bytes.clone()
     }
@@ -1460,9 +1461,9 @@ impl MilkRuntime {
             mapped_at_creation: false,
         });
         queue.write_buffer(&uniform_buffer, 0, &uniform_bytes);
-        // The 128-byte q block carries the instance's live `q1..q32` values to
-        // `@group(0) @binding(27)`. Kept separate from the main uniform so none
-        // of its byte offsets or the sampler bindings change.
+        // The q block carries the instance's live `q1..q32` values to
+        // `@group(0)` at `MILK_Q_BINDING`. Kept separate from the main uniform
+        // so none of its byte offsets or the sampler bindings change.
         let q_bytes = MilkQUniforms::from_instance(instance).to_bytes();
         let q_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("modV MilkDrop q uniform buffer"),
@@ -2480,7 +2481,7 @@ fn uniform_bind_entry(buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     }
 }
 
-/// Uniform-buffer entry at binding 27 for the 128-byte `MilkQUniforms` block.
+/// Uniform-buffer entry for the `MilkQUniforms` block.
 fn q_uniform_bind_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry {
         binding,
@@ -2519,7 +2520,8 @@ struct MilkSamplerViews<'a> {
 /// warp/comp shader, in `translate::BUILTIN_SAMPLERS` order. Binding 0 is the
 /// uniform; `sampler_main` is `main_view`, blur samplers 1..3 are the blur
 /// targets, the five noise samplers use the deterministic noise textures and
-/// the remaining built-ins use the 1×1 dummy texture.
+/// the remaining built-ins use the 1×1 dummy texture. The q block is bound at
+/// [`MILK_Q_BINDING`], immediately after the sampler pairs.
 fn milk_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
