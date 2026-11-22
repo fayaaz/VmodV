@@ -563,6 +563,10 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     // wrapper alias; the float uniform keeps its original byte offset as
     // `aspect_x`, so `aspect.xy` compiles without shifting any other member.
     out.push_str("  vec2 aspect = vec2(aspect_x, 1.0);\n");
+    // Both aliases are locals of `main`, so prelude helper functions (which are
+    // emitted above `main`) cannot reference bare `uv`/`aspect`. A real preset
+    // whose helpers need them would require a varying/global-based approach;
+    // that is intentionally out of scope for this shadowable-local wrapper.
     out.push_str("  {\n");
     out.push_str(&body);
     if !body.ends_with('\n') {

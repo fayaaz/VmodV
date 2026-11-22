@@ -338,6 +338,7 @@ struct MilkOutputUniforms {
     _pad0: vec4<f32>, _pad1: vec4<f32>, _pad2: vec4<f32>, _pad3: vec4<f32>,
     _pad4: vec4<f32>, _pad5: vec4<f32>, _pad6: vec4<f32>, _pad7: vec4<f32>,
     _pad8: vec4<f32>, _pad9: vec4<f32>, _pad10: vec4<f32>, _pad11: vec4<f32>,
+    _pad12: vec4<f32>, // keep the controls clear of the ang slot (bytes 192..=199)
     gammaadj: f32,
     brighten: f32,
     darken: f32,
@@ -1007,6 +1008,13 @@ pub struct OverlayFrame {
 /// same buffer can be used with dynamic offsets on every backend.
 pub const MILK_UNIFORM_STRIDE: usize = 256;
 
+/// Byte offset of the first output-pass control scalar in the shared uniform
+/// buffer. This sits past byte 199 so it cannot overlap the `ang` vec2 slot of
+/// the warp/comp `MilkUniforms` layout (bytes 192..=199). It is mirrored by the
+/// 13 `vec4` pads that precede the controls in `OUTPUT_FRAGMENT_WGSL`'s
+/// `MilkOutputUniforms` struct.
+const OUTPUT_CONTROLS_OFFSET: usize = 208;
+
 /// Typed failures from compiling or driving a MilkDrop preset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MilkRuntimeError {
@@ -1058,10 +1066,11 @@ impl MilkFailureCache {
 
 /// Serialized `MilkUniforms` payload for one frame.
 ///
-/// This holds the MilkDrop scalars/vec2s described by
+/// This holds the MilkDrop scalars/`vec4`/`vec2` members described by
 /// `milkdrop::translate::UNIFORM_MEMBERS` (globals, base vals, rand values and
-/// derived quantities) for one frame. [`MilkUniforms::to_bytes`] always returns exactly
-/// [`MILK_UNIFORM_STRIDE`] bytes so the buffer can be used with dynamic offsets.
+/// derived quantities) for one frame. [`MilkUniforms::to_bytes`] always returns
+/// exactly [`MILK_UNIFORM_STRIDE`] bytes so the buffer can be used with dynamic
+/// offsets.
 pub struct MilkUniforms {
     bytes: Vec<u8>,
 }
@@ -1069,11 +1078,21 @@ pub struct MilkUniforms {
 impl MilkUniforms {
     /// Build the uniform payload for `frame` from the live `instance` state.
     ///
-    /// Offsets 0..=191 mirror the 32 scalars + 8 vec2s of
-    /// `translate::UNIFORM_MEMBERS` (the layout the warp/comp WGSL expects).
-    /// Offsets 192..=231 carry the base-val post-processing controls and
-    /// deterministic per-frame rand values consumed by the output pass. Both
-    /// live in one 256-byte slice so a single buffer serves every pass.
+    /// Layout, in bytes into the shared 256-byte slice:
+    /// * `0..=127` — the 32 `f32` scalars of `translate::UNIFORM_MEMBERS`.
+    /// * `128..=143` — `texsize` as a `vec4` (width, height, 1/width, 1/height):
+    ///   the real MilkDrop 2 contract, 16-byte aligned.
+    /// * `144..=199` — seven `vec2` members (`texsize_fw/pw/fc/pc`, `uv_orig_u`,
+    ///   `rad`, `ang`), 8-byte aligned.
+    /// * `208..=247` — ten `f32` output-pass controls (post-processing flags and
+    ///   deterministic rand values), starting at `OUTPUT_CONTROLS_OFFSET`. The
+    ///   gap past `ang` keeps the warp/comp and output interpretations of the
+    ///   buffer from overlapping; `OUTPUT_FRAGMENT_WGSL` mirrors it with 13
+    ///   `vec4` pads before the controls.
+    ///
+    /// One slice serves every pass: warp/comp read the first 200 bytes as
+    /// `MilkUniforms`, the output stage reads the same buffer as
+    /// `MilkOutputUniforms`.
     pub fn from_frame(instance: &MilkInstance, frame: &MilkFrameInfo) -> Self {
         let mut bytes = vec![0u8; MILK_UNIFORM_STRIDE];
         let g = &instance.globals;
@@ -1136,7 +1155,8 @@ impl MilkUniforms {
         write_f32(&mut bytes, 136, 1.0 / width);
         write_f32(&mut bytes, 140, 1.0 / height);
         // The seven downstream vec2 members follow at byte 144 (8-byte
-        // aligned); these are the fw/pw/fc/pc sizes, uv_orig_u, rad and ang.
+        // aligned): the fw/pw/fc/pc sizes, uv_orig_u, rad and ang. `ang` ends
+        // at byte 199; the output controls start at `OUTPUT_CONTROLS_OFFSET`.
         let size = [width, height];
         write_vec2(&mut bytes, 144, size); // texsize_fw
         write_vec2(&mut bytes, 152, size); // texsize_pw
@@ -1148,17 +1168,23 @@ impl MilkUniforms {
         write_vec2(&mut bytes, 184, [0.5, 0.5]); // rad
         write_vec2(&mut bytes, 192, [0.0, 0.0]); // ang
 
-        // Output-pass controls (see OUTPUT_FRAGMENT_WGSL).
-        write_f32(&mut bytes, 192, base.gammaadj as f32);
-        write_f32(&mut bytes, 196, if base.brighten { 1.0 } else { 0.0 });
-        write_f32(&mut bytes, 200, if base.darken { 1.0 } else { 0.0 });
-        write_f32(&mut bytes, 204, if base.invert { 1.0 } else { 0.0 });
-        write_f32(&mut bytes, 208, if base.solarize { 1.0 } else { 0.0 }); // faithful 2*x*(1-x)
-        write_f32(&mut bytes, 212, if base.red_blue { 1.0 } else { 0.0 });
-        write_f32(&mut bytes, 216, rand_frame);
-        write_f32(&mut bytes, 220, rand_preset);
-        write_f32(&mut bytes, 224, base.brightness as f32);
-        write_f32(&mut bytes, 228, base.decay as f32);
+        // Output-pass controls (see OUTPUT_FRAGMENT_WGSL). Kept past the `ang`
+        // vec2 so the warp/comp and output layouts never share a byte.
+        let output_controls = [
+            base.gammaadj as f32,
+            if base.brighten { 1.0 } else { 0.0 },
+            if base.darken { 1.0 } else { 0.0 },
+            if base.invert { 1.0 } else { 0.0 },
+            if base.solarize { 1.0 } else { 0.0 }, // faithful 2*x*(1-x)
+            if base.red_blue { 1.0 } else { 0.0 },
+            rand_frame,
+            rand_preset,
+            base.brightness as f32,
+            base.decay as f32,
+        ];
+        for (index, value) in output_controls.iter().enumerate() {
+            write_f32(&mut bytes, OUTPUT_CONTROLS_OFFSET + index * 4, *value);
+        }
 
         Self { bytes }
     }
