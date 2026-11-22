@@ -100,6 +100,58 @@
 //! `dpkg` package list and `appimagetool`) are skipped when the input they would
 //! produce is already supplied. So a dry run exercises the code that ships.
 //!
+//! ## The bundle-check contract (canonical build + CI)
+//!
+//! CI already BUILDS the fat AppImage with `make build` in both
+//! `.github/workflows/vmodv.yml` and `.github/workflows/release.yml`; it must
+//! also VERIFY it, and the same gate applies to the canonical local build. The
+//! gate is a standalone `tools/vmodv-appimage-check.sh`, exposed as
+//! `make vmodv-appimage-check`, invoked by `tools/vmodv-appimage.sh` on the
+//! artifact it just produced (so `make build` fails on a thin bundle), by the
+//! vmodv.yml test job
+//! (`make engine-test ARGS="-p modv-app --test appimage_bundle -- --test-threads=1"`)
+//! and package job, and by the release.yml publish job before publishing. The
+//! `.deb` packaging (`tools/vmodv-deb.sh`, `packaging/vmodv/vmodv.control`,
+//! `packaging/vmodv/deb-launcher.sh`, `tools/vmodv-deb-check.sh`) and
+//! `packaging/vmodv/AppRun` / `packaging/vmodv/log-run.sh` stay UNCHANGED.
+//!
+//! CLI: `bash tools/vmodv-appimage-check.sh <path>` — exactly one positional
+//! argument:
+//!
+//! * a directory: an already-assembled AppDir, checked in place;
+//! * a `*.AppImage` file: extracted with `--appimage-extract` (no FUSE needed)
+//!   into a temporary directory, then checked exactly like an AppDir.
+//!
+//! Content assertions (each exits non-zero on the FIRST failure, naming the
+//! missing behaviour):
+//!
+//! * `usr/bin/modv` and `AppRun` are present and executable;
+//! * at least **100** plugin `*.so` files under `usr/lib/gstreamer-1.0/` (this
+//!   exact floor is the documented contract);
+//! * `usr/libexec/gstreamer-1.0/gst-plugin-scanner` is present;
+//! * `usr/lib/` holds `libgstreamer-1.0.so*` plus at least one of
+//!   `libgstbase-1.0.so*`, `libgstvideo-1.0.so*`, `libgstaudio-1.0.so*`,
+//!   `libgstpbutils-1.0.so*`;
+//! * `usr/share/vmodv/gstreamer-bundle.json` is present, JSON-parseable and
+//!   holds at least one package/version entry;
+//! * at least one `usr/share/doc/*/copyright` licence text is present;
+//! * zero glibc-family files: `libc.so*`, `libm.so*`, `libdl*`, `libpthread*`,
+//!   `librt*`, `ld-linux*`, `libresolv*`, `libmvec*`, `libnsl*`, `libutil*`,
+//!   `libcrypt.so.1*`, `libanl*`, `libthread_db*` — plus no `libc6` licence text;
+//! * zero host display-stack files: `libGL.so*`, `libGLX*`, `libGLdispatch*`,
+//!   `libOpenGL*`, `libEGL*`, `libGLES*`, `libglapi*`, `libgbm*`,
+//!   `libvulkan*`, `libwayland*`;
+//! * zero development-only artifacts: `*.a`, `*.la`, `*.pc`, `*.pdb`;
+//! * `readelf -d` shows an `$ORIGIN`-relative RUNPATH (never an absolute path,
+//!   never missing — fail closed) on `usr/bin/modv`, the scanner, a sample of
+//!   `usr/lib/*.so*` and a sample of the plugin `*.so`s. Error text names the
+//!   offending path and `RUNPATH`.
+//!
+//! A readable size/content summary is printed to stdout: the AppImage byte
+//! size for an image input, payload byte totals and counts otherwise, with
+//! lines containing `plugins:`, `libraries:`, `licences:` and `bytes:`. NO size
+//! budget is asserted.
+//!
 //! ## The `AppRun` contract
 //!
 //! Before launching the app, `packaging/vmodv/AppRun` must export
@@ -1566,5 +1618,371 @@ fn dry_run_aborts_when_patchelf_reports_failure() {
         stderr.contains("patchelf"),
         "tools/vmodv-appimage.sh failed without naming patchelf, so the RUNPATH failure is not \
          diagnosable from the build log:\nstdout:\n{stdout}\nstderr:\n{stderr}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The bundle-check gate: tools/vmodv-appimage-check.sh (slug appimage-ci-check).
+// ---------------------------------------------------------------------------
+
+/// The exact plugin `*.so` count floor the checker enforces under
+/// `usr/lib/gstreamer-1.0/`. Documented in the module comment so GREEN
+/// implements exactly this contract.
+const CHECKER_MIN_PLUGINS: usize = 100;
+
+/// The standalone bundle checker the canonical build and both workflows must
+/// run on the fat AppImage / AppDir.
+const CHECKER_SCRIPT: &str = "tools/vmodv-appimage-check.sh";
+
+fn checker_path() -> PathBuf {
+    repo_root().join(CHECKER_SCRIPT)
+}
+
+/// Invoke the checker with a single positional `<path>` argument (an AppDir or
+/// a built `.AppImage`), exactly as the Makefile and the workflows will.
+fn run_checker(target: &Path) -> Output {
+    Command::new("bash")
+        .arg(checker_path())
+        .arg(target)
+        .current_dir(repo_root())
+        .output()
+        .expect("spawn bash tools/vmodv-appimage-check.sh")
+}
+
+fn output_text(output: &Output) -> String {
+    format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+/// Compile a tiny real ELF in `dir` with gcc/patchelf (both in the toolchain
+/// image) so `readelf -d` produces genuine RUNPATH evidence. `rpath = None`
+/// leaves the ELF with no RUNPATH at all — the "broken RUNPATH evidence" case.
+fn compile_runpath_elf(
+    dir: &Path,
+    name: &str,
+    source: &str,
+    shared: bool,
+    rpath: Option<&str>,
+) -> PathBuf {
+    fs::create_dir_all(dir)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", dir.display()));
+    let source_path = dir.join(format!("{name}.c"));
+    fs::write(&source_path, source)
+        .unwrap_or_else(|error| panic!("cannot write {}: {error}", source_path.display()));
+    let binary = dir.join(name);
+    let mut compiler = Command::new("gcc");
+    compiler.arg("-o").arg(&binary);
+    if shared {
+        compiler.arg("-shared").arg("-fPIC");
+    }
+    compiler.arg(&source_path);
+    let built = compiler.output().expect("run gcc for the checker fixture");
+    assert!(
+        built.status.success(),
+        "gcc failed building the checker's ELF fixture {}:\n{}",
+        binary.display(),
+        output_text(&built)
+    );
+    if let Some(rpath) = rpath {
+        let patched = Command::new("patchelf")
+            .arg("--set-rpath")
+            .arg(rpath)
+            .arg(&binary)
+            .output()
+            .expect("run patchelf for the checker fixture");
+        assert!(
+            patched.status.success(),
+            "patchelf failed setting {rpath} on {}:\n{}",
+            binary.display(),
+            output_text(&patched)
+        );
+    }
+    binary
+}
+
+/// Recursive directory copy (std-only) preserving the executable bits the
+/// checker asserts. Negative cases run on copies of one staged good bundle.
+fn copy_dir_tree(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", dst.display()));
+    for entry in
+        fs::read_dir(src).unwrap_or_else(|error| panic!("cannot read {}: {error}", src.display()))
+    {
+        let entry = entry
+            .unwrap_or_else(|error| panic!("cannot read an entry in {}: {error}", src.display()));
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&from)
+            .unwrap_or_else(|error| panic!("cannot stat {}: {error}", from.display()));
+        if metadata.is_dir() {
+            copy_dir_tree(&from, &to);
+        } else {
+            fs::copy(&from, &to).unwrap_or_else(|error| {
+                panic!(
+                    "cannot copy {} to {}: {error}",
+                    from.display(),
+                    to.display()
+                )
+            });
+            fs::set_permissions(
+                &to,
+                fs::Permissions::from_mode(metadata.permissions().mode()),
+            )
+            .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", to.display()));
+        }
+    }
+}
+
+/// Stage a bundle the checker must ACCEPT: the normal dry-run AppDir (manifest,
+/// licences, AppRun, payload) with its text stubs replaced by real ELFs carrying
+/// `$ORIGIN`-relative RUNPATHs, and enough plugins to clear the documented
+/// floor of 100.
+fn stage_checked_bundle() -> FakeToolchain {
+    let toolchain = FakeToolchain::new();
+    let appdir = toolchain.staged();
+    let elf_work = toolchain.holder.path().join("checker-elf-work");
+
+    let lib_elf = compile_runpath_elf(
+        &elf_work,
+        "lib-runtime-elf.so",
+        "int runtime_stub(void) { return 0; }\n",
+        true,
+        Some("$ORIGIN"),
+    );
+    let plugin_elf = compile_runpath_elf(
+        &elf_work,
+        "lib-plugin-elf.so",
+        "int plugin_stub(void) { return 0; }\n",
+        true,
+        Some("$ORIGIN/.."),
+    );
+    let binary_elf = compile_runpath_elf(
+        &elf_work,
+        "modv-elf",
+        "int main(void) { return 0; }\n",
+        false,
+        Some("$ORIGIN/../lib"),
+    );
+    let scanner_elf = compile_runpath_elf(
+        &elf_work,
+        "scanner-elf",
+        "int main(void) { return 0; }\n",
+        false,
+        Some("$ORIGIN/../../lib"),
+    );
+
+    let lib_dir = appdir.join("usr/lib");
+    for entry in fs::read_dir(&lib_dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", lib_dir.display()))
+    {
+        let path = entry
+            .unwrap_or_else(|error| {
+                panic!("cannot read an entry in {}: {error}", lib_dir.display())
+            })
+            .path();
+        if path.is_file() {
+            fs::copy(&lib_elf, &path)
+                .unwrap_or_else(|error| panic!("cannot overwrite {}: {error}", path.display()));
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", path.display()));
+        }
+    }
+
+    let plugin_dir = appdir.join("usr/lib/gstreamer-1.0");
+    let mut plugin_count = 0usize;
+    for entry in fs::read_dir(&plugin_dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", plugin_dir.display()))
+    {
+        let path = entry
+            .unwrap_or_else(|error| {
+                panic!("cannot read an entry in {}: {error}", plugin_dir.display())
+            })
+            .path();
+        if path.is_file() {
+            fs::copy(&plugin_elf, &path)
+                .unwrap_or_else(|error| panic!("cannot overwrite {}: {error}", path.display()));
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", path.display()));
+            plugin_count += 1;
+        }
+    }
+    for index in plugin_count..(CHECKER_MIN_PLUGINS + 5) {
+        let path = plugin_dir.join(format!("libgstbundled{index:03}.so"));
+        fs::copy(&plugin_elf, &path)
+            .unwrap_or_else(|error| panic!("cannot write {}: {error}", path.display()));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", path.display()));
+    }
+
+    let binary = appdir.join("usr/bin/modv");
+    fs::copy(&binary_elf, &binary)
+        .unwrap_or_else(|error| panic!("cannot overwrite {}: {error}", binary.display()));
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", binary.display()));
+    let scanner = appdir.join("usr/libexec/gstreamer-1.0/gst-plugin-scanner");
+    fs::copy(&scanner_elf, &scanner)
+        .unwrap_or_else(|error| panic!("cannot overwrite {}: {error}", scanner.display()));
+    fs::set_permissions(&scanner, fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", scanner.display()));
+
+    toolchain
+}
+
+/// Run the checker on a broken copy and require a non-zero exit that NAMES the
+/// missing behaviour (the first failed assertion), not a silent failure.
+fn assert_checker_rejects(appdir: &Path, expected: &str, label: &str) {
+    let output = run_checker(appdir);
+    let text = output_text(&output);
+    assert!(
+        !output.status.success(),
+        "tools/vmodv-appimage-check.sh ACCEPTED {label}: the bundle gate does not gate.\n{text}"
+    );
+    assert!(
+        text.contains(expected),
+        "tools/vmodv-appimage-check.sh rejected {label} without naming {expected:?}, so the \
+         failure is not diagnosable from CI:\n{text}"
+    );
+}
+
+/// A well-formed fat AppDir must pass the checker and produce a readable
+/// size/content summary. At RED the checker script is missing, so this fails
+/// on the invocation (the intended missing behaviour).
+#[test]
+fn checker_accepts_a_well_formed_fat_appdir() {
+    let toolchain = stage_checked_bundle();
+    let output = run_checker(&toolchain.appdir);
+    assert!(
+        output.status.success(),
+        "tools/vmodv-appimage-check.sh rejected a well-formed fat AppDir ({}): the gate would \
+         fail a good release.\n{}",
+        toolchain.appdir.display(),
+        output_text(&output),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for token in ["plugins:", "libraries:", "licences:", "bytes:"] {
+        assert!(
+            stdout.contains(token),
+            "the checker's size/content summary does not include {token:?}, so it is not the \
+             readable summary CI needs:\n{stdout}"
+        );
+    }
+}
+
+/// The gate really gates: each broken copy of the good bundle must be rejected
+/// with an error naming the first failed assertion.
+#[test]
+fn checker_gate_rejects_broken_bundles() {
+    let toolchain = stage_checked_bundle();
+    let good = &toolchain.appdir;
+
+    // (a) no plugins at all: camera/file/screen pipelines would be empty.
+    let broken = toolchain.holder.path().join("broken-no-plugins");
+    copy_dir_tree(good, &broken);
+    fs::remove_dir_all(broken.join("usr/lib/gstreamer-1.0"))
+        .expect("remove the plugin directory from the broken copy");
+    assert_checker_rejects(
+        &broken,
+        "gstreamer-1.0",
+        "an AppDir with no usr/lib/gstreamer-1.0 plugin directory",
+    );
+
+    // (b) no auditable manifest of bundled package versions.
+    let broken = toolchain.holder.path().join("broken-no-manifest");
+    copy_dir_tree(good, &broken);
+    fs::remove_file(broken.join("usr/share/vmodv/gstreamer-bundle.json"))
+        .expect("remove the bundle manifest from the broken copy");
+    assert_checker_rejects(
+        &broken,
+        "gstreamer-bundle.json",
+        "an AppDir with no GStreamer bundle manifest",
+    );
+
+    // (c) a bundled glibc family member shadows the host's libc.
+    let broken = toolchain.holder.path().join("broken-glibc");
+    copy_dir_tree(good, &broken);
+    fs::write(broken.join("usr/lib/libc.so.6"), "fake host libc\n")
+        .expect("plant a fake libc.so.6 in the broken copy");
+    assert_checker_rejects(&broken, "libc.so.6", "an AppDir that bundles libc.so.6");
+
+    // (d) a bundled host display library breaks the user's GPU stack.
+    let broken = toolchain.holder.path().join("broken-wayland");
+    copy_dir_tree(good, &broken);
+    fs::write(
+        broken.join("usr/lib/libwayland-client.so.0"),
+        "fake host wayland\n",
+    )
+    .expect("plant a fake libwayland-client.so.0 in the broken copy");
+    assert_checker_rejects(
+        &broken,
+        "libwayland",
+        "an AppDir that bundles libwayland-client.so.0",
+    );
+
+    // (e) no RUNPATH evidence on the binary: it resolves against the host.
+    let broken = toolchain.holder.path().join("broken-runpath");
+    copy_dir_tree(good, &broken);
+    let bare = compile_runpath_elf(
+        &toolchain.holder.path().join("checker-elf-work"),
+        "modv-no-runpath-elf",
+        "int main(void) { return 0; }\n",
+        false,
+        None,
+    );
+    let binary = broken.join("usr/bin/modv");
+    fs::copy(&bare, &binary).expect("replace modv with an ELF with no RUNPATH");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))
+        .expect("chmod the RUNPATH-less modv");
+    assert_checker_rejects(
+        &broken,
+        "RUNPATH",
+        "an AppDir whose usr/bin/modv has no $ORIGIN RUNPATH",
+    );
+}
+
+/// The canonical local build must run the checker: a `make` target exists and
+/// the AppImage staging script invokes the checker on the artifact it builds,
+/// so `make build` fails on a thin bundle just like `vmodv-deb` does.
+#[test]
+fn canonical_build_invokes_the_bundle_checker() {
+    let root = repo_root();
+    let makefile = fs::read_to_string(root.join("Makefile"))
+        .unwrap_or_else(|error| panic!("cannot read Makefile: {error}"));
+    assert!(
+        makefile.contains("vmodv-appimage-check"),
+        "the Makefile has no vmodv-appimage-check target: the canonical local build cannot \
+         verify the fat AppImage it just made:\n{makefile}"
+    );
+    let script = fs::read_to_string(root.join("tools/vmodv-appimage.sh"))
+        .unwrap_or_else(|error| panic!("cannot read tools/vmodv-appimage.sh: {error}"));
+    assert!(
+        script.contains(CHECKER_SCRIPT),
+        "tools/vmodv-appimage.sh never invokes {CHECKER_SCRIPT} on the AppImage it produced: \
+         `make appimage-vmodv` (and therefore `make build`) would ship a thin bundle unchecked"
+    );
+}
+
+/// Both workflows must verify the built AppImage, not just build it.
+#[test]
+fn ci_and_release_workflows_run_the_bundle_check() {
+    let root = repo_root();
+    let ci = fs::read_to_string(root.join(".github/workflows/vmodv.yml"))
+        .unwrap_or_else(|error| panic!("cannot read vmodv.yml: {error}"));
+    assert!(
+        ci.contains("--test appimage_bundle"),
+        "vmodv.yml has no step running `make engine-test ARGS=\"-p modv-app --test \
+         appimage_bundle -- --test-threads=1\"`: CI never exercises the bundle tests"
+    );
+    assert!(
+        ci.contains("vmodv-appimage-check"),
+        "vmodv.yml's package job does not run the bundle check on the AppImage it built"
+    );
+    let release = fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .unwrap_or_else(|error| panic!("cannot read release.yml: {error}"));
+    assert!(
+        release.contains("vmodv-appimage-check"),
+        "release.yml's publish job does not run the bundle check before publishing the AppImage"
     );
 }
