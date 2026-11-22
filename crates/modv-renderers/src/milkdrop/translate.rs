@@ -33,6 +33,28 @@
 //!   order.
 //! * Entry point `main` returns `@location(0) vec4<f32>`; the full-screen
 //!   triangle drives comp, while warp consumes the mesh's warped UVs.
+//!
+//! # Real MilkDrop 2 conventions bridged here
+//!
+//! Production v2 presets put more than uniform declarations in the `prelude`:
+//!
+//! * **Helper functions** (HLSL `float2/3/4` signatures and bodies) that
+//!   `shader_body` calls. These are retained by `retained_prelude` with HLSL
+//!   vector types rewritten to GLSL.
+//! * **`static` globals** — legal in MilkDrop's HLSL-flavoured prelude but not
+//!   at GLSL 450 global scope, so the qualifier is stripped while the
+//!   declaration survives.
+//! * **HLSL builtins** `lerp`/`saturate`/`frac`, defined in `HLSL_MACROS` as
+//!   `mix`/`clamp`/`fract`.
+//! * **`ret` of either width** — v2 bodies declare `float3 ret` or
+//!   `float4 ret`; [`wrap_milk_shader`] writes `vec4(ret.xyz, 1.0)` so both
+//!   compile.
+//!
+//! Uniforms and samplers are owned by `uniform_block_glsl` /
+//! `sampler_bindings_glsl`; `retained_prelude` skips those top-level
+//! declarations (plus reserved sampler redeclarations) so nothing is emitted
+//! twice, and tracks brace depth so lines *inside* helper bodies are never
+//! mistaken for them.
 
 #![forbid(unsafe_code)]
 
@@ -345,9 +367,28 @@ fn uniform_block_glsl(prelude: &str) -> String {
     out
 }
 
+/// Net brace depth change of a line, ignoring `//` comments.
+///
+/// Prelude helpers can open a body on one line and close it on another; callers
+/// use the running total to tell top-level declarations from lines *inside* a
+/// helper body.
+fn brace_delta(line: &str) -> i64 {
+    let code = line.split("//").next().unwrap_or(line);
+    code.chars().fold(0, |depth, c| match c {
+        '{' => depth + 1,
+        '}' => depth - 1,
+        _ => depth,
+    })
+}
+
 /// True when a prelude line merely declares (rather than uses) a sampler the
 /// wrapper already binds — a built-in or a positional noise sampler. Such a
 /// redeclaration would expand into a duplicate binding and break naga.
+///
+/// Deliberately conservative: it needs a trailing `;` and no `(`, so a call or
+/// a use site with parentheses is never mistaken for a declaration. Callers
+/// apply it only at top level (see [`retained_prelude`]) so a bare use site in a
+/// helper body is kept too.
 fn declares_reserved_sampler(line: &str) -> bool {
     let trimmed = line.trim();
     if !trimmed.ends_with(';') || trimmed.contains('(') {
@@ -380,23 +421,35 @@ fn declares_reserved_sampler(line: &str) -> bool {
 /// folded into the uniform block / sampler bindings above, and reserved sampler
 /// redeclarations are dropped, so neither is emitted twice.
 ///
+/// Only *top-level* lines (brace depth zero) can be wrapper-owned declarations.
+/// Lines inside a helper body are always kept verbatim: a local declaration or
+/// a use site such as `foo = sampler_pw_noise_lq;` must not be mistaken for a
+/// uniform/sampler redeclaration and dropped.
+///
 /// HLSL vector types are rewritten to GLSL and the HLSL-only `static` storage
 /// qualifier is stripped (it is illegal at GLSL 450 global scope).
 fn retained_prelude(prelude: &str) -> String {
     let mut out = String::new();
+    let mut depth: i64 = 0;
     for line in prelude.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty()
-            || !parse_uniform_line(line).is_empty()
-            || declares_reserved_sampler(line)
+        let at_top_level = depth == 0;
+
+        if !trimmed.is_empty()
+            && !(at_top_level && !parse_uniform_line(line).is_empty())
+            && !(at_top_level && declares_reserved_sampler(line))
         {
-            continue;
+            let indent_len = line.len() - trimmed.len();
+            let content = strip_qualifier(trimmed, "static").unwrap_or(trimmed);
+            out.push_str(&line[..indent_len]);
+            out.push_str(content);
+            out.push('\n');
         }
-        let indent_len = line.len() - trimmed.len();
-        let content = strip_qualifier(trimmed, "static").unwrap_or(trimmed);
-        out.push_str(&line[..indent_len]);
-        out.push_str(content);
-        out.push('\n');
+
+        // Update after emitting: the opening line of a helper is still
+        // top-level, but everything up to and including its closing brace is
+        // shielded by the new depth.
+        depth = (depth + brace_delta(line)).max(0);
     }
     rewrite_hlsl_types(&out)
 }
