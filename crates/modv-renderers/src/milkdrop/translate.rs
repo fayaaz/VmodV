@@ -992,4 +992,79 @@ float4 helper(float2 p) {\n\
             "the runtime must bind one (texture, sampler) pair per built-in sampler"
         );
     }
+
+    // --- MilkDrop 2 real shader contract (RED) ------------------------------
+
+    /// Real v2 presets (M0Rf30 - Aurora Cathedral / Nebula Forge) read
+    /// `texsize.w` (the reciprocal of the frame height). MilkDrop's `texsize`
+    /// is a **vec4** — x=width, y=height, z=1/width, w=1/height — but our
+    /// wrapper currently declares it as `vec2`, which makes naga reject the
+    /// `.w` swizzle. The uniform member must be `vec4 texsize;`.
+    #[test]
+    fn texsize_is_a_vec4_with_milkdrop_swizzles() {
+        let body = "float3 ret = vec3(uv_orig.x * texsize.w);\n";
+
+        let wrapped = wrap_milk_shader("", body, MilkShaderStage::Comp);
+        assert!(
+            wrapped.contains("vec4 texsize;"),
+            "the uniform block must declare texsize as a vec4, got {wrapped:?}"
+        );
+        assert!(
+            !wrapped.contains("vec2 texsize;"),
+            "texsize must not be a vec2 (MilkDrop uses .z/.w), got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "a v2 body reading texsize.w must translate, got {compiled:?}"
+        );
+    }
+
+    /// Real v2 comp shaders (M0Rf30 - Bioluminescent Abyss) reference `uv`
+    /// directly instead of `uv_orig`. The wrapper must expose a `uv` alias so
+    /// the bare use compiles, without breaking existing fixtures that declare
+    /// their own local `uv` (= `uv_orig`).
+    #[test]
+    fn uv_alias_is_available_without_declaring_it() {
+        // The exact body shape from the diagnosed real preset.
+        let body = "\
+vec2 p = (uv - 0.5) * aspect.xy;\n\
+float3 ret = vec3(p, 0.0);\n";
+
+        let wrapped = wrap_milk_shader("", body, MilkShaderStage::Comp);
+        let declares_uv = wrapped.contains("vec2 uv;")
+            || wrapped.contains("vec2 uv =")
+            || wrapped.contains("in vec2 uv;")
+            || wrapped.contains("#define uv ");
+        assert!(
+            declares_uv,
+            "wrapped GLSL must declare/alias `uv` so a bare use compiles, got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader("", body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "a v2 body referencing `uv` directly must translate, got {compiled:?}"
+        );
+
+        // Sampling through the alias must become a real WGSL texture sample.
+        let sample_body = "float3 ret = tex2D(sampler_main, uv).rgb;\n";
+        let sample = translate_milk_shader("", sample_body, MilkShaderStage::Comp)
+            .unwrap_or_else(|error| panic!("sampling via the uv alias must translate: {error}"));
+        assert!(
+            sample.wgsl.contains("textureSample"),
+            "a tex2D call through `uv` must become a textureSample in WGSL, got {:?}",
+            sample.wgsl
+        );
+
+        // Regression: existing fixtures declare their own local `uv` and must
+        // keep translating once a wrapper-owned alias is introduced.
+        let local_uv_body = "float2 uv = uv_orig;\nfloat3 ret = vec3(uv, 0.0);\n";
+        let local = translate_milk_shader("", local_uv_body, MilkShaderStage::Comp);
+        assert!(
+            local.is_ok(),
+            "a fixture declaring its own local `uv` must still translate, got {local:?}"
+        );
+    }
 }

@@ -3234,6 +3234,47 @@ ret = uv;\n\
         assert_ne!(a.lq, a.hq, "LQ and HQ noise must differ");
         assert_ne!(a.lq, a.pw, "LQ and preset-wave noise must differ");
     }
+
+    /// MilkDrop's `texsize` is a vec4 — x=width, y=height, z=1/width,
+    /// w=1/height. The runtime uniform payload must serialize all four values
+    /// at texsize's declared offset (byte 128: the first vector member after
+    /// the 32 f32 scalars), while the total buffer stays 256 bytes.
+    #[test]
+    fn uniform_payload_exposes_texsize_as_vec4() {
+        let doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("texsize-vec4", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 7);
+        let mut f = frame(0.5, 0.25, 1.0, 1, 0.016);
+        f.width = 1920;
+        f.height = 1080;
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        let bytes = MilkUniforms::from_frame(&instance, &f).to_bytes();
+        assert_eq!(
+            bytes.len(),
+            MILK_UNIFORM_STRIDE,
+            "the payload must stay 256 bytes"
+        );
+
+        // texsize is the first member after the 32 f32 scalars = byte 128.
+        const TEXSIZE_OFFSET: usize = 32 * 4;
+        let read =
+            |i: usize| f32::from_ne_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+        let texsize = [
+            read(TEXSIZE_OFFSET),
+            read(TEXSIZE_OFFSET + 4),
+            read(TEXSIZE_OFFSET + 8),
+            read(TEXSIZE_OFFSET + 12),
+        ];
+        let expected = [1920.0_f32, 1080.0_f32, 1.0 / 1920.0_f32, 1.0 / 1080.0_f32];
+        for (index, (got, want)) in texsize.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-6,
+                "texsize[{index}] must be {want}, got {got} (decoded texsize {texsize:?})"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4451,6 +4492,67 @@ mod gpu_tests {
         assert_eq!(
             first, second,
             "two renders of the same bodyless v1 preset must be byte-identical"
+        );
+    }
+
+    /// A real v2 comp body that references `uv` directly and reads `texsize.w`
+    /// (1/height) must compile, render a non-black 160x90 output, and be
+    /// deterministic across two identical renders. Skips without an adapter.
+    #[test]
+    fn gpu_milkdrop_v2_contract_shader_renders() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_milkdrop_v2_contract_shader_renders: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let render_once = || -> Vec<u8> {
+            let mut doc = doc_with_comp("float3 ret = vec3(uv.x, texsize.w * 100.0, 0.2);");
+            doc.name = "v2-contract".to_string();
+            identity_output(&mut doc);
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                _previous,
+                previous_view,
+                output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc);
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("a v2 contract comp shader must compile and render");
+            read_texture(&device, &queue, &output).expect("read output back")
+        };
+
+        let first = render_once();
+        let second = render_once();
+
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        assert!(
+            first.iter().any(|&channel| channel != 0),
+            "the v2 contract output must not be entirely black"
+        );
+        assert_eq!(
+            first, second,
+            "two renders of the same v2 contract shader must be byte-identical"
         );
     }
 }
