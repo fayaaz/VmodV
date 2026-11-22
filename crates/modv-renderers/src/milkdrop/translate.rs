@@ -285,6 +285,38 @@ fn rewrite_hlsl_types(body: &str) -> String {
     replace_ident(&body, "float4", "vec4")
 }
 
+/// True when `source` contains `<ty> <name>` as a pair of whole identifiers
+/// (so `vec3 ret` matches but `vec3 retval` does not).
+fn contains_type_name(source: &str, ty: &str, name: &str) -> bool {
+    let pattern = format!("{ty} {name}");
+    let mut rest = source;
+    while let Some(index) = rest.find(&pattern) {
+        let before_ok = rest[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_ident_char(c));
+        let after = &rest[index + pattern.len()..];
+        let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+/// True when `body` already declares a local `ret`, either with HLSL
+/// (`float3/4 ret`) or GLSL (`vec3/4 ret`) types. Such bodies must not receive
+/// an injected declaration, or naga rejects the duplicate identifier.
+fn body_declares_ret(body: &str) -> bool {
+    body.lines().any(|line| {
+        let code = line.split("//").next().unwrap_or(line);
+        ["vec3", "vec4", "float3", "float4"]
+            .iter()
+            .any(|ty| contains_type_name(code, ty, "ret"))
+    })
+}
+
 // --- Prelude parsing -------------------------------------------------------
 
 /// Strip a leading `qualifier` that is followed by whitespace, returning the
@@ -558,6 +590,10 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     let retained = retained_prelude(prelude);
     let samplers = samplers_for_prelude(prelude, &retained, body);
     let body = rewrite_hlsl_types(body);
+    // Real v2 preset shaders assign to a bare `ret` that MilkDrop itself
+    // injects. Inject a local declaration when the body uses `ret` without
+    // declaring it, but leave already-declared bodies alone.
+    let inject_ret = contains_ident(&body, "ret") && !body_declares_ret(&body);
 
     let mut out = String::with_capacity(body.len() + 4096 + retained.len());
     out.push_str("#version 450\n\n");
@@ -591,6 +627,9 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     // whose helpers need them would require a varying/global-based approach;
     // that is intentionally out of scope for this shadowable-local wrapper.
     out.push_str("  {\n");
+    if inject_ret {
+        out.push_str("    vec3 ret = vec3(0.0);\n");
+    }
     out.push_str(&body);
     if !body.ends_with('\n') {
         out.push('\n');
