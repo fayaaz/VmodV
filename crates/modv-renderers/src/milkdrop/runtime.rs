@@ -1881,6 +1881,47 @@ pub fn evaluate_mesh(
     Ok(MilkMesh { uvs, width, height })
 }
 
+// --- Mesh UV upload (RED stubs) --------------------------------------------
+//
+// These public types/functions are the surface the GREEN phase implements to
+// upload the warped UV grid to the GPU and drive the warp pass from it. The
+// stubs make the mesh-upload tests compile while leaving them failing on their
+// assertions; no existing render pass is modified.
+
+/// GPU-side storage for a [`MilkMesh`]'s warped UV grid and its triangle
+/// indices, consumed by the warp pass. GREEN uploads two buffers and switches
+/// the warp draw to an indexed triangle list using the per-vertex UVs; the RED
+/// stub only exposes the grid metadata so the tests compile.
+#[derive(Clone, Debug, Default)]
+pub struct MilkMeshGpu {
+    /// Number of UV columns (`meshx + 1`).
+    pub width: u32,
+    /// Number of UV rows (`meshy + 1`).
+    pub height: u32,
+    /// Number of vertices in the UV buffer (`width * height`).
+    pub vertex_count: usize,
+    /// Number of indices in the triangle buffer (`meshx * meshy * 6`).
+    pub index_count: usize,
+}
+
+impl MilkMeshGpu {
+    /// Upload `mesh` to `device`. The RED stub leaves every count at zero.
+    pub fn new(_device: &wgpu::Device, _mesh: &MilkMesh) -> Self {
+        Self::default()
+    }
+}
+
+/// Build the triangle-list indices covering a `width`×`height` UV grid.
+///
+/// One cell per quad, traversed row-major, with two triangles per cell. Cell
+/// `(row, col)` has corners `a=base` (top-left), `b=base+1` (top-right),
+/// `c=base+width` (bottom-left), `d=base+width+1` (bottom-right) where
+/// `base = row * width + col`; the two triangles share the `a–d` diagonal.
+/// The RED stub returns an empty buffer.
+pub(crate) fn mesh_triangle_indices(_width: u32, _height: u32) -> Vec<u32> {
+    Vec::new()
+}
+
 // --- GPU helpers -----------------------------------------------------------
 
 /// Use the EEL value when the pool has assigned it, otherwise derive a stable
@@ -2489,6 +2530,42 @@ ret = uv;\n\
     }
 
     #[test]
+    fn mesh_triangle_indices_cover_every_cell_and_stay_in_range() {
+        let width = 4u32;
+        let height = 3u32;
+        let indices = mesh_triangle_indices(width, height);
+        assert_eq!(
+            indices.len(),
+            ((width - 1) * (height - 1) * 6) as usize,
+            "two triangles (six indices) per grid cell"
+        );
+        let vertex_count = width * height;
+        assert!(
+            indices.iter().all(|&index| index < vertex_count),
+            "every index must address a vertex of the {width}x{height} grid, got {indices:?}"
+        );
+
+        for cell_row in 0..height - 1 {
+            for cell_col in 0..width - 1 {
+                let cell = (cell_row * (width - 1) + cell_col) as usize;
+                let base = cell_row * width + cell_col;
+                let corners = [base, base + 1, base + width, base + width + 1];
+                let tri = &indices[cell * 6..cell * 6 + 6];
+                assert!(
+                    tri.iter().all(|&index| corners.contains(&index)),
+                    "cell ({cell_row},{cell_col}) triangle {tri:?} must use only its four corners {corners:?}"
+                );
+                for &corner in &corners {
+                    assert!(
+                        tri.contains(&corner),
+                        "cell ({cell_row},{cell_col}) must cover corner {corner}, got {tri:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn failure_cache_mark_query_clear() {
         let cache = MilkFailureCache::new();
         assert!(!cache.is_failed("mod/a"), "fresh cache is empty");
@@ -2887,6 +2964,167 @@ mod gpu_tests {
             output_view,
             targets,
         )
+    }
+
+    #[test]
+    fn mesh_gpu_buffer_reports_grid_dimensions_and_counts() {
+        let (device, _queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping mesh_gpu_buffer_reports_grid_dimensions_and_counts: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let doc = doc_with_comp("float3 ret = float3(0.2, 0.4, 0.6);");
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("mesh-gpu", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 7);
+        let f = frame();
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let mesh = evaluate_mesh(&mut instance, &f).expect("evaluate_mesh");
+
+        let gpu_mesh = MilkMeshGpu::new(&device, &mesh);
+        assert_eq!(
+            gpu_mesh.width, mesh.width,
+            "GPU mesh width matches the UV grid width"
+        );
+        assert_eq!(
+            gpu_mesh.height, mesh.height,
+            "GPU mesh height matches the UV grid height"
+        );
+        assert_eq!(
+            gpu_mesh.vertex_count,
+            mesh.uvs.len(),
+            "vertex_count == (meshx + 1) * (meshy + 1)"
+        );
+        assert_eq!(
+            gpu_mesh.index_count,
+            ((mesh.width - 1) * (mesh.height - 1) * 6) as usize,
+            "index_count == meshx * meshy * 6 (two triangles per grid cell)"
+        );
+    }
+
+    #[test]
+    fn gpu_warp_uses_mesh_uvs_zoom_changes_warp_target() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_warp_uses_mesh_uvs: no GPU adapter in this environment");
+                return;
+            }
+        };
+
+        // A non-uniform previous frame (a 2D RGB ramp). Sampling it at
+        // different mesh UVs yields measurably different pixels, so a
+        // mesh-driven warp must react to `zoom`. COPY_DST is required so the
+        // gradient can be uploaded; COPY_SRC so read-back can inspect it.
+        fn gradient_texture(
+            device: &wgpu::Device,
+            queue: &wgpu::Queue,
+            width: u32,
+            height: u32,
+        ) -> wgpu::Texture {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("milkdrop RED gradient previous"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+            let padded = (width as usize * 4).div_ceil(align) * align;
+            let mut bytes = vec![0u8; padded * height as usize];
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let offset = y * padded + x * 4;
+                    bytes[offset] = (x * 255 / (width as usize - 1)) as u8;
+                    bytes[offset + 1] = (y * 255 / (height as usize - 1)) as u8;
+                    bytes[offset + 2] = 128;
+                    bytes[offset + 3] = 255;
+                }
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded as u32),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            texture
+        }
+
+        // Solid-colour comp (so the composite itself is irrelevant) + a warp
+        // that samples sampler_main. The observable signal is the warp target:
+        // a real mesh-UV upload changes what the warp pass samples as zoom moves.
+        let render_warp = |zoom: f64| -> Vec<u8> {
+            let mut doc = doc_with_comp("float3 ret = float3(0.2, 0.4, 0.6);");
+            doc.name = format!("warp-zoom-{zoom}");
+            identity_output(&mut doc);
+            doc.base.zoom = zoom;
+            doc.base.zoomexp = 1.0; // zoom_factor = zoom^1 = zoom
+            let runtime =
+                MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (mut instance, frame, mesh, _previous, _previous_view, _output, output_view, mut targets) =
+                render_fixture(&device, &queue, &runtime, doc);
+            let previous = gradient_texture(&device, &queue, WIDTH, HEIGHT);
+            let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("render");
+            let warp = targets.warp_texture().expect("warp target exists");
+            read_texture(&device, &queue, warp).expect("read warp target back")
+        };
+
+        let zoom1_a = render_warp(1.0);
+        let zoom1_b = render_warp(1.0);
+        let zoom2_a = render_warp(2.0);
+        let zoom2_b = render_warp(2.0);
+
+        assert_eq!(
+            zoom1_a.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 warp target must be read back"
+        );
+        assert_eq!(
+            zoom1_a, zoom1_b,
+            "two renders at zoom=1.0 must be byte-identical"
+        );
+        assert_eq!(
+            zoom2_a, zoom2_b,
+            "two renders at zoom=2.0 must be byte-identical"
+        );
+        assert_ne!(
+            zoom1_a, zoom2_a,
+            "mesh UVs must drive warp sampling: zoom=2.0 must change the warp target vs zoom=1.0"
+        );
     }
 
     #[test]
