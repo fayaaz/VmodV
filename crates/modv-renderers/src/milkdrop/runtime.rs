@@ -2986,6 +2986,46 @@ ret = uv;\n\
         );
     }
 
+    /// A v1 preset has no `MILKDROP_PRESET_VERSION` line and therefore no
+    /// `warp_N`/`comp_N` `shader_body` strings at all. `extract_shader_body("")`
+    /// yields an empty prelude/body, and a wrapper with no `ret` declaration
+    /// makes naga fail with "Unknown variable: ret". Such presets must instead
+    /// compile with default identity warp/comp shaders.
+    #[test]
+    fn compile_preset_accepts_v1_preset_without_shader_bodies() {
+        let doc = MilkDocument {
+            version: 1,
+            name: "v1-no-shaders".to_string(),
+            frame_eqs: "x = x + 0.01;".to_string(),
+            warp: String::new(),
+            comp: String::new(),
+            ..Default::default()
+        };
+        let cache = MilkFailureCache::new();
+        let result = compile_preset("v1-no-shaders", &doc, &cache);
+        assert!(
+            result.is_ok(),
+            "a v1 preset with no shader bodies must compile to default identity shaders, got {result:?}"
+        );
+        assert!(
+            !cache.is_failed("v1-no-shaders"),
+            "a bodyless v1 preset must not be recorded as a compilation failure"
+        );
+
+        let compiled = result.expect("checked is_ok above");
+        for (label, shader) in [("warp", &compiled.warp), ("comp", &compiled.comp)] {
+            assert!(
+                !shader.wgsl.is_empty(),
+                "{label}: a default identity shader must generate non-empty WGSL"
+            );
+            assert!(
+                shader.wgsl.contains("textureSample"),
+                "{label}: a default identity shader must sample the previous frame, got {:?}",
+                shader.wgsl
+            );
+        }
+    }
+
     // --- Layer 5c: wave/shape overlay CPU tests ----------------------------
 
     #[test]
@@ -4263,6 +4303,128 @@ mod gpu_tests {
             feedback,
             render("decay-on-repeat", 0.5, [0.9, 0.9, 0.9, 1.0]),
             "feedback renders must be byte-identical for the same inputs"
+        );
+    }
+
+    /// A real v1 preset has no warp/comp shader lines. It must still render a
+    /// non-black, non-uniform result through the default identity shaders, and
+    /// two renders of the same preset must be byte-identical.
+    #[test]
+    fn gpu_v1_preset_without_shaders_renders_non_black() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_v1_preset_without_shaders_renders_non_black: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        // A non-uniform, non-black previous frame: a horizontal/vertical RGB
+        // ramp. With decay < 1 the warp stage binds it as `sampler_main`, so an
+        // identity warp + comp must let it show through into the output.
+        let previous = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("milkdrop RED v1 previous"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let padded = (WIDTH as usize * 4).div_ceil(align) * align;
+        let mut bytes = vec![0u8; padded * HEIGHT as usize];
+        for y in 0..HEIGHT as usize {
+            for x in 0..WIDTH as usize {
+                let offset = y * padded + x * 4;
+                bytes[offset] = (x * 255 / (WIDTH as usize - 1)) as u8;
+                bytes[offset + 1] = (y * 255 / (HEIGHT as usize - 1)) as u8;
+                bytes[offset + 2] = 128;
+                bytes[offset + 3] = 255;
+            }
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &previous,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(HEIGHT),
+            },
+            wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+        );
+        let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let render_once = || -> Vec<u8> {
+            let mut doc = MilkDocument {
+                version: 1,
+                name: "v1-gpu-no-shaders".to_string(),
+                frame_eqs: "x = x + 0.01;".to_string(),
+                warp: String::new(),
+                comp: String::new(),
+                ..Default::default()
+            };
+            identity_output(&mut doc);
+            // decay < 1 makes the warp pass bind `previous` (the gradient)
+            // instead of the neutral dummy texture.
+            doc.base.decay = 0.5;
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (mut instance, frame, mesh, _prev, _prev_view, output, output_view, mut targets) =
+                render_fixture(&device, &queue, &runtime, doc);
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("a v1 preset without shader bodies must render");
+            read_texture(&device, &queue, &output).expect("read output back")
+        };
+
+        let first = render_once();
+        let second = render_once();
+
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        assert!(
+            first.iter().any(|&channel| channel != 0),
+            "the output of a bodyless v1 preset must not be entirely black"
+        );
+        let distinct = first
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+            .collect::<std::collections::HashSet<_>>();
+        assert!(
+            distinct.len() > 1,
+            "the output must be non-uniform (the previous frame must show through), got {distinct:?}"
+        );
+        assert_eq!(
+            first, second,
+            "two renders of the same bodyless v1 preset must be byte-identical"
         );
     }
 }

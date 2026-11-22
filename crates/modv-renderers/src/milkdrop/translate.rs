@@ -906,6 +906,64 @@ ret += tex2D(sampler_pw_noise_hq, uv).rgb;\n";
         );
     }
 
+    /// A noise sampler referenced only inside a prelude helper (not in the
+    /// `shader_body`) must still get a real named binding. Otherwise the wrapper
+    /// binds that slot anonymously (`isf_tex_unused_N`) and naga fails with
+    /// "Unknown variable: sampler_noise_lq" when the helper calls `tex2D`.
+    #[test]
+    fn samplers_used_only_in_prelude_helpers_get_named_bindings() {
+        let prelude = "\
+float4 helper(float2 p) {\n\
+  return tex2D(sampler_noise_lq, p);\n\
+}\n";
+        let body = "float3 ret = helper(uv_orig).rgb;\n";
+
+        let wrapped = wrap_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            wrapped.contains("isf_tex_sampler_noise_lq"),
+            "a sampler used only inside a prelude helper must get a named texture binding, got {wrapped:?}"
+        );
+        assert!(
+            wrapped.contains("isf_smp_sampler_noise_lq"),
+            "a sampler used only inside a prelude helper must get a named sampler binding, got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "a shader whose sampler is used only in a prelude helper must translate, got {compiled:?}"
+        );
+    }
+
+    /// An HLSL-style sampler declaration in the prelude must not leak into the
+    /// generated GLSL as an invalid declaration, while the helper body that
+    /// uses the same sampler must be retained and still translate.
+    #[test]
+    fn hlsl_sampler_redeclaration_in_prelude_is_stripped() {
+        let prelude = "\
+sampler sampler_pw_noise_lq;\n\
+float4 helper(float2 p) {\n\
+  return tex2D(sampler_pw_noise_lq, p);\n\
+}\n";
+        let body = "float3 ret = helper(uv_orig).rgb;\n";
+
+        let wrapped = wrap_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            !wrapped.contains("sampler sampler_pw_noise_lq;"),
+            "the bare HLSL sampler redeclaration must be stripped from wrapped GLSL, got {wrapped:?}"
+        );
+        assert!(
+            wrapped.contains("tex2D(sampler_pw_noise_lq, p)"),
+            "the helper body's use of the sampler must be retained, got {wrapped:?}"
+        );
+
+        let compiled = translate_milk_shader(prelude, body, MilkShaderStage::Comp);
+        assert!(
+            compiled.is_ok(),
+            "translation must succeed after the HLSL redeclaration is stripped, got {compiled:?}"
+        );
+    }
+
     #[test]
     fn builtin_sampler_count_matches_runtime_binding_pairs() {
         // 8 original built-ins (main, fw, pw, fc, pc, blur1-3) + 5 noise.
