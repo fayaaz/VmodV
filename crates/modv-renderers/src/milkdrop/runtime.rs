@@ -2143,6 +2143,38 @@ fn evaluate_one_shape(
     })
 }
 
+/// Seed the frame-level wave variables (`wave_r/g/b/x/y`) from the preset's
+/// base vals into `pool`.
+///
+/// [`begin_frame`] calls this after the init equations and immediately before
+/// the per-frame equations, because the ordering is significant:
+///
+/// - Self-referential EEL such as `wave_r = wave_r + 0.1;` must accumulate
+///   from the configured base value rather than from the pool's zero default,
+///   so the frame equations see a meaningful starting point.
+/// - These are frame-level values: each frame starts from the base and the
+///   frame equations decide the final value, keeping frames independent.
+///
+/// Because this runs on *every* frame (after the one-time init stage), a preset
+/// that assigns one of these variables only in its init equations has that
+/// assignment overwritten here on the first frame. Presets are expected to
+/// drive them from their frame equations. Tracking which variables init touched
+/// in order to preserve init-only overrides would add state this seeding does
+/// not have; the base values are deliberately left to win, matching the tested
+/// per-frame semantics.
+fn seed_wave_base_vals(pool: &mut VarPool, base: &MilkBaseVals) {
+    seed_vars(
+        pool,
+        &[
+            ("wave_r", base.wave_r as f32),
+            ("wave_g", base.wave_g as f32),
+            ("wave_b", base.wave_b as f32),
+            ("wave_x", base.wave_x as f32),
+            ("wave_y", base.wave_y as f32),
+        ],
+    );
+}
+
 /// Advance `instance` to `frame`: run init once, build globals/audio, update
 /// the band followers and run the per-frame equations.
 pub fn begin_frame(
@@ -2201,21 +2233,9 @@ pub fn begin_frame(
     instance.wave = frame.audio.wave.clone();
     instance.byte_frequency_data = frame.audio.byte_frequency_data.clone();
 
-    // Seed the frame-level wave variables from the preset's base vals before
-    // the per-frame equations run, so self-referential equations such as
-    // `wave_r = wave_r + 0.1;` accumulate from the configured base rather than
-    // from the pool's zero default.
-    let base = &instance.compiled.doc.base;
-    let wave_seed = [
-        ("wave_r", base.wave_r as f32),
-        ("wave_g", base.wave_g as f32),
-        ("wave_b", base.wave_b as f32),
-        ("wave_x", base.wave_x as f32),
-        ("wave_y", base.wave_y as f32),
-    ];
-    for (name, value) in wave_seed {
-        instance.pool.set(name, value);
-    }
+    // Seed the frame-level wave variables before the per-frame equations run
+    // (see `seed_wave_base_vals` for why this ordering matters).
+    seed_wave_base_vals(&mut instance.pool, &instance.compiled.doc.base);
 
     // (3) Per-frame equations: `run_frame` restores the captured q baseline
     // before injecting the globals, so q changes never leak into the next frame.
