@@ -37,7 +37,7 @@ pub const PROFILE_FOLDERS: [&str; 10] = [
 
 /// The shared, non-profile folders created directly under `<media>`.
 ///
-/// These are corpus folders for every profile (kept for older native builds)
+/// These are corpus folders for every profile (kept for older VmodV builds)
 /// and must not be mistaken for a project profile by [`list_profiles`]. They
 /// share the `<media>` namespace with profiles, so their names are effectively
 /// **reserved**: a profile cannot be named `milkdrop`, because its folder would
@@ -289,7 +289,7 @@ pub fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec
 /// The user MilkDrop preset folders to scan for `profile`.
 ///
 /// Mirrors [`user_isf_dirs`]: the flat `<media>/milkdrop` folder is kept for
-/// installs created by older native builds, only the **active** profile's
+/// installs created by older VmodV builds, only the **active** profile's
 /// `milkdrop` folder counts, and existing explicit extras are included. An
 /// explicit `MODV_USER_MILKDROP_DIR` environment override replaces all of them.
 pub fn user_milkdrop_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec<PathBuf> {

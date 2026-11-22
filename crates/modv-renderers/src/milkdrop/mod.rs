@@ -1,6 +1,6 @@
 //! MilkDrop preset renderer — parser (Layer 1) and EEL evaluator (Layer 2).
 //!
-//! Native replacement for the `.mlk` preset loading that used to happen in
+//! VmodV replacement for the `.mlk` preset loading that used to happen in
 //! the archived JavaScript tree. Like [`crate::isf`], all format logic lives
 //! in `modv-renderers` so it can be shared by the engine, the compositor and
 //! the headless binary without pulling in a UI or GPU dependency.
