@@ -1,19 +1,19 @@
 # MilkDrop presets in VmodV
 
-VmodV can load MilkDrop-style `.mlk` presets as modules, but it does **not**
-ship a preset collection of its own. This guide explains where your own files
-go, what happens to them, and what you are responsible for when you share a
-build or a preset.
+VmodV can load MilkDrop-style `.mlk` and `.milk` presets as modules, but it
+does **not** ship a preset collection of its own. This guide explains where
+your own files go, what happens to them, and what you are responsible for
+when you share a build or a preset.
 
 ## What are MilkDrop presets
 
-MilkDrop presets are plain-text files with a `.mlk` extension. Each file holds
-one preset in a `[preset00]` section: `key=value` lines configure warp, wave,
-shape and video settings, while `warp=` and `comp=` carry the EEL equations
-that animate the visuals. VmodV registers a loaded preset as a `milkdrop`
-module and renders it with its own MilkDrop runtime. Because they are ordinary
-text files, presets are read from disk when VmodV builds its module registry —
-none are baked into the app or the installer.
+MilkDrop presets are plain-text files with a `.mlk` or `.milk` extension. Each
+file holds one preset in a `[preset00]` section: `key=value` lines configure
+warp, wave, shape and video settings, while `warp=` and `comp=` carry the EEL
+equations that animate the visuals. VmodV registers a loaded preset as a
+`milkdrop` module and renders it with its own MilkDrop runtime. Because they
+are ordinary text files, presets are read from disk when VmodV builds its
+module registry — none are baked into the app or the installer.
 
 ## Where to put MilkDrop files
 
@@ -48,8 +48,9 @@ MilkDrop presets are third-party creative works with widely varying licenses —
 many are non-commercial and/or share-alike, and the author and terms are not
 always clear. Bundling a corpus would mean redistributing those files and
 taking on their attribution and license obligations. VmodV therefore ships no
-presets at all: the only `.mlk` file in this repository is a test fixture used
-to exercise the notices guard, not a preset that is installed for users.
+presets at all: the only MilkDrop preset in this repository is a `.mlk` test
+fixture used to exercise the notices guard, not a preset that is installed for
+users.
 
 ## Your responsibilities
 
