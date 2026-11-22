@@ -1639,9 +1639,17 @@ impl MilkRuntime {
             &comp_pipeline,
             &comp_bind,
         );
-        // Layer 5c: draw wave/shape overlay primitives onto the comp target so
-        // the output pass (which samples comp_view) sees them. Best-effort:
-        // when no overlays were evaluated the existing six-pass path is exact.
+        // Layer 5c: production callers (compositor: begin_frame → evaluate_mesh
+        // → render) never call `evaluate_overlays()` explicitly, so evaluate the
+        // enabled wave/shape sections here before the overlay pass. This is
+        // idempotent: `evaluate_overlays` replaces (not appends to) the cached
+        // `instance.overlay_frame` and re-seeds the per-frame vars, so an
+        // explicit pre-render call followed by this one yields the same geometry
+        // and the pass below still draws it exactly once (no double-draw).
+        let _ = evaluate_overlays(instance, frame);
+        // Draw wave/shape overlay primitives onto the comp target so the output
+        // pass (which samples comp_view) sees them. Best-effort: when no
+        // overlays were evaluated the existing six-pass path is exact.
         if !instance.overlay_frame.waves.is_empty() || !instance.overlay_frame.shapes.is_empty() {
             let alpha_pipeline = cache.overlay_pipeline(device, false)?;
             let additive_pipeline = cache.overlay_pipeline(device, true)?;
