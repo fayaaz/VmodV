@@ -771,3 +771,74 @@ fn notices_no_longer_reference_the_deleted_electron_tree() {
         "THIRD_PARTY_NOTICES.md still names a deleted src/renderer path"
     );
 }
+
+/// The body of a `## <heading>` section of a markdown document, up to the next
+/// `## ` heading (or end of file).
+fn doc_section<'a>(doc: &'a str, heading: &str) -> &'a str {
+    let marker = format!("## {heading}");
+    let start = doc
+        .find(marker.as_str())
+        .unwrap_or_else(|| panic!("doc is missing the section {marker:?}"));
+    let after = start + marker.len();
+    let end = doc[after..]
+        .find("\n## ")
+        .map(|offset| after + offset)
+        .unwrap_or(doc.len());
+    &doc[after..end]
+}
+
+fn contains_ci(haystack: &str, needle: &str) -> bool {
+    haystack
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
+}
+
+#[test]
+fn milkdrop_presets_guide_accepts_both_extensions_case_insensitively() {
+    // The runtime discovers and watches both the legacy `.mlk` and the
+    // conventional `.milk` extension case-insensitively, so the user guide must
+    // say so — including in the section users read when a preset is not listed.
+    const DOC: &str = "docs/milkdrop-presets.md";
+    let path = repo_root().join(DOC);
+    let content = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("{DOC} must exist with the MilkDrop preset guidance: {error}")
+    });
+
+    let where_to_put = doc_section(&content, "Where to put MilkDrop files");
+    assert!(
+        contains_ci(where_to_put, ".mlk"),
+        "the \"Where to put MilkDrop files\" section must still mention .mlk"
+    );
+    assert!(
+        contains_ci(where_to_put, ".milk"),
+        "the \"Where to put MilkDrop files\" section must mention the conventional \
+         .milk extension: real community .milk presets can be dropped in \
+         without renaming"
+    );
+    assert!(
+        contains_ci(where_to_put, "case-insensitiv"),
+        "the \"Where to put MilkDrop files\" section must state that both .mlk and \
+         .milk are matched case-insensitively"
+    );
+    assert!(
+        contains_ci(where_to_put, "renam"),
+        "the \"Where to put MilkDrop files\" section must say real community .milk \
+         presets can be dropped in without renaming"
+    );
+
+    let troubleshooting = doc_section(&content, "Troubleshooting");
+    assert!(
+        contains_ci(troubleshooting, ".mlk"),
+        "the Troubleshooting section must still mention .mlk"
+    );
+    assert!(
+        contains_ci(troubleshooting, ".milk"),
+        "the Troubleshooting section must mention .milk: a user whose .milk \
+         preset is not listed must find the answer there"
+    );
+    assert!(
+        contains_ci(troubleshooting, "case-insensitiv"),
+        "the Troubleshooting section must state that both .mlk and .milk are \
+         accepted case-insensitively"
+    );
+}
