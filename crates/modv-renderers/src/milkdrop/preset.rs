@@ -99,6 +99,11 @@ pub struct MilkBaseVals {
     pub solarize: bool,
     pub invert: bool,
     pub wave_a: f64,
+    pub wave_r: f64,
+    pub wave_g: f64,
+    pub wave_b: f64,
+    pub wave_x: f64,
+    pub wave_y: f64,
     pub wave_scale: f64,
     pub wave_smoothing: f64,
     pub wave_mystery: f64,
@@ -208,6 +213,11 @@ fn default_base_vals() -> MilkBaseVals {
         solarize: false,
         invert: false,
         wave_a: 1.0,
+        wave_r: 0.5,
+        wave_g: 0.5,
+        wave_b: 0.5,
+        wave_x: 0.5,
+        wave_y: 0.5,
         wave_scale: 1.0,
         wave_smoothing: 0.0,
         wave_mystery: 1.0,
@@ -371,6 +381,26 @@ static BASE_VALS: &[BaseVal] = &[
     BaseVal {
         keys: &["wave_a", "fwavealpha"],
         set: |b, v| b.wave_a = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_r"],
+        set: |b, v| b.wave_r = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_g"],
+        set: |b, v| b.wave_g = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_b"],
+        set: |b, v| b.wave_b = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_x"],
+        set: |b, v| b.wave_x = parse_f64(v),
+    },
+    BaseVal {
+        keys: &["wave_y"],
+        set: |b, v| b.wave_y = parse_f64(v),
     },
     BaseVal {
         keys: &["wave_scale", "fwavescale"],

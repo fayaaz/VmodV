@@ -2201,6 +2201,22 @@ pub fn begin_frame(
     instance.wave = frame.audio.wave.clone();
     instance.byte_frequency_data = frame.audio.byte_frequency_data.clone();
 
+    // Seed the frame-level wave variables from the preset's base vals before
+    // the per-frame equations run, so self-referential equations such as
+    // `wave_r = wave_r + 0.1;` accumulate from the configured base rather than
+    // from the pool's zero default.
+    let base = &instance.compiled.doc.base;
+    let wave_seed = [
+        ("wave_r", base.wave_r as f32),
+        ("wave_g", base.wave_g as f32),
+        ("wave_b", base.wave_b as f32),
+        ("wave_x", base.wave_x as f32),
+        ("wave_y", base.wave_y as f32),
+    ];
+    for (name, value) in wave_seed {
+        instance.pool.set(name, value);
+    }
+
     // (3) Per-frame equations: `run_frame` restores the captured q baseline
     // before injecting the globals, so q changes never leak into the next frame.
     run_frame(
@@ -4639,7 +4655,13 @@ mod gpu_tests {
             (WIDTH * HEIGHT * 4) as usize,
             "a full 160x90 output must be read back"
         );
-        let max_red = pixels.chunks_exact(4).map(|p| p[0]).max().unwrap_or(0);
+        let max_red = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .max()
+            .unwrap_or(0);
         assert!(
             (145..=161).contains(&max_red),
             "built-in wave red channel must be ~153 (0.6 * 255) from the seeded base, \
