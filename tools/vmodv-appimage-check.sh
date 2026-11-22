@@ -105,6 +105,11 @@ LICENCE_COUNT="$(find "$APPDIR/usr/share/doc" -type f -name copyright 2>/dev/nul
 [ "$LICENCE_COUNT" -ge 1 ] || fail "no usr/share/doc/<package>/copyright licence text: redistributing libav/ffmpeg needs its licence shipped"
 
 # --- 7..9. forbidden files: glibc family, host display stack, dev artifacts -
+# These patterns deliberately duplicate the staging script's filters
+# (is_glibc_family / is_host_display_stack_lib). The checker is an independent
+# second opinion: sharing one list would let a too-narrow producer filter pass
+# its own gate. The sets also differ on purpose (broader display prefixes here),
+# so they are intentionally not factored into a shared snippet.
 # Restrict the sweep to usr/lib (which includes the gstreamer-1.0 plugin dir):
 # that is where a fat bundle stages binaries, and the negative cases plant
 # their decoys there.
@@ -181,7 +186,9 @@ sampled=0
 while IFS= read -r lib; do
     check_runpath "$lib"
     sampled=$((sampled + 1))
-    [ "$sampled" -ge 5 ] && break
+    if [ "$sampled" -ge 5 ]; then
+        break
+    fi
 done < <(find "$LIB_DIR" -maxdepth 1 -type f \( -name '*.so' -o -name '*.so.*' \) | sort)
 [ "$sampled" -gt 0 ] || fail "no runtime libraries under usr/lib to verify a RUNPATH on (fail closed)"
 
@@ -189,7 +196,9 @@ sampled=0
 while IFS= read -r plugin; do
     check_runpath "$plugin"
     sampled=$((sampled + 1))
-    [ "$sampled" -ge 5 ] && break
+    if [ "$sampled" -ge 5 ]; then
+        break
+    fi
 done < <(find "$PLUGIN_DIR" -maxdepth 1 -type f -name '*.so' | sort)
 [ "$sampled" -gt 0 ] || fail "no GStreamer plugins under usr/lib/gstreamer-1.0 to verify a RUNPATH on (fail closed)"
 

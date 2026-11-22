@@ -1736,6 +1736,14 @@ fn copy_dir_tree(src: &Path, dst: &Path) {
     }
 }
 
+/// Copy the known-good checker bundle into a scratch directory so a negative
+/// case can be mutated without disturbing the fixture other checks rely on.
+fn copy_checked_bundle(toolchain: &FakeToolchain, label: &str) -> PathBuf {
+    let copy = toolchain.holder.path().join(label);
+    copy_dir_tree(&toolchain.appdir, &copy);
+    copy
+}
+
 /// Stage a bundle the checker must ACCEPT: the normal dry-run AppDir (manifest,
 /// licences, AppRun, payload) with its text stubs replaced by real ELFs carrying
 /// `$ORIGIN`-relative RUNPATHs, and enough plugins to clear the documented
@@ -1939,6 +1947,121 @@ fn checker_gate_rejects_broken_bundles() {
         &broken,
         "RUNPATH",
         "an AppDir whose usr/bin/modv has no $ORIGIN RUNPATH",
+    );
+}
+
+/// Narrowing the glibc globs to real sonames fixed a false positive on the
+/// legitimate bundled `libpthreadpool.so.0`. Pin BOTH directions: that library
+/// (and `librtmp.so.1`, the other real closure library the checker exempts)
+/// must still be accepted, so the globs cannot silently widen again.
+#[test]
+fn checker_accepts_legitimate_non_glibc_libraries() {
+    let toolchain = stage_checked_bundle();
+    let appdir = copy_checked_bundle(&toolchain, "legitimate-extra-libs");
+    let lib_dir = appdir.join("usr/lib");
+    for (index, name) in ["libpthreadpool.so.0", "librtmp.so.1"]
+        .into_iter()
+        .enumerate()
+    {
+        // Real ELFs with a good RUNPATH: even if one is sampled, the only thing
+        // under test is the forbidden-name filter.
+        let elf = compile_runpath_elf(
+            &toolchain
+                .holder
+                .path()
+                .join(format!("checker-legit-elf-{index}")),
+            name,
+            "int legit_stub(void) { return 0; }\n",
+            true,
+            Some("$ORIGIN"),
+        );
+        let path = lib_dir.join(name);
+        fs::copy(&elf, &path).unwrap_or_else(|error| panic!("cannot stage {name}: {error}"));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("cannot chmod {name}: {error}"));
+    }
+    let output = run_checker(&appdir);
+    assert!(
+        output.status.success(),
+        "the checker rejected legitimate userspace libraries (libpthreadpool.so.0, \
+         librtmp.so.1) as glibc: the forbidden globs are over-broad again.\n{}",
+        output_text(&output),
+    );
+}
+
+/// The narrowing must not over-correct: the real glibc-family sonames are still
+/// rejected, and the failure names the offending file.
+#[test]
+fn checker_rejects_full_glibc_sonames() {
+    let toolchain = stage_checked_bundle();
+    for soname in [
+        "libpthread.so.2",
+        "librt.so.1",
+        "libresolv.so.2",
+        "libmvec.so.1",
+    ] {
+        let appdir = copy_checked_bundle(&toolchain, &format!("glibc-{soname}"));
+        fs::write(appdir.join("usr/lib").join(soname), "fake host glibc\n")
+            .unwrap_or_else(|error| panic!("cannot plant {soname}: {error}"));
+        assert_checker_rejects(&appdir, soname, &format!("an AppDir that bundles {soname}"));
+    }
+}
+
+/// A corrupt manifest must fail the gate even though the file exists: the
+/// auditable package/version list is a hard requirement, not just a filename.
+#[test]
+fn checker_rejects_malformed_manifest_json() {
+    let toolchain = stage_checked_bundle();
+    let appdir = copy_checked_bundle(&toolchain, "malformed-manifest");
+    fs::write(
+        appdir.join("usr/share/vmodv/gstreamer-bundle.json"),
+        "{ this is not valid JSON\n",
+    )
+    .expect("corrupt the bundle manifest");
+    assert_checker_rejects(
+        &appdir,
+        "gstreamer-bundle.json",
+        "an AppDir whose GStreamer bundle manifest is not valid JSON",
+    );
+}
+
+/// One absolute (non-`$ORIGIN`) component in a sampled plugin's RUNPATH must fail
+/// the gate. The checker samples the first sorted `*.so` plugin (in this fixture
+/// a `libgstbundled*` one), so replacing that file guarantees the sample sees
+/// the bad RUNPATH.
+#[test]
+fn checker_rejects_absolute_plugin_runpath() {
+    let toolchain = stage_checked_bundle();
+    let appdir = copy_checked_bundle(&toolchain, "absolute-plugin-runpath");
+    let plugin_dir = appdir.join("usr/lib/gstreamer-1.0");
+    // Same ordering the checker uses: sorted `*.so` files, first one sampled.
+    let mut plugins: Vec<PathBuf> = fs::read_dir(&plugin_dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", plugin_dir.display()))
+        .map(|entry| entry.expect("read a staged plugin").path())
+        .filter(|path| {
+            path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("so")
+        })
+        .collect();
+    plugins.sort();
+    let target = plugins
+        .into_iter()
+        .next()
+        .expect("stage_checked_bundle plants at least 100 plugins");
+    let mixed = compile_runpath_elf(
+        &toolchain.holder.path().join("checker-absolute-elf-work"),
+        "libabsolute-runpath.so",
+        "int abs_stub(void) { return 0; }\n",
+        true,
+        Some("$ORIGIN:/usr/lib/x86_64-linux-gnu"),
+    );
+    fs::copy(&mixed, &target)
+        .unwrap_or_else(|error| panic!("cannot replace {}: {error}", target.display()));
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", target.display()));
+    assert_checker_rejects(
+        &appdir,
+        "absolute, not $ORIGIN-relative",
+        "an AppDir whose sampled plugin has an absolute RUNPATH component",
     );
 }
 
