@@ -54,6 +54,8 @@ RUN apt-get update \
       gstreamer1.0-plugins-bad \
       gstreamer1.0-libav \
       gstreamer1.0-pipewire \
+      patchelf \
+      pax-utils \
       libclang-dev \
       libxkbcommon-dev \
       libxkbcommon-x11-0 \

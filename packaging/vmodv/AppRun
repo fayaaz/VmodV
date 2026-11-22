@@ -3,4 +3,23 @@ set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export MODV_ISF_DIR="${MODV_ISF_DIR:-$HERE/usr/share/vmodv/isf}"
 export MODV_ASSETS_DIR="${MODV_ASSETS_DIR:-$HERE/usr/share/vmodv/textures}"
+
+# The fat AppImage bundles the build container's GStreamer runtime under
+# usr/lib/gstreamer-1.0 (plugins), usr/libexec/gstreamer-1.0 (the plugin
+# scanner) and usr/lib (the shared-library closure). Point GStreamer at the
+# bundle first, then blank the host plugin search paths: without that the
+# host's own plugins are still probed and their symbols clash with the
+# bundled gstreamer core. The glibc family intentionally stays the host's.
+export GST_PLUGIN_PATH_1_0="$HERE/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_PATH="$GST_PLUGIN_PATH_1_0"
+export GST_PLUGIN_SYSTEM_PATH_1_0=""
+export GST_PLUGIN_SYSTEM_PATH=""
+export GST_PLUGIN_SCANNER_1_0="$HERE/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+export GST_PLUGIN_SCANNER="$GST_PLUGIN_SCANNER_1_0"
+# The AppImage payload is mounted read-only, so GStreamer's plugin registry
+# must live in the user's own cache directory.
+GST_REGISTRY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/VmodV"
+mkdir -p "$GST_REGISTRY_DIR" 2>/dev/null || true
+export GST_REGISTRY="$GST_REGISTRY_DIR/gstreamer-registry.bin"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$HERE/usr/bin/log-run.sh" "$HERE/usr/bin/modv" "$@"
