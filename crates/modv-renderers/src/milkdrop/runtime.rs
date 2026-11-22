@@ -3329,6 +3329,115 @@ ret = uv;\n\
         );
     }
 
+    // --- Built-in waveform for v1 presets (RED) ----------------------------
+
+    /// Build a v1-style document: no `shader_body` strings, no `wavecode_*`
+    /// sections. `wave_a`/`wave_scale` are base vals; `wave_r/g/b/x/y` are
+    /// per-frame EEL variables in a real MilkDrop 1 preset.
+    fn v1_builtin_wave_doc() -> MilkDocument {
+        let mut doc = MilkDocument {
+            version: 1,
+            name: "v1-builtin-wave".to_string(),
+            frame_eqs: "wave_r = 1; wave_g = 0; wave_b = 0; wave_x = 0.5; wave_y = 0.5;"
+                .to_string(),
+            warp: String::new(),
+            comp: String::new(),
+            ..Default::default()
+        };
+        doc.base.wave_a = 2.0;
+        doc.base.wave_scale = 0.5;
+        doc
+    }
+
+    /// A non-flat 1024-sample sine so a sample-driven wave is observable.
+    fn sine_audio_frame() -> MilkFrameInfo {
+        let mut f = frame(0.5, 0.25, 0.75, 1, 0.016);
+        for (index, sample) in f.audio.wave.iter_mut().enumerate() {
+            *sample = (index as f32 * std::f32::consts::TAU / 64.0).sin();
+        }
+        f
+    }
+
+    #[test]
+    fn builtin_wave_is_generated_when_no_custom_waves_and_wave_a_positive() {
+        let cache = MilkFailureCache::new();
+        let doc = v1_builtin_wave_doc();
+        assert!(
+            doc.active_waves().is_empty(),
+            "this fixture must have no custom wave sections"
+        );
+        let f = sine_audio_frame();
+
+        let mut enabled = new_instance(
+            compile_preset("v1-builtin-on", &doc, &cache).expect("fixture compiles"),
+            0xBEEF,
+        );
+        begin_frame(&mut enabled, &f).expect("begin_frame");
+        let overlays = evaluate_overlays(&mut enabled, &f).expect("evaluate_overlays");
+
+        assert!(
+            !overlays.waves.is_empty(),
+            "wave_a > 0 with no custom waves must synthesise a built-in wave overlay"
+        );
+        let wave = &overlays.waves[0];
+        assert!(
+            wave.enabled,
+            "the synthesised built-in wave must be enabled"
+        );
+        assert!(
+            !wave.points.is_empty(),
+            "the built-in wave must contribute at least one sample point"
+        );
+        for (index, point) in wave.points.iter().enumerate() {
+            assert!(
+                point.x.is_finite() && point.y.is_finite() && point.sample.is_finite(),
+                "built-in wave point {index} must have finite x/y/sample, got {point:?}"
+            );
+        }
+
+        // Colour comes from wave_r/g/b/a (alpha clamped to [0, 1]).
+        approx!(wave.pool.get("r"), 1.0, "wave_r -> red");
+        approx!(wave.pool.get("g"), 0.0, "wave_g -> green");
+        approx!(wave.pool.get("b"), 0.0, "wave_b -> blue");
+        let alpha = wave.pool.get("a");
+        assert!(
+            alpha.is_finite() && (0.0..=1.0).contains(&alpha),
+            "wave_a = 2.0 must be clamped into [0, 1], got {alpha}"
+        );
+
+        // Deterministic for identical audio/frame and seed.
+        let mut again = new_instance(
+            compile_preset("v1-builtin-again", &doc, &cache).expect("fixture compiles"),
+            0xBEEF,
+        );
+        begin_frame(&mut again, &f).expect("begin_frame");
+        let again_overlays = evaluate_overlays(&mut again, &f).expect("evaluate_overlays");
+        assert_eq!(
+            again_overlays.waves.len(),
+            overlays.waves.len(),
+            "built-in wave count must be deterministic"
+        );
+        assert_eq!(
+            again_overlays.waves[0].points, overlays.waves[0].points,
+            "built-in wave points must be identical for identical audio/frame"
+        );
+
+        // wave_a == 0 must produce no built-in wave at all.
+        let mut zero_doc = doc;
+        zero_doc.base.wave_a = 0.0;
+        let mut zero = new_instance(
+            compile_preset("v1-builtin-off", &zero_doc, &cache).expect("fixture compiles"),
+            0xBEEF,
+        );
+        begin_frame(&mut zero, &f).expect("begin_frame");
+        let zero_overlays = evaluate_overlays(&mut zero, &f).expect("evaluate_overlays");
+        assert!(
+            zero_overlays.waves.is_empty(),
+            "wave_a == 0 must produce no built-in wave, got {} wave(s)",
+            zero_overlays.waves.len()
+        );
+    }
+
     // --- Built-in noise samplers (RED) -------------------------------------
 
     #[test]
@@ -4197,6 +4306,82 @@ mod gpu_tests {
             .count()
     }
 
+    /// Like `render_pixels`, but accepts a caller-supplied audio frame so a
+    /// non-flat 1024-sample wave can drive the built-in waveform.
+    fn render_pixels_with_frame(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        runtime: &MilkRuntime,
+        doc: MilkDocument,
+        frame: MilkFrameInfo,
+    ) -> Vec<u8> {
+        let name = doc.name.clone();
+        let compiled = compile_preset(&name, &doc, &runtime.failures).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 7);
+        begin_frame(&mut instance, &frame).expect("begin_frame");
+        let mesh = evaluate_mesh(&mut instance, &frame).expect("evaluate_mesh");
+
+        let previous = test_texture(device, WIDTH, HEIGHT, "builtin-wave RED previous");
+        clear_to(device, queue, &previous, [0.0, 0.0, 0.0, 1.0]);
+        let previous_view = previous.create_view(&wgpu::TextureViewDescriptor::default());
+        let output = test_texture(device, WIDTH, HEIGHT, "builtin-wave RED output");
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut targets = MilkGpuTargets::new(device, WIDTH, HEIGHT);
+
+        let _ = evaluate_overlays(&mut instance, &frame).expect("evaluate_overlays");
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &output_view,
+            )
+            .expect("render");
+        read_texture(device, queue, &output).expect("read back")
+    }
+
+    /// A v1-style GPU fixture: no wavecode sections, black comp, identity
+    /// output and a red built-in wave configured through base vals + frame EEL.
+    fn builtin_wave_gpu_doc() -> MilkDocument {
+        let mut doc = doc_with_comp("float3 ret = vec3(0.0);");
+        doc.version = 1;
+        doc.name = "v1-builtin-wave-gpu".to_string();
+        doc.frame_eqs =
+            "wave_r = 1; wave_g = 0; wave_b = 0; wave_x = 0.5; wave_y = 0.5;".to_string();
+        doc.base.wave_a = 2.0;
+        doc.base.wave_scale = 0.5;
+        identity_output(&mut doc);
+        doc
+    }
+
+    fn sine_gpu_frame() -> MilkFrameInfo {
+        let mut f = frame();
+        for (index, sample) in f.audio.wave.iter_mut().enumerate() {
+            *sample = (index as f32 * std::f32::consts::TAU / 64.0).sin();
+        }
+        f
+    }
+
+    fn red_dominant_count(pixels: &[u8]) -> usize {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 40 && p[0] > p[1].saturating_mul(2) && p[0] > p[2].saturating_mul(2))
+            .count()
+    }
+
+    fn green_dominant_count(pixels: &[u8]) -> usize {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[1] > 40 && p[1] > p[0].saturating_mul(2) && p[1] > p[2].saturating_mul(2))
+            .count()
+    }
+
     #[test]
     fn gpu_wave_overlay_enabled_changes_pixels_vs_disabled() {
         let (device, queue) = match gpu() {
@@ -4228,6 +4413,132 @@ mod gpu_tests {
             "the enabled wave must produce more bright pixels (on={}, off={})",
             bright_count(&on_pixels),
             bright_count(&off_pixels)
+        );
+    }
+
+    /// A v1 preset with no custom waves must paint visible, red-dominant
+    /// pixels from its built-in waveform, deterministically. A control doc
+    /// with `wave_a == 0` must leave the black comp untouched.
+    #[test]
+    fn gpu_builtin_wave_renders_coloured_pixels() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_builtin_wave_renders_coloured_pixels: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let render_once = || {
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            render_pixels_with_frame(
+                &device,
+                &queue,
+                &runtime,
+                builtin_wave_gpu_doc(),
+                sine_gpu_frame(),
+            )
+        };
+
+        let first = render_once();
+        let second = render_once();
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 output must be read back"
+        );
+        assert!(
+            red_dominant_count(&first) > 0,
+            "the built-in red wave must paint red-dominant pixels, got {} (first 8 RGBA: {:?})",
+            red_dominant_count(&first),
+            first.as_chunks::<4>().0.iter().take(8).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            first, second,
+            "two renders of the same built-in wave must be byte-identical"
+        );
+
+        let mut off = builtin_wave_gpu_doc();
+        off.base.wave_a = 0.0;
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let off_pixels = render_pixels_with_frame(&device, &queue, &runtime, off, sine_gpu_frame());
+        assert_pixels_near(&off_pixels, [0, 0, 0], 4, "wave_a == 0 control");
+    }
+
+    /// Custom compiled waves keep priority: with one enabled `wavecode_*`
+    /// section the built-in wave must NOT also be drawn.
+    ///
+    /// CPU-side counts are used for the priority check (the two overlays can
+    /// overlap in pixel space); the control half verifies that the built-in
+    /// wave is synthesised once the custom wave is disabled. A GPU pixel check
+    /// confirms no red (built-in) pixels appear alongside the green custom
+    /// wave.
+    #[test]
+    fn gpu_custom_wave_takes_priority_over_builtin() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "skipping gpu_custom_wave_takes_priority_over_builtin: no GPU adapter in this environment"
+                );
+                return;
+            }
+        };
+
+        let make_doc = || {
+            let mut doc = builtin_wave_gpu_doc();
+            doc.name = "custom-wave-priority".to_string();
+            doc.waves[0].enabled = true;
+            doc.waves[0].frame_eqs = "r = 0; g = 1; b = 0; a = 1;".to_string();
+            doc.waves[0].point_eqs = "y = value1;".to_string();
+            doc
+        };
+
+        let f = sine_gpu_frame();
+        let cache = MilkFailureCache::new();
+
+        let custom_doc = make_doc();
+        let mut custom = new_instance(
+            compile_preset("custom-priority", &custom_doc, &cache).expect("fixture compiles"),
+            7,
+        );
+        begin_frame(&mut custom, &f).expect("begin_frame");
+        let custom_overlays = evaluate_overlays(&mut custom, &f).expect("evaluate_overlays");
+        assert_eq!(
+            custom_overlays.waves.len(),
+            1,
+            "one custom wave + wave_a > 0 must draw exactly one wave (no double-draw)"
+        );
+
+        // Control: with the custom wave disabled the built-in wave must appear.
+        let mut control_doc = make_doc();
+        control_doc.waves[0].enabled = false;
+        let mut control = new_instance(
+            compile_preset("custom-priority-control", &control_doc, &cache)
+                .expect("fixture compiles"),
+            7,
+        );
+        begin_frame(&mut control, &f).expect("begin_frame");
+        let control_overlays = evaluate_overlays(&mut control, &f).expect("evaluate_overlays");
+        assert_eq!(
+            control_overlays.waves.len(),
+            1,
+            "with no custom waves, wave_a > 0 must produce exactly one built-in wave"
+        );
+
+        // Pixel-level guard: the custom wave is green, the built-in is red.
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let pixels = render_pixels_with_frame(&device, &queue, &runtime, make_doc(), f);
+        assert!(
+            green_dominant_count(&pixels) > 0,
+            "the custom green wave must be visible"
+        );
+        assert_eq!(
+            red_dominant_count(&pixels),
+            0,
+            "the built-in red wave must not be drawn when a custom wave exists"
         );
     }
 
