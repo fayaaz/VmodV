@@ -5,9 +5,10 @@
 #
 # Common targets:
 #   make build            VmodV AppImage + .deb into dist/ (clean first)
-#   make appimage-vmodv  VmodV AppImage only
+#   make appimage-vmodv  VmodV AppImage only (runs vmodv-appimage-check.sh)
 #   make vmodv-deb       VmodV .deb (runs vmodv-deb-check.sh)
 #   make vmodv-deb-check re-check an existing .deb
+#   make vmodv-appimage-check re-check an existing AppImage's fat bundle
 #   make dev              VmodV shell (release; MODV_UI is gone)
 #   make vmodv-debug     VmodV shell, debug profile
 #   make engine           release workspace build
@@ -81,7 +82,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-vmodv vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean version
+.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean version
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -115,6 +116,9 @@ version:
 build: clean appimage-vmodv vmodv-deb
 
 # VmodV AppImage: reusable Rust toolchain image + cargo cache, no Electron.
+# tools/vmodv-appimage.sh verifies the fat bundle with
+# tools/vmodv-appimage-check.sh on the image it just produced, so `make build`
+# (and this target) fails on a thin bundle just like `vmodv-deb` does.
 appimage-vmodv: disk-guard docker-cargo-volume
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
@@ -131,6 +135,22 @@ appimage-vmodv: disk-guard docker-cargo-volume
 
 # Backwards-compatible alias for the only AppImage build that exists.
 appimage: appimage-vmodv
+
+# Re-run the fat-bundle content checks on an already-built AppImage. Mirrors
+# vmodv-deb-check: the checker runs in the toolchain container because it uses
+# readelf to verify the $ORIGIN-relative RUNPATHs.
+vmodv-appimage-check: docker-rust
+	mkdir -p "$(DIST_DIR)"
+	$(DOCKER) run --rm \
+		--ulimit core=0 \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		-e APP_VERSION=$(VMODV_VERSION) \
+		-e DIST_DIR=$(DIST_DIR) \
+		-v "$(CURDIR)":/app \
+		-w /app \
+		$(DOCKER_RUN_ARGS) \
+		"$(RUST_IMAGE)" \
+		bash /app/tools/vmodv-appimage-check.sh /app/$(DIST_DIR)/VmodV-$(VMODV_VERSION)-x86_64.AppImage
 
 # VmodV Debian package. Reuses the cargo cache; the script builds the release
 # `modv` binary, assembles the package tree and verifies the result with

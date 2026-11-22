@@ -149,6 +149,11 @@ jobs:
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
 
+      # The fat AppImage bundle gate: its tests stage real ELF fixtures and
+      # exercise tools/vmodv-appimage-check.sh against good/broken AppDirs.
+      - name: VmodV AppImage bundle check tests (serial)
+        run: make engine-test ARGS="-p modv-app --test appimage_bundle -- --test-threads=1"
+
       # Integration test: the Windows portable ZIP layout is staged by
       # tools/windows-portable.sh --dry-run inside Linux Docker. Not covered by
       # the --lib step above, so it is run explicitly here.
@@ -206,6 +211,9 @@ jobs:
 
       - name: Build VmodV AppImage and .deb
         run: make build
+
+      - name: Verify the fat AppImage bundle
+        run: make vmodv-appimage-check
 
       - name: Inspect installers
         run: |

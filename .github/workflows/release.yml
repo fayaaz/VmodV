@@ -344,6 +344,11 @@ jobs:
         env:
           VMODV_VERSION: ${{ env.VERSION }}
 
+      - name: Verify the fat AppImage bundle before publishing
+        run: make vmodv-appimage-check
+        env:
+          VMODV_VERSION: ${{ env.VERSION }}
+
       - name: Inspect installers
         run: |
           ls -lh dist
