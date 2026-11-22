@@ -1814,14 +1814,46 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
     }
 }
 
+/// Normalised parameter `t` in `[0, 1]` for sample `index` of `samples`.
+///
+/// A single sample is pinned to the midpoint so the waveform stays centred.
+/// Shared by the compiled-wave and built-in-wave paths so both lay samples out
+/// identically before they are mapped into NDC.
+fn wave_sample_t(index: usize, samples: usize) -> f32 {
+    if samples > 1 {
+        index as f32 / (samples - 1) as f32
+    } else {
+        0.5
+    }
+}
+
+/// Map a normalised sample parameter `t` in `[0, 1]` to NDC `x` in `[-1, 1]`.
+///
+/// Both wave paths use this so the polyline spans the full output width. The
+/// overlay vertex builder clamps `x` into `[-1, 1]`, so leaving the built-in
+/// wave at `t` would draw only the right half of the canvas.
+fn wave_ndc_x(t: f32) -> f32 {
+    t * 2.0 - 1.0
+}
+
 /// Synthesise the MilkDrop v1 built-in wave for presets that have no custom
 /// `wavecode_*` sections but still request a waveform through `wave_a > 0`.
+///
+/// The gate lives in [`evaluate_overlays`]: the built-in is only pushed when
+/// there are zero compiled custom-wave programs **and** `base.wave_a > 0`,
+/// so an enabled custom wave always keeps priority and the two never overlap.
+/// Unset EEL variables default to zero, so a preset that never writes the wave
+/// variables still produces a (flat, black) overlay rather than no overlay.
 ///
 /// The overlay reuses the exact same surface as a compiled custom wave — a
 /// [`WaveOverlay`] with a colour/additive frame pool and one [`WavePoint`] per
 /// audio sample — so the existing GPU wave pass draws it without any changes.
-/// Point positions are derived purely from the audio samples and the preset's
-/// base values, which makes identical inputs produce byte-identical overlays.
+/// Colour comes from the frame-level EEL variables `wave_r/g/b` captured in
+/// `instance.pool` by `begin_frame`; alpha comes from `base.wave_a` clamped to
+/// `[0, 1]` and `additive` from `base.additivewave`. Position comes from the
+/// frame-level `wave_y` variable plus `base.wave_scale` times each audio sample,
+/// with `x` spanning the full `[-1, 1]` NDC width. All inputs are pure values,
+/// so identical audio/frames produce byte-identical overlays.
 fn evaluate_builtin_wave(
     instance: &MilkInstance,
     frame: &MilkFrameInfo,
@@ -1844,14 +1876,10 @@ fn evaluate_builtin_wave(
     let wave_scale = base.wave_scale as f32;
     let mut points = Vec::with_capacity(samples);
     for index in 0..samples {
-        let t = if samples > 1 {
-            index as f32 / (samples - 1) as f32
-        } else {
-            0.5
-        };
+        let t = wave_sample_t(index, samples);
         let audio_value = frame.audio.wave.get(index).copied().unwrap_or(0.0);
         points.push(WavePoint {
-            x: t,
+            x: wave_ndc_x(t),
             y: wave_y + audio_value * wave_scale,
             sample: t,
             value1: audio_value,
@@ -2058,12 +2086,8 @@ fn evaluate_one_wave(
     let mut point_pool = state.pool.clone();
     let mut points = Vec::with_capacity(samples);
     for index in 0..samples {
-        let t = if samples > 1 {
-            index as f32 / (samples - 1) as f32
-        } else {
-            0.5
-        };
-        let x = t * 2.0 - 1.0;
+        let t = wave_sample_t(index, samples);
+        let x = wave_ndc_x(t);
         let audio_value = audio_wave.get(index).copied().unwrap_or(0.0);
         point_pool.set("sample", t);
         point_pool.set("value1", audio_value);
