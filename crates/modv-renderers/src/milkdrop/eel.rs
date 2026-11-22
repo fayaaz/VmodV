@@ -858,15 +858,31 @@ impl Parser {
         Ok(stmts)
     }
 
+    /// Parse a control-flow body: either a braced `{ ... }` block or, as real
+    /// MilkDrop 2 presets commonly write it, a single brace-less statement.
+    /// Both forms yield a `Vec<Stmt>` so the evaluator can reuse `exec_block`.
+    fn parse_body(&mut self) -> Result<Vec<Stmt>, EelError> {
+        self.skip_seps();
+        if matches!(self.peek(), Tok::LBrace) {
+            self.parse_block()
+        } else {
+            Ok(vec![self.parse_stmt()?])
+        }
+    }
+
     fn parse_stmt(&mut self) -> Result<Stmt, EelError> {
         if self.is_ident("if") && matches!(self.peek2(), Tok::LParen) {
             self.pos += 2; // consume `if` `(`
             let cond = self.parse_expr()?;
             self.expect(&Tok::RParen)?;
-            let then_body = self.parse_block()?;
+            let then_body = self.parse_body()?;
+            // A brace-less body leaves its trailing `;` unconsumed, so skip
+            // separators before deciding whether an `else` follows. This also
+            // binds a dangling `else` to the nearest (innermost) `if`.
+            self.skip_seps();
             let else_body = if self.is_ident("else") {
                 self.pos += 1;
-                self.parse_block()?
+                self.parse_body()?
             } else {
                 Vec::new()
             };
@@ -880,14 +896,14 @@ impl Parser {
             self.pos += 2;
             let cond = self.parse_expr()?;
             self.expect(&Tok::RParen)?;
-            let body = self.parse_block()?;
+            let body = self.parse_body()?;
             return Ok(Stmt::While { cond, body });
         }
         if self.is_ident("loop") && matches!(self.peek2(), Tok::LParen) {
             self.pos += 2;
             let count = self.parse_expr()?;
             self.expect(&Tok::RParen)?;
-            let body = self.parse_block()?;
+            let body = self.parse_body()?;
             return Ok(Stmt::Loop { count, body });
         }
         Ok(Stmt::Expr(self.parse_expr()?))
@@ -1785,8 +1801,8 @@ out = q1 + q2 + acc + megabuf[10];
 
     #[test]
     fn braceless_else_if_chain_selects_the_correct_branch() {
-        let eq = compile("if (a) x=1; else if (b) x=2; else x=3;", 2)
-            .expect("else-if chain compiles");
+        let eq =
+            compile("if (a) x=1; else if (b) x=2; else x=3;", 2).expect("else-if chain compiles");
         let run = |a: f32, b: f32| {
             let mut pool = VarPool::with_seed(1);
             pool.set("a", a);
@@ -1857,7 +1873,11 @@ out = q1 + q2 + q3 + q4 + q5 + megabuf[5];
         let a = run_once();
         let b = run_once();
         approx!(a.get("q1"), 0.1, "q accumulator");
-        approx!(a.get("q3"), 0.8_f32.powf(2.0), "nested if(above(...), pow(...))");
+        approx!(
+            a.get("q3"),
+            0.8_f32.powf(2.0),
+            "nested if(above(...), pow(...))"
+        );
         approx!(a.get("q5"), 1.0, "brace-less if driven by above()");
         approx!(a.megabuf(5), 0.01, "min/max clamped megabuf write");
         assert!(a.get("out").is_finite(), "outputs must be finite");
@@ -1870,14 +1890,23 @@ out = q1 + q2 + q3 + q4 + q5 + megabuf[5];
         // An empty body (`;`) is not a statement: even with brace-less support
         // this must remain a typed ParseError, never a panic.
         let res = std::panic::catch_unwind(|| compile("if (x>0) ;", 2));
-        assert!(res.is_ok(), "compile must not panic on malformed braceless if");
+        assert!(
+            res.is_ok(),
+            "compile must not panic on malformed braceless if"
+        );
         assert!(
             matches!(res.expect("no panic"), Err(EelError::ParseError(_))),
             "expected a typed ParseError"
         );
 
         let res = std::panic::catch_unwind(|| compile("while (x<1) ;", 2));
-        assert!(res.is_ok(), "compile must not panic on malformed braceless while");
-        assert!(matches!(res.expect("no panic"), Err(EelError::ParseError(_))));
+        assert!(
+            res.is_ok(),
+            "compile must not panic on malformed braceless while"
+        );
+        assert!(matches!(
+            res.expect("no panic"),
+            Err(EelError::ParseError(_))
+        ));
     }
 }
