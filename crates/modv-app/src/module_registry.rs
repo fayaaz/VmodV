@@ -761,8 +761,8 @@ impl ModuleRegistry {
     /// Build the registry with the ISF corpus plus user MilkDrop directories.
     ///
     /// `milkdrop_dirs` are scanned recursively by
-    /// [`collect_milkdrop_definitions`]: case-insensitive `.mlk` files, sorted
-    /// paths, hidden/temporary and symlink entries skipped, and the first
+    /// [`collect_milkdrop_definitions`]: case-insensitive `.mlk`/`.milk` files,
+    /// sorted paths, hidden/temporary and symlink entries skipped, and the first
     /// sorted path winning a duplicate file stem. The walk shares the user-ISF
     /// caps [`USER_ISF_MAX_DEPTH`] and [`USER_ISF_MAX_ENTRIES`].
     pub fn build_with_milkdrop(
@@ -1572,15 +1572,15 @@ struct ScannedIsf {
 
 /// One sorted, bounded walk of a user module directory.
 ///
-/// `extension` selects which files are collected (case-insensitively) and
+/// `extensions` selects which files are collected (case-insensitively) and
 /// `label` names the module kind in warning messages. The walker is shared by
-/// the ISF (`.fs`) and MilkDrop (`.mlk`) scanners so both honour identical
-/// hidden/temporary/symlink skips and the depth/entry caps carried by
+/// the ISF (`.fs`) and MilkDrop (`.mlk`/`.milk`) scanners so both honour
+/// identical hidden/temporary/symlink skips and the depth/entry caps carried by
 /// [`IsfScanLimits`] (the user caps reuse [`USER_ISF_MAX_DEPTH`] and
 /// [`USER_ISF_MAX_ENTRIES`]).
 struct ModuleFileScan {
     limits: IsfScanLimits,
-    extension: &'static str,
+    extensions: &'static [&'static str],
     label: &'static str,
     files: Vec<PathBuf>,
     visited: usize,
@@ -1591,19 +1591,19 @@ struct ModuleFileScan {
 impl ModuleFileScan {
     /// The ISF scanner: case-insensitive `.fs`, labelled "ISF" in warnings.
     fn collect(root: &Path, limits: IsfScanLimits) -> Self {
-        Self::collect_with_extension(root, limits, "fs", "ISF")
+        Self::collect_with_extensions(root, limits, &["fs"], "ISF")
     }
 
-    /// A generic scanner for the given extension and warning label.
-    fn collect_with_extension(
+    /// A generic scanner for the given extensions and warning label.
+    fn collect_with_extensions(
         root: &Path,
         limits: IsfScanLimits,
-        extension: &'static str,
+        extensions: &'static [&'static str],
         label: &'static str,
     ) -> Self {
         let mut scan = Self {
             limits,
-            extension,
+            extensions,
             label,
             files: Vec::new(),
             visited: 0,
@@ -1693,7 +1693,11 @@ impl ModuleFileScan {
             if path
                 .extension()
                 .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case(self.extension))
+                .is_some_and(|extension| {
+                    self.extensions
+                        .iter()
+                        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+                })
             {
                 self.files.push(path);
             }
@@ -1839,16 +1843,16 @@ fn scan_isf_directory(dir: &Path, limits: IsfScanLimits) -> Vec<ScannedIsf> {
     definitions
 }
 
-/// The `.mlk` files under `dir`, sorted by path and bounded by `limits`.
+/// The `.mlk`/`.milk` files under `dir`, sorted by path and bounded by `limits`.
 fn scan_milk_paths(dir: &Path, limits: IsfScanLimits) -> Vec<PathBuf> {
-    ModuleFileScan::collect_with_extension(dir, limits, "mlk", "MilkDrop").files
+    ModuleFileScan::collect_with_extensions(dir, limits, &["mlk", "milk"], "MilkDrop").files
 }
 
 /// Collect MilkDrop presets from user directories.
 ///
 /// Roots are sorted and deduplicated before walking. Each root is scanned with
 /// the same bounded walker as user ISF folders (see [`ModuleFileScan`]):
-/// case-insensitive `.mlk` matches, sorted paths, hidden/temporary entries and
+/// case-insensitive `.mlk`/`.milk` matches, sorted paths, hidden/temporary entries and
 /// symlinks skipped, recursion capped by [`USER_ISF_MAX_DEPTH`] and
 /// [`USER_ISF_MAX_ENTRIES`]. The first sorted path wins a duplicate file stem;
 /// later duplicates are logged and skipped. Each preset is parsed header-only

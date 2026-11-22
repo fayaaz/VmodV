@@ -287,7 +287,7 @@ pub fn supported(folder: MediaFolder, name: &str) -> bool {
         MediaFolder::Video => matches!(extension.as_str(), "mp4" | "webm" | "webv"),
         MediaFolder::Palette => extension == "json",
         // The extension was lower-cased above, so this is case-insensitive.
-        MediaFolder::Milkdrop => extension == "mlk",
+        MediaFolder::Milkdrop => matches!(extension.as_str(), "mlk" | "milk"),
     }
 }
 
