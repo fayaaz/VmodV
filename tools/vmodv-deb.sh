@@ -8,29 +8,87 @@
 # /usr/lib/vmodv, the ISF corpus, the Point10 textures, a desktop entry
 # and an icon. GStreamer/PipeWire/Vulkan/ALSA/X11 are declared as host runtime
 # dependencies in DEBIAN/control.
+#
+# Modes
+#   real (default)  cargo build + stage + dpkg-deb + tools/vmodv-deb-check.sh.
+#                   DEB_SUFFIX from the environment is appended to the artifact
+#                   name and forwarded to the checker.
+#   --dry-run       stage the identical package tree from explicit fake inputs
+#                   (guarded by crates/modv-app/tests/deb_package.rs): no cargo
+#                   build, no dpkg-deb and no checker invocation. The staged
+#                   tree is left in place so callers can inspect DEBIAN/control.
+#
+# Flags (real-mode default in brackets):
+#   --dry-run          stage only; run no cargo build, dpkg-deb or checker
+#   --project-root DIR repository root [ROOT, default /app]
+#   --binary FILE      modv binary [<project-root>/crates/target/release/modv]
+#   --dist DIR         output directory [<project-root>/dist]
+#   --version VER      package version [APP_VERSION / VMODV_VERSION / tools/version.sh]
+#   --suffix SUFFIX    appended verbatim to the artifact name [DEB_SUFFIX, empty]
 set -euo pipefail
 
-ROOT="${ROOT:-/app}"
-VERSION="${APP_VERSION:-${VMODV_VERSION:-$(bash "$ROOT/tools/version.sh")}}"
-DIST="${DIST_DIR:-$ROOT/dist}"
+DRY_RUN=0
+ROOT="${ROOT:-}"
+BINARY=""
+DIST_ARG=""
+VERSION_ARG=""
+SUFFIX_ARG=""
+
+usage() {
+    cat <<'EOF'
+Usage: tools/vmodv-deb.sh [options]
+  --dry-run              stage the package tree from explicit fake inputs (no cargo/dpkg-deb/checker)
+  --project-root DIR     repository root (default: ROOT or /app)
+  --binary FILE          modv binary (default: <project-root>/crates/target/release/modv)
+  --dist DIR             output directory (default: <project-root>/dist)
+  --version VER          package version (default: APP_VERSION / VMODV_VERSION / tools/version.sh)
+  --suffix SUFFIX        artifact-name suffix (default: DEB_SUFFIX or empty)
+  -h, --help             show this help
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --dry-run)         DRY_RUN=1; shift ;;
+        --project-root)    ROOT="${2:?--project-root needs a value}"; shift 2 ;;
+        --binary)          BINARY="${2:?--binary needs a value}"; shift 2 ;;
+        --dist)            DIST_ARG="${2:?--dist needs a value}"; shift 2 ;;
+        --version)         VERSION_ARG="${2:?--version needs a value}"; shift 2 ;;
+        --suffix)          SUFFIX_ARG="${2:?--suffix needs a value}"; shift 2 ;;
+        -h|--help)         usage; exit 0 ;;
+        *)
+            echo "error: unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+[ -n "$ROOT" ] || ROOT="/app"
+BINARY="${BINARY:-$ROOT/crates/target/release/modv}"
+DIST="${DIST_ARG:-${DIST_DIR:-$ROOT/dist}}"
 case "$DIST" in
     /*) ;;
     *) DIST="$ROOT/$DIST" ;;
 esac
+VERSION="${VERSION_ARG:-${APP_VERSION:-${VMODV_VERSION:-$(bash "$ROOT/tools/version.sh")}}}"
+SUFFIX="${SUFFIX_ARG:-${DEB_SUFFIX:-}}"
 
-PKG="VmodV-$VERSION-amd64"
+PKG="VmodV-$VERSION-amd64$SUFFIX"
 PKGROOT="$DIST/$PKG"
 DEB="$DIST/$PKG.deb"
 
 cleanup() {
     rm -rf "$PKGROOT"
 }
-trap cleanup EXIT
-
-command -v dpkg-deb >/dev/null || {
-    echo "error: dpkg-deb not found; install dpkg in the Rust toolchain image" >&2
-    exit 1
-}
+# A dry run leaves the staged tree in place so callers can inspect DEBIAN/control.
+if [ "$DRY_RUN" -eq 0 ]; then
+    trap cleanup EXIT
+    command -v dpkg-deb >/dev/null || {
+        echo "error: dpkg-deb not found; install dpkg in the Rust toolchain image" >&2
+        exit 1
+    }
+fi
 
 rm -rf "$PKGROOT" "$DEB"
 install -d -m 0755 \
@@ -44,10 +102,12 @@ install -d -m 0755 \
 
 # The crate version is packaging metadata's default; APP_VERSION/VMODV_VERSION
 # only override the .deb version (the AppImage does the same).
-cargo build --locked --release --manifest-path "$ROOT/crates/Cargo.toml" \
-    -p modv-app --bin modv
+if [ "$DRY_RUN" -eq 0 ]; then
+    cargo build --locked --release --manifest-path "$ROOT/crates/Cargo.toml" \
+        -p modv-app --bin modv
+fi
 
-install -Dm755 "$ROOT/crates/target/release/modv" \
+install -Dm755 "$BINARY" \
     "$PKGROOT/usr/lib/vmodv/modv"
 install -Dm755 "$ROOT/packaging/vmodv/log-run.sh" \
     "$PKGROOT/usr/lib/vmodv/log-run.sh"
@@ -90,12 +150,17 @@ chmod 0644 "$PKGROOT/DEBIAN/control"
 ) >"$PKGROOT/DEBIAN/md5sums"
 chmod 0644 "$PKGROOT/DEBIAN/md5sums"
 
-dpkg-deb --build --root-owner-group "$PKGROOT" "$DEB"
-rm -rf "$PKGROOT"
+if [ "$DRY_RUN" -eq 0 ]; then
+    dpkg-deb --build --root-owner-group "$PKGROOT" "$DEB"
+    rm -rf "$PKGROOT"
 
-if [ -f "$ROOT/tools/vmodv-deb-check.sh" ]; then
-    ROOT="$ROOT" DIST_DIR="$DIST" APP_VERSION="$VERSION" \
-        bash "$ROOT/tools/vmodv-deb-check.sh"
+    if [ -f "$ROOT/tools/vmodv-deb-check.sh" ]; then
+        ROOT="$ROOT" DIST_DIR="$DIST" APP_VERSION="$VERSION" DEB_SUFFIX="$SUFFIX" \
+            bash "$ROOT/tools/vmodv-deb-check.sh"
+    fi
+    echo "VmodV .deb: $DEB ($(du -h "$DEB" | cut -f1))"
+else
+    STAGED=$(find "$PKGROOT" -type f | wc -l | tr -d ' ')
+    echo "VmodV .deb dry run (staged, not built): $DEB"
+    echo "  staged files: $STAGED, installed: ${INSTALLED_KIB} KiB"
 fi
-
-echo "VmodV .deb: $DEB ($(du -h "$DEB" | cut -f1))"

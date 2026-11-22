@@ -28,6 +28,11 @@ VMODV_VERSION ?= $(shell "$(CURDIR)/tools/version.sh")
 NODE_IMAGE ?= node:24-slim
 DOCKER_BUILD_ARGS ?=
 DIST_DIR ?= dist
+# Build image base and .deb artifact suffix. The release workflow overrides
+# both per Ubuntu leg (--build-arg BASE_IMAGE=ubuntu:..., DEB_SUFFIX=-ubuntu...);
+# local builds keep Debian trixie and the unsuffixed artifact.
+BASE_IMAGE ?= debian:trixie-slim
+DEB_SUFFIX ?=
 
 DOCKER ?= docker
 RUST_IMAGE ?= modv-rust:local
@@ -156,6 +161,8 @@ vmodv-appimage-check: docker-rust
 # `modv` binary, assembles the package tree and verifies the result with
 # tools/vmodv-deb-check.sh.
 vmodv-deb: disk-guard docker-cargo-volume
+
+vmodv-deb:
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
@@ -164,6 +171,7 @@ vmodv-deb: disk-guard docker-cargo-volume
 		-e CARGO_HOME=/cargo \
 		-e APP_VERSION=$(VMODV_VERSION) \
 		-e DIST_DIR=$(DIST_DIR) \
+		-e DEB_SUFFIX=$(DEB_SUFFIX) \
 		-v "$(CURDIR)":/app \
 		-v "$(CARGO_VOLUME)":/cargo \
 		-w /app \
@@ -172,12 +180,15 @@ vmodv-deb: disk-guard docker-cargo-volume
 
 # Re-run the metadata/file-list/binary checks on an already-built package.
 vmodv-deb-check: docker-rust
+
+vmodv-deb-check:
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		-e APP_VERSION=$(VMODV_VERSION) \
 		-e DIST_DIR=$(DIST_DIR) \
+		-e DEB_SUFFIX=$(DEB_SUFFIX) \
 		-v "$(CURDIR)":/app \
 		-w /app \
 		$(RUST_IMAGE) \
@@ -192,7 +203,10 @@ docker-package: disk-guard
 		$(DOCKER_BUILD_ARGS) .
 
 docker-rust: disk-guard
-	$(DOCKER) build --target rust -t "$(RUST_IMAGE)" .
+
+docker-rust:
+	$(DOCKER) build --target rust -t "$(RUST_IMAGE)" \
+		--build-arg "BASE_IMAGE=$(BASE_IMAGE)" .
 
 docker-cargo-volume: docker-rust
 	@case "$(CARGO_VOLUME)" in \

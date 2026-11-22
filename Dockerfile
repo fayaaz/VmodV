@@ -13,8 +13,11 @@
 #   artifacts        both installers, for `docker buildx --output type=local`.
 
 ARG DEBIAN_RELEASE=trixie
+# The release workflow's Ubuntu .deb matrix overrides BASE_IMAGE with
+# --build-arg; the default build stays on Debian trixie.
+ARG BASE_IMAGE=debian:${DEBIAN_RELEASE}-slim
 
-FROM debian:${DEBIAN_RELEASE}-slim AS base
+FROM ${BASE_IMAGE} AS base
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

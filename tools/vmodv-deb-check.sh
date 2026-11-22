@@ -15,7 +15,10 @@ case "$DIST" in
     /*) ;;
     *) DIST="$ROOT/$DIST" ;;
 esac
-DEB="$DIST/VmodV-$VERSION-amd64.deb"
+# DEB_SUFFIX distinguishes the per-Ubuntu artifacts (e.g. -ubuntu24.04) from
+# the default unsuffixed build; empty by default so existing checks are unchanged.
+DEB_SUFFIX="${DEB_SUFFIX:-}"
+DEB="$DIST/VmodV-$VERSION-amd64${DEB_SUFFIX}.deb"
 
 # The corpus count is derived from the checkout when available so a future ISF
 # addition does not need this script edited; the fixed fallback is the current
