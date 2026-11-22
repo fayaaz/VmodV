@@ -32,7 +32,8 @@
 //! passes plus an optional overlay pass, in MilkDrop's order:
 //!
 //! 1. **warp** — the translated warp WGSL resamples the previous composited
-//!    frame (`sampler_main`) at the mesh UVs carried in `uv_orig`.
+//!    frame (`sampler_main`) at the per-pixel `uv_orig` varying emitted by the
+//!    full-screen vertex stage.
 //! 2. **blur1/2/3** — populate the three `GetBlur{1,2,3}` targets. These are
 //!    currently plain texture copies; real blur kernels are a deliberate
 //!    simplification.
@@ -49,11 +50,13 @@
 //!    here. The exact arithmetic lives in `OUTPUT_FRAGMENT_WGSL`.
 //!
 //! [`MilkGpuTargets`] owns the five `Rgba8Unorm` intermediate textures and
-//! reallocates them only when the size changes. The mesh UV grid is not
-//! uploaded for the warp pass; the translated shaders read `uv_orig` from the
-//! uniform block instead. The audio wave copied onto [`MilkInstance`] feeds the
-//! wave overlay's per-point equations (see below); the spectrum bytes are not
-//! yet consumed by any pass.
+//! reallocates them only when the size changes. No mesh UV grid is uploaded:
+//! the full-screen vertex stage emits an upright `uv_orig` at `@location(0)`
+//! and both translated stages read it as an interpolated varying (the uniform
+//! block keeps a same-offset `uv_orig_u` slot only for byte-layout stability).
+//! The audio wave copied onto [`MilkInstance`] feeds the wave overlay's
+//! per-point equations (see below); the spectrum bytes are not yet consumed by
+//! any pass.
 //!
 //! # Overlay subset and error isolation (Layer 5c)
 //!
@@ -137,12 +140,12 @@ const DEFAULT_WAVE_SAMPLES: usize = 512;
 /// Draw every Nth evaluated wave point as a line segment (keeps vertex counts small).
 const WAVE_VERTEX_STRIDE: usize = 4;
 
-// --- Deterministic built-in noise (Layer 5b, RED stub) ---------------------
+// --- Deterministic built-in noise -----------------------------------------
 //
-// GREEN implements real deterministic noise generation here and uploads the
-// four buffers as GPU textures bound to the built-in noise samplers. The RED
-// shape below only returns zeroed buffers so the noise tests fail on their
-// assertions rather than on a missing type. Do not implement generation here.
+// The five built-in noise samplers (`noise_lq/mq/hq` and the two `pw_noise`
+// samplers) read four deterministic RGBA8 fields generated on the CPU and
+// uploaded once as GPU textures. Both the noise unit tests and the render path
+// share the single generator below.
 
 /// Deterministic noise buffers for MilkDrop's built-in noise samplers.
 ///
@@ -211,11 +214,11 @@ pub(crate) const MILK_RUNTIME_SAMPLER_PAIRS: usize = 13;
 // --- GPU pass shaders (Layer 5b) -------------------------------------------
 //
 // The warp/comp fragment stages come from `translate::translate_milk_shader`
-// and already declare `@group(0) @binding(0)` (uniform) plus eight built-in
-// sampler pairs at bindings 1..=16 (see `translate::BUILTIN_SAMPLERS`). A single
-// full-screen triangle vertex stage drives every pass; the mesh UV grid is
-// carried in the uniform block's `uv_orig` slot for this cycle (waves/shapes
-// overlays remain a separate, later cycle).
+// and declare `@group(0) @binding(0)` (uniform) plus one pair per
+// `translate::BUILTIN_SAMPLERS` entry (13 samplers, bindings 1..=26). A single
+// full-screen triangle vertex stage drives every pass and supplies the
+// per-pixel `uv_orig` varying at `@location(0)` (waves/shapes overlays remain a
+// separate, later cycle).
 
 /// Shared full-screen-triangle vertex stage. `@location(0)` carries an
 /// upright (top-left origin) UV to the fragment stages.
@@ -341,13 +344,13 @@ enum MilkLayout {
     Output,
 }
 
-/// The four deterministic noise fields uploaded as GPU textures. The views are
-/// bound positionally at the five built-in noise sampler slots in
-/// `milk_bind_group` (both preset-wave noise samplers share the `pw` field).
+/// The four deterministic noise fields, uploaded once and kept alive by their
+/// views. The views are bound positionally at the five built-in noise sampler
+/// slots in `milk_bind_group` (both preset-wave noise samplers share the `pw`
+/// field). wgpu ref-counts GPU resources, so a `TextureView` keeps its parent
+/// texture alive — no separate `Texture` handles need to be stored.
 #[derive(Clone)]
 struct MilkNoiseGpu {
-    #[allow(dead_code)]
-    textures: [wgpu::Texture; 4],
     views: [wgpu::TextureView; 4],
 }
 
@@ -486,17 +489,10 @@ impl MilkGpuCache {
                 "modV MilkDrop noise hq",
                 "modV MilkDrop noise pw",
             ];
-            let mut textures = [None, None, None, None];
-            let mut views = [None, None, None, None];
-            for (index, (bytes, label)) in fields.iter().zip(labels).enumerate() {
-                let (texture, view) = create_noise_texture(device, queue, bytes, label);
-                textures[index] = Some(texture);
-                views[index] = Some(view);
-            }
-            self.noise = Some(MilkNoiseGpu {
-                textures: textures.map(|texture| texture.expect("four noise textures")),
-                views: views.map(|view| view.expect("four noise views")),
+            let views = std::array::from_fn(|index| {
+                create_noise_view(device, queue, fields[index], labels[index])
             });
+            self.noise = Some(MilkNoiseGpu { views });
         }
         if self.vertex.is_none() {
             self.vertex = Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -952,7 +948,9 @@ impl MilkUniforms {
         write_vec2(&mut bytes, 144, size);
         write_vec2(&mut bytes, 152, size);
         write_vec2(&mut bytes, 160, size);
-        write_vec2(&mut bytes, 168, [0.5, 0.5]); // uv_orig (texture centre)
+        // uv_orig_u: legacy uniform slot kept for byte-layout stability; the
+        // translated shaders read `uv_orig` from the vertex varying instead.
+        write_vec2(&mut bytes, 168, [0.5, 0.5]);
         write_vec2(&mut bytes, 176, [0.5, 0.5]); // rad
         write_vec2(&mut bytes, 184, [0.0, 0.0]); // ang
 
@@ -1038,7 +1036,7 @@ impl MilkGpuTargets {
         self.allocate(device);
     }
 
-    /// Warp-pass target (previous frame resampled through the mesh UVs).
+    /// Warp-pass target (previous frame resampled through the `uv_orig` varying).
     pub fn warp_texture(&self) -> Option<&wgpu::Texture> {
         self.warp.as_ref()
     }
@@ -1119,10 +1117,11 @@ impl MilkRuntime {
     /// warp pass) and `targets` owns the intermediate warp/comp/blur textures.
     /// A malformed shader yields [`MilkRuntimeError::Draw`] rather than a panic.
     ///
-    /// The mesh UV grid is not uploaded in this cycle (waves/shapes are a
-    /// separate pass); the translated shaders read `uv_orig` from the uniform
-    /// block instead. The blur passes currently copy their source unchanged —
-    /// real blur kernels are deferred until the wave/shape overlay cycle.
+    /// No mesh UV grid is uploaded in this cycle (waves/shapes are a separate
+    /// pass); the full-screen vertex stage supplies `uv_orig` as a per-pixel
+    /// varying at `@location(0)`. The blur passes currently copy their source
+    /// unchanged — real blur kernels are deferred until the wave/shape overlay
+    /// cycle.
     pub fn render(
         &self,
         instance: &mut MilkInstance,
@@ -1277,7 +1276,7 @@ impl MilkRuntime {
             label: Some("modV MilkDrop frame"),
         });
 
-        // warp: resample `previous` through the (uniform) mesh UVs.
+        // warp: resample `previous` at the per-pixel `uv_orig` varying.
         encode_fullscreen_pass(
             &mut encoder,
             "milkdrop warp",
@@ -1924,13 +1923,17 @@ fn create_target(device: &wgpu::Device, width: u32, height: u32, label: &str) ->
     })
 }
 
-/// Upload one deterministic RGBA8 noise field into a sampleable GPU texture.
-fn create_noise_texture(
+/// Upload one deterministic RGBA8 noise field and return its sampleable view.
+///
+/// The texture handle is dropped here: wgpu ref-counts GPU resources, so the
+/// returned `TextureView` keeps the parent texture alive for as long as the
+/// view (and any bind groups created from it) exist.
+fn create_noise_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     bytes: &[u8],
     label: &str,
-) -> (wgpu::Texture, wgpu::TextureView) {
+) -> wgpu::TextureView {
     let size = MilkNoise::SIZE;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -1965,8 +1968,7 @@ fn create_noise_texture(
             depth_or_array_layers: 1,
         },
     );
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 /// Uniform-buffer entry at binding 0, shared by the warp/comp and output

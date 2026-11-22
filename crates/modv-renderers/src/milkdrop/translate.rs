@@ -220,6 +220,27 @@ fn is_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
+/// True when `needle` occurs in `source` as a whole identifier, i.e. not as a
+/// substring of a longer identifier. Shared by the sampler-usage scan below and
+/// by reserved-redeclaration detection so both agree on what "mentions a
+/// sampler" means.
+fn contains_ident(source: &str, needle: &str) -> bool {
+    let mut rest = source;
+    while let Some(index) = rest.find(needle) {
+        let before_ok = rest[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_ident_char(c));
+        let after = &rest[index + needle.len()..];
+        let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
 /// Replace whole-identifier occurrences of `from` with `to` in `source`.
 fn replace_ident(source: &str, from: &str, to: &str) -> String {
     let mut out = String::with_capacity(source.len());
@@ -323,27 +344,9 @@ fn is_reserved_sampler(name: &str) -> bool {
 /// slot the body never references: the slot is still declared with an
 /// anonymous name so every sampler keeps its fixed `BUILTIN_SAMPLERS` position
 /// (and the runtime's matching bind-group slot) without leaking the reserved
-/// identifier into the generated shader.
+/// identifier into the generated shader. See [`sampler_bindings_glsl`].
 struct SamplerBinding {
     name: Option<String>,
-}
-
-/// True when `name` appears as a whole identifier in `body`.
-fn body_uses_sampler(body: &str, name: &str) -> bool {
-    let mut rest = body;
-    while let Some(index) = rest.find(name) {
-        let before_ok = rest[..index]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !is_ident_char(c));
-        let after = &rest[index + name.len()..];
-        let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
-        if before_ok && after_ok {
-            return true;
-        }
-        rest = after;
-    }
-    false
 }
 
 /// The samplers a wrapper must bind: the 13 built-ins first (in fixed order),
@@ -355,7 +358,7 @@ fn samplers_for_prelude(prelude: &str, body: &str) -> Vec<SamplerBinding> {
     let mut samplers: Vec<SamplerBinding> = BUILTIN_SAMPLERS
         .iter()
         .map(|name| SamplerBinding {
-            name: (!NOISE_SAMPLERS.contains(name) || body_uses_sampler(body, name))
+            name: (!NOISE_SAMPLERS.contains(name) || contains_ident(body, name))
                 .then(|| name.to_string()),
         })
         .collect();
@@ -380,6 +383,9 @@ fn samplers_for_prelude(prelude: &str, body: &str) -> Vec<SamplerBinding> {
 /// sampler name to naga's `sampler2D(texture, sampler)` constructor.
 ///
 /// Binding 0 is the uniform block, so textures/samplers occupy 1, 2, 3, …
+/// Named bindings emit the alias macro; anonymous ones (unused noise slots)
+/// only declare the `texture`/`sampler` pair, so the slot stays bound at a
+/// fixed index without the reserved sampler name appearing in the shader.
 fn sampler_bindings_glsl(samplers: &[SamplerBinding]) -> String {
     let mut out = String::new();
     for (index, binding) in samplers.iter().enumerate() {
@@ -464,22 +470,7 @@ fn declares_reserved_sampler(line: &str) -> bool {
     BUILTIN_SAMPLERS
         .iter()
         .chain(NOISE_SAMPLERS.iter())
-        .any(|name| {
-            let mut search: &str = &lower;
-            while let Some(index) = search.find(name) {
-                let before_ok = search[..index]
-                    .chars()
-                    .next_back()
-                    .is_none_or(|c| !is_ident_char(c));
-                let after = &search[index + name.len()..];
-                let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
-                if before_ok && after_ok {
-                    return true;
-                }
-                search = after;
-            }
-            false
-        })
+        .any(|name| contains_ident(&lower, name))
 }
 
 /// The non-uniform prelude lines that must appear before `main`: helper
@@ -536,10 +527,11 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     out.push_str(HLSL_MACROS);
     out.push('\n');
     out.push_str(&uniform_block_glsl(prelude));
-    // Per-pixel UV from the fullscreen vertex stage. The uniform block keeps
-    // an `uv_orig_u` slot at the same byte offset for layout stability, but
-    // shader bodies read this interpolated varying so texture samples vary
-    // across the frame.
+    // `uv_orig` is a per-pixel varying from the full-screen vertex stage
+    // (`FULLSCREEN_VERTEX_WGSL`, @location(0)). Both warp and comp are fragment
+    // stages, so this single declaration serves them and makes texture samples
+    // vary across the frame. The uniform block keeps an `uv_orig_u` slot at the
+    // same byte offset purely for layout stability; bodies read the varying.
     out.push_str("layout(location = 0) in vec2 uv_orig;\n");
     out.push_str(&sampler_bindings_glsl(&samplers));
     out.push_str("layout(location = 0) out vec4 milk_FragColor;\n\n");
