@@ -137,6 +137,50 @@ const DEFAULT_WAVE_SAMPLES: usize = 512;
 /// Draw every Nth evaluated wave point as a line segment (keeps vertex counts small).
 const WAVE_VERTEX_STRIDE: usize = 4;
 
+// --- Deterministic built-in noise (Layer 5b, RED stub) ---------------------
+//
+// GREEN implements real deterministic noise generation here and uploads the
+// four buffers as GPU textures bound to the built-in noise samplers. The RED
+// shape below only returns zeroed buffers so the noise tests fail on their
+// assertions rather than on a missing type. Do not implement generation here.
+
+/// Deterministic noise buffers for MilkDrop's built-in noise samplers.
+///
+/// `lq`, `mq` and `hq` are independent 256×256 RGBA8 white-noise fields at
+/// increasing spatial frequency; `pw` is the preset-wave noise field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MilkNoise {
+    /// Low-frequency noise (sampler_noise_lq).
+    pub lq: Vec<u8>,
+    /// Medium-frequency noise (sampler_noise_mq).
+    pub mq: Vec<u8>,
+    /// High-frequency noise (sampler_noise_hq).
+    pub hq: Vec<u8>,
+    /// Preset-wave noise (sampler_pw_noise_lq / sampler_pw_noise_hq).
+    pub pw: Vec<u8>,
+}
+
+impl MilkNoise {
+    /// Edge length (in pixels) of each square noise texture.
+    pub const SIZE: u32 = 256;
+
+    /// Generate the four deterministic noise fields.
+    pub fn new() -> Self {
+        let len = (Self::SIZE as usize) * (Self::SIZE as usize) * 4;
+        Self {
+            lq: vec![0; len],
+            mq: vec![0; len],
+            hq: vec![0; len],
+            pw: vec![0; len],
+        }
+    }
+}
+
+/// Number of (texture, sampler) pairs the MilkDrop shader bind group binds.
+/// Guarded against `translate::BUILTIN_SAMPLERS` by a unit test. GREEN raises
+/// this to 13 and uses it in the bind-group layout/construction.
+pub(crate) const MILK_RUNTIME_SAMPLER_PAIRS: usize = 8;
+
 // --- GPU pass shaders (Layer 5b) -------------------------------------------
 //
 // The warp/comp fragment stages come from `translate::translate_milk_shader`
@@ -2508,6 +2552,39 @@ ret = uv;\n\
             "the valid wave still evaluates"
         );
     }
+
+    // --- Built-in noise samplers (RED) -------------------------------------
+
+    #[test]
+    fn milk_noise_is_deterministic_non_uniform_and_distinct_per_frequency() {
+        let a = MilkNoise::new();
+        let b = MilkNoise::new();
+
+        let expected_len = (MilkNoise::SIZE as usize) * (MilkNoise::SIZE as usize) * 4;
+        for (label, bytes) in [
+            ("lq", &a.lq),
+            ("mq", &a.mq),
+            ("hq", &a.hq),
+            ("pw", &a.pw),
+        ] {
+            assert_eq!(
+                bytes.len(), expected_len,
+                "{label} noise must be a {}x{} RGBA8 field",
+                MilkNoise::SIZE, MilkNoise::SIZE
+            );
+            let distinct = bytes.iter().copied().collect::<HashSet<_>>();
+            assert!(
+                distinct.len() > 1,
+                "{label} noise must be non-uniform (multiple distinct byte values), got {distinct:?}"
+            );
+        }
+
+        assert_eq!(a, b, "two generations of the noise must be byte-identical");
+        assert_ne!(a.lq, a.mq, "LQ and MQ noise must differ");
+        assert_ne!(a.mq, a.hq, "MQ and HQ noise must differ");
+        assert_ne!(a.lq, a.hq, "LQ and HQ noise must differ");
+        assert_ne!(a.lq, a.pw, "LQ and preset-wave noise must differ");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3036,6 +3113,77 @@ mod gpu_tests {
             "the enabled shape must produce more bright pixels (on={}, off={})",
             bright_count(&on_pixels),
             bright_count(&off_pixels)
+        );
+    }
+
+    #[test]
+    fn gpu_noise_sampler_comp_renders_varying_deterministic_pixels() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => {
+                eprintln!("skipping gpu_noise_sampler_comp: no GPU adapter in this environment");
+                return;
+            }
+        };
+        let mut doc = doc_with_comp("float3 ret = tex2D(sampler_noise_lq, uv_orig).rgb;");
+        doc.name = "noise-comp".to_string();
+        identity_output(&mut doc);
+
+        // Translation must accept the built-in noise sampler name and bind a
+        // real texture to it (assert here so RED fails on an assertion, not on
+        // render_fixture's internal expect).
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset(&doc.name, &doc, &cache);
+        assert!(
+            compiled.is_ok(),
+            "comp shader sampling sampler_noise_lq must translate, got {compiled:?}"
+        );
+
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let render_once = || {
+            let (
+                mut instance,
+                frame,
+                mesh,
+                _previous,
+                previous_view,
+                output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc.clone());
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("noise comp renders");
+            read_texture(&device, &queue, &output).expect("read the output back")
+        };
+
+        let first = render_once();
+        let second = render_once();
+        assert_eq!(
+            first.len(),
+            (WIDTH * HEIGHT * 4) as usize,
+            "a full 160x90 RGBA target must be read back"
+        );
+        let distinct = first
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+            .collect::<HashSet<_>>();
+        assert!(
+            distinct.len() > 1,
+            "sampling a noise texture must produce varying (non-flat) pixels, got {distinct:?}"
+        );
+        assert_eq!(
+            first, second,
+            "two renders of the same noise comp must be byte-identical"
         );
     }
 }

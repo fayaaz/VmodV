@@ -798,4 +798,64 @@ ret = saturate(ret) * frac(t);\n";
             compiled.wgsl
         );
     }
+
+    // --- MilkDrop 2 built-in noise samplers (RED) ---------------------------
+
+    /// A real v2 comp shader that samples all five built-in noise textures by
+    /// name. The wrapper must declare each one as a split texture/sampler pair
+    /// so naga sees a valid identifier.
+    const NOISE_SAMPLER_BODY: &str = "\
+vec2 uv = uv_orig;\n\
+float3 ret = tex2D(sampler_noise_lq, uv).rgb;\n\
+ret += tex2D(sampler_noise_mq, uv).rgb;\n\
+ret += tex2D(sampler_noise_hq, uv).rgb;\n\
+ret += tex2D(sampler_pw_noise_lq, uv).rgb;\n\
+ret += tex2D(sampler_pw_noise_hq, uv).rgb;\n";
+
+    #[test]
+    fn noise_samplers_are_declared_and_sampled_in_wgsl() {
+        let wrapped = wrap_milk_shader("", NOISE_SAMPLER_BODY, MilkShaderStage::Comp);
+        for name in [
+            "sampler_noise_lq",
+            "sampler_noise_mq",
+            "sampler_noise_hq",
+            "sampler_pw_noise_lq",
+            "sampler_pw_noise_hq",
+        ] {
+            assert!(
+                wrapped.contains(&format!("isf_tex_{name}")),
+                "wrapped GLSL must declare a texture binding for {name}, got {wrapped:?}"
+            );
+            assert!(
+                wrapped.contains(&format!("isf_smp_{name}")),
+                "wrapped GLSL must declare a sampler binding for {name}, got {wrapped:?}"
+            );
+        }
+
+        let compiled = translate_milk_shader("", NOISE_SAMPLER_BODY, MilkShaderStage::Comp)
+            .unwrap_or_else(|error| {
+                panic!("comp body sampling all five noise samplers must translate: {error}")
+            });
+        assert!(
+            compiled.wgsl.contains("textureSample"),
+            "noise sampler tex2D calls must become textureSample in WGSL, got {:?}",
+            compiled.wgsl
+        );
+    }
+
+    #[test]
+    fn builtin_sampler_count_matches_runtime_binding_pairs() {
+        // 8 original built-ins (main, fw, pw, fc, pc, blur1-3) + 5 noise.
+        const EXPECTED_BUILTINS: usize = 13;
+        assert_eq!(
+            BUILTIN_SAMPLERS.len(),
+            EXPECTED_BUILTINS,
+            "the wrapper must declare all 13 built-in samplers"
+        );
+        assert_eq!(
+            crate::milkdrop::runtime::MILK_RUNTIME_SAMPLER_PAIRS,
+            BUILTIN_SAMPLERS.len(),
+            "the runtime must bind one (texture, sampler) pair per built-in sampler"
+        );
+    }
 }
