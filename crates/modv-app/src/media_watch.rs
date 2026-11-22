@@ -589,6 +589,32 @@ mod tests {
     }
 
     #[test]
+    fn conventional_milk_extension_is_supported_with_the_same_library_policy() {
+        assert!(
+            supported(MediaFolder::Milkdrop, "preset.milk"),
+            "the conventional .milk extension is a MilkDrop preset"
+        );
+        assert!(
+            supported(MediaFolder::Milkdrop, "PRESET.MILK"),
+            "the .milk extension check is case-insensitive"
+        );
+        assert!(
+            supported(MediaFolder::Milkdrop, "preset.mlk"),
+            "the legacy .mlk extension is still accepted"
+        );
+        assert!(!supported(MediaFolder::Milkdrop, "shader.fs"));
+        assert!(!supported(MediaFolder::Milkdrop, "notes.txt"));
+        assert!(
+            !MediaBurst {
+                folders: vec![MediaFolder::Milkdrop],
+                events: 1,
+            }
+            .touches_library(),
+            "a .milk preset burst must not rescan the media library"
+        );
+    }
+
+    #[test]
     fn milkdrop_burst_is_coalesced_once_and_does_not_touch_the_library() {
         let start = Instant::now();
         let mut debounce = Debounce::default();
@@ -652,6 +678,45 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "no MilkDrop burst within 5 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_real_watcher_reports_debounced_conventional_milk_preset_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "modv-media-watch-milkdrop-milk-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        for folder in ["isf", "image", "video", "palette", "milkdrop"] {
+            std::fs::create_dir_all(root.join("live").join(folder)).expect("media folder");
+        }
+        let mut watcher =
+            MediaWatcher::for_profile(&root, "live", &[]).expect("a watchable media tree");
+
+        std::thread::sleep(Duration::from_millis(100));
+        for name in ["a.milk", "b.MILK", "c.milk"] {
+            std::fs::write(root.join("live/milkdrop").join(name), b"preset").expect("write preset");
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(burst) = watcher.pump_at(Instant::now()) {
+                assert!(burst.has(MediaFolder::Milkdrop), "{burst:?}");
+                assert!(
+                    !burst.touches_library(),
+                    "a preset-only burst must not rescan the media library"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no .milk MilkDrop burst within 5 seconds"
             );
             std::thread::sleep(Duration::from_millis(50));
         }

@@ -2843,6 +2843,31 @@ void main() { gl_FragColor = vec4(1.0); }
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The upstream MilkDrop preset extension is `.milk`; discovery must accept
+    /// it alongside the legacy `.mlk` (case-insensitively), while keeping the
+    /// extension scoping that rejects unrelated files.
+    #[test]
+    fn milkdrop_scan_accepts_the_conventional_milk_extension() {
+        let dir = registry_temp_dir("modv-milk-conventional-extension");
+        write_milk_preset(&dir.join("Preset A.mlk"), "Preset A");
+        write_milk_preset(&dir.join("Preset B.milk"), "Preset B");
+        write_milk_preset(&dir.join("Preset C.MILK"), "Preset C");
+        write_milk_preset(&dir.join("notes.txt"), "notes");
+
+        let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
+
+        assert_eq!(registry.kind("Preset A"), Some(ModuleKind::Milkdrop));
+        assert_eq!(registry.kind("Preset B"), Some(ModuleKind::Milkdrop));
+        assert_eq!(registry.kind("Preset C"), Some(ModuleKind::Milkdrop));
+        assert_eq!(
+            registry.kind("notes"),
+            None,
+            "non-.mlk/.milk files are still not scanned"
+        );
+        assert_eq!(registry.milkdrop_definitions().len(), 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn milkdrop_meta_fields_map_to_the_js_module_meta() {
         let dir = registry_temp_dir("modv-milk-meta");
@@ -2935,6 +2960,40 @@ void main() { gl_FragColor = vec4(1.0); }
         std::fs::create_dir_all(root.join("b-pack")).expect("b-pack");
         std::fs::write(
             root.join("a-pack/Shared.mlk"),
+            "[preset00]\ntitle=Shared - From A\n",
+        )
+        .expect("a-pack preset");
+        std::fs::write(
+            root.join("b-pack/Shared.mlk"),
+            "[preset00]\ntitle=Shared - From B\n",
+        )
+        .expect("b-pack preset");
+
+        // Supplied in reverse order on purpose: the scan sorts the roots.
+        let registry = ModuleRegistry::build_with_milkdrop(
+            None,
+            &[],
+            &[root.join("b-pack"), root.join("a-pack")],
+        );
+
+        let definition = registry
+            .milkdrop_definition("Shared")
+            .expect("duplicate stem still registers once");
+        assert_eq!(definition.meta.author, "From A");
+        assert_eq!(registry.milkdrop_definitions().len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A duplicate file stem across the two accepted extensions still keeps a
+    /// single definition: the first sorted path wins (here the `.milk` in the
+    /// alphabetically-first pack), even when the roots are supplied reversed.
+    #[test]
+    fn milkdrop_duplicate_stems_across_extensions_keep_the_first_sorted_path() {
+        let root = registry_temp_dir("modv-milk-duplicate-extensions");
+        std::fs::create_dir_all(root.join("a-pack")).expect("a-pack");
+        std::fs::create_dir_all(root.join("b-pack")).expect("b-pack");
+        std::fs::write(
+            root.join("a-pack/Shared.milk"),
             "[preset00]\ntitle=Shared - From A\n",
         )
         .expect("a-pack preset");
