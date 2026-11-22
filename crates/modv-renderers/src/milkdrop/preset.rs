@@ -548,10 +548,13 @@ impl SectionAcc {
     }
 }
 
-/// If `key` is `prefix` or `prefix_N`, return its numeric index (bare → 0).
+/// If `key` is `prefix_N`, return its numeric index.
+///
+/// A bare key equal to `prefix` is a base val (e.g. `warp=0.01`), not a
+/// numbered shader line, so it is ignored here and left to base-val parsing.
 fn numbered_index(key: &str, prefix: &str) -> Option<usize> {
     if key == prefix {
-        return Some(0);
+        return None;
     }
     key.strip_prefix(prefix)?
         .strip_prefix('_')?
@@ -573,7 +576,8 @@ fn push_numbered(key: &str, value: &str, sets: &mut [(&str, &mut EqLines)]) -> b
 /// Convert a 1-based section number into a 0-based slot index.
 fn section_index(num: &str) -> Option<usize> {
     let i = num.parse::<usize>().ok()?;
-    (i > 0 && i <= SECTION_COUNT).then_some(i - 1)
+    // `then` evaluates `i - 1` lazily, so an out-of-range `0` never underflows.
+    (i > 0 && i <= SECTION_COUNT).then(|| i - 1)
 }
 
 /// Parse `wavecode_<i>_<prop>` / `shapecode_<i>_<prop>`; `i` is 1-based.
