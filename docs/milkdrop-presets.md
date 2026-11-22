@@ -17,15 +17,17 @@ none are baked into the app or the installer.
 
 ## Where to put MilkDrop files
 
-Put your `.mlk` files in the `milkdrop` folder of your media tree:
+Put your `.mlk` and `.milk` files in the `milkdrop` folder of your media tree:
 
 - the shared `<userData>/media/milkdrop` folder, used by every profile;
 - the active profile's `<userData>/media/<profile>/milkdrop` folder; or
 - any extra MilkDrop folder you have configured.
 
-Folders are scanned recursively and `.mlk` is matched case-insensitively, so
-subfolders and names such as `MyPreset.MLK` are found too; hidden and temporary
-files are skipped. Only the active profile's folder counts.
+Folders are scanned recursively, and both `.mlk` and `.milk` are accepted
+case-insensitively, so subfolders and names such as `MyPreset.MLK` or
+`MyPreset.MILK` are found too; hidden and temporary files are skipped. Real
+community `.milk` presets can be dropped in without renaming. Only the active
+profile's folder counts.
 
 `MODV_USER_MILKDROP_DIR` overrides all of those with a single directory, which
 is useful for pointing VmodV at an existing collection without copying files
@@ -61,9 +63,10 @@ of that bundled set.
 
 ## Troubleshooting
 
-- **Preset not listed.** Check that the file ends in `.mlk`, sits in one of the
-  watched `milkdrop` folders, and contains a `[preset00]` section — a file with
-  no preset block is ignored.
+- **Preset not listed.** Check that the file ends in `.mlk` or `.milk` (both
+  extensions are accepted case-insensitively), sits in one of the watched
+  `milkdrop` folders, and contains a `[preset00]` section — a file with no
+  preset block is ignored.
 - **Edits not showing up.** The watcher waits for 500 ms of quiet, so pause
   briefly after saving. If you set `MODV_USER_MILKDROP_DIR`, only that folder is
   scanned; unset it (or include your other folders) to see them again.
