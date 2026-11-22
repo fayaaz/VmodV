@@ -81,7 +81,24 @@
 //! * manifest -> `usr/share/vmodv/gstreamer-bundle.json`, a JSON object with a
 //!   `"packages"` array holding every `--package-list` name and version
 //! * licences -> `usr/share/doc/<package>/copyright` for every bundled package
-//! * never    -> `*.a`, `*.la`, `*.pc`, `*.pdb`, headers, and the glibc family
+//! * never    -> `*.a`, `*.la`, `*.pc`, `*.pdb`, headers, and the glibc family:
+//!   `libc.so.6`, `libm.so.6`, `libdl*`, `libpthread*`, `librt*`, the dynamic
+//!   loader *and* the rest of the libc6-owned helpers a real `lddtree` walk
+//!   reports (`libresolv`, `libmvec`, `libnsl`, `libutil`, `libcrypt`, `libanl`,
+//!   `libthread_db`)
+//! * canonicalised inputs: an input root handed over as a symlink stages like
+//!   the real directory it points at
+//! * RUNPATHs: every staged ELF gets an `$ORIGIN`-relative RUNPATH through
+//!   `patchelf --set-rpath <rpath> <file>` (`patchelf` has no `--` separator), a
+//!   non-zero patchelf status is fatal, and the script only uses `realpath`
+//!   options the build container's coreutils actually has (`-f` is not one, and
+//!   it killed the first real `make appimage-vmodv` run)
+//!
+//! `--dry-run` and the real build share one staging pipeline: the same
+//! `collect_plugins` / staging / licence / RUNPATH code runs in both modes, and
+//! the real-mode extras (the `cargo build`, the `lddtree` closure walk, the
+//! `dpkg` package list and `appimagetool`) are skipped when the input they would
+//! produce is already supplied. So a dry run exercises the code that ships.
 //!
 //! ## The `AppRun` contract
 //!
@@ -107,6 +124,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -178,7 +196,7 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) {
 /// shape). Every name and version here is the real one the build container
 /// (`modv-rust:local`, Debian 13) ships, so the manifest contract the GREEN
 /// phase implements against `dpkg-query` is the same contract.
-const PACKAGES: [(&str, &str); 27] = [
+const PACKAGES: [(&str, &str); 26] = [
     ("gstreamer1.0-plugins-base", "1.26.2-1+deb13u2"),
     ("gstreamer1.0-plugins-good", "1.26.2-1+deb13u2"),
     ("gstreamer1.0-plugins-bad", "1.26.2-3+deb13u3"),
@@ -197,7 +215,8 @@ const PACKAGES: [(&str, &str); 27] = [
     ("libavutil59", "7:7.1.5-0+deb13u1"),
     ("libavformat61", "7:7.1.5-0+deb13u1"),
     ("libdrm2", "2.4.124-2"),
-    ("libwayland-client0", "1.23.1-3"),
+    // No libwayland-client0 entry: the Wayland client stack is host-side, see
+    // [`HOST_DISPLAY_LIBRARIES`].
     ("libatk1.0-0t64", "2.56.2-1+deb13u2"),
     ("libatspi2.0-0t64", "2.56.2-1+deb13u2"),
     ("libpango-1.0-0", "1.56.3-1"),
@@ -227,7 +246,7 @@ const PLUGINS: [&str; 9] = [
 
 /// Userspace runtime libraries standing in for the transitive closure: the real
 /// sonames those plugins and `modv` link against in the container.
-const RUNTIME_LIBS: [&str; 30] = [
+const RUNTIME_LIBS: [&str; 29] = [
     "libglib-2.0.so.0",
     "libgobject-2.0.so.0",
     "libgio-2.0.so.0",
@@ -251,7 +270,8 @@ const RUNTIME_LIBS: [&str; 30] = [
     "libv4l2.so.0",
     "libv4lconvert.so.0",
     "libdrm.so.2",
-    "libwayland-client.so.0",
+    // `libwayland-*` would be here in a raw `lddtree` walk: it is deliberately
+    // absent because it is host display plumbing, see [`HOST_DISPLAY_LIBRARIES`].
     "libatk-1.0.so.0",
     "libatspi.so.0",
     "libcairo.so.2",
@@ -268,6 +288,39 @@ const GLIBC_FAMILY: [&str; 6] = [
     "libpthread.so.0",
     "librt.so.1",
     "ld-linux-x86-64.so.2",
+];
+
+/// The rest of the libc6-owned runtime library family a real `lddtree` walk
+/// reports next to `libc.so.6`. They belong to the host's glibc exactly like
+/// `libc.so.6`/`libm.so.6` do. The first fat AppImage build leaked
+/// `libresolv.so.2` and `libmvec.so.1` into `usr/lib` because the filter only
+/// knew the six names in [`GLIBC_FAMILY`].
+const LIBC6_OWNED_LIBRARIES: [&str; 7] = [
+    "libresolv.so.2",
+    "libmvec.so.1",
+    "libnsl.so.1",
+    "libutil.so.1",
+    "libcrypt.so.1",
+    "libanl.so.1",
+    "libthread_db.so.1",
+];
+
+/// The host's own Wayland and GLVND dispatch stack. A real `lddtree` walk pulls
+/// them in through `libgstwayland-1.0`, `libgstgl-1.0`, `libgdk-3` and
+/// `libSDL2-2.0` (the GLVND pair arrive under `libGL.so.1`, which is excluded, so
+/// nothing bundled even needs them), but they must stay host-side like
+/// EGL/vulkan/GBM: `AppRun` puts `usr/lib` *ahead* of the system paths, so a
+/// staged copy shadows the user's — for the *host's* Mesa vulkan ICDs too, which
+/// link libwayland-client themselves and then fail to load with
+/// `undefined symbol: wl_fixes_interface`, leaving wgpu with no adapter at all.
+const HOST_DISPLAY_LIBRARIES: [&str; 7] = [
+    "libwayland-client.so.0",
+    "libwayland-cursor.so.0",
+    "libwayland-egl.so.1",
+    "libwayland-server.so.0",
+    "libGLX.so.0",
+    "libGLdispatch.so.0",
+    "libOpenGL.so.0",
 ];
 
 /// Development-only decoys planted in the fake sysroot: they must never be
@@ -317,6 +370,8 @@ const PROBE_SCRIPT: &str = concat!(
     "exit 0\n",
 );
 
+/// Every library that belongs to the host's glibc: the classic six plus the
+/// libc6-owned helpers in [`LIBC6_OWNED_LIBRARIES`].
 fn is_glibc_family(name: &str) -> bool {
     [
         "libc.so",
@@ -325,9 +380,99 @@ fn is_glibc_family(name: &str) -> bool {
         "libpthread.so",
         "librt.so",
         "ld-",
+        "libresolv.so",
+        "libmvec.so",
+        "libnsl.so",
+        "libutil.so",
+        "libcrypt.so",
+        "libanl.so",
+        "libthread_db.so",
     ]
     .iter()
     .any(|prefix| name.starts_with(prefix))
+}
+
+/// Content that satisfies the staging script's ELF magic check without being a
+/// loadable ELF: enough to make the script's ELF detection (and therefore its
+/// RUNPATH patching) engage in a dry run, where no real ELF exists.
+fn elf_stub_contents(name: &str) -> String {
+    format!("\u{7f}ELF\u{2}\u{1}\u{1}\u{0} fake ELF stub {name}\n")
+}
+
+/// A `patchelf` stand-in. It records each invocation as a `# <argument count>`
+/// line followed by that many argument lines, then exits with
+/// `PATCH_RPATH_STATUS`. That lets a test assert both the argument shape
+/// (`patchelf` has no `--` separator: it takes `--` as the file name and
+/// applies no RUNPATH) and that a non-zero status is fatal for the build.
+const PATCHELF_SHIM: &str = concat!(
+    "#!/bin/sh\n",
+    "# Records its arguments, then exits with PATCH_RPATH_STATUS.\n",
+    "if [ -n \"${PATCH_RPATH_LOG:-}\" ]; then\n",
+    "    {\n",
+    "        printf '# %s\\n' \"$#\"\n",
+    "        for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done\n",
+    "    } >> \"$PATCH_RPATH_LOG\"\n",
+    "fi\n",
+    "exit \"${PATCH_RPATH_STATUS:-0}\"\n",
+);
+
+/// Parse the invocation log written by [`PATCHELF_SHIM`]: one `# <count>` line
+/// per invocation, followed by `<count>` argument lines.
+fn parse_patchelf_log(path: &Path) -> Vec<Vec<String>> {
+    let text = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("cannot read patchelf log {}: {error}", path.display()));
+    let mut invocations: Vec<Vec<String>> = Vec::new();
+    let mut declared_counts: Vec<usize> = Vec::new();
+    for line in text.lines() {
+        if let Some(count) = line.strip_prefix("# ") {
+            let count = count
+                .trim()
+                .parse::<usize>()
+                .unwrap_or_else(|error| panic!("bad patchelf argument count {line:?}: {error}"));
+            declared_counts.push(count);
+            invocations.push(Vec::new());
+        } else if let Some(arguments) = invocations.last_mut() {
+            arguments.push(line.to_string());
+        }
+    }
+    for (arguments, count) in invocations.iter().zip(&declared_counts) {
+        assert_eq!(
+            arguments.len(),
+            *count,
+            "the patchelf shim logged {arguments:?} for an invocation it reported as \
+             taking {count} arguments"
+        );
+    }
+    invocations
+}
+
+/// The `--set-rpath <rpath>` a recorded `patchelf` invocation applied to the
+/// bundle path ending in `suffix`, if any.
+fn recorded_rpath(invocations: &[Vec<String>], suffix: &str) -> Option<String> {
+    invocations.iter().find_map(|arguments| {
+        arguments
+            .get(2)
+            .filter(|file| file.ends_with(suffix))
+            .map(|_| arguments[1].clone())
+    })
+}
+
+/// Install [`PATCHELF_SHIM`] as `patchelf` inside `shim_dir` and return the file
+/// it records invocations to.
+fn install_patchelf_shim(shim_dir: &Path) -> PathBuf {
+    fs::create_dir_all(shim_dir)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", shim_dir.display()));
+    write_executable(&shim_dir.join("patchelf"), PATCHELF_SHIM);
+    shim_dir.join("patchelf-invocations.txt")
+}
+
+/// `PATH` with `shim_dir` in front, so the staging script resolves `patchelf`
+/// to the shim while keeping every other tool it needs.
+fn shimmed_path(shim_dir: &Path) -> String {
+    let inherited = std::env::var_os("PATH")
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("{}:{inherited}", shim_dir.display())
 }
 
 fn is_development_only(name: &str) -> bool {
@@ -401,12 +546,9 @@ fn parse_env_dump(path: &Path) -> BTreeMap<String, String> {
 /// scanner, doc/licence texts and a package list, plus the decoys that must be
 /// filtered out.
 struct FakeToolchain {
-    /// Kept only for its `Drop` impl: it removes the fake sysroot and the
-    /// staging AppDir, including when an assertion panics.
-    #[expect(
-        dead_code,
-        reason = "the guard owns the cleanup; nothing needs to read the path"
-    )]
+    /// Owns the fake sysroot and the staging AppDir: its `Drop` removes both,
+    /// including when an assertion panics. Tests that need a scratch directory
+    /// alongside the fake sysroot create it under `holder`.
     holder: TempDirGuard,
     binary: PathBuf,
     plugin_root: PathBuf,
@@ -468,6 +610,21 @@ impl FakeToolchain {
         for name in GLIBC_FAMILY {
             fs::write(lib_root.join(name), format!("fake glibc {name}\n"))
                 .unwrap_or_else(|error| panic!("cannot write glibc stub {name}: {error}"));
+        }
+        // The libc6-owned helpers `lddtree` reports alongside them: they are the
+        // host glibc's too, and the first fat build staged two of them.
+        for name in LIBC6_OWNED_LIBRARIES {
+            fs::write(lib_root.join(name), format!("fake libc6 library {name}\n"))
+                .unwrap_or_else(|error| panic!("cannot write libc6 stub {name}: {error}"));
+        }
+
+        // The host Wayland client stack, as a real closure reports it.
+        for name in HOST_DISPLAY_LIBRARIES {
+            fs::write(
+                lib_root.join(name),
+                format!("fake host wayland library {name}\n"),
+            )
+            .unwrap_or_else(|error| panic!("cannot write host display stub {name}: {error}"));
         }
 
         // Development-only artifacts a distro -dev package drops next to the
@@ -543,11 +700,15 @@ impl FakeToolchain {
         }
     }
 
-    /// Invoke `tools/vmodv-appimage.sh --dry-run` with the fake inputs.
+    /// The `tools/vmodv-appimage.sh --dry-run` invocation for these fake inputs.
     ///
     /// The flag pre-assertion keeps a script that has no `--dry-run` mode from
-    /// falling through into a real `cargo build` + appimagetool download.
-    fn stage(&self) -> Output {
+    /// falling through into a real `cargo build` + appimagetool download. A test
+    /// that needs something more (a `patchelf` shim on `PATH`, an input root
+    /// handed over as a symlink) configures the returned [`Command`] through
+    /// [`FakeToolchain::stage_with`]: the script's argument parser lets a
+    /// repeated flag override the earlier value.
+    fn command(&self) -> Command {
         let repo_root = repo_root();
         let script = repo_root.join("tools/vmodv-appimage.sh");
         assert!(
@@ -568,7 +729,8 @@ impl FakeToolchain {
             );
         }
 
-        Command::new("bash")
+        let mut command = Command::new("bash");
+        command
             .arg(&script)
             .arg("--dry-run")
             .arg("--project-root")
@@ -588,14 +750,24 @@ impl FakeToolchain {
             .arg("--package-list")
             .arg(&self.package_list)
             .env("APP_VERSION", "0.0.0-test")
-            .current_dir(&repo_root)
+            .current_dir(&repo_root);
+        command
+    }
+
+    /// Invoke the dry run with the fake inputs, optionally adding environment or
+    /// overriding a flag (the script's parser lets a repeated flag win).
+    fn stage_with(&self, configure: impl FnOnce(&mut Command)) -> Output {
+        let mut command = self.command();
+        configure(&mut command);
+        command
             .output()
             .expect("spawn bash tools/vmodv-appimage.sh --dry-run")
     }
 
-    /// Run the dry run and require success, reporting the script's output.
-    fn staged(&self) -> PathBuf {
-        let output = self.stage();
+    /// Run a dry run configured by `configure` and require success, reporting the
+    /// script's output.
+    fn staged_with(&self, configure: impl FnOnce(&mut Command)) -> PathBuf {
+        let output = self.stage_with(configure);
         assert!(
             output.status.success(),
             "tools/vmodv-appimage.sh --dry-run failed with status {:?}\n\
@@ -610,6 +782,30 @@ impl FakeToolchain {
             self.appdir.display()
         );
         self.appdir.clone()
+    }
+
+    /// Run the dry run and require success, reporting the script's output.
+    fn staged(&self) -> PathBuf {
+        self.staged_with(|_| {})
+    }
+
+    /// Rewrite the fake sysroot's binary, plugins, libraries and scanner with the
+    /// ELF magic bytes the staging script looks for, so its ELF detection — and
+    /// therefore its RUNPATH patching — engages in a dry run too. Licence texts
+    /// and the package list stay plain text.
+    fn stubs_as_elfs(&self) {
+        let mut targets = vec![self.binary.clone(), self.scanner.clone()];
+        targets.extend(PLUGINS.iter().map(|name| self.plugin_root.join(name)));
+        targets.extend(RUNTIME_LIBS.iter().map(|name| self.lib_root.join(name)));
+        for path in &targets {
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            fs::write(path, elf_stub_contents(name)).unwrap_or_else(|error| {
+                panic!("cannot rewrite {} as an ELF stub: {error}", path.display())
+            });
+        }
     }
 
     fn files(&self) -> Vec<PathBuf> {
@@ -1081,5 +1277,294 @@ fn apprun_blanks_the_host_gstreamer_plugin_path_at_launch() {
         "LD_LIBRARY_PATH={ld_library_path} is not prefixed with the bundled {} : the staged \
          closure would never be loaded",
         bundled_lib_dir.display()
+    );
+}
+
+/// Container-tool compatibility guard. `realpath` in the build container is GNU
+/// coreutils': it canonicalises by default and has **no `-f`**. An unsupported
+/// flag exits 1, and under `set -euo pipefail` that aborted the whole real
+/// `make appimage-vmodv` build at `tools/vmodv-appimage.sh:216` — right after a
+/// 3-minute `cargo build`, with no artifact and no bundle to inspect.
+#[test]
+fn appimage_script_only_uses_realpath_options_the_build_container_has() {
+    let script = repo_root().join("tools/vmodv-appimage.sh");
+    let script_text = fs::read_to_string(&script)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", script.display()));
+    let unsupported = |token: &str| {
+        token == "-f"
+            || (token.starts_with("--canonicalize")
+                && token != "--canonicalize-existing"
+                && token != "--canonicalize-missing")
+    };
+    for line in script_text.lines() {
+        // Only the code half of a line matters: the header explains the pitfall.
+        let code = line.split('#').next().unwrap_or_default();
+        if !code.contains("realpath") {
+            continue;
+        }
+        let offenders: Vec<&str> = code
+            .split_whitespace()
+            .filter(|token| unsupported(token))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "tools/vmodv-appimage.sh calls realpath with {offenders:?}:\n  {}\nThe build \
+             container's coreutils `realpath` already canonicalises and has no `-f`, so the \
+             call exits 1 and `set -euo pipefail` aborts the AppImage build. Canonicalise with \
+             a plain `realpath -- <path>`.",
+            code.trim_end(),
+        );
+    }
+}
+
+/// Input roots are canonicalised by the shared staging path, so a distro layout
+/// that puts a GStreamer tree behind a symlink stages exactly like the real one
+/// (`find` does not descend into a symlink it is given as a starting point).
+#[test]
+fn dry_run_stages_from_symlinked_input_roots() {
+    let toolchain = FakeToolchain::new();
+    let links = toolchain.holder.path().join("symlinked-inputs");
+    fs::create_dir_all(&links)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", links.display()));
+    let plugin_link = links.join("gstreamer-1.0");
+    let lib_link = links.join("lib");
+    symlink(&toolchain.plugin_root, &plugin_link)
+        .unwrap_or_else(|error| panic!("cannot symlink {}: {error}", plugin_link.display()));
+    symlink(&toolchain.lib_root, &lib_link)
+        .unwrap_or_else(|error| panic!("cannot symlink {}: {error}", lib_link.display()));
+
+    let appdir = toolchain.staged_with(|command| {
+        command.arg("--plugin-root").arg(&plugin_link);
+        command.arg("--lib-root").arg(&lib_link);
+    });
+
+    for name in PLUGINS {
+        let plugin = appdir.join("usr/lib/gstreamer-1.0").join(name);
+        assert!(
+            plugin.is_file(),
+            "{} is not a file: --plugin-root was handed over as the symlink {} and staging \
+             must canonicalise its input roots (find does not descend into a symlink given as \
+             a starting point), exactly as it must for the distro's real plugin tree",
+            plugin.display(),
+            plugin_link.display(),
+        );
+    }
+    for name in RUNTIME_LIBS {
+        let library = appdir.join("usr/lib").join(name);
+        assert!(
+            library.is_file(),
+            "{} is not a file: --lib-root was handed over as the symlink {}",
+            library.display(),
+            lib_link.display(),
+        );
+    }
+}
+
+/// The libc6-owned helpers a real `lddtree` walk reports next to `libc.so.6` are
+/// host glibc too. The first fat AppImage staged `libresolv.so.2` and
+/// `libmvec.so.1` into `usr/lib` because the filter only knew the classic six.
+#[test]
+fn dry_run_never_stages_libc6_owned_runtime_libraries() {
+    let toolchain = FakeToolchain::new();
+    for name in LIBC6_OWNED_LIBRARIES {
+        assert!(
+            toolchain.lib_root.join(name).is_file(),
+            "the fake sysroot does not plant {name}: the filter gap this test guards would \
+             not be exercised",
+        );
+    }
+    let appdir = toolchain.staged();
+    for path in toolchain.files() {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let owned_by_libc6 = LIBC6_OWNED_LIBRARIES.contains(&name);
+        assert!(
+            !owned_by_libc6,
+            "libc6-owned library {} was bundled into {}: libresolv, libmvec, libnsl, libutil, \
+             libcrypt, libanl and libthread_db belong to the host glibc exactly like libc.so.6 \
+             and libm.so.6 do, and shipping them next to a host libc.so.6 is how an AppImage \
+             breaks on the user's machine",
+            path.display(),
+            appdir.display(),
+        );
+    }
+}
+
+/// `AppRun` puts `usr/lib` *ahead* of the system paths, so a staged copy of the
+/// build container's Wayland and GLVND dispatch libraries shadows the user's —
+/// for the *host's* Mesa vulkan ICDs too. Those are built against a newer
+/// libwayland and then fail to load with `undefined symbol:
+/// wl_fixes_interface`, which leaves wgpu reporting `no compatible GPU adapter
+/// found` on a machine whose driver is perfectly good (exactly what the first fat
+/// AppImage did on the reference host). The host display stack is host-side
+/// plumbing like EGL/vulkan/GBM: the plugins that use it still ship and resolve
+/// it from the user's machine.
+#[test]
+fn dry_run_leaves_the_host_display_stack_host_side() {
+    let toolchain = FakeToolchain::new();
+    let plugin = "libgstwayland-1.0.so";
+    fs::write(
+        toolchain.plugin_root.join(plugin),
+        format!("fake GStreamer plugin {plugin}\n"),
+    )
+    .expect("write the fake GStreamer Wayland plugin");
+
+    let appdir = toolchain.staged();
+
+    for name in HOST_DISPLAY_LIBRARIES {
+        assert!(
+            toolchain.lib_root.join(name).is_file(),
+            "the fake sysroot does not plant {name}: a closure that reports the host Wayland \
+             stack is precisely the case this test guards",
+        );
+    }
+    for path in toolchain.files() {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        assert!(
+            !HOST_DISPLAY_LIBRARIES.contains(&name),
+            "host display library {} was bundled into {}: staging the container's libwayland-* \
+             or GLVND dispatch libraries shadows the user's copies through AppRun's \
+             LD_LIBRARY_PATH, and the host's Mesa vulkan ICDs then fail with `undefined symbol: \
+             wl_fixes_interface`, leaving the app with no GPU adapter at all",
+            path.display(),
+            appdir.display(),
+        );
+    }
+
+    // Over-exclusion guard: the plugin that needs Wayland still ships.
+    let staged_plugin = appdir.join("usr/lib/gstreamer-1.0").join(plugin);
+    assert!(
+        staged_plugin.is_file(),
+        "{} is not a file: excluding the host Wayland stack must not drop the GStreamer Wayland \
+         plugin, which resolves libwayland from the user's machine",
+        staged_plugin.display()
+    );
+}
+
+/// RUNPATHs must actually be applied. `patchelf` has no `--` end-of-options
+/// separator: `patchelf --set-rpath <rpath> -- <file>` treats `--` as the input
+/// file, errors out, and leaves the bundle with the distro's absolute library
+/// paths — which the first fat build did for all 640 of its ELFs, invisibly,
+/// because the image still ran against the host's own GStreamer.
+#[test]
+fn dry_run_applies_origin_relative_runpaths_to_every_bundled_elf() {
+    let toolchain = FakeToolchain::new();
+    toolchain.stubs_as_elfs();
+    let shim_dir = toolchain.holder.path().join("shim-bin");
+    let log = install_patchelf_shim(&shim_dir);
+
+    let appdir = toolchain.staged_with(|command| {
+        command.env("PATH", shimmed_path(&shim_dir));
+        command.env("PATCH_RPATH_LOG", &log);
+        command.env("PATCH_RPATH_STATUS", "0");
+    });
+
+    assert!(
+        log.is_file(),
+        "{} was never written: the dry run staged ELF stubs without ever calling patchelf, so \
+         the bundle's RUNPATHs would keep the distro paths and the shared staging path would \
+         never be exercised",
+        log.display(),
+    );
+    let invocations = parse_patchelf_log(&log);
+    let expected = 1 + PLUGINS.len() + RUNTIME_LIBS.len() + 1;
+    assert_eq!(
+        invocations.len(),
+        expected,
+        "the bundle patched {} ELFs, expected {expected}: the staged binary, the plugin \
+         scanner, every library under usr/lib and every plugin under usr/lib/gstreamer-1.0 \
+         must get an $ORIGIN-relative RUNPATH ({} was staged into {})",
+        invocations.len(),
+        toolchain.files().len(),
+        appdir.display(),
+    );
+    for arguments in &invocations {
+        assert_eq!(
+            arguments.len(),
+            3,
+            "patchelf was called as {arguments:?}: it takes `--set-rpath <rpath> <file>` and has \
+             no `--` end-of-options separator, so with `--` it treats the separator as the file \
+             name, fails, and applies no RUNPATH at all"
+        );
+        assert_eq!(
+            arguments[0], "--set-rpath",
+            "patchelf was called as {arguments:?}: the bundle's RUNPATHs are set with \
+             `--set-rpath <rpath> <file>`",
+        );
+        assert!(
+            arguments[1].starts_with("$ORIGIN"),
+            "patchelf was called as {arguments:?}: a bundled ELF must resolve its neighbours \
+             inside the read-only image, so every RUNPATH is $ORIGIN-relative",
+        );
+        assert!(
+            Path::new(&arguments[2]).starts_with(&appdir),
+            "patchelf was called on {} outside the staged AppDir {}",
+            arguments[2],
+            appdir.display(),
+        );
+    }
+    for (bundled, rpath) in [
+        ("usr/bin/modv", "$ORIGIN/../lib"),
+        (
+            "usr/libexec/gstreamer-1.0/gst-plugin-scanner",
+            "$ORIGIN/../../lib",
+        ),
+        ("usr/lib/libgstreamer-1.0.so.0", "$ORIGIN"),
+        ("usr/lib/libavcodec.so.61", "$ORIGIN"),
+        ("usr/lib/gstreamer-1.0/libgstcoreelements.so", "$ORIGIN/.."),
+        ("usr/lib/gstreamer-1.0/libgstlibav.so", "$ORIGIN/.."),
+    ] {
+        let applied = recorded_rpath(&invocations, bundled);
+        assert_eq!(
+            applied.as_deref(),
+            Some(rpath),
+            "no patchelf invocation applied {rpath} to the staged {bundled}: the bundle's ELFs \
+             keep the distro's absolute library paths and resolve against the host instead of \
+             each other inside the image",
+        );
+    }
+}
+
+/// ... and a failing `patchelf` must stop the build instead of being logged as a
+/// warning: a bundle with unpatched RUNPATHs still runs on the build host, so a
+/// warning is how the defect stays invisible until a user's machine differs.
+#[test]
+fn dry_run_aborts_when_patchelf_reports_failure() {
+    let toolchain = FakeToolchain::new();
+    toolchain.stubs_as_elfs();
+    let shim_dir = toolchain.holder.path().join("shim-bin");
+    let log = install_patchelf_shim(&shim_dir);
+
+    let output = toolchain.stage_with(|command| {
+        command.env("PATH", shimmed_path(&shim_dir));
+        command.env("PATCH_RPATH_LOG", &log);
+        command.env("PATCH_RPATH_STATUS", "1");
+    });
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        log.is_file(),
+        "{} was never written: the dry run never called patchelf, so a patchelf failure could \
+         not be observed at all and the bundle's RUNPATHs are unverified",
+        log.display(),
+    );
+    assert!(
+        !output.status.success(),
+        "tools/vmodv-appimage.sh exited {} although patchelf reported failure for the staged \
+         bundle: a bundle whose RUNPATHs were not applied silently resolves libraries against \
+         the host instead of inside the read-only image, which is invisible in the build \
+         container. Treat a non-zero patchelf status as fatal.\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status,
+    );
+    assert!(
+        stderr.contains("patchelf"),
+        "tools/vmodv-appimage.sh failed without naming patchelf, so the RUNPATH failure is not \
+         diagnosable from the build log:\nstdout:\n{stdout}\nstderr:\n{stderr}",
     );
 }
