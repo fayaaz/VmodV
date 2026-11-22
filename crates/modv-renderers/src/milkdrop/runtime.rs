@@ -165,21 +165,48 @@ impl MilkNoise {
     pub const SIZE: u32 = 256;
 
     /// Generate the four deterministic noise fields.
+    ///
+    /// Each field is filled with bytes drawn from an independent splitmix64
+    /// stream seeded with a distinct constant, so every buffer is non-uniform
+    /// and the four fields are pairwise distinct. The generator is fixed and
+    /// allocation-only, so two calls always produce byte-identical output.
     pub fn new() -> Self {
-        let len = (Self::SIZE as usize) * (Self::SIZE as usize) * 4;
         Self {
-            lq: vec![0; len],
-            mq: vec![0; len],
-            hq: vec![0; len],
-            pw: vec![0; len],
+            lq: Self::field(0x9E37_79B9_7F4A_7C15),
+            mq: Self::field(0xBF58_476D_1CE4_E5B9),
+            hq: Self::field(0x94D0_49BB_1331_11EB),
+            pw: Self::field(0xD1B5_4A32_D192_ED03),
         }
+    }
+
+    /// Fill one `SIZE × SIZE` RGBA8 field from a seeded splitmix64 stream.
+    fn field(seed: u64) -> Vec<u8> {
+        let len = (Self::SIZE as usize) * (Self::SIZE as usize) * 4;
+        let mut bytes = Vec::with_capacity(len);
+        let mut state = seed;
+        while bytes.len() < len {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            bytes.extend_from_slice(&z.to_le_bytes());
+        }
+        bytes.truncate(len);
+        bytes
     }
 }
 
-/// Number of (texture, sampler) pairs the MilkDrop shader bind group binds.
-/// Guarded against `translate::BUILTIN_SAMPLERS` by a unit test. GREEN raises
-/// this to 13 and uses it in the bind-group layout/construction.
-pub(crate) const MILK_RUNTIME_SAMPLER_PAIRS: usize = 8;
+impl Default for MilkNoise {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Number of (texture, sampler) pairs the MilkDrop shader bind group binds:
+/// the eight original built-ins plus the five noise samplers. Guarded against
+/// `translate::BUILTIN_SAMPLERS` by a unit test.
+pub(crate) const MILK_RUNTIME_SAMPLER_PAIRS: usize = 13;
 
 // --- GPU pass shaders (Layer 5b) -------------------------------------------
 //
@@ -306,12 +333,22 @@ fn fs_main(input: OverlayIn) -> @location(0) vec4<f32> {
 /// Which bind-group layout a cached pipeline was built against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MilkLayout {
-    /// The translated warp/comp shaders: uniform + 8 sampler pairs.
+    /// The translated warp/comp shaders: uniform + 13 sampler pairs.
     WarpComp,
     /// The blur passes: one texture + one sampler.
     Pass,
     /// The output pass: uniform + one texture + one sampler.
     Output,
+}
+
+/// The four deterministic noise fields uploaded as GPU textures. The views are
+/// bound positionally at the five built-in noise sampler slots in
+/// `milk_bind_group` (both preset-wave noise samplers share the `pw` field).
+#[derive(Clone)]
+struct MilkNoiseGpu {
+    #[allow(dead_code)]
+    textures: [wgpu::Texture; 4],
+    views: [wgpu::TextureView; 4],
 }
 
 /// Reusable GPU objects shared by every render of one runtime. Kept behind an
@@ -326,6 +363,7 @@ struct MilkGpuCache {
     vertex: Option<wgpu::ShaderModule>,
     sampler: Option<wgpu::Sampler>,
     dummy: Option<(wgpu::Texture, wgpu::TextureView)>,
+    noise: Option<MilkNoiseGpu>,
     /// WGSL sources already known to fail validation, so a broken preset is
     /// reported as a typed [`MilkRuntimeError::Draw`] without recompiling.
     failed: HashSet<String>,
@@ -341,6 +379,7 @@ impl MilkGpuCache {
             vertex: None,
             sampler: None,
             dummy: None,
+            noise: None,
             failed: HashSet::new(),
         }
     }
@@ -438,6 +477,27 @@ impl MilkGpuCache {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self.dummy = Some((texture, view));
         }
+        if self.noise.is_none() {
+            let noise = MilkNoise::new();
+            let fields = [&noise.lq, &noise.mq, &noise.hq, &noise.pw];
+            let labels = [
+                "modV MilkDrop noise lq",
+                "modV MilkDrop noise mq",
+                "modV MilkDrop noise hq",
+                "modV MilkDrop noise pw",
+            ];
+            let mut textures = [None, None, None, None];
+            let mut views = [None, None, None, None];
+            for (index, (bytes, label)) in fields.iter().zip(labels).enumerate() {
+                let (texture, view) = create_noise_texture(device, queue, bytes, label);
+                textures[index] = Some(texture);
+                views[index] = Some(view);
+            }
+            self.noise = Some(MilkNoiseGpu {
+                textures: textures.map(|texture| texture.expect("four noise textures")),
+                views: views.map(|view| view.expect("four noise views")),
+            });
+        }
         if self.vertex.is_none() {
             self.vertex = Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("modV MilkDrop vertex"),
@@ -445,11 +505,11 @@ impl MilkGpuCache {
             }));
         }
         if self.milk_layout.is_none() {
-            // Binding 0 is the uniform; bindings 1..=16 are eight
-            // (texture, sampler) pairs in `BUILTIN_SAMPLERS` order.
-            let mut entries = Vec::with_capacity(17);
+            // Binding 0 is the uniform; the rest are `MILK_RUNTIME_SAMPLER_PAIRS`
+            // (texture, sampler) pairs in `BUILTIN_SAMPLERS` order (1..=26).
+            let mut entries = Vec::with_capacity(1 + MILK_RUNTIME_SAMPLER_PAIRS * 2);
             entries.push(Self::uniform_entry(0));
-            for binding in 1..=16u32 {
+            for binding in 1..=(MILK_RUNTIME_SAMPLER_PAIRS as u32) * 2 {
                 entries.push(if binding % 2 == 1 {
                     Self::texture_entry(binding)
                 } else {
@@ -1165,6 +1225,17 @@ impl MilkRuntime {
             .as_ref()
             .map(|(_, view)| view.clone())
             .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop dummy texture missing".into()))?;
+        let noise_views = cache
+            .noise
+            .as_ref()
+            .map(|noise| noise.views.clone())
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop noise textures missing".into()))?;
+        let noise_refs: [&wgpu::TextureView; 4] = [
+            &noise_views[0],
+            &noise_views[1],
+            &noise_views[2],
+            &noise_views[3],
+        ];
         let milk_layout = cache
             .milk_layout
             .clone()
@@ -1178,24 +1249,22 @@ impl MilkRuntime {
             .clone()
             .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop output layout missing".into()))?;
 
-        let warp_bind = milk_bind_group(
-            device,
-            &milk_layout,
-            &uniform_buffer,
-            previous,
-            blur_refs,
-            &sampler,
-            &dummy_view,
-        );
-        let comp_bind = milk_bind_group(
-            device,
-            &milk_layout,
-            &uniform_buffer,
-            &warp_view,
-            blur_refs,
-            &sampler,
-            &dummy_view,
-        );
+        let warp_views = MilkSamplerViews {
+            main: previous,
+            dummy: &dummy_view,
+            blur: blur_refs,
+            noise: noise_refs,
+        };
+        let comp_views = MilkSamplerViews {
+            main: &warp_view,
+            dummy: &dummy_view,
+            blur: blur_refs,
+            noise: noise_refs,
+        };
+        let warp_bind =
+            milk_bind_group(device, &milk_layout, &uniform_buffer, &sampler, warp_views);
+        let comp_bind =
+            milk_bind_group(device, &milk_layout, &uniform_buffer, &sampler, comp_views);
         let output_bind = output_bind_group(
             device,
             &output_layout,
@@ -1855,6 +1924,51 @@ fn create_target(device: &wgpu::Device, width: u32, height: u32, label: &str) ->
     })
 }
 
+/// Upload one deterministic RGBA8 noise field into a sampleable GPU texture.
+fn create_noise_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    bytes: &[u8],
+    label: &str,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let size = MilkNoise::SIZE;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size * 4),
+            rows_per_image: Some(size),
+        },
+        wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 /// Uniform-buffer entry at binding 0, shared by the warp/comp and output
 /// passes. The whole 256-byte stride is bound so one buffer serves both.
 fn uniform_bind_entry(buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -1882,30 +1996,43 @@ fn sampler_bind(binding: u32, sampler: &wgpu::Sampler) -> wgpu::BindGroupEntry<'
     }
 }
 
-/// Bind the uniform block plus the eight built-in sampler pairs of a
-/// translated warp/comp shader. Bindings follow `translate.rs`: binding 0 is
-/// the uniform, `sampler_main` is `main_view`, blur samplers 1..3 are the
-/// blur targets and every other built-in uses the 1×1 dummy texture.
+/// Texture views bound to the built-in sampler slots of a warp/comp shader.
+#[derive(Clone, Copy)]
+struct MilkSamplerViews<'a> {
+    main: &'a wgpu::TextureView,
+    dummy: &'a wgpu::TextureView,
+    blur: [&'a wgpu::TextureView; 3],
+    noise: [&'a wgpu::TextureView; 4],
+}
+
+/// Bind the uniform block plus every built-in sampler pair of a translated
+/// warp/comp shader, in `translate::BUILTIN_SAMPLERS` order. Binding 0 is the
+/// uniform; `sampler_main` is `main_view`, blur samplers 1..3 are the blur
+/// targets, the five noise samplers use the deterministic noise textures and
+/// the remaining built-ins use the 1×1 dummy texture.
 fn milk_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     uniform: &wgpu::Buffer,
-    main_view: &wgpu::TextureView,
-    blur_views: [&wgpu::TextureView; 3],
     sampler: &wgpu::Sampler,
-    dummy_view: &wgpu::TextureView,
+    views: MilkSamplerViews<'_>,
 ) -> wgpu::BindGroup {
-    let mut entries = Vec::with_capacity(17);
+    let mut entries = Vec::with_capacity(1 + MILK_RUNTIME_SAMPLER_PAIRS * 2);
     entries.push(uniform_bind_entry(uniform));
-    let textures: [&wgpu::TextureView; 8] = [
-        main_view,
-        dummy_view,
-        dummy_view,
-        dummy_view,
-        dummy_view,
-        blur_views[0],
-        blur_views[1],
-        blur_views[2],
+    let textures: [&wgpu::TextureView; MILK_RUNTIME_SAMPLER_PAIRS] = [
+        views.main,
+        views.dummy,
+        views.dummy,
+        views.dummy,
+        views.dummy,
+        views.blur[0],
+        views.blur[1],
+        views.blur[2],
+        views.noise[0],
+        views.noise[1],
+        views.noise[2],
+        views.noise[3],
+        views.noise[3],
     ];
     for (index, view) in textures.iter().enumerate() {
         let base = (index as u32) * 2 + 1;
@@ -2561,16 +2688,13 @@ ret = uv;\n\
         let b = MilkNoise::new();
 
         let expected_len = (MilkNoise::SIZE as usize) * (MilkNoise::SIZE as usize) * 4;
-        for (label, bytes) in [
-            ("lq", &a.lq),
-            ("mq", &a.mq),
-            ("hq", &a.hq),
-            ("pw", &a.pw),
-        ] {
+        for (label, bytes) in [("lq", &a.lq), ("mq", &a.mq), ("hq", &a.hq), ("pw", &a.pw)] {
             assert_eq!(
-                bytes.len(), expected_len,
+                bytes.len(),
+                expected_len,
                 "{label} noise must be a {}x{} RGBA8 field",
-                MilkNoise::SIZE, MilkNoise::SIZE
+                MilkNoise::SIZE,
+                MilkNoise::SIZE
             );
             let distinct = bytes.iter().copied().collect::<HashSet<_>>();
             assert!(

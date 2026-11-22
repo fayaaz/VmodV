@@ -124,12 +124,24 @@ const BUILTIN_SAMPLERS: &[&str] = &[
     "sampler_blur1",
     "sampler_blur2",
     "sampler_blur3",
+    "sampler_noise_lq",
+    "sampler_noise_mq",
+    "sampler_noise_hq",
+    "sampler_pw_noise_lq",
+    "sampler_pw_noise_hq",
 ];
 
-/// Noise samplers the runtime binds positionally. A preset that redeclares one
-/// of these in its prelude is stripped defensively so the split binding emitted
-/// below is the single declaration naga sees.
-const NOISE_SAMPLERS: &[&str] = &["sampler_pw_noise_lq", "sampler_pw_noise_hq"];
+/// Noise samplers the runtime binds positionally after the eight original
+/// built-ins. A preset that redeclares one of these in its prelude is stripped
+/// defensively so the split binding emitted below is the single declaration
+/// naga sees.
+const NOISE_SAMPLERS: &[&str] = &[
+    "sampler_noise_lq",
+    "sampler_noise_mq",
+    "sampler_noise_hq",
+    "sampler_pw_noise_lq",
+    "sampler_pw_noise_hq",
+];
 
 /// The canonical MilkDrop uniform members emitted into the `@group(0)
 /// @binding(0)` block. Scalars are `float`, coordinates/`texsize` are `vec2`.
@@ -172,7 +184,9 @@ const UNIFORM_MEMBERS: &[(&str, &str)] = &[
     ("vec2", "texsize_pw"),
     ("vec2", "texsize_fc"),
     ("vec2", "texsize_pc"),
-    ("vec2", "uv_orig"),
+    // Kept as a uniform slot so the byte layout stays stable; shader bodies
+    // read the per-pixel `uv_orig` varying declared by `wrap_milk_shader`.
+    ("vec2", "uv_orig_u"),
     ("vec2", "rad"),
     ("vec2", "ang"),
 ];
@@ -305,19 +319,59 @@ fn is_reserved_sampler(name: &str) -> bool {
     BUILTIN_SAMPLERS.contains(&name) || NOISE_SAMPLERS.contains(&name)
 }
 
-/// The samplers a wrapper must bind: built-ins first, then user samplers from
-/// the prelude in declaration order. Reserved/noise samplers are skipped so the
-/// wrapper stays the single declaration naga sees.
-fn samplers_for_prelude(prelude: &str) -> Vec<String> {
-    let mut samplers: Vec<String> = BUILTIN_SAMPLERS.iter().map(|s| s.to_string()).collect();
+/// One wrapper-owned sampler binding. `name` is `None` for a built-in noise
+/// slot the body never references: the slot is still declared with an
+/// anonymous name so every sampler keeps its fixed `BUILTIN_SAMPLERS` position
+/// (and the runtime's matching bind-group slot) without leaking the reserved
+/// identifier into the generated shader.
+struct SamplerBinding {
+    name: Option<String>,
+}
+
+/// True when `name` appears as a whole identifier in `body`.
+fn body_uses_sampler(body: &str, name: &str) -> bool {
+    let mut rest = body;
+    while let Some(index) = rest.find(name) {
+        let before_ok = rest[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_ident_char(c));
+        let after = &rest[index + name.len()..];
+        let after_ok = after.chars().next().is_none_or(|c| !is_ident_char(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+/// The samplers a wrapper must bind: the 13 built-ins first (in fixed order),
+/// then user samplers from the prelude in declaration order. Reserved/noise
+/// samplers are skipped as user declarations so the wrapper stays the single
+/// declaration naga sees. A noise sampler the body never uses is bound
+/// anonymously at its reserved slot, keeping binding indices stable.
+fn samplers_for_prelude(prelude: &str, body: &str) -> Vec<SamplerBinding> {
+    let mut samplers: Vec<SamplerBinding> = BUILTIN_SAMPLERS
+        .iter()
+        .map(|name| SamplerBinding {
+            name: (!NOISE_SAMPLERS.contains(name) || body_uses_sampler(body, name))
+                .then(|| name.to_string()),
+        })
+        .collect();
     for (ty, name) in prelude_uniforms(prelude) {
         if ty != "sampler2D" || is_reserved_sampler(name) {
             continue;
         }
-        if samplers.iter().any(|existing| existing == name) {
+        if samplers
+            .iter()
+            .any(|existing| existing.name.as_deref() == Some(name))
+        {
             continue;
         }
-        samplers.push(name.to_string());
+        samplers.push(SamplerBinding {
+            name: Some(name.to_string()),
+        });
     }
     samplers
 }
@@ -326,20 +380,32 @@ fn samplers_for_prelude(prelude: &str) -> Vec<String> {
 /// sampler name to naga's `sampler2D(texture, sampler)` constructor.
 ///
 /// Binding 0 is the uniform block, so textures/samplers occupy 1, 2, 3, …
-fn sampler_bindings_glsl(samplers: &[String]) -> String {
+fn sampler_bindings_glsl(samplers: &[SamplerBinding]) -> String {
     let mut out = String::new();
-    for (index, name) in samplers.iter().enumerate() {
+    for (index, binding) in samplers.iter().enumerate() {
         let texture_binding = (index as u32) * 2 + 1;
         let sampler_binding = texture_binding + 1;
-        out.push_str(&format!(
-            "#define {name} sampler2D(isf_tex_{name}, isf_smp_{name})\n"
-        ));
-        out.push_str(&format!(
-            "layout(binding = {texture_binding}) uniform texture2D isf_tex_{name};\n"
-        ));
-        out.push_str(&format!(
-            "layout(binding = {sampler_binding}) uniform sampler isf_smp_{name};\n"
-        ));
+        match &binding.name {
+            Some(name) => {
+                out.push_str(&format!(
+                    "#define {name} sampler2D(isf_tex_{name}, isf_smp_{name})\n"
+                ));
+                out.push_str(&format!(
+                    "layout(binding = {texture_binding}) uniform texture2D isf_tex_{name};\n"
+                ));
+                out.push_str(&format!(
+                    "layout(binding = {sampler_binding}) uniform sampler isf_smp_{name};\n"
+                ));
+            }
+            None => {
+                out.push_str(&format!(
+                    "layout(binding = {texture_binding}) uniform texture2D isf_tex_unused_{index};\n"
+                ));
+                out.push_str(&format!(
+                    "layout(binding = {sampler_binding}) uniform sampler isf_smp_unused_{index};\n"
+                ));
+            }
+        }
     }
     out.push('\n');
     out
@@ -461,7 +527,7 @@ fn retained_prelude(prelude: &str) -> String {
 /// `vec4(ret.xyz, 1.0)` (component-wise so both `float3` and `float4` bodies
 /// work).
 pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> String {
-    let samplers = samplers_for_prelude(prelude);
+    let samplers = samplers_for_prelude(prelude, body);
     let body = rewrite_hlsl_types(body);
 
     let mut out = String::with_capacity(body.len() + 4096);
@@ -470,6 +536,11 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     out.push_str(HLSL_MACROS);
     out.push('\n');
     out.push_str(&uniform_block_glsl(prelude));
+    // Per-pixel UV from the fullscreen vertex stage. The uniform block keeps
+    // an `uv_orig_u` slot at the same byte offset for layout stability, but
+    // shader bodies read this interpolated varying so texture samples vary
+    // across the frame.
+    out.push_str("layout(location = 0) in vec2 uv_orig;\n");
     out.push_str(&sampler_bindings_glsl(&samplers));
     out.push_str("layout(location = 0) out vec4 milk_FragColor;\n\n");
     out.push_str(&retained_prelude(prelude));
