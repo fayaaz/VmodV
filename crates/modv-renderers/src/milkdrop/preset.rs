@@ -902,4 +902,247 @@ shader_body\n\
             doc.diagnostics
         );
     }
+
+    // ---- Real MilkDrop 2 `.milk` format compatibility (RED) -----------------
+
+    /// Real v2 presets escape every raw shader line by prefixing it with a
+    /// backtick. That backtick is a file-format escape, never GLSL/HLSL.
+    #[test]
+    fn backtick_escaped_shader_lines_are_stripped_and_body_extracts() {
+        let src = r#"[preset00]
+MILKDROP_PRESET_VERSION=201
+warp_1=`float4 helper(float2 p) {
+warp_2=`  return float4(p, 0.0, 1.0);
+warp_3=`}
+warp_4=`shader_body
+warp_5=`{
+warp_6=`  float3 ret = helper(uv_orig).rgb;
+warp_7=`}
+comp_1=`shader_body
+comp_2=`{
+comp_3=`  float4 ret = float4(0.0);
+comp_4=`}
+"#;
+        let doc = parse_milk(src, "backtick_shader").expect("v2 preset parses");
+
+        assert!(
+            !doc.warp.contains('`'),
+            "assembled warp must carry no backticks, got {:?}",
+            doc.warp
+        );
+        assert!(
+            !doc.comp.contains('`'),
+            "assembled comp must carry no backticks, got {:?}",
+            doc.comp
+        );
+
+        let expected_warp = concat!(
+            "float4 helper(float2 p) {\n",
+            "  return float4(p, 0.0, 1.0);\n",
+            "}\n",
+            "shader_body\n",
+            "{\n",
+            "  float3 ret = helper(uv_orig).rgb;\n",
+            "}",
+        );
+        assert_eq!(
+            doc.warp, expected_warp,
+            "one leading backtick per line stripped, indentation and braces kept"
+        );
+
+        let shader = extract_shader_body(&doc.warp);
+        assert!(
+            shader.prelude.contains("float4 helper(float2 p) {"),
+            "prelude keeps the helper declaration, got {:?}",
+            shader.prelude
+        );
+        assert!(
+            shader.prelude.contains("  return float4(p, 0.0, 1.0);"),
+            "prelude keeps original indentation, got {:?}",
+            shader.prelude
+        );
+        assert!(
+            shader.prelude.contains("}\n"),
+            "helper closing brace stays intact, got {:?}",
+            shader.prelude
+        );
+        assert!(
+            shader
+                .body
+                .contains("float3 ret = helper(uv_orig).rgb;"),
+            "body keeps the helper call site, got {:?}",
+            shader.body
+        );
+        assert!(
+            !shader.prelude.contains('`') && !shader.body.contains('`'),
+            "extracted prelude/body carry no backticks"
+        );
+    }
+
+    /// Escape stripping removes exactly ONE leading backtick per value line:
+    /// indentation and any later (mid-line) backticks must survive untouched.
+    #[test]
+    fn only_one_leading_backtick_is_stripped_from_equation_values() {
+        let src = r#"[preset00]
+per_frame_1=`x=1; y=`z;
+per_frame_2=``x=2;
+per_pixel_1=`  q = 1;
+"#;
+        let doc = parse_milk(src, "backtick_eqs").expect("parses");
+        assert_eq!(
+            doc.frame_eqs, "x=1; y=`z;\n`x=2;",
+            "strip one leading backtick per line; keep mid-line and second backticks"
+        );
+        assert_eq!(
+            doc.pixel_eqs, "  q = 1;",
+            "leading indentation after the stripped backtick is preserved"
+        );
+    }
+
+    /// A UTF-8 BOM in front of `[preset00]` is a common `.milk` artefact and
+    /// must be stripped before section detection; a BOM alone is not a section.
+    #[test]
+    fn utf8_bom_before_preset_section_is_accepted() {
+        let src = "\u{feff}[preset00]\nfDecay=0.9\nper_frame_1=x=1;\n";
+        let doc = parse_milk(src, "bom").expect("BOM-prefixed preset parses");
+        assert_eq!(doc.version, 1);
+        assert!(
+            (doc.base.decay - 0.9).abs() < 1e-9,
+            "base vals after the BOM section still parse"
+        );
+        assert_eq!(doc.frame_eqs, "x=1;");
+
+        let no_section = "\u{feff}fDecay=0.9\nper_frame_1=x=1;\n";
+        assert!(
+            matches!(
+                parse_milk(no_section, "bom_no_section"),
+                Err(MilkParseError::PresetSectionMissing)
+            ),
+            "a BOM does not turn a section-less file into a preset"
+        );
+    }
+
+    /// `psversion*` are real v2 metadata keys: recognised-but-ignored, exactly
+    /// like the already-known rating/shader/preview keys. Genuine unknowns stay
+    /// in diagnostics.
+    #[test]
+    fn real_v2_metadata_keys_are_recognised_but_ignored() {
+        let src = r#"[preset00]
+psversion=3
+psversion_warp=2
+psversion_comp=2
+frating=5.0
+fshader=2
+fpreview=1
+fDecay=0.9
+per_frame_1=x=1;
+"#;
+        let doc = parse_milk(src, "metadata").expect("parses");
+        assert!(
+            doc.diagnostics.is_empty(),
+            "real v2 metadata keys must not become diagnostics, got {:?}",
+            doc.diagnostics
+        );
+
+        let control = "[preset00]\npsversion=3\nfTotallyUnknownKey=1\n";
+        let control_doc = parse_milk(control, "control").expect("parses");
+        assert!(
+            control_doc
+                .diagnostics
+                .iter()
+                .any(|d| d.to_lowercase().contains("totallyunknownkey")),
+            "a genuinely unknown key is still diagnosed, got {:?}",
+            control_doc.diagnostics
+        );
+    }
+
+    /// A representative real v2 header: the compatibility rename table maps
+    /// these names onto canonical base vals; omitted fields keep defaults.
+    #[test]
+    fn real_v2_header_renames_map_to_canonical_base_vals() {
+        let src = r#"[preset00]
+MILKDROP_PRESET_VERSION=201
+fDecay=0.98
+fGammaAdj=1.5
+fVideoEchoZoom=1.25
+nWaveMode=8
+fWaveAlpha=0.75
+fZoomExponent=1.3
+nMotionVectorsX=2
+nMotionVectorsY=3
+"#;
+        let doc = parse_milk(src, "header").expect("parses");
+        assert_eq!(doc.version, 2);
+        assert!((doc.base.decay - 0.98).abs() < 1e-9, "fDecay -> decay");
+        assert!((doc.base.gammaadj - 1.5).abs() < 1e-9, "fGammaAdj -> gammaadj");
+        assert!(
+            (doc.base.echo_zoom - 1.25).abs() < 1e-9,
+            "fVideoEchoZoom -> echo_zoom"
+        );
+        assert_eq!(doc.base.wave_mode, 8, "nWaveMode -> wave_mode");
+        assert!((doc.base.wave_a - 0.75).abs() < 1e-9, "fWaveAlpha -> wave_a");
+        assert!((doc.base.zoomexp - 1.3).abs() < 1e-9, "fZoomExponent -> zoomexp");
+        assert_eq!(doc.base.mv_x, 2, "nMotionVectorsX -> mv_x");
+        assert_eq!(doc.base.mv_y, 3, "nMotionVectorsY -> mv_y");
+        // Canonical defaults for omitted fields.
+        assert!((doc.base.zoom - 1.0).abs() < 1e-9, "default zoom");
+        assert!((doc.base.warp - 1.0).abs() < 1e-9, "default warp");
+        assert!((doc.base.cx - 0.5).abs() < 1e-9, "default cx");
+        assert!((doc.base.brightness - 1.0).abs() < 1e-9, "default brightness");
+    }
+
+    /// `[preset00]` detection is case-insensitive, tolerates surrounding
+    /// whitespace, and CRLF line endings are still normalised to LF.
+    #[test]
+    fn preset_section_case_whitespace_and_crlf_are_tolerated() {
+        let src = "  [PrEsEt00]  \r\nfDecay=0.9\r\nper_frame_1=x=1;\r\n";
+        let doc = parse_milk(src, "case").expect("parses");
+        assert!(
+            (doc.base.decay - 0.9).abs() < 1e-9,
+            "mixed-case section with padding is found"
+        );
+        assert_eq!(doc.frame_eqs, "x=1;");
+        assert!(!doc.frame_eqs.contains('\r'), "CRLF normalised to LF");
+    }
+
+    /// Real wave/shape sections: `*_enabled` gates activity, equations are
+    /// backtick-escaped, and `shape_*_per_point` is not valid but must be
+    /// ignored gracefully rather than diagnosed or panicking.
+    #[test]
+    fn real_wave_and_shape_sections_enable_and_strip_backticks() {
+        let src = r#"[preset00]
+wavecode_1_enabled=1
+wavecode_1_r=1.0
+wavecode_2_enabled=0
+wave_1_per_frame_1=`x=1;
+shapecode_1_enabled=1
+shapecode_2_enabled=0
+shape_1_per_frame_1=`shape_x = 0.5;
+shape_1_per_point_1=`ignored = 1;
+"#;
+        let doc = parse_milk(src, "wave_shape").expect("parses");
+
+        assert_eq!(doc.active_waves().len(), 1, "one enabled wave");
+        assert_eq!(doc.active_shapes().len(), 1, "one enabled shape");
+
+        let wave = doc.active_waves()[0];
+        let shape = doc.active_shapes()[0];
+        assert_eq!(
+            wave.frame_eqs, "x=1;",
+            "wave equation has no leading backtick, got {:?}",
+            wave.frame_eqs
+        );
+        assert_eq!(
+            shape.frame_eqs, "shape_x = 0.5;",
+            "shape equation has no leading backtick, got {:?}",
+            shape.frame_eqs
+        );
+        assert!(
+            !doc.diagnostics
+                .iter()
+                .any(|d| d.to_lowercase().contains("per_point")),
+            "shape per_point is ignored gracefully, got {:?}",
+            doc.diagnostics
+        );
+    }
 }
