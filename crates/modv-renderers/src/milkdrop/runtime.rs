@@ -1639,17 +1639,25 @@ impl MilkRuntime {
             &comp_pipeline,
             &comp_bind,
         );
-        // Layer 5c: production callers (compositor: begin_frame → evaluate_mesh
-        // → render) never call `evaluate_overlays()` explicitly, so evaluate the
-        // enabled wave/shape sections here before the overlay pass. This is
-        // idempotent: `evaluate_overlays` replaces (not appends to) the cached
+        // Layer 5c: evaluate overlays here because production callers drive a
+        // plain `begin_frame → evaluate_mesh → render` flow (see the compositor)
+        // and never call `evaluate_overlays()` themselves. Doing it inside
+        // `render` guarantees the enabled wave/shape sections reach the
+        // framebuffer regardless of the caller. This is idempotent:
+        // `evaluate_overlays` replaces (rather than appends to) the cached
         // `instance.overlay_frame` and re-seeds the per-frame vars, so an
-        // explicit pre-render call followed by this one yields the same geometry
-        // and the pass below still draws it exactly once (no double-draw).
+        // explicit pre-render call followed by this one yields identical
+        // geometry and the pass below still draws each overlay exactly once.
+        // We deliberately do not cache an "already evaluated" flag on the
+        // instance: that would add new public state and could serve stale
+        // overlays if the frame changes, while the extra EEL pass is cheap.
+        // The `Result` is ignored on purpose: `evaluate_overlays` already logs
+        // and skips any individual section that fails, and a broken overlay
+        // must never fail the whole render -- the six-pass path stays exact.
         let _ = evaluate_overlays(instance, frame);
         // Draw wave/shape overlay primitives onto the comp target so the output
-        // pass (which samples comp_view) sees them. Best-effort: when no
-        // overlays were evaluated the existing six-pass path is exact.
+        // pass (which samples comp_view) sees them. When no overlays were
+        // evaluated the existing six-pass path is unchanged.
         if !instance.overlay_frame.waves.is_empty() || !instance.overlay_frame.shapes.is_empty() {
             let alpha_pipeline = cache.overlay_pipeline(device, false)?;
             let additive_pipeline = cache.overlay_pipeline(device, true)?;
