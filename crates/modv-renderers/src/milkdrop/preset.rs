@@ -460,6 +460,9 @@ static METADATA_KEYS: &[&str] = &[
     "frating",
     "fshader",
     "fpreview",
+    "psversion",
+    "psversion_warp",
+    "psversion_comp",
     "author",
     "desc",
     "description",
@@ -626,7 +629,10 @@ pub fn extract_shader_body(src: &str) -> MilkShader {
 
 /// Parse a MilkDrop preset from `src`. The file extension is irrelevant.
 pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseError> {
-    let normalized = src.replace("\r\n", "\n");
+    let owned = src.replace("\r\n", "\n");
+    // Real `.milk` files frequently begin with a UTF-8 BOM. Strip exactly one
+    // before section detection; a BOM alone does not create a section.
+    let normalized = owned.strip_prefix('\u{feff}').unwrap_or(&owned);
 
     let section_start = normalized
         .lines()
@@ -663,10 +669,14 @@ pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseE
         {
             continue;
         }
-        let Some((raw_key, value)) = trimmed.split_once('=') else {
+        let Some((raw_key, raw_value)) = trimmed.split_once('=') else {
             continue;
         };
         let key = raw_key.trim().to_lowercase();
+        // Real v2 presets escape each value line with exactly one leading
+        // backtick. Strip one; keep indentation and every other character
+        // (mid-line backticks and any additional leading ones survive).
+        let value = raw_value.strip_prefix('`').unwrap_or(raw_value);
         // `value` deliberately keeps leading whitespace: EEL/shader lines rely
         // on indentation; scalar parsers trim locally.
 
