@@ -355,11 +355,19 @@ struct SamplerBinding {
 /// declaration naga sees. A noise sampler the body never uses is bound
 /// anonymously at its reserved slot, keeping binding indices stable.
 fn samplers_for_prelude(prelude: &str, body: &str) -> Vec<SamplerBinding> {
+    // Scan the *retained* prelude, not the raw text: that keeps sampler use
+    // sites inside prelude helper functions while dropping top-level
+    // declarations (which must not, on their own, earn a named binding). This
+    // lets a noise sampler referenced only from a helper get a real named
+    // binding instead of an anonymous slot the helper cannot refer to.
+    let retained = retained_prelude(prelude);
     let mut samplers: Vec<SamplerBinding> = BUILTIN_SAMPLERS
         .iter()
         .map(|name| SamplerBinding {
-            name: (!NOISE_SAMPLERS.contains(name) || contains_ident(body, name))
-                .then(|| name.to_string()),
+            name: (!NOISE_SAMPLERS.contains(name)
+                || contains_ident(body, name)
+                || contains_ident(&retained, name))
+            .then(|| name.to_string()),
         })
         .collect();
     for (ty, name) in prelude_uniforms(prelude) {

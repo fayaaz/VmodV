@@ -1560,6 +1560,11 @@ impl MilkRuntime {
     }
 }
 
+/// Default identity shader body for presets with no `shader_body` at all
+/// (notably v1 presets, which predate per-stage HLSL). Sampling the previous
+/// frame at the mesh UV makes warp and comp pass-through stages.
+const DEFAULT_SHADER_BODY: &str = "float3 ret = tex2D(sampler_main, uv_orig).rgb;\n";
+
 /// Compile a parsed preset into an owned handle.
 ///
 /// On a shader/equation error the offending `name` is recorded in `failures`
@@ -1584,11 +1589,25 @@ pub fn compile_preset(
         compile(&doc.pixel_eqs, doc.version).map_err(|e| fail(format!("pixel equations: {e}")))?;
 
     let warp_src = extract_shader_body(&doc.warp);
-    let warp = translate_milk_shader(&warp_src.prelude, &warp_src.body, MilkShaderStage::Warp)
+    // A preset with no `shader_body` (v1, or otherwise empty) yields an empty
+    // body that would leave `ret` undeclared. Substitute the identity body so it
+    // still compiles and samples the previous frame. Presets with a body are
+    // translated verbatim.
+    let warp_body = if warp_src.body.trim().is_empty() {
+        DEFAULT_SHADER_BODY
+    } else {
+        &warp_src.body
+    };
+    let warp = translate_milk_shader(&warp_src.prelude, warp_body, MilkShaderStage::Warp)
         .map_err(|e| fail(format!("warp shader: {e}")))?;
 
     let comp_src = extract_shader_body(&doc.comp);
-    let comp = translate_milk_shader(&comp_src.prelude, &comp_src.body, MilkShaderStage::Comp)
+    let comp_body = if comp_src.body.trim().is_empty() {
+        DEFAULT_SHADER_BODY
+    } else {
+        &comp_src.body
+    };
+    let comp = translate_milk_shader(&comp_src.prelude, comp_body, MilkShaderStage::Comp)
         .map_err(|e| fail(format!("comp shader: {e}")))?;
 
     // Layer 5c: compile one program per enabled wave/shape section. A malformed
