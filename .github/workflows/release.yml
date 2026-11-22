@@ -358,10 +358,9 @@ jobs:
 
   publish-debs:
     name: Publish Ubuntu .debs
-    # The release job builds the AppImage with `make appimage-vmodv` and
-    # publishes it with the portable ZIPs; this job attaches only the four
-    # per-Ubuntu .debs after the release exists, so a slow Ubuntu leg cannot
-    # block tagging.
+    # The release job builds and publishes the AppImage with the portable
+    # ZIPs; this job attaches only the four per-Ubuntu .debs after the release
+    # exists, so a slow Ubuntu leg cannot block tagging.
     runs-on: ubuntu-latest
     needs: [version, release, linux-debs]
     if: ${{ needs.version.outputs.should_release == 'true' }}

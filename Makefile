@@ -161,8 +161,6 @@ vmodv-appimage-check: docker-rust
 # `modv` binary, assembles the package tree and verifies the result with
 # tools/vmodv-deb-check.sh.
 vmodv-deb: disk-guard docker-cargo-volume
-
-vmodv-deb:
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
@@ -180,8 +178,6 @@ vmodv-deb:
 
 # Re-run the metadata/file-list/binary checks on an already-built package.
 vmodv-deb-check: docker-rust
-
-vmodv-deb-check:
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
@@ -203,8 +199,6 @@ docker-package: disk-guard
 		$(DOCKER_BUILD_ARGS) .
 
 docker-rust: disk-guard
-
-docker-rust:
 	$(DOCKER) build --target rust -t "$(RUST_IMAGE)" \
 		--build-arg "BASE_IMAGE=$(BASE_IMAGE)" .
 

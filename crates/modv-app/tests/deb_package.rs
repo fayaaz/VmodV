@@ -202,11 +202,18 @@ fn assert_dry_run_flags(script_text: &str) {
     }
 }
 
-/// The body of a Makefile target: its tab-indented recipe lines.
+/// The body of a Makefile target: its tab-indented recipe lines. Accepts both
+/// a bare `target:` line and a normal rule with prerequisites
+/// (`target: prereq1 prereq2`), so the Makefile need not be split into
+/// duplicate rules purely to satisfy this helper.
 fn recipe(text: &str, target: &str) -> String {
     let key = format!("{target}:");
+    let with_prereqs = format!("{key} ");
     let lines: Vec<&str> = text.lines().collect();
-    let start = match lines.iter().position(|line| *line == key) {
+    let start = match lines.iter().position(|line| {
+        let line = line.trim_end();
+        line == key || line.starts_with(&with_prereqs)
+    }) {
         Some(index) => index,
         None => return String::new(),
     };
@@ -595,14 +602,13 @@ fn release_workflow_builds_and_publishes_four_ubuntu_debs() {
         "gh release upload",
         "v${VERSION}",
         "dist/VmodV-*.deb",
-        "make appimage-vmodv",
     ] {
         assert_contains(&publish, required, "the publish-debs job");
     }
     assert!(
         !publish.contains("make build"),
         "publish-debs must not run `make build`: that would rebuild the retired generic \
-         .deb; use `make appimage-vmodv` instead"
+         .deb; the release job builds the AppImage instead"
     );
 
     let release_job = job_block(&text, "release");
@@ -614,7 +620,15 @@ fn release_workflow_builds_and_publishes_four_ubuntu_debs() {
         "the release job must NOT wait for linux-debs: a flaky ubuntu:devel leg must not \
          block tagging; got {release_needs:?}"
     );
-    assert_contains(&release_job, "make appimage-vmodv", "the release job");
+    // Require the command in an actual `run:` step, not in a comment: a
+    // comment mentioning `make appimage-vmodv` must not satisfy this check.
+    assert!(
+        release_job.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with("run:") && line.contains("make appimage-vmodv")
+        }),
+        "the release job must run `make appimage-vmodv` in a step:\n{release_job}"
+    );
     assert!(
         !release_job.contains("make build"),
         "the release job must build the AppImage only (`make appimage-vmodv`); \
