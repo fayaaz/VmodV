@@ -144,7 +144,8 @@ const NOISE_SAMPLERS: &[&str] = &[
 ];
 
 /// The canonical MilkDrop uniform members emitted into the `@group(0)
-/// @binding(0)` block. Scalars are `float`, coordinates/`texsize` are `vec2`.
+/// @binding(0)` block. Scalars are `float`, `texsize` is a vec4 (MilkDrop 2:
+/// x=width, y=height, z=1/width, w=1/height), other coordinates are `vec2`.
 /// Every name a body can reference (per the runtime prelude) is present here.
 const UNIFORM_MEMBERS: &[(&str, &str)] = &[
     ("float", "time"),
@@ -161,7 +162,9 @@ const UNIFORM_MEMBERS: &[(&str, &str)] = &[
     ("float", "vol"),
     ("float", "rand_preset"),
     ("float", "rand_frame"),
-    ("float", "aspect"),
+    // Real v2 shaders use `aspect.xy`; the wrapper exposes a shadowable vec2
+    // `aspect` alias built from this scalar at the same byte offset.
+    ("float", "aspect_x"),
     ("float", "slow_roam_cos"),
     ("float", "slow_roam_sin"),
     ("float", "roam_cos"),
@@ -179,7 +182,7 @@ const UNIFORM_MEMBERS: &[(&str, &str)] = &[
     ("float", "blur2_max"),
     ("float", "blur3_min"),
     ("float", "blur3_max"),
-    ("vec2", "texsize"),
+    ("vec4", "texsize"),
     ("vec2", "texsize_fw"),
     ("vec2", "texsize_pw"),
     ("vec2", "texsize_fc"),
@@ -550,11 +553,23 @@ pub fn wrap_milk_shader(prelude: &str, body: &str, stage: MilkShaderStage) -> St
     out.push_str("layout(location = 0) out vec4 milk_FragColor;\n\n");
     out.push_str(&retained);
     out.push_str("void main() {\n");
+    // Real v2 presets reference bare `uv`. Expose it as a wrapper-scoped alias
+    // of the per-pixel `uv_orig` varying. The body lives in an inner block so a
+    // fixture that declares its own `float2 uv = uv_orig;` shadows this alias
+    // instead of clashing with it (a plain `#define uv uv_orig` would rewrite
+    // such declarations into `float2 uv_orig = uv_orig;` and break them).
+    out.push_str("  vec2 uv = uv_orig;\n");
+    // MilkDrop 2's `aspect` is a vec2 (x=w/h, y=1). Expose it as a shadowable
+    // wrapper alias; the float uniform keeps its original byte offset as
+    // `aspect_x`, so `aspect.xy` compiles without shifting any other member.
+    out.push_str("  vec2 aspect = vec2(aspect_x, 1.0);\n");
+    out.push_str("  {\n");
     out.push_str(&body);
     if !body.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str("  milk_FragColor = vec4(ret.xyz, 1.0);\n");
+    out.push_str("    milk_FragColor = vec4(ret.xyz, 1.0);\n");
+    out.push_str("  }\n");
     out.push_str("}\n");
     out
 }

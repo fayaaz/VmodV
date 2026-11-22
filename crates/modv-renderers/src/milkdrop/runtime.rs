@@ -1127,18 +1127,26 @@ impl MilkUniforms {
             write_f32(&mut bytes, index * 4, *value);
         }
 
-        // The eight vec2 members start at byte 128 (8-byte aligned).
-        let size = [frame.width as f32, frame.height as f32];
-        write_vec2(&mut bytes, 128, size);
-        write_vec2(&mut bytes, 136, size);
-        write_vec2(&mut bytes, 144, size);
-        write_vec2(&mut bytes, 152, size);
-        write_vec2(&mut bytes, 160, size);
+        // `texsize` is a vec4 at byte 128 (16-byte aligned): x=width,
+        // y=height, z=1/width, w=1/height — the real MilkDrop 2 contract.
+        let width = frame.width as f32;
+        let height = frame.height as f32;
+        write_f32(&mut bytes, 128, width);
+        write_f32(&mut bytes, 132, height);
+        write_f32(&mut bytes, 136, 1.0 / width);
+        write_f32(&mut bytes, 140, 1.0 / height);
+        // The seven downstream vec2 members follow at byte 144 (8-byte
+        // aligned); these are the fw/pw/fc/pc sizes, uv_orig_u, rad and ang.
+        let size = [width, height];
+        write_vec2(&mut bytes, 144, size); // texsize_fw
+        write_vec2(&mut bytes, 152, size); // texsize_pw
+        write_vec2(&mut bytes, 160, size); // texsize_fc
+        write_vec2(&mut bytes, 168, size); // texsize_pc
         // uv_orig_u: legacy uniform slot kept for byte-layout stability; the
         // translated shaders read `uv_orig` from the vertex varying instead.
-        write_vec2(&mut bytes, 168, [0.5, 0.5]);
-        write_vec2(&mut bytes, 176, [0.5, 0.5]); // rad
-        write_vec2(&mut bytes, 184, [0.0, 0.0]); // ang
+        write_vec2(&mut bytes, 176, [0.5, 0.5]);
+        write_vec2(&mut bytes, 184, [0.5, 0.5]); // rad
+        write_vec2(&mut bytes, 192, [0.0, 0.0]); // ang
 
         // Output-pass controls (see OUTPUT_FRAGMENT_WGSL).
         write_f32(&mut bytes, 192, base.gammaadj as f32);
