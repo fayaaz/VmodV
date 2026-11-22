@@ -36,8 +36,9 @@
 //!    mesh vertex stage. With `decay >= 1` there is no prior-frame feedback, so
 //!    the warp stage binds a neutral (black) texture instead.
 //! 2. **blur1/2/3** — populate the three `GetBlur{1,2,3}` targets with a
-//!    normalized 5x5 Gaussian kernel whose radius comes from the `b1n`/`b2n`/
-//!    `b3n` base vals, so energy spreads into neighbouring texels.
+//!    normalized 5x5 Gaussian kernel (separable `[1,4,6,4,1]` weights) whose
+//!    radius comes from the `b1n`/`b2n`/`b3n` base vals. Each level blurs the
+//!    previous one, so energy spreads into neighbouring texels.
 //! 3. **comp** — the translated comp WGSL samples the warped frame and produces
 //!    the composite colour.
 //! 4. **overlays (Layer 5c)** — when at least one wave/shape was evaluated,
@@ -45,7 +46,8 @@
 //!    the comp target, between comp and output. When there are no overlays this
 //!    pass is skipped entirely, so the six-pass path is byte-for-byte unchanged.
 //! 5. **output** — feedback blending (`mix(previous, current, decay)` for
-//!    `0 < decay < 1`) followed by post-processing into the caller-supplied
+//!    `0 < decay < 1`; `decay == 1` and the `decay == 0` derived-Default sentinel
+//!    are passthrough) followed by post-processing into the caller-supplied
 //!    target. `gammaadj`, `invert`, `red_blue`, `brighten` (`1-(1-x)^2`),
 //!    `darken` (`x^2`) and `solarize` (`2*x*(1-x)`) follow MilkDrop 2's
 //!    `milkdropfs.cpp`. The exact arithmetic lives in `OUTPUT_FRAGMENT_WGSL`.
@@ -140,6 +142,18 @@ const MAX_WAVE_SAMPLES: usize = 1024;
 const DEFAULT_WAVE_SAMPLES: usize = 512;
 /// Draw every Nth evaluated wave point as a line segment (keeps vertex counts small).
 const WAVE_VERTEX_STRIDE: usize = 4;
+/// Bytes in the single-`vec4` uniform that carries one blur level's texel radius.
+const SMALL_UNIFORM_BYTES: u64 = 16;
+/// Base blur radius in texels, added to a level's `b1n`/`b2n`/`b3n` strength.
+const BLUR_RADIUS_BASE_TEXELS: f64 = 0.5;
+
+/// Turn a `b1n`/`b2n`/`b3n` base-val minimum into the blur kernel's texel radius.
+///
+/// Strength is clamped to `0..=1`, so the radius spans `0.5..=1.5` texels. The
+/// shader clamps the value again defensively before spacing the 5x5 taps.
+fn blur_radius_texels(strength: f64) -> f32 {
+    (BLUR_RADIUS_BASE_TEXELS + strength.clamp(0.0, 1.0)) as f32
+}
 
 // --- Deterministic built-in noise -----------------------------------------
 //
@@ -270,13 +284,14 @@ fn vs_main(
 }
 "#;
 
-/// Separable-style Gaussian blur, used by the three blur passes.
+/// Normalized 5x5 Gaussian blur, used by the three blur passes.
 ///
-/// `radius.x` is the blur radius in texels (derived from the `b1n`/`b2n`/`b3n`
-/// base vals). A 5x5 kernel spaced by that radius spreads energy into the
-/// neighbouring texels, so `GetBlur{1,2,3}` sample a genuinely softened frame
-/// rather than a copy. `textureDimensions` supplies `texsize` without another
-/// uniform, and the weight function keeps the kernel symmetric and normalized.
+/// The kernel is the separable binomial `[1, 4, 6, 4, 1]` applied in both axes
+/// (`tap_weight` below), so it is symmetric and sums to one — a flat image is
+/// unchanged. `radius.x` is the tap spacing in texels (derived from the
+/// `b1n`/`b2n`/`b3n` base vals), spreading energy into neighbouring texels so
+/// `GetBlur{1,2,3}` sample a softened frame rather than a copy.
+/// `textureDimensions` supplies `texsize` without another uniform.
 const BLUR_FRAGMENT_WGSL: &str = r#"
 struct BlurUniforms {
     radius: vec4<f32>,
@@ -311,11 +326,13 @@ fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Final output pass. Blends the previous frame in when `decay < 1`, then
-/// applies MilkDrop 2's post ops: gamma adjust, brighten/darken, solarize,
-/// invert and red/blue stereo swap. `brighten`/`darken`/`solarize` are
-/// booleans in a `.mlk` (their per-pixel `q` equations are not evaluated here)
-/// and use the faithful fixed formulas from `milkdropfs.cpp`.
+/// Final output pass. Blends `previous` into the composited frame for a
+/// fractional `decay` in `(0, 1)` (`mix(previous, current, decay)`), then
+/// applies MilkDrop 2's post ops in order: gamma adjust, brighten, darken,
+/// solarize, invert and red/blue stereo swap. `brighten`/`darken`/`solarize`
+/// are booleans in a `.mlk` (their per-pixel `q` equations are not evaluated
+/// here), so the faithful fixed filters from `milkdropfs.cpp` are used:
+/// `brighten = 1-(1-x)^2`, `darken = x^2`, `solarize = 2*x*(1-x)`.
 const OUTPUT_FRAGMENT_WGSL: &str = r#"
 struct MilkOutputUniforms {
     _pad0: vec4<f32>, _pad1: vec4<f32>, _pad2: vec4<f32>, _pad3: vec4<f32>,
@@ -341,12 +358,12 @@ struct MilkFragIn { @location(0) uv: vec2<f32> }
 @fragment
 fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
     var c = textureSample(src_texture, src_sampler, input.uv).rgb;
-    // MilkDrop feedback: with decay < 1 the previous composited frame bleeds
-    // into the current one; decay == 1 is the passthrough (no feedback) case.
-    // Sample unconditionally: `textureSample` needs uniform control flow.
+    // MilkDrop feedback: for a fractional decay in (0, 1) the previous
+    // composited frame bleeds into the current one via `mix`. decay == 1 is the
+    // no-feedback case; decay == 0 is the derived-Default "unset" sentinel used
+    // by test fixtures and is treated as passthrough too. Sample `previous`
+    // unconditionally because `textureSample` needs uniform control flow.
     let previous = textureSample(prev_texture, prev_sampler, input.uv).rgb;
-    // `decay == 0` is the derived-Default "unset" value in test fixtures;
-    // treat it like the passthrough case so those presets stay unchanged.
     if (params.decay > 0.0 && params.decay < 1.0) {
         c = mix(previous, c, clamp(params.decay, 0.0, 1.0));
     }
@@ -519,7 +536,7 @@ impl MilkGpuCache {
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(16),
+                min_binding_size: wgpu::BufferSize::new(SMALL_UNIFORM_BYTES),
             },
             count: None,
         }
@@ -1336,7 +1353,7 @@ impl MilkRuntime {
         )?;
         let blur_pipeline = cache.pipeline(
             device,
-            "blur|copy-v1".into(),
+            "blur|gaussian5x5-v1".into(),
             BLUR_FRAGMENT_WGSL,
             "fs_main",
             MilkLayout::Pass,
@@ -1372,13 +1389,12 @@ impl MilkRuntime {
             .map(|&strength| {
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("modV MilkDrop blur radius"),
-                    size: 16,
+                    size: SMALL_UNIFORM_BYTES,
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                let mut data = [0u8; 16];
-                let radius = (0.5 + strength.clamp(0.0, 1.0)) as f32;
-                write_f32(&mut data, 0, radius);
+                let mut data = [0u8; SMALL_UNIFORM_BYTES as usize];
+                write_f32(&mut data, 0, blur_radius_texels(strength));
                 queue.write_buffer(&buffer, 0, &data);
                 buffer
             })
@@ -1486,44 +1502,26 @@ impl MilkRuntime {
             &gpu_mesh,
         );
         // blur1/2/3: populate the blur targets feeding GetBlur{1,2,3} with a
-        // real Gaussian kernel whose radius comes from b1n/b2n/b3n.
-        let blur1_bind =
-            pass_bind_group(device, &pass_layout, &blur_uniforms[0], previous, &sampler);
-        encode_fullscreen_pass(
-            &mut encoder,
-            "milkdrop blur1",
-            &blur_views[0],
-            &blur_pipeline,
-            &blur1_bind,
-        );
-        let blur2_bind = pass_bind_group(
-            device,
-            &pass_layout,
-            &blur_uniforms[1],
-            &blur_views[0],
-            &sampler,
-        );
-        encode_fullscreen_pass(
-            &mut encoder,
-            "milkdrop blur2",
-            &blur_views[1],
-            &blur_pipeline,
-            &blur2_bind,
-        );
-        let blur3_bind = pass_bind_group(
-            device,
-            &pass_layout,
-            &blur_uniforms[2],
-            &blur_views[1],
-            &sampler,
-        );
-        encode_fullscreen_pass(
-            &mut encoder,
-            "milkdrop blur3",
-            &blur_views[2],
-            &blur_pipeline,
-            &blur3_bind,
-        );
+        // real Gaussian kernel whose radius comes from b1n/b2n/b3n. Each level
+        // blurs the previous one (blur1 starts from `previous`), so the three
+        // radii accumulate down the chain.
+        let blur_sources: [&wgpu::TextureView; 3] = [previous, &blur_views[0], &blur_views[1]];
+        for (index, source) in blur_sources.iter().enumerate() {
+            let bind = pass_bind_group(
+                device,
+                &pass_layout,
+                &blur_uniforms[index],
+                source,
+                &sampler,
+            );
+            encode_fullscreen_pass(
+                &mut encoder,
+                &format!("milkdrop blur{}", index + 1),
+                &blur_views[index],
+                &blur_pipeline,
+                &bind,
+            );
+        }
         // comp: translated composite shader, sampling the warped frame.
         encode_fullscreen_pass(
             &mut encoder,
@@ -2418,7 +2416,7 @@ fn small_uniform_bind(buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
             buffer,
             offset: 0,
-            size: wgpu::BufferSize::new(16),
+            size: wgpu::BufferSize::new(SMALL_UNIFORM_BYTES),
         }),
     }
 }
