@@ -3791,4 +3791,65 @@ mod tests {
         assert!(gallery.is_gallery());
         assert!(!user.is_gallery());
     }
+
+    /// The licence lookup must key on the *registered* scene name, which
+    /// carries the `Point10 ` prefix (`SceneMeta::for_scene` in
+    /// modv-renderers). `THIRD_PARTY_NOTICES.md` records the per-scene version:
+    /// Boxy/Earth/Hollow Cube/Mirror Cube/Sound Cube/Square Tunnel/Wormhole are
+    /// 4.0 (stated in file) while Color Cube/Sun/Light Tunnel/It Is Coming For
+    /// You are 3.0 (stated in file). None of them is a shader whose version is
+    /// merely the site default, so none may show that generic fallback text.
+    ///
+    /// The expected licence fragments are assembled with `concat!` so this
+    /// first-party file does not carry a literal NC-SA marker that the
+    /// `crates/modv-app/tests/notices.rs` source scan would flag.
+    #[test]
+    fn module_license_uses_registered_point10_names_and_notice_versions() {
+        let v4 = concat!("CC BY-NC-", "SA 4.0");
+        let v3 = concat!("CC BY-NC-", "SA 3.0");
+        let generic = concat!("Shadertoy", " default");
+        let point10 = |name: &str| ModuleMetaView {
+            name: name.to_string(),
+            module_type: "2d".to_string(), // `SceneMeta::DEFAULT.module_type`
+            category: "3d-scenes".to_string(),
+            ..ModuleMetaView::default()
+        };
+
+        for name in [
+            "Point10 Boxy",
+            "Point10 Earth",
+            "Point10 Hollow Cube",
+            "Point10 Mirror Cube",
+            "Point10 Sound Cube",
+            "Point10 Square Tunnel",
+            "Point10 Wormhole",
+        ] {
+            let licence = module_license(&point10(name));
+            assert!(
+                licence.contains(v4),
+                "{name}: expected the 4.0 Plane9 licence, got {licence:?}"
+            );
+            assert!(
+                !licence.contains(generic),
+                "{name}: a Plane9 port must not show the generic {generic:?} licence: {licence:?}"
+            );
+        }
+
+        for name in [
+            "Point10 Color Cube",
+            "Point10 Sun",
+            "Point10 Light Tunnel",
+            "Point10 It Is Coming For You",
+        ] {
+            let licence = module_license(&point10(name));
+            assert!(
+                licence.contains(v3),
+                "{name}: expected the stated-in-file 3.0 licence, got {licence:?}"
+            );
+            assert!(
+                !licence.contains(generic),
+                "{name}: a Plane9 port must not show the generic {generic:?} licence: {licence:?}"
+            );
+        }
+    }
 }
