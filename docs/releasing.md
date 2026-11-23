@@ -39,9 +39,12 @@ Merge commits are ignored.
    `linux-debs` (four Ubuntu bases) — and uploaded as a workflow artifact.
    A separate `attach-*` job waits for the release and for that one build:
    when the build succeeds it downloads the artifact and runs
-   `gh release upload --clobber`. A failed, slow or capacity-starved build
-   (a macOS runner that never acquires capacity, for example) costs only its
-   own assets; the release and every other platform's artifacts still go out.
+   `gh release upload --clobber`. On macOS both architectures are legs of one
+   matrix job, so the attach job also runs when only one leg succeeds and
+   uploads the surviving architecture's ZIP. A failed, slow or
+   capacity-starved build (a macOS runner that never acquires capacity, for
+   example) costs only its own assets; the release and every other platform's
+   artifacts still go out.
    On pushes to `main` the packaging jobs in `vmodv.yml` and `macos.yml` are
    skipped so the same AppImage, Windows ZIP and macOS bundles are not built
    twice for one commit. PRs and other branches still package in CI.

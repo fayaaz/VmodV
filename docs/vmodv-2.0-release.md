@@ -136,7 +136,8 @@ and logging).
   version-bump commit; the version comes from the tags) and publishes the
   versioned AppImage/deb, attaching the portable Windows ZIP and both portable
   macOS architecture ZIPs to the `vX.Y.Z` GitHub release (see
-  `docs/releasing.md`). There is no Electron job and no rolling nightly.
+  `docs/releasing.md`). If only one macOS architecture builds, its ZIP is
+  still attached. There is no Electron job and no rolling nightly.
 - Stable 2.0.0 artifacts are built with `make build` (or `VMODV_VERSION`
   overridden) from a green commit.
 

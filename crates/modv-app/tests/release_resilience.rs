@@ -12,7 +12,9 @@
 //!    still a release and is still visible to users.
 //! 3. Each build job hands its artifact to a separate attach job that also
 //!    waits for `release`. When that build succeeds its artifact is uploaded;
-//!    when it fails the attach job is skipped but the release stands.
+//!    when it fails the attach job is skipped but the release stands. The
+//!    macOS matrix is the exception: either architecture failing must not
+//!    drop the other architecture's ZIP.
 //!
 //! Pure text scanning of `.github/workflows/release.yml`: no YAML crate, no
 //! network and no env mutation. Run with:
@@ -272,6 +274,50 @@ fn attach_jobs_can_resolve_the_github_repository() {
              'fatal: not a git repository'"
         );
     }
+}
+
+#[test]
+fn one_failed_macos_architecture_still_attaches_the_other() {
+    // `macos-portable` is a two-leg matrix (x86_64 + arm64) with fail-fast
+    // off. GitHub reports the whole job as failed when either leg fails, so
+    // the default `success()` gate on `needs` skips `attach-macos` and the
+    // surviving architecture's ZIP never reaches the release.
+    let text = release_workflow();
+    let block = job_block(&text, "attach-macos").expect("release.yml has no `attach-macos` job");
+
+    let if_condition = block
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("if:"))
+        .map(str::trim)
+        .expect("`attach-macos` has no `if:` guard");
+    assert!(
+        if_condition.contains("!cancelled()") || if_condition.contains("always()"),
+        "`attach-macos` still runs only when every macOS architecture succeeds: \
+         one failed leg skips the job and the other leg's ZIP is never attached \
+         (if: {if_condition})"
+    );
+    assert!(
+        !if_condition.contains("needs.macos-portable.result == 'success'"),
+        "`attach-macos` still explicitly requires the whole macOS matrix to \
+         succeed, so a single failed architecture drops the other ZIP \
+         (if: {if_condition})"
+    );
+
+    let tolerant_downloads = block.matches("continue-on-error: true").count();
+    assert!(
+        tolerant_downloads >= 2,
+        "`attach-macos` has {tolerant_downloads} best-effort artifact downloads; \
+         a missing architecture's artifact must not abort the job before the \
+         surviving ZIP is attached"
+    );
+
+    assert!(
+        block.contains("nullglob") || block.contains("compgen -G"),
+        "`attach-macos` must guard the `dist-macos/*.zip` glob before calling \
+         `gh release upload`; with no surviving architecture the literal \
+         pattern is passed to gh and the attach job fails instead of no-oping"
+    );
 }
 
 #[test]

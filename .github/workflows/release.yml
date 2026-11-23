@@ -13,7 +13,7 @@ name: Release
 # version-bump commit is made — the tree keeps no version literal, the tags
 # are the source of truth) and publishes the GitHub release immediately. Each
 # artifact is built once by its own job and attached by a separate `attach-*`
-# job only when that build succeeded, so a failed/slow platform build can cost
+# job once that build has produced it, so a failed/slow platform build can cost
 # an asset but can never stop the release going out. Versions are tagged
 # `vX.Y.Z`; the `v2.0.0` tag seeds the base for the first automated release
 # (v2.1.0). Commits without feat:/fix:/breaking types do not produce a release.
@@ -269,7 +269,9 @@ jobs:
   # Both runner labels are pinned: the unpinned default arm64 runner was
   # repeatedly unavailable in CI due to capacity constraints. `attach-macos`
   # attaches both artifacts after the release exists; a runner that never
-  # starts only costs the macOS ZIPs, not the release itself.
+  # starts only costs the macOS ZIPs, not the release itself. The matrix has
+  # `fail-fast: false` and the attach job treats each architecture separately,
+  # so one failed leg still publishes the other's ZIP.
   macos-portable:
     name: Build portable macOS app bundle (${{ matrix.arch }})
     strategy:
@@ -516,7 +518,9 @@ jobs:
 
   # Each attach job waits for the release and for one build job with the
   # default `success()` status check: a failed build skips only its own attach
-  # step, never the release and never the other platforms' artifacts.
+  # step, never the release and never the other platforms' artifacts. The
+  # macOS attach is the exception: its two architectures share one matrix job,
+  # so it must still run when one leg fails and attach whichever ZIPs exist.
   attach-appimage:
     name: Attach Linux AppImage to release
     runs-on: ubuntu-latest
@@ -569,7 +573,12 @@ jobs:
     name: Attach portable macOS ZIPs to release
     runs-on: ubuntu-latest
     needs: [version, release, macos-portable]
-    if: ${{ needs.version.outputs.should_release == 'true' }}
+    # A two-leg matrix job reports failure when either architecture fails, so
+    # the default `success()` check would skip this job and drop the ZIP of the
+    # architecture that did build. Run whenever the release exists (unless the
+    # run was cancelled); each download below is best-effort, and the upload
+    # step attaches whatever arrived.
+    if: ${{ !cancelled() && needs.version.outputs.should_release == 'true' && needs.release.result == 'success' }}
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -580,18 +589,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # A failed or absent architecture must not sink the other one, so a
+      # missing artifact only marks this step as failed, not the job.
       - name: Download portable macOS ZIP (x86_64)
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: vmodv-macos-x86_64-portable
           path: dist-macos
 
       - name: Download portable macOS ZIP (arm64)
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: vmodv-macos-arm64-portable
           path: dist-macos
 
       - name: Upload portable macOS ZIPs to the release
-        run: gh release upload "v${VERSION}" dist-macos/*.zip --clobber
+        run: |
+          shopt -s nullglob
+          zips=(dist-macos/*.zip)
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "::warning::No macOS ZIPs were produced; nothing to attach."
+            exit 0
+          fi
+          printf 'Attaching %s\n' "${zips[@]}"
+          gh release upload "v${VERSION}" "${zips[@]}" --clobber
 
