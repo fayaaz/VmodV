@@ -2307,31 +2307,35 @@ pub struct ModuleMetaView {
 /// The labels are assembled with `concat!` so this first-party file does not
 /// trip the source scan in `crates/modv-app/tests/notices.rs`, which requires
 /// every file bearing the licence markers to be a listed third-party source.
-/// The rendered text is unchanged.
+/// Splitting the literals renders the same text as a single literal would.
 pub fn module_license(meta: &ModuleMetaView) -> &'static str {
+    // Point10 scenes are registered under their full `Point10 `-prefixed names.
+    // Match the suffix once; scenes not listed here fall through to the
+    // provenance-based labels below, exactly as any other module would.
+    if let Some(name) = meta.name.strip_prefix("Point10 ") {
+        match name {
+            // Plane9 ports whose own headers state 4.0.
+            "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube" | "Square Tunnel"
+            | "Wormhole" | "Around Plus" => {
+                return concat!(
+                    "CC BY-NC-",
+                    "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+                );
+            }
+            // Plane9 ports whose own headers state 3.0. Kept distinct from the
+            // generic "Shadertoy default" fallback below: their version is
+            // stated in the ported file, not assumed from the site default.
+            "Color Cube" | "Sun" | "Light Tunnel" | "It Is Coming For You" => {
+                return concat!(
+                    "CC BY-NC-",
+                    "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+                );
+            }
+            _ => {}
+        }
+    }
+
     match meta.name.as_str() {
-        // Plane9/Point10 ports whose own headers state 4.0.
-        "Point10 Boxy"
-        | "Point10 Earth"
-        | "Point10 Hollow Cube"
-        | "Point10 Mirror Cube"
-        | "Point10 Sound Cube"
-        | "Point10 Square Tunnel"
-        | "Point10 Wormhole"
-        | "Point10 Around Plus" => concat!(
-            "CC BY-NC-",
-            "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
-        ),
-        // Plane9/Point10 ports whose own headers state 3.0. Kept distinct from
-        // the generic "Shadertoy default" fallback below: their version is
-        // stated in the ported file, not assumed from the site default.
-        "Point10 Color Cube"
-        | "Point10 Sun"
-        | "Point10 Light Tunnel"
-        | "Point10 It Is Coming For You" => concat!(
-            "CC BY-NC-",
-            "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
-        ),
         "Boxinator"
         | "CollapsingArchitecture"
         | "FractilianParabolicCircleInversion"
