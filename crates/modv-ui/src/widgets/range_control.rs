@@ -211,11 +211,12 @@ impl RangeControl {
                 .scope(|ui| {
                     theme::slider_visuals(ui);
                     // egui 0.37 sizes sliders from `spacing.slider_width` and
-                    // ignores `add_sized`, so shrink it in this scope when a
-                    // trailing widget shares the row.
-                    if has_trailing {
-                        ui.style_mut().spacing.slider_width = slider_width;
-                    }
+                    // ignores `add_sized`, so always set it in this scope to
+                    // the width computed for the row. Limiting this override to
+                    // the trailing-widget case leaves `draw()` (used once a prop
+                    // gains a link) at egui's 140px default, shrinking its
+                    // slider below its unlinked siblings.
+                    ui.style_mut().spacing.slider_width = slider_width;
                     ui.add_sized([slider_width, 20.0], slider)
                 })
                 .inner

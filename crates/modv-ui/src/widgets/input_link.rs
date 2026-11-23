@@ -33,12 +33,51 @@ pub fn link_row(
     });
 }
 
-/// Draw the same link control inside an *existing* horizontal row.
+/// The compact link control embedded in a numeric prop's Inspector row.
 ///
-/// The Inspector uses this from within the prop editor's own row so the link
-/// button stays visually attached to the prop it binds instead of floating in
-/// a disconnected row below it.
-pub fn link_row_inline(
+/// The trailing slot of a `RangeControl` reserves a fixed width whether or not
+/// a link exists, so this control must stay a single, fixed-size widget in
+/// both states — otherwise the prop's slider would change width on link. While
+/// unlinked it is the plain `+ link` button; once linked it reads `LINKED` and
+/// is lit with the accent colour. The dedicated meta/component rows use
+/// [`link_row`] instead, where there is room for the full summary/Edit row.
+pub fn link_control_inline(
+    ui: &mut egui::Ui,
+    prop_name: &str,
+    input_id: &str,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+) {
+    if snapshot.input_links.contains_key(input_id) {
+        let response = ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new("LINKED")
+                        .monospace()
+                        .size(11.0)
+                        .strong()
+                        .color(theme::ACCENT),
+                )
+                .small()
+                .fill(theme::ACCENT_DIM)
+                .stroke(egui::Stroke::new(1.0, theme::ACCENT)),
+            )
+            .on_hover_text(format!("Input {input_id} is linked; click to edit"));
+        if response.clicked() {
+            open_link_editor_for(input_id, prop_name, snapshot, state);
+        }
+    } else {
+        link_row_inline(ui, prop_name, input_id, snapshot, state);
+    }
+}
+
+/// Draw the link control's contents inside an *existing* horizontal row.
+///
+/// Used by [`link_row`] for the dedicated Group/Module meta and component rows,
+/// where the full LINK/summary/Edit/x cluster has room, and by
+/// [`link_control_inline`]'s unlinked state. Numeric Inspector props use
+/// `link_control_inline` directly so their slider keeps a constant width.
+fn link_row_inline(
     ui: &mut egui::Ui,
     prop_name: &str,
     input_id: &str,
@@ -56,8 +95,7 @@ pub fn link_row_inline(
         ui.label(egui::RichText::new(summary).size(11.0).color(theme::MUTED))
             .on_hover_text(format!("input {input_id}"));
         if ui.small_button("Edit").clicked() {
-            let title = focused_input_title(input_id, prop_name, snapshot);
-            state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
+            open_link_editor_for(input_id, prop_name, snapshot, state);
         }
         if ui.small_button("x").on_hover_text("Remove link").clicked() {
             // Releasing the smoothing id keeps the evaluator registry from
@@ -75,8 +113,7 @@ pub fn link_row_inline(
         .on_hover_text("Bind this input to audio, draw, state, MIDI or OSC")
         .clicked()
     {
-        let title = focused_input_title(input_id, prop_name, snapshot);
-        state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
+        open_link_editor_for(input_id, prop_name, snapshot, state);
     }
 
     // The legacy E badge marks an input with an expression assignment,
@@ -87,6 +124,17 @@ pub fn link_row_inline(
             assignment.expression
         ));
     }
+}
+
+/// Resolve the legacy-style title and open the focused-input editor.
+fn open_link_editor_for(
+    input_id: &str,
+    prop_name: &str,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+) {
+    let title = focused_input_title(input_id, prop_name, snapshot);
+    state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
 }
 
 fn link_summary(link: &InputLinkView) -> String {

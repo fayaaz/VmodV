@@ -31,7 +31,7 @@ use crate::state::{
 };
 use crate::tab_drag::{TabDrag, TabDropTarget, floating_bounds_for_drop};
 use crate::theme;
-use crate::widgets::input_link::{link_editor_window, link_row, link_row_inline};
+use crate::widgets::input_link::{link_control_inline, link_editor_window, link_row};
 use crate::widgets::range_control::chip;
 use crate::widgets::texture_control::TextureControlChange;
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
@@ -1803,9 +1803,9 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
     }
     for prop in &module.props {
         draw_prop(ui, &module.id, &module.module_name, prop, snapshot, state);
-        // Numeric props draw their link control inside their own editor row
-        // (see `draw_prop`), so only the remaining prop types need a separate
-        // link row here.
+        // Numeric props own their link control in `draw_prop`'s trailing slot
+        // in both states, so only the remaining prop types need a link row
+        // here.
         if !matches!(prop.prop_type.as_str(), "float" | "int")
             && let Some(input_id) = &prop.input_id
         {
@@ -4172,15 +4172,18 @@ fn draw_prop(
             if let Some(default) = prop.default.as_ref().and_then(serde_json::Value::as_f64) {
                 control = control.with_default(default);
             }
-            // Keep the input link button on the same row as the prop editor so
-            // it reads as attached to the value it binds.
-            let changed = if let Some(input_id) = prop.input_id.as_deref() {
-                let mut link = |ui: &mut egui::Ui| {
-                    link_row_inline(ui, &prop.name, input_id, snapshot, state);
-                };
-                control.draw_with_trailing(ui, Some(&mut link))
-            } else {
-                control.draw(ui)
+            // Keep the link control in the prop editor's trailing slot in both
+            // states so the slider reserves the same width whether or not the
+            // prop is linked. `link_control_inline` renders `+ link` while
+            // unlinked and a lit `LINKED` button once a link exists.
+            let changed = match prop.input_id.as_deref() {
+                Some(input_id) => {
+                    let mut link = |ui: &mut egui::Ui| {
+                        link_control_inline(ui, &prop.name, input_id, snapshot, state);
+                    };
+                    control.draw_with_trailing(ui, Some(&mut link))
+                }
+                None => control.draw(ui),
             };
             if changed {
                 state.push_action(
