@@ -527,6 +527,11 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      # gh infers OWNER/REPO from the git remote; without a checkout the upload
+      # fails with "fatal: not a git repository".
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download AppImage
         uses: actions/download-artifact@v4
         with:
@@ -546,6 +551,11 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      # gh infers OWNER/REPO from the git remote; without a checkout the upload
+      # fails with "fatal: not a git repository".
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download portable Windows ZIP
         uses: actions/download-artifact@v4
         with:
@@ -565,6 +575,11 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      # gh infers OWNER/REPO from the git remote; without a checkout the upload
+      # fails with "fatal: not a git repository".
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download portable macOS ZIP (x86_64)
         uses: actions/download-artifact@v4
         with:

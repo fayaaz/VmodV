@@ -247,6 +247,34 @@ fn main_pushes_do_not_rebuild_release_artifacts_in_ci_workflows() {
 }
 
 #[test]
+fn attach_jobs_can_resolve_the_github_repository() {
+    // `gh release upload` discovers OWNER/REPO from the local git remote unless
+    // GH_REPO is set. The attach jobs have no checkout today, so gh fails with
+    // "fatal: not a git repository" and no artifact is attached. Every job
+    // that calls `gh release upload` must establish the repository one way or
+    // the other.
+    let text = release_workflow();
+    for job in [
+        "attach-appimage",
+        "attach-windows",
+        "attach-macos",
+        "publish-debs",
+    ] {
+        let block = job_block(&text, job).unwrap_or_default();
+        let resolves_repo = block.contains("GH_REPO:")
+            || block
+                .lines()
+                .any(|line| line.trim() == "uses: actions/checkout@v4");
+        assert!(
+            resolves_repo,
+            "`{job}` runs `gh release upload` without a checkout or GH_REPO; \
+             gh cannot infer the repository and the upload fails with \
+             'fatal: not a git repository'"
+        );
+    }
+}
+
+#[test]
 fn macos_build_failure_cannot_block_the_release() {
     // The reported regression: a missing/failed macOS leg left no release at
     // all. Pin the two halves of the fix explicitly, even if the generic tests
