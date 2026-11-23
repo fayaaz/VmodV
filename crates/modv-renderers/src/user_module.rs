@@ -118,7 +118,7 @@ fn parse_prop(value: &Value) -> Result<UserModuleProp, UserModuleParseError> {
             return Err(UserModuleParseError::InvalidPropType {
                 name,
                 found: other.to_string(),
-            })
+            });
         }
     };
 
@@ -166,8 +166,5 @@ fn optional_string_field(object: &Map<String, Value>, key: &str) -> Option<Strin
 }
 
 fn bool_field(object: &Map<String, Value>, key: &str, default: bool) -> bool {
-    object
-        .get(key)
-        .and_then(Value::as_bool)
-        .unwrap_or(default)
+    object.get(key).and_then(Value::as_bool).unwrap_or(default)
 }

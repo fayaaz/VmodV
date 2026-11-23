@@ -9,7 +9,7 @@ use std::fmt;
 
 use modv_renderers::shader::uniforms::PropKind;
 use modv_renderers::user_module::{
-    parse_user_module, UserModuleDescriptor, UserModuleParseError, UserModuleProp,
+    UserModuleDescriptor, UserModuleParseError, UserModuleProp, parse_user_module,
 };
 
 fn check_eq<T: fmt::Debug + PartialEq>(
