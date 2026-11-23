@@ -34,6 +34,10 @@ permissions:
 jobs:
   macos-portable:
     name: Build portable macOS app bundle (${{ matrix.arch }})
+    # release.yml builds both architectures on every main push. Skip the
+    # duplicate macOS runner pass on that ref; PRs, feature-branch pushes and
+    # manual runs still build the bundles here.
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:

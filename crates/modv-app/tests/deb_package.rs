@@ -620,19 +620,29 @@ fn release_workflow_builds_and_publishes_four_ubuntu_debs() {
         "the release job must NOT wait for linux-debs: a flaky ubuntu:devel leg must not \
          block tagging; got {release_needs:?}"
     );
-    // Require the command in an actual `run:` step, not in a comment: a
-    // comment mentioning `make appimage-vmodv` must not satisfy this check.
+    // The AppImage is built exactly once, in `build-appimage`, and handed to
+    // `release` as a workflow artifact. `release` itself must not build it:
+    // that would both duplicate the work and gate the release on the build.
+    let appimage = job_block(&text, "build-appimage").expect(
+        "release.yml has no `build-appimage` job: the AppImage would be built \
+         in the `release` job, gating the release on the build",
+    );
     assert!(
-        release_job.lines().any(|line| {
+        appimage.lines().any(|line| {
             let line = line.trim();
             line.starts_with("run:") && line.contains("make appimage-vmodv")
         }),
-        "the release job must run `make appimage-vmodv` in a step:\n{release_job}"
+        "the `build-appimage` job must run `make appimage-vmodv` in a step:\n{appimage}"
+    );
+    assert!(
+        !release_job.contains("make appimage-vmodv"),
+        "the `release` job must not build the AppImage: `build-appimage` does \
+         that once and uploads it for `attach-appimage`"
     );
     assert!(
         !release_job.contains("make build"),
-        "the release job must build the AppImage only (`make appimage-vmodv`); \
-         the generic .deb is retired"
+        "no release job may run `make build`; the generic .deb is retired and \
+         installers are built by their own jobs"
     );
 
     let create_command = match release_job.find("gh release create") {
@@ -643,15 +653,16 @@ fn release_workflow_builds_and_publishes_four_ubuntu_debs() {
         !create_command.is_empty(),
         "the release job must create the GitHub release with `gh release create`"
     );
-    // Bound the scan to the `gh release create` invocation itself so the
-    // publish-debs job's `dist/VmodV-*.deb` upload does not trip this check.
-    let create_command = match create_command.find("dist-macos/*.zip") {
-        Some(end) => &create_command[..end + "dist-macos/*.zip".len()],
+    // Bound the scan to the `gh release create` invocation itself so later
+    // attach steps in this job cannot trip the check.
+    let create_command = match create_command.find("\n        - name:") {
+        Some(end) => &create_command[..end],
         None => create_command,
     };
     assert!(
-        !create_command.contains("*.deb"),
-        "`gh release create` must no longer publish the unsuffixed generic .deb:\n\
+        !create_command.contains("dist/"),
+        "`gh release create` must publish notes only; artifacts are attached \
+         later by the `attach-*` jobs so a failed build cannot stop the release:\n\
          {create_command}"
     );
 }

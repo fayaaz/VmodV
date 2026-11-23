@@ -168,6 +168,10 @@ jobs:
 
   package:
     name: VmodV AppImage and .deb
+    # release.yml builds and publishes these installers on every main push.
+    # Skip the duplicate build on that ref; PRs and other branches still
+    # package so packaging regressions are caught before they reach main.
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -238,6 +242,9 @@ jobs:
   # pipewiresrc) remains Linux-only at runtime and is not ported here.
   windows-portable:
     name: Portable Windows ZIP (x86_64)
+    # release.yml builds the portable ZIP on every main push. Skip the
+    # duplicate Windows/GStreamer build on that ref; PRs still build it.
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     runs-on: windows-latest
     timeout-minutes: 90
     steps:

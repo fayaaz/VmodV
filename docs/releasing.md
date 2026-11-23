@@ -25,18 +25,30 @@ Merge commits are ignored.
    `tools/semver-next.sh`. It finds the highest `v*.*.*` tag, scans the
    conventional commits since it and prints the next version (or nothing
    when no release is warranted).
-2. If a bump is warranted, the `release` job:
+2. If a bump is warranted, the `release` job (which depends on `version`
+   only — never on a build job):
    - tags the pushed commit `vX.Y.Z` (annotated, as `github-actions[bot]`) —
      no version-bump commit is created; the tree contains no version
      literal,
    - pushes the tag,
-   - builds the AppImage and `.deb` via `make build` with
-     `VMODV_VERSION=vX.Y.Z` (same artifacts as `make build` locally),
    - publishes a GitHub release titled `vX.Y.Z` with the changelog since the
-     previous tag and the two installers attached.
-3. The tag step is idempotent: re-running a failed workflow leaves an
-   existing `vX.Y.Z` tag in place and re-pushes it, so re-runs after a
-   build failure do not die on the tag already existing.
+     previous tag. `gh release create` attaches no files, so the release goes
+     out even when no artifact was built.
+3. Each artifact is produced **once** by its own job — `build-appimage`,
+   `windows-portable`, `macos-portable` (both architectures) and
+   `linux-debs` (four Ubuntu bases) — and uploaded as a workflow artifact.
+   A separate `attach-*` job waits for the release and for that one build:
+   when the build succeeds it downloads the artifact and runs
+   `gh release upload --clobber`. A failed, slow or capacity-starved build
+   (a macOS runner that never acquires capacity, for example) costs only its
+   own assets; the release and every other platform's artifacts still go out.
+   On pushes to `main` the packaging jobs in `vmodv.yml` and `macos.yml` are
+   skipped so the same AppImage, Windows ZIP and macOS bundles are not built
+   twice for one commit. PRs and other branches still package in CI.
+4. The tag and create steps are idempotent: re-running a failed workflow
+   leaves an existing `vX.Y.Z` tag in place and re-pushes it, and leaves an
+   existing release in place, so re-runs after a build failure do not die on
+   the tag or release already existing.
 
 This is the only release channel: the old rolling `nightly` prerelease was
 removed — download the latest `vX.Y.Z` release for current artifacts.
@@ -86,6 +98,6 @@ untagged-repository error path.
 - To skip releasing a given change: use a non-feat/fix type (`chore:`,
   `docs:`, `perf:`…). Those never cut a release.
 - The release workflow does not run the test suite; `vmodv.yml` gates
-  `main`. If the installer build fails, the tag remains pushed — re-run the
-  failed job to rebuild and publish (the `gh release create` step is safe
-  to re-run when the release does not exist yet).
+  `main`. A build failure never blocks the release: re-run the failed job to
+  rebuild and attach just that asset (`gh release upload --clobber` is safe
+  to re-run against an existing release).
