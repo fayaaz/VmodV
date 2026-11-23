@@ -395,6 +395,25 @@ impl Store {
         Arc::clone(&self.registry)
     }
 
+    /// [`Self::reload_modules_with_milkdrop`] plus user-authored WGSL + JSON
+    /// modules, so a `.json`/`.wgsl` pair under a user module folder survives a
+    /// registry rebuild (startup and watcher/Rescan-triggered rescans).
+    pub fn reload_modules_with_user_modules(
+        &mut self,
+        isf_dir: Option<&std::path::Path>,
+        extra_isf_dirs: &[std::path::PathBuf],
+        milkdrop_dirs: &[std::path::PathBuf],
+        user_module_dirs: &[std::path::PathBuf],
+    ) -> Arc<ModuleRegistry> {
+        self.registry = crate::vmodv::build_module_registry_with_user_modules(
+            isf_dir,
+            extra_isf_dirs,
+            milkdrop_dirs,
+            user_module_dirs,
+        );
+        Arc::clone(&self.registry)
+    }
+
     /// A shared handle to the registry, for the compositor to build against the
     /// same module definitions (including the scanned ISF corpus).
     pub fn registry_arc(&self) -> Arc<ModuleRegistry> {

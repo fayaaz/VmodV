@@ -286,6 +286,27 @@ pub fn user_isf_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Vec
     dirs
 }
 
+/// The user-authored WGSL + JSON module folders to scan for `profile`.
+///
+/// Mirrors [`user_isf_dirs`]: the flat `<media>/module` folder is kept for
+/// legacy installs, only the **active** profile's `module` folder counts, and
+/// duplicate paths (an empty profile name collapsing onto the flat folder) are
+/// removed. Existing folders are returned in sorted order.
+pub fn user_module_dirs(media_root: &Path, profile: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for candidate in [
+        media_root.join("module"),
+        profile_folder(media_root, profile, "module"),
+    ] {
+        if candidate.is_dir() {
+            dirs.push(candidate);
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
 /// The user MilkDrop preset folders to scan for `profile`.
 ///
 /// Mirrors [`user_isf_dirs`]: the flat `<media>/milkdrop` folder is kept for
@@ -331,17 +352,6 @@ pub fn user_milkdrop_dirs_with_override(
     dirs.dedup();
     dirs
 }
-
-// ============================ RED-ONLY SHIM ============================
-// `media_profiles::user_module_dirs` is the API under test. It does NOT exist
-// in RED, so this empty standalone keeps the test compiling and failing on the
-// assertion (no directories returned) rather than on a compile error. GREEN
-// MUST delete this function and add the real one beside `user_isf_dirs`.
-#[cfg(test)]
-fn user_module_dirs(_media_root: &Path, _profile: &str) -> Vec<PathBuf> {
-    Vec::new()
-}
-// ========================== END RED-ONLY SHIM ==========================
 
 #[cfg(test)]
 mod tests {

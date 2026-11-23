@@ -474,6 +474,12 @@ pub struct VmodvApp {
     /// [`VmodvApp::rebuild_user_isf_dirs`], and handed to the store so the
     /// module registry can pick up `.mlk` presets on startup and on rescan.
     user_milkdrop_dirs: Vec<PathBuf>,
+    /// The user-authored WGSL + JSON module folders to scan (mirrors
+    /// `user_isf_dirs`). Resolved in [`VmodvApp::new`], refreshed with the
+    /// watcher in [`VmodvApp::rebuild_user_isf_dirs`], and applied to the
+    /// registry on startup and every rescan via
+    /// [`build_module_registry_with_user_modules`].
+    user_module_dirs: Vec<PathBuf>,
     media_watcher: Option<MediaWatcher>,
     /// The active profile's recursive image/video/palette index.
     media_library: crate::media_library::MediaLibrary,
@@ -563,6 +569,7 @@ impl VmodvApp {
         // `user_*_dirs` so a profile switch or watcher burst can rebuild it.
         let user_isf_dirs = user_isf_dirs(&media_root, &active_profile, &extra_isf_dirs);
         let user_milkdrop_dirs = user_milkdrop_dirs(&media_root, &active_profile, &extra_isf_dirs);
+        let user_module_dirs = user_module_dirs(&media_root, &active_profile);
         let VmodvStoreBootstrap {
             mut store,
             restored_snapshot,
@@ -572,6 +579,15 @@ impl VmodvApp {
             isf_dir.as_deref(),
             &user_isf_dirs,
             &user_milkdrop_dirs,
+        );
+        // Apply the user module folders to the store registry before the
+        // compositor is built from `registry_arc()` in `init`, so a dropped
+        // `.json`/`.wgsl` pair is visible in the Gallery from the first frame.
+        store.reload_modules_with_user_modules(
+            isf_dir.as_deref(),
+            &user_isf_dirs,
+            &user_milkdrop_dirs,
+            &user_module_dirs,
         );
         // The VmodV shell has no renderer to forward the media manager's
         // path, so it dispatches `media/setMediaDirectoryPath` itself; the
@@ -892,6 +908,7 @@ impl VmodvApp {
             isf_dir,
             user_isf_dirs,
             user_milkdrop_dirs,
+            user_module_dirs,
             media_watcher,
             media_library,
             library_refresh: crate::media_library::LibraryRefresh::default(),
@@ -2554,6 +2571,7 @@ impl VmodvApp {
             user_isf_dirs(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
         self.user_milkdrop_dirs =
             user_milkdrop_dirs(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
+        self.user_module_dirs = user_module_dirs(&self.media_root, &self.active_profile);
         self.media_watcher =
             MediaWatcher::for_profile(&self.media_root, &self.active_profile, &self.extra_isf_dirs);
     }
@@ -3020,10 +3038,11 @@ impl VmodvApp {
 
     /// Rebuild the module registry after a user ISF or MilkDrop change.
     fn rescan_modules(&mut self) {
-        let registry = self.store.reload_modules_with_milkdrop(
+        let registry = self.store.reload_modules_with_user_modules(
             self.isf_dir.as_deref(),
             &self.user_isf_dirs,
             &self.user_milkdrop_dirs,
+            &self.user_module_dirs,
         );
         if let Some(compositor) = &mut self.compositor {
             compositor.set_registry(registry);
@@ -4593,6 +4612,40 @@ fn user_milkdrop_dirs(media_root: &Path, profile: &str, extra: &[PathBuf]) -> Ve
     media_profiles::user_milkdrop_dirs(media_root, profile, extra)
 }
 
+/// User-authored WGSL + JSON module folders under `<userData>/media`.
+///
+/// Mirrors [`user_isf_dirs`]: resolved in [`VmodvApp::new`], refreshed with the
+/// watcher on profile changes, and handed to the store so a `.json`/`.wgsl`
+/// pair dropped into `<media>/<profile>/module/` reaches the Gallery on startup
+/// and on rescan. `MODV_USER_MODULE_DIR` overrides all of it.
+fn user_module_dirs(media_root: &Path, profile: &str) -> Vec<PathBuf> {
+    if let Some(dir) = std::env::var_os("MODV_USER_MODULE_DIR").map(PathBuf::from) {
+        return vec![dir];
+    }
+    media_profiles::user_module_dirs(media_root, profile)
+}
+
+/// Build the module registry for the shell, adding user-authored WGSL modules.
+///
+/// This is the single builder used both at startup and by
+/// [`VmodvApp::rescan_modules`], so a `.json`/`.wgsl` pair under a user module
+/// folder survives a registry rebuild instead of being dropped.
+pub(crate) fn build_module_registry_with_user_modules(
+    isf_dir: Option<&Path>,
+    extra_isf_dirs: &[PathBuf],
+    milkdrop_dirs: &[PathBuf],
+    user_module_dirs: &[PathBuf],
+) -> Arc<crate::module_registry::ModuleRegistry> {
+    Arc::new(
+        crate::module_registry::ModuleRegistry::build_with_milkdrop(
+            isf_dir,
+            extra_isf_dirs,
+            milkdrop_dirs,
+        )
+        .with_user_modules(user_module_dirs),
+    )
+}
+
 /// Resolve a Library-relative folder under one kind root.
 ///
 /// Returns `None` for anything that could escape the profile: absolute paths,
@@ -4904,34 +4957,6 @@ impl ApplicationHandler for VmodvApp {
         }
     }
 }
-
-// ============================ RED-ONLY SHIM ============================
-// The two functions below are the app-level APIs under test. Neither exists
-// in RED, so these no-op/ignoring versions keep the tests compiling and
-// failing on their assertions rather than on compile errors. GREEN MUST delete
-// both: `user_module_dirs` becomes the real app-level resolver (mirroring
-// `user_isf_dirs`, with an optional `MODV_USER_MODULE_DIR` override) and
-// `build_module_registry_with_user_modules` becomes the registry builder used
-// by startup and `rescan_modules` to apply `ModuleRegistry::with_user_modules`.
-#[cfg(test)]
-fn user_module_dirs(_media_root: &Path, _profile: &str) -> Vec<PathBuf> {
-    Vec::new()
-}
-
-#[cfg(test)]
-fn build_module_registry_with_user_modules(
-    isf_dir: Option<&Path>,
-    extra_isf_dirs: &[PathBuf],
-    milkdrop_dirs: &[PathBuf],
-    _user_module_dirs: &[PathBuf],
-) -> Arc<crate::module_registry::ModuleRegistry> {
-    Arc::new(crate::module_registry::ModuleRegistry::build_with_milkdrop(
-        isf_dir,
-        extra_isf_dirs,
-        milkdrop_dirs,
-    ))
-}
-// ========================== END RED-ONLY SHIM ==========================
 
 #[cfg(test)]
 mod tests {
