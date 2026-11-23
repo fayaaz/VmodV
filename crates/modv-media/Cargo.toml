@@ -19,7 +19,7 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 rustfft = "6.4.1"
 # Audio input-device enumeration and capture (WS-9). `cpal` is the
 # cross-platform host backend; on Linux it goes through ALSA.
-cpal = "0.17.3"
+cpal = "0.18.2"
 # Video capture (WS-10): cameras (v4l2), video files (decodebin) and PipeWire
 # screen sources all go through one GStreamer graph, which is what the legacy
 # renderer's getUserMedia/getDisplayMedia/WebCodecs trio did in JS.

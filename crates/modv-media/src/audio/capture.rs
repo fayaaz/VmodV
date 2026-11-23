@@ -413,12 +413,12 @@ impl From<cpal::SupportedStreamConfigRange> for ConfigRange {
 /// cpal's "it has been unplugged" text, which sent users looking for an
 /// unplugged card that was in fact fine, just owned by PipeWire. The
 /// replacement names the busy case and the PipeWire way out.
-pub fn supported_configs_error(error: cpal::SupportedStreamConfigsError) -> CaptureError {
-    match error {
-        cpal::SupportedStreamConfigsError::DeviceNotAvailable => CaptureError::ConfigUnsupported(
+pub fn supported_configs_error(error: cpal::Error) -> CaptureError {
+    match error.kind() {
+        cpal::ErrorKind::DeviceNotAvailable => CaptureError::ConfigUnsupported(
             "the device is busy or no longer available (PipeWire usually owns hardware on this host; pick a PipeWire source row in the Audio panel)".to_string(),
         ),
-        other => CaptureError::ConfigUnsupported(other.to_string()),
+        _ => CaptureError::ConfigUnsupported(error.to_string()),
     }
 }
 
@@ -727,7 +727,7 @@ impl AudioCapture {
 
         let stream = device
             .build_input_stream_raw(
-                &stream_config,
+                stream_config,
                 sample_format,
                 move |data, _info| {
                     if !convert_buffer_into(data, &mut scratch) {
@@ -822,7 +822,7 @@ mod tests {
     fn a_busy_device_gets_an_actionable_error_not_unplugged_speak() {
         // cpal reports DeviceNotAvailable both for an unplugged device and for
         // one PipeWire holds exclusively (the usual case on PipeWire desktops).
-        let error = supported_configs_error(cpal::SupportedStreamConfigsError::DeviceNotAvailable);
+        let error = supported_configs_error(cpal::Error::from(cpal::ErrorKind::DeviceNotAvailable));
         let message = error.to_string();
 
         assert!(message.contains("busy"), "{message}");
@@ -833,7 +833,10 @@ mod tests {
 
     #[test]
     fn other_supported_config_errors_keep_their_cpal_message() {
-        let error = supported_configs_error(cpal::SupportedStreamConfigsError::InvalidArgument);
+        let error = supported_configs_error(cpal::Error::with_message(
+            cpal::ErrorKind::InvalidInput,
+            "Invalid argument",
+        ));
 
         assert!(matches!(error, CaptureError::ConfigUnsupported(_)));
         assert!(error.to_string().contains("Invalid argument"), "{error}");
