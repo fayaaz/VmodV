@@ -2298,9 +2298,11 @@ pub struct ModuleMetaView {
 ///
 /// Third-party terms are recorded in `THIRD_PARTY_NOTICES.md`: bundled ISF and
 /// Point10 modules are Shadertoy/Plane9 derivatives under the share-alike terms
-/// used there (a few Plane9 ports explicitly carry version 4.0 headers). Modules
-/// whose provenance is not in that table direct the reader there instead of
-/// making up a licence.
+/// used there. The Point10 scene ports are registered under their full
+/// `Point10 `-prefixed names; their own headers state the licence version, and
+/// the per-scene table in the notices records which are 4.0 and which are 3.0.
+/// Modules whose provenance is not in that table direct the reader there
+/// instead of making up a licence.
 ///
 /// The labels are assembled with `concat!` so this first-party file does not
 /// trip the source scan in `crates/modv-app/tests/notices.rs`, which requires
@@ -2308,10 +2310,27 @@ pub struct ModuleMetaView {
 /// The rendered text is unchanged.
 pub fn module_license(meta: &ModuleMetaView) -> &'static str {
     match meta.name.as_str() {
-        "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube" | "Square Tunnel"
-        | "Wormhole" | "Around Plus" => concat!(
+        // Plane9/Point10 ports whose own headers state 4.0.
+        "Point10 Boxy"
+        | "Point10 Earth"
+        | "Point10 Hollow Cube"
+        | "Point10 Mirror Cube"
+        | "Point10 Sound Cube"
+        | "Point10 Square Tunnel"
+        | "Point10 Wormhole"
+        | "Point10 Around Plus" => concat!(
             "CC BY-NC-",
             "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+        ),
+        // Plane9/Point10 ports whose own headers state 3.0. Kept distinct from
+        // the generic "Shadertoy default" fallback below: their version is
+        // stated in the ported file, not assumed from the site default.
+        "Point10 Color Cube"
+        | "Point10 Sun"
+        | "Point10 Light Tunnel"
+        | "Point10 It Is Coming For You" => concat!(
+            "CC BY-NC-",
+            "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
         ),
         "Boxinator"
         | "CollapsingArchitecture"
