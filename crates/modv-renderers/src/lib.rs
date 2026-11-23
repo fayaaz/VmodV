@@ -6,6 +6,7 @@ pub mod milkdrop;
 pub mod point10;
 pub mod shader;
 pub mod two_d;
+pub mod user_module;
 
 #[cfg(test)]
 mod test_gpu;

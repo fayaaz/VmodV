@@ -1,89 +1,16 @@
-//! RED-phase test for user-authored WGSL + JSON module descriptors.
+//! Test for user-authored WGSL + JSON module descriptors.
 //!
 //! Scope (BUGS.md item 5, user-chosen design): users can drop a descriptor
 //! plus a sibling WGSL file into `media/<profile>/module/` and get a
 //! single-pass fragment module with ISF/builtin-style time + audio uniforms
 //! and typed props. This test covers the **pure parser** only.
-//!
-//! # TEMPORARY RED SHIM — DELETE IN GREEN
-//!
-//! The production `modv_renderers::user_module` module does not exist yet.
-//! The `red_shim` module below declares the API the GREEN implementation
-//! must provide and stubs `parse_user_module` with a sentinel error so this
-//! test compiles today and fails on an assertion (never a compile error).
-//!
-//! GREEN implementer: delete the `red_shim` module and its `use`, then add
-//! `use modv_renderers::user_module::{parse_user_module, UserModuleDescriptor,
-//! UserModuleParseError, UserModuleProp};`. Keep the assertions unchanged.
 
 use std::fmt;
 
-// ---------------------------------------------------------------------------
-// BEGIN TEMPORARY RED SHIM (delete in GREEN, import the real API instead).
-// ---------------------------------------------------------------------------
-mod red_shim {
-    use modv_renderers::shader::uniforms::PropKind;
-
-    /// One user-declared prop, in declaration (= prop-buffer slot) order.
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct UserModuleProp {
-        pub name: String,
-        pub label: String,
-        pub kind: PropKind,
-        pub default: f64,
-        pub min: f64,
-        pub max: f64,
-        pub step: f64,
-    }
-
-    /// A fully parsed, ready-to-register user module definition.
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct UserModuleDescriptor {
-        pub name: String,
-        pub author: String,
-        pub version: String,
-        pub description: String,
-        pub category: Option<String>,
-        pub license: Option<String>,
-        pub wgsl_source: String,
-        pub entry: String,
-        pub audio: bool,
-        pub preview_with_output: bool,
-        pub props: Vec<UserModuleProp>,
-    }
-
-    /// Failures reported by the pure descriptor parser.
-    // The real parser will construct every variant; the shim only returns
-    // NotImplemented, so silence dead_code here (removed with the shim).
-    #[allow(dead_code)]
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub enum UserModuleParseError {
-        InvalidJson(String),
-        DescriptorNotAnObject,
-        MissingName,
-        MissingWgslSource,
-        InvalidPropType {
-            name: String,
-            found: String,
-        },
-        /// Shim-only sentinel — remove in GREEN.
-        NotImplemented,
-    }
-
-    /// Pure parser: JSON descriptor text plus optional sibling WGSL source.
-    pub fn parse_user_module(
-        _descriptor_json: &str,
-        _sibling_wgsl_source: Option<&str>,
-    ) -> Result<UserModuleDescriptor, UserModuleParseError> {
-        Err(UserModuleParseError::NotImplemented)
-    }
-}
-// ---------------------------------------------------------------------------
-// END TEMPORARY RED SHIM.
-// ---------------------------------------------------------------------------
-
 use modv_renderers::shader::uniforms::PropKind;
-use red_shim::{UserModuleDescriptor, UserModuleParseError, UserModuleProp, parse_user_module};
+use modv_renderers::user_module::{
+    parse_user_module, UserModuleDescriptor, UserModuleParseError, UserModuleProp,
+};
 
 fn check_eq<T: fmt::Debug + PartialEq>(
     label: &str,
