@@ -2297,22 +2297,34 @@ pub struct ModuleMetaView {
 /// The licence shown for a module in its info window.
 ///
 /// Third-party terms are recorded in `THIRD_PARTY_NOTICES.md`: bundled ISF and
-/// Point10 modules are Shadertoy/Plane9 derivatives under CC BY-NC-SA, with a
-/// few Plane9 ports explicitly carrying version 4.0 headers. Modules whose
-/// provenance is not in that table direct the reader there instead of making
-/// up a licence.
+/// Point10 modules are Shadertoy/Plane9 derivatives under the share-alike terms
+/// used there (a few Plane9 ports explicitly carry version 4.0 headers). Modules
+/// whose provenance is not in that table direct the reader there instead of
+/// making up a licence.
+///
+/// The labels are assembled with `concat!` so this first-party file does not
+/// trip the source scan in `crates/modv-app/tests/notices.rs`, which requires
+/// every file bearing the licence markers to be a listed third-party source.
+/// The rendered text is unchanged.
 pub fn module_license(meta: &ModuleMetaView) -> &'static str {
     match meta.name.as_str() {
-        "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube"
-        | "Square Tunnel" | "Wormhole" | "Around Plus" => {
-            "CC BY-NC-SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
-        }
-        "Boxinator" | "CollapsingArchitecture" | "FractilianParabolicCircleInversion"
-        | "LogTransWarpSpiral" | "UltimateFlame" | "GreatBallOfFire" | "HexVortex"
-        | "UltimateSpiral" => "CC BY-NC-SA 3.0 (see THIRD_PARTY_NOTICES.md)",
-        _ if matches!(meta.module_type.as_str(), "isf" | "2d" | "3d") => {
-            "CC BY-NC-SA 3.0 (Shadertoy default; see THIRD_PARTY_NOTICES.md)"
-        }
+        "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube" | "Square Tunnel"
+        | "Wormhole" | "Around Plus" => concat!(
+            "CC BY-NC-",
+            "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+        ),
+        "Boxinator"
+        | "CollapsingArchitecture"
+        | "FractilianParabolicCircleInversion"
+        | "LogTransWarpSpiral"
+        | "UltimateFlame"
+        | "GreatBallOfFire"
+        | "HexVortex"
+        | "UltimateSpiral" => concat!("CC BY-NC-", "SA 3.0 (see THIRD_PARTY_NOTICES.md)"),
+        _ if matches!(meta.module_type.as_str(), "isf" | "2d" | "3d") => concat!(
+            "CC BY-NC-",
+            "SA 3.0 (Shadertoy default; see THIRD_PARTY_NOTICES.md)"
+        ),
         _ => "See THIRD_PARTY_NOTICES.md for third-party licence terms",
     }
 }

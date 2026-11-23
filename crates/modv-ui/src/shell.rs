@@ -5187,7 +5187,7 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
 /// Shows the module's Gallery metadata and its third-party licence, as recorded
 /// in `THIRD_PARTY_NOTICES.md`.
 fn module_info_window(ctx: &egui::Context, state: &mut UiState) {
-    let Some(meta) = state.module_info.clone() else {
+    let Some(meta) = state.module_info.as_ref() else {
         return;
     };
     let mut open = true;
@@ -5212,7 +5212,7 @@ fn module_info_window(ctx: &egui::Context, state: &mut UiState) {
         ui.label(format!("Type: {}", meta.module_type));
         ui.label(format!("Author: {}", meta.author));
         ui.label(format!("Version: {}", meta.version));
-        ui.label(format!("License: {}", module_license(&meta)));
+        ui.label(format!("License: {}", module_license(meta)));
         ui.separator();
         ui.label(&meta.description);
     });
