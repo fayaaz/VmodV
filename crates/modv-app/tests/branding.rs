@@ -38,15 +38,27 @@ fn the_logo_has_an_editable_svg_source_with_a_mirrored_v() {
         "the source keeps the legacy 276.7-unit artboard"
     );
     assert!(
-        svg.contains("#00E676"),
-        "the mark uses the VmodV neon-green accent"
+        svg.contains("#007A3D"),
+        "the mark uses the dark VmodV green"
     );
-    // The legacy right-hand V is duplicated on the left so the mark reads
-    // V-M-V. Keep both copies in the source.
-    let legacy_v = "M187.6,189.2";
     assert_eq!(
-        svg.matches(legacy_v).count(),
+        svg.matches("fill=\"#000000\" stroke=\"#007A3D\"").count(),
+        5,
+        "the disc and mark are green outlines on black: two Vs, the M and the diamond"
+    );
+    // The V is duplicated on the left so the mark reads V-M-V. Keep both
+    // copies in the source.
+    let v_apex = "M187.6,189.2";
+    assert_eq!(
+        svg.matches(v_apex).count(),
         2,
-        "the V must be mirrored on the left of the mark"
+        "the V must be duplicated on the left of the mark"
+    );
+    // Keep the legacy V geometry: its slants are parallel to the M's outer
+    // edges, which is what keeps both V-M gaps even along their length.
+    assert_eq!(
+        svg.matches("l-56.9,-98.7").count(),
+        2,
+        "both Vs must keep the legacy 56.9/98.7 slants"
     );
 }
