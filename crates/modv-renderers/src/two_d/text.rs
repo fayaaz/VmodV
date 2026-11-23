@@ -157,15 +157,12 @@ impl TextEngine {
         // The wrapper's default `lineHeight: 1` → the line box is one em.
         let metrics = Metrics::new(size, size);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(&mut self.font_system, max_width, None);
-        buffer.set_wrap(
-            &mut self.font_system,
-            if max_width.is_some() {
-                Wrap::WordOrGlyph
-            } else {
-                Wrap::None
-            },
-        );
+        buffer.set_size(max_width, None);
+        buffer.set_wrap(if max_width.is_some() {
+            Wrap::WordOrGlyph
+        } else {
+            Wrap::None
+        });
 
         let family = family_for(&style.family);
         let attrs = Attrs::new()
@@ -176,7 +173,7 @@ impl TextEngine {
                 Weight::NORMAL
             })
             .style(Style::Normal);
-        buffer.set_text(&mut self.font_system, text, &attrs, Shaping::Advanced);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
         buffer
     }
