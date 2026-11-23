@@ -324,8 +324,10 @@ impl SceneGridState {
     /// Finish a copy drag over `target`. Returns the engine action, or `None`
     /// for a same-cell drop (which cancels the drag without an action).
     pub fn drop_copy(&mut self, target: &CellRef) -> Option<UiAction> {
-        let source = self.copy_source.take()?;
+        // Clear the drag flag unconditionally so no stale state survives,
+        // even when there was no source to take.
         self.copy_is_drag = false;
+        let source = self.copy_source.take()?;
         if source == *target {
             return None;
         }
@@ -2070,10 +2072,7 @@ fn scene_cell_menu(
         ui.close();
     }
     if ui
-        .add_enabled(
-            grid.copy_source.is_some(),
-            egui::Button::new("Paste cell"),
-        )
+        .add_enabled(grid.copy_source.is_some(), egui::Button::new("Paste cell"))
         .clicked()
     {
         if let Some(action) = grid.paste_into(&CellRef::new(scene.id.clone(), row)) {
@@ -2238,7 +2237,7 @@ mod tests {
         let mut grid = SceneGridState::default();
         let source = CellRef::new("scene-a", 2);
         let target = CellRef::new("scene-b", 1);
-        grid.begin_copy(source.clone());
+        grid.begin_drag_copy(source.clone());
         assert!(grid.is_copying());
         let action = grid
             .drop_copy(&target)
@@ -2256,7 +2255,7 @@ mod tests {
     fn same_cell_drop_cancels_without_an_action() {
         let mut grid = SceneGridState::default();
         let cell = CellRef::new("scene-a", 0);
-        grid.begin_copy(cell.clone());
+        grid.begin_drag_copy(cell.clone());
         assert_eq!(grid.drop_copy(&cell), None);
         assert!(!grid.is_copying());
     }
@@ -2270,9 +2269,37 @@ mod tests {
     #[test]
     fn cancel_clears_the_drag() {
         let mut grid = SceneGridState::default();
-        grid.begin_copy(CellRef::new("scene-a", 0));
+        grid.begin_drag_copy(CellRef::new("scene-a", 0));
         grid.cancel_copy();
         assert!(!grid.is_copying());
+        assert!(!grid.copy_is_drag, "cancelling clears the flag too");
+    }
+
+    #[test]
+    fn menu_copy_is_a_durable_clipboard_while_drag_copy_is_one_shot() {
+        let mut grid = SceneGridState::default();
+
+        // A menu copy is not flagged as a drag, so the frame-level release
+        // cleanup must not cancel it.
+        grid.begin_copy(CellRef::new("scene-a", 0));
+        assert!(grid.is_copying());
+        assert!(!grid.copy_is_drag);
+
+        // Paste borrows the clipboard: it can be repeated, leaves the source
+        // intact, and ignores a same-cell paste.
+        let target = CellRef::new("scene-b", 1);
+        let first = grid.paste_into(&target).expect("a paste emits an action");
+        let second = grid.paste_into(&target).expect("pastes can be repeated");
+        assert_eq!(first.payload, second.payload);
+        assert!(grid.is_copying(), "pasting must not consume the clipboard");
+        assert_eq!(grid.paste_into(&CellRef::new("scene-a", 0)), None);
+
+        // The frame-level cleanup cancels only drag-originated copies.
+        grid.begin_drag_copy(target.clone());
+        assert!(grid.copy_is_drag);
+        grid.cancel_copy();
+        assert!(!grid.is_copying());
+        assert!(!grid.copy_is_drag);
     }
 
     #[test]
