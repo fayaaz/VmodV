@@ -75,8 +75,11 @@ pub fn load_user_modules(dirs: &[PathBuf]) -> Vec<UserModuleDescriptor> {
         let Ok(value) = serde_json::from_str::<Value>(&json) else {
             continue;
         };
-        let sibling = sibling_source(&path, value.as_object());
-        let Ok(descriptor) = parse_user_module(&json, sibling.as_deref()) else {
+        let Some(object) = value.as_object() else {
+            continue;
+        };
+        let sibling = sibling_source(&path, object);
+        let Ok(descriptor) = descriptor_from_object(object, sibling.as_deref()) else {
             continue;
         };
         if seen.insert(descriptor.name.clone()) {
@@ -99,9 +102,12 @@ fn is_ignored_name(path: &Path) -> bool {
 }
 
 /// Read the sibling file named by a descriptor's `wgsl` field, if any.
-fn sibling_source(path: &Path, object: Option<&Map<String, Value>>) -> Option<String> {
-    let object = object?;
-    if optional_string_field(object, "wgslSource").is_some() {
+fn sibling_source(path: &Path, object: &Map<String, Value>) -> Option<String> {
+    if object
+        .get("wgslSource")
+        .and_then(Value::as_str)
+        .is_some_and(|source| !source.is_empty())
+    {
         return None;
     }
     let name = object.get("wgsl")?.as_str()?;
@@ -139,7 +145,16 @@ pub fn parse_user_module(
     let object = value
         .as_object()
         .ok_or(UserModuleParseError::DescriptorNotAnObject)?;
+    descriptor_from_object(object, sibling_wgsl_source)
+}
 
+/// Build a descriptor from an already-parsed JSON object. Both the public
+/// parser and filesystem discovery use this, so discovery parses each file
+/// only once.
+fn descriptor_from_object(
+    object: &Map<String, Value>,
+    sibling_wgsl_source: Option<&str>,
+) -> Result<UserModuleDescriptor, UserModuleParseError> {
     let name = string_field(object, "name");
     if name.is_empty() {
         return Err(UserModuleParseError::MissingName);
