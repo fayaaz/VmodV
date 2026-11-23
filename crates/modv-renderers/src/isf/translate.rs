@@ -2078,4 +2078,33 @@ void main(void) {
                 .contains("Fragment shaders (`.fs`): **0**")
         );
     }
+
+    #[test]
+    fn isfv3_looped_buffer_translates() {
+        // ISF v3 feedback shaders read the previous frame of a persistent
+        // buffer with the v3-only `isf_LoopedBuffer()` helper. Supporting v3
+        // means the header/version-3 path must recognise that helper and emit
+        // GLSL naga can compile. Today the identifier is left undefined and
+        // translation fails.
+        let shader = r#"/*{
+            "ISFVSN": "3",
+            "PASSES": [
+                { "TARGET": "feedback", "PERSISTENT": true },
+                { }
+            ]
+        }*/
+        void main() {
+            vec4 previous = isf_LoopedBuffer(feedback, RENDERSIZE, isf_FragNormCoord);
+            gl_FragColor = previous * 0.95;
+        }"#;
+        let document = doc(shader);
+        assert_eq!(document.version, 3.0, "the v3 header must be recognised");
+        let translated = translate_fragment(&document, 0);
+        assert!(
+            translated.is_ok(),
+            "ISF v3 isf_LoopedBuffer must translate to WGSL, got: {:?}",
+            translated.as_ref().err()
+        );
+        assert_valid_wgsl(&translated.expect("translates").wgsl.expect("WGSL"));
+    }
 }
