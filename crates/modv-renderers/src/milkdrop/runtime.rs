@@ -1188,6 +1188,14 @@ impl MilkUniforms {
         let mut bytes = vec![0u8; MILK_UNIFORM_STRIDE];
         let g = &instance.globals;
         let base = &instance.compiled.doc.base;
+        let live_or = |name: &str, fallback: f64| {
+            let value = instance.pool.get(name);
+            if value.is_finite() {
+                value
+            } else {
+                fallback as f32
+            }
+        };
 
         // The 32 scalars of the translated uniform block, in declaration order.
         let aspect = if g.aspecty.abs() > 1e-6 {
@@ -1204,7 +1212,7 @@ impl MilkUniforms {
             g.frame,                         // frame
             g.fps,                           // fps
             0.0,                             // progress
-            base.decay as f32,               // decay
+            live_or("decay", base.decay),    // decay
             g.bass,                          // bass
             g.mid,                           // mid
             g.treb,                          // treb
@@ -1226,9 +1234,9 @@ impl MilkUniforms {
             0.0,                             // bias1
             0.0,                             // bias2
             0.0,                             // bias3
-            base.b1n as f32,                 // blur1_min
-            base.b2n as f32,                 // blur2_min
-            base.b3n as f32,                 // blur3_min
+            live_or("b1n", base.b1n),        // blur1_min
+            live_or("b2n", base.b2n),        // blur2_min
+            live_or("b3n", base.b3n),        // blur3_min
             1.0,                             // blur1_max
             1.0,                             // blur2_max
             1.0,                             // blur3_max
@@ -1687,10 +1695,19 @@ impl MilkRuntime {
         // derived from the `b1n`/`b2n`/`b3n` base-val minima. The kernel is a
         // normalized 5x5 Gaussian in `BLUR_FRAGMENT_WGSL`, so a non-zero
         // minimum produces a real blur that spills into neighbouring texels.
+        let base = &instance.compiled.doc.base;
+        let live_or = |name: &str, fallback: f64| {
+            let value = instance.pool.get(name);
+            if value.is_finite() {
+                value as f64
+            } else {
+                fallback
+            }
+        };
         let blur_strengths = [
-            instance.compiled.doc.base.b1n,
-            instance.compiled.doc.base.b2n,
-            instance.compiled.doc.base.b3n,
+            live_or("b1n", base.b1n),
+            live_or("b2n", base.b2n),
+            live_or("b3n", base.b3n),
         ];
         let blur_uniforms: Vec<wgpu::Buffer> = blur_strengths
             .iter()
@@ -2061,6 +2078,10 @@ pub struct MilkInstance {
     pub band_long_att: [f32; 3],
     /// Current FFT band sums (Butterchurn's `imm`) for this frame.
     pub band_imm: [f32; 3],
+    /// Inspector input-prop overrides, applied after the per-frame equations
+    /// so a user control wins over authored animation. Keys are EEL variable
+    /// names from [`crate::milkdrop::MILKDROP_LOOK_PROP_NAMES`].
+    pub overrides: Vec<(&'static str, f32)>,
     pub frame_index: u32,
     /// Whether the init equations have run for this preset.
     pub init_done: bool,
@@ -2095,6 +2116,7 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
         band_att: [0.0; 3],
         band_long_att: [0.0; 3],
         band_imm: [0.0; 3],
+        overrides: Vec::new(),
         frame_index: 0,
         init_done: false,
         rand_start: std::array::from_fn(|_| rand_rng.next_f32()),
@@ -2946,6 +2968,16 @@ pub fn begin_frame(
         &instance.globals,
     )
     .map_err(|e| MilkRuntimeError::Evaluate(format!("frame equations: {e}")))?;
+
+    // Inspector input props win over the preset's own animation. They are
+    // applied after the equations (but before mesh/overlay/uniform evaluation)
+    // so a control can override `decay`, `zoom`, echo, etc. without fighting
+    // the authored EEL.
+    for &(name, value) in &instance.overrides {
+        if value.is_finite() {
+            instance.pool.set(name, value);
+        }
+    }
     Ok(())
 }
 
@@ -2961,16 +2993,14 @@ pub struct MilkMesh {
 }
 
 /// Resolve one warp parameter from the live EEL pool, falling back to the
-/// preset's base-val default.
+/// preset's base-val default only when the pool value is non-finite.
 ///
-/// Per-frame equations may override any of these variables at runtime. The
-/// pool is not seeded with the base vals, so a `0.0` read means "untouched"
-/// and the base value wins. For a hand-written fixture whose base vals are all
-/// zero this leaves the parameter at zero (the warp math below guards it),
-/// keeping the result finite and deterministic.
+/// [`begin_frame`] seeds every frame-level variable from the base vals before
+/// the equations run and then applies Inspector overrides, so `0.0` is a real
+/// authored/UI value (e.g. disabling `warp` or `rot`), not "unset".
 fn warp_param(pool: &VarPool, name: &str, base: f64) -> f32 {
     let live = pool.get(name);
-    if live == 0.0 { base as f32 } else { live }
+    if live.is_finite() { live } else { base as f32 }
 }
 
 /// `value` when it is finite and non-degenerate, otherwise `fallback`.
@@ -3842,6 +3872,41 @@ ret = uv;\n\
                 byte_frequency_data: vec![128; 1024],
             },
         }
+    }
+
+    #[test]
+    fn inspector_overrides_win_over_frame_equations() {
+        let doc = doc_with(
+            "",
+            "decay = 0.25; gamma = 1.5; wave_a = 0.1;",
+            "",
+            VALID_WARP,
+            VALID_COMP,
+        );
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("overrides", &doc, &cache).expect("compiles");
+        let mut instance = new_instance(compiled, 1);
+        instance.overrides = vec![("decay", 0.9), ("gamma", 2.0), ("wave_a", 0.4)];
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        approx!(instance.pool.get("decay"), 0.9, "decay override wins");
+        approx!(instance.pool.get("gamma"), 2.0, "gamma override wins");
+        approx!(instance.pool.get("wave_a"), 0.4, "wave alpha override wins");
+    }
+
+    #[test]
+    fn uniform_payload_serializes_the_live_decay() {
+        let doc = doc_with("", "decay = 0.37;", "", VALID_WARP, VALID_COMP);
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("live-decay", &doc, &cache).expect("compiles");
+        let mut instance = new_instance(compiled, 1);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let bytes = MilkUniforms::from_frame(&instance, &f).to_bytes();
+        // `decay` is the fifth scalar in the translated uniform block.
+        let decay = f32::from_ne_bytes(bytes[16..20].try_into().unwrap());
+        approx!(decay, 0.37, "per-frame decay reaches the warp uniform");
     }
 
     #[test]

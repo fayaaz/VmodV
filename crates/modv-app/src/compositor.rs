@@ -306,8 +306,8 @@ use modv_renderers::isf::{
     CompiledIsf, IsfDocument, IsfFrameUniforms, IsfRuntime, IsfValue, IsfValues,
 };
 use modv_renderers::milkdrop::{
-    MilkAudio, MilkFrameInfo, MilkGpuTargets, MilkInstance, MilkRuntime, begin_frame,
-    compile_preset, evaluate_mesh, new_instance,
+    MILKDROP_LOOK_PROP_NAMES, MilkAudio, MilkFrameInfo, MilkGpuTargets, MilkInstance, MilkRuntime,
+    begin_frame, compile_preset, evaluate_mesh, new_instance,
 };
 use modv_renderers::point10::audio_bridge::{
     AudioBridge, BandPayload, RawBands, ResponsivenessLevers,
@@ -2604,6 +2604,22 @@ impl Compositor {
             },
         };
 
+        // Inspector look controls only override when they differ from the
+        // preset's authored base value. Defaults are seeded into every module's
+        // props map by the registry; treating them as overrides would freeze
+        // presets that animate decay/gamma/warp in EEL.
+        let milk_overrides: Vec<(&'static str, f32)> = MILKDROP_LOOK_PROP_NAMES
+            .iter()
+            .filter_map(|name| {
+                let declared = definition.props.get(*name)?;
+                let raw = module.props.get(*name)?;
+                if Some(raw) == declared.default.as_ref() {
+                    return None;
+                }
+                scene_prop_number(raw).map(|value| (*name, value))
+            })
+            .collect();
+
         // Split the borrows: the instance lives in `milkdrop`, the runtime in
         // `milkdrop_runtime` (exactly like the ISF draw block). A `String`
         // error keeps the failure path independent of `CompositorError`.
@@ -2616,6 +2632,10 @@ impl Compositor {
             let Some(milk) = milkdrop.get_mut(module_id) else {
                 return Ok(());
             };
+            milk.instance.overrides.clear();
+            milk.instance
+                .overrides
+                .extend(milk_overrides.iter().copied());
             begin_frame(&mut milk.instance, &milk_frame)
                 .map_err(|error| format!("frame: {error:?}"))?;
             let mesh = evaluate_mesh(&mut milk.instance, &milk_frame)

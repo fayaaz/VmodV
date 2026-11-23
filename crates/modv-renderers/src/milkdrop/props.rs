@@ -21,7 +21,7 @@
 #![forbid(unsafe_code)]
 
 use indexmap::IndexMap;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::isf::props::EnumMember;
 use crate::milkdrop::MilkDocument;
@@ -144,16 +144,208 @@ pub fn meta_from_document(doc: &MilkDocument) -> MilkMeta {
     }
 }
 
+/// Names of the preset variables exposed as Inspector input props.
+///
+/// These are EEL/`MilkBaseVals` names, not UI labels: the compositor copies a
+/// module's numeric prop values into [`MilkInstance::overrides`] under these
+/// keys, and `begin_frame` applies them after the preset's frame equations so
+/// a user control wins over authored animation. Keeping the list here means
+/// the prop synthesis and the runtime override path cannot drift apart.
+pub const MILKDROP_LOOK_PROP_NAMES: &[&str] = &[
+    "decay",
+    "gamma",
+    "fshader",
+    "echo_alpha",
+    "echo_zoom",
+    "echo_orient",
+    "brighten",
+    "darken",
+    "solarize",
+    "invert",
+    "red_blue",
+    "zoom",
+    "warp",
+    "rot",
+    "wave_a",
+    "wave_scale",
+    "wave_mode",
+    "b1n",
+    "b2n",
+    "b3n",
+];
+
+fn float_prop(
+    props: &mut IndexMap<String, MilkProp>,
+    name: &str,
+    label: &str,
+    default: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+) {
+    props.insert(
+        name.to_string(),
+        MilkProp {
+            type_: MilkPropType::Float,
+            label: label.to_string(),
+            default: Some(json!(default)),
+            min: Some(min),
+            max: Some(max),
+            step: Some(step),
+            enum_members: None,
+        },
+    );
+}
+
+fn bool_prop(props: &mut IndexMap<String, MilkProp>, name: &str, label: &str, default: bool) {
+    props.insert(
+        name.to_string(),
+        MilkProp {
+            type_: MilkPropType::Bool,
+            label: label.to_string(),
+            default: Some(json!(default)),
+            min: None,
+            max: None,
+            step: None,
+            enum_members: None,
+        },
+    );
+}
+
 /// Synthesise the module prop table from a parsed preset.
 ///
-/// MilkDrop presets currently expose no user-facing props: their parameters
-/// are driven by EEL equations evaluated each frame rather than by editable
-/// inputs, so the returned ordered map is intentionally empty. The function
-/// exists so the module registry can share one `document -> props` conversion
-/// between ISF and MilkDrop modules; later layers may populate per-preset
-/// props without changing any caller.
-pub fn synthesise_props(_doc: &MilkDocument) -> IndexMap<String, MilkProp> {
-    IndexMap::new()
+/// These are look/dev controls, not a replacement for the preset's EEL: every
+/// prop starts at the preset's authored base value and is applied after the
+/// per-frame equations, so moving a control visibly overrides the preset while
+/// leaving the equation state intact. The curated set covers feedback/decay,
+/// the legacy composite (gamma/hue/echo/filters) and the warp/wave basics.
+pub fn synthesise_props(doc: &MilkDocument) -> IndexMap<String, MilkProp> {
+    let base = &doc.base;
+    let mut props = IndexMap::new();
+
+    float_prop(&mut props, "decay", "Decay", base.decay, 0.0, 1.5, 0.001);
+    float_prop(&mut props, "gamma", "Gamma", base.gammaadj, 0.0, 8.0, 0.01);
+    float_prop(
+        &mut props,
+        "fshader",
+        "Hue Shader",
+        base.shader,
+        0.0,
+        1.0,
+        0.01,
+    );
+    float_prop(
+        &mut props,
+        "echo_alpha",
+        "Echo Alpha",
+        base.echo_alpha,
+        0.0,
+        1.0,
+        0.01,
+    );
+    float_prop(
+        &mut props,
+        "echo_zoom",
+        "Echo Zoom",
+        base.echo_zoom,
+        0.1,
+        4.0,
+        0.001,
+    );
+    let orient = base.echo_orient.clamp(0, 3);
+    props.insert(
+        "echo_orient".to_string(),
+        MilkProp {
+            type_: MilkPropType::Enum,
+            label: "Echo Orientation".to_string(),
+            default: Some(json!(orient)),
+            min: None,
+            max: None,
+            step: None,
+            enum_members: Some(
+                ["None", "Flip X", "Flip Y", "Flip XY"]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, label)| EnumMember {
+                        label: label.to_string(),
+                        value: json!(index),
+                        selected: index as i64 == orient,
+                    })
+                    .collect(),
+            ),
+        },
+    );
+    bool_prop(&mut props, "brighten", "Brighten", base.brighten);
+    bool_prop(&mut props, "darken", "Darken", base.darken);
+    bool_prop(&mut props, "solarize", "Solarize", base.solarize);
+    bool_prop(&mut props, "invert", "Invert", base.invert);
+    bool_prop(&mut props, "red_blue", "Red/Blue Swap", base.red_blue);
+    float_prop(&mut props, "zoom", "Zoom", base.zoom, 0.5, 2.0, 0.001);
+    float_prop(&mut props, "warp", "Warp", base.warp, 0.0, 4.0, 0.01);
+    float_prop(
+        &mut props,
+        "rot",
+        "Rotation",
+        base.rot,
+        -std::f64::consts::PI,
+        std::f64::consts::PI,
+        0.001,
+    );
+    float_prop(
+        &mut props,
+        "wave_a",
+        "Wave Alpha",
+        base.wave_a,
+        0.0,
+        1.0,
+        0.01,
+    );
+    float_prop(
+        &mut props,
+        "wave_scale",
+        "Wave Scale",
+        base.wave_scale,
+        0.0,
+        4.0,
+        0.001,
+    );
+    let wave_mode = base.wave_mode.rem_euclid(8);
+    props.insert(
+        "wave_mode".to_string(),
+        MilkProp {
+            type_: MilkPropType::Enum,
+            label: "Wave Mode".to_string(),
+            default: Some(json!(wave_mode)),
+            min: None,
+            max: None,
+            step: None,
+            enum_members: Some(
+                [
+                    "Circle",
+                    "Radial",
+                    "Spiral",
+                    "Spectrum",
+                    "MilkDrop 4",
+                    "MilkDrop 5",
+                    "Radial 3D",
+                    "Dual Line",
+                ]
+                .iter()
+                .enumerate()
+                .map(|(index, label)| EnumMember {
+                    label: label.to_string(),
+                    value: json!(index),
+                    selected: index as i64 == wave_mode,
+                })
+                .collect(),
+            ),
+        },
+    );
+    float_prop(&mut props, "b1n", "Blur 1 Min", base.b1n, 0.0, 1.0, 0.001);
+    float_prop(&mut props, "b2n", "Blur 2 Min", base.b2n, 0.0, 1.0, 0.001);
+    float_prop(&mut props, "b3n", "Blur 3 Min", base.b3n, 0.0, 1.0, 0.001);
+
+    props
 }
 
 #[cfg(test)]
@@ -198,10 +390,39 @@ mod tests {
     }
 
     #[test]
-    fn synthesise_props_returns_empty_index_map() {
-        let doc = parse("[preset00]\nper_frame_1=q=1;\n", "p");
+    fn synthesise_props_exposes_the_look_controls() {
+        let doc = parse(
+            "[preset00]\nfDecay=0.91\nfGammaAdj=2.5\nfShader=0.75\n\
+             fVideoEchoAlpha=0.4\nfVideoEchoZoom=1.5\nnVideoEchoOrientation=2\n\
+             nWaveMode=7\nbDarken=1\nbSolarize=1\nfWaveAlpha=0.3\nfWaveScale=2.0\n",
+            "p",
+        );
         let props = synthesise_props(&doc);
-        assert!(props.is_empty());
+        assert_eq!(props.len(), MILKDROP_LOOK_PROP_NAMES.len());
+        for name in MILKDROP_LOOK_PROP_NAMES {
+            assert!(props.contains_key(*name), "missing prop {name}");
+        }
+        assert_eq!(props["decay"].default, Some(json!(0.91)));
+        assert_eq!(props["gamma"].default, Some(json!(2.5)));
+        assert_eq!(props["fshader"].default, Some(json!(0.75)));
+        assert_eq!(props["echo_alpha"].default, Some(json!(0.4)));
+        assert_eq!(props["echo_zoom"].default, Some(json!(1.5)));
+        assert_eq!(props["echo_orient"].default, Some(json!(2)));
+        assert_eq!(props["wave_mode"].default, Some(json!(7)));
+        assert_eq!(props["darken"].default, Some(json!(true)));
+        assert_eq!(props["solarize"].default, Some(json!(true)));
+        assert_eq!(props["wave_a"].default, Some(json!(0.3)));
+        assert_eq!(props["wave_scale"].default, Some(json!(2.0)));
+        assert_eq!(props["brighten"].type_, MilkPropType::Bool);
+        assert_eq!(props["wave_mode"].type_, MilkPropType::Enum);
+        assert_eq!(
+            props["wave_mode"]
+                .enum_members
+                .as_ref()
+                .expect("wave mode options")
+                .len(),
+            8
+        );
     }
 
     #[test]

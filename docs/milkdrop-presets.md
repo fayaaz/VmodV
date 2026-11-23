@@ -62,6 +62,27 @@ content VmodV *does* bundle, and of the test fixture above, are recorded in
 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md); user presets are not part
 of that bundled set.
 
+## Inspector look controls
+
+Selecting a MilkDrop module in the Inspector exposes a curated set of input
+props. They start at the preset's authored values and only override the
+preset when you change them, so presets that animate these variables in EEL
+keep their animation by default:
+
+- **Decay** / **Gamma** / **Hue Shader** — feedback, brightness and the legacy
+  four-corner colour field.
+- **Echo Alpha** / **Echo Zoom** / **Echo Orientation** — the MilkDrop 1 video
+  echo.
+- **Brighten**, **Darken**, **Solarize**, **Invert**, **Red/Blue Swap** — the
+  fixed composite filters.
+- **Zoom**, **Warp**, **Rotation** — the warp mesh.
+- **Wave Alpha**, **Wave Scale**, **Wave Mode** — the built-in waveform.
+- **Blur 1–3 Min** — the blur strengths available to warp/comp shaders.
+
+These are per-module values and are saved with the project. Changing one
+overrides the preset's value for that frame onward; reset it from the
+Inspector to return to the authored animation.
+
 ## Troubleshooting
 
 - **Preset not listed.** Check that the file ends in `.mlk` or `.milk` (both

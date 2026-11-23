@@ -65,7 +65,10 @@ pub use translate::{
     CompiledMilkShader, MilkShaderStage, TranslateError, translate_milk_shader, wrap_milk_shader,
 };
 
-pub use props::{MilkMeta, MilkProp, MilkPropType, meta_from_document, synthesise_props};
+pub use props::{
+    MILKDROP_LOOK_PROP_NAMES, MilkMeta, MilkProp, MilkPropType, meta_from_document,
+    synthesise_props,
+};
 
 pub use runtime::{
     MILK_UNIFORM_STRIDE, MilkAudio, MilkCompiledPreset, MilkFailureCache, MilkFrameInfo,

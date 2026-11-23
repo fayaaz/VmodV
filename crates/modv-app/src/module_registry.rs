@@ -126,8 +126,8 @@ use modv_renderers::isf::{
     IsfDocument, IsfMeta, IsfProp, IsfPropType, meta_from_document, parse_isf, synthesise_props,
 };
 use modv_renderers::milkdrop::{
-    MilkDocument, MilkMeta, MilkProp, meta_from_document as milk_meta_from_document, parse_milk,
-    synthesise_props as milk_synthesise_props,
+    MilkDocument, MilkMeta, MilkProp, MilkPropType, meta_from_document as milk_meta_from_document,
+    parse_milk, synthesise_props as milk_synthesise_props,
 };
 use modv_renderers::point10::chromatic::line::ChromaticLine;
 use modv_renderers::point10::chromatic::wave::ChromaticWave;
@@ -256,8 +256,10 @@ pub struct MilkdropDefinition {
     pub name: String,
     /// Metadata derived with `milkdrop::meta_from_document`.
     pub meta: MilkMeta,
-    /// Synthesised props (currently empty: presets are EEL-driven), keyed by
-    /// prop name in declaration order — the value returned by `synthesise_props`.
+    /// Synthesised look controls (decay/gamma/echo/warp/wave/blur), keyed by
+    /// EEL variable name in declaration order — the value returned by
+    /// `synthesise_props`. Values are applied after the preset's per-frame
+    /// equations when the user changes them from the authored base.
     pub props: IndexMap<String, MilkProp>,
     /// The parsed preset, kept additively so the compositor can compile a
     /// `MilkCompiledPreset` on first draw without re-reading the source file.
@@ -1119,6 +1121,11 @@ impl ModuleRegistry {
             return (prop == QUALITY_PROP).then(quality_schema);
         }
 
+        if let Some(definition) = self.milkdrop_definition(module_name) {
+            let declared = definition.props.get(prop)?;
+            return Some(schema_for_milk(declared));
+        }
+
         if prop == QUALITY_PROP {
             // Only ISF/Point10 report the synthetic prop; anything else
             // returns None like any other unknown prop name.
@@ -1219,9 +1226,8 @@ impl ModuleRegistry {
                 .chain(std::iter::once(QUALITY_PROP.to_string()))
                 .collect();
         }
-        if let Some(_definition) = self.milkdrop_definition(module_name) {
-            // MilkDrop presets expose no format-specific props yet.
-            return Vec::new();
+        if let Some(definition) = self.milkdrop_definition(module_name) {
+            return definition.props.keys().cloned().collect();
         }
         Vec::new()
     }
@@ -1250,10 +1256,12 @@ impl ModuleRegistry {
             return Some(Value::Object(props));
         }
 
-        if let Some(_definition) = self.milkdrop_definition(module_name) {
-            // No format-specific props yet; caller-style defaults are added by
-            // the store/preview builder exactly as they are for ISF modules.
-            return Some(Value::Object(Map::new()));
+        if let Some(definition) = self.milkdrop_definition(module_name) {
+            let mut props = Map::new();
+            for (name, prop) in &definition.props {
+                props.insert(name.clone(), default_milk_prop_value(prop));
+            }
+            return Some(Value::Object(props));
         }
 
         let definition = self.point10_definition(module_name)?;
@@ -1520,6 +1528,50 @@ fn default_shader_prop_value(prop: &ShaderProp) -> Value {
 /// control metadata but does **not** clamp writes. That is the JS behaviour:
 /// `modules/updateProp` only clamps `strict` props, and the shader receives
 /// out-of-range values unchanged.
+fn schema_for_milk(prop: &MilkProp) -> PropSchema {
+    PropSchema {
+        type_: prop.type_.as_str().to_string(),
+        min: prop.min,
+        max: prop.max,
+        strict: false,
+        abs: false,
+        default: Some(default_milk_prop_value(prop)),
+        enum_members: prop.enum_members.as_ref().map(|members| {
+            members
+                .iter()
+                .map(|member| modv_engine::props::EnumMember {
+                    label: if member.label.is_empty() {
+                        member.value.to_string()
+                    } else {
+                        member.label.clone()
+                    },
+                    value: member.value.clone(),
+                })
+                .collect()
+        }),
+    }
+}
+
+fn default_milk_prop_value(prop: &MilkProp) -> Value {
+    match prop.type_ {
+        MilkPropType::Float => prop.default.clone().unwrap_or_else(|| json!(0.0)),
+        MilkPropType::Bool => prop.default.clone().unwrap_or(json!(false)),
+        MilkPropType::Enum => prop
+            .enum_members
+            .as_ref()
+            .and_then(|members| {
+                members
+                    .iter()
+                    .find(|member| member.selected)
+                    .or_else(|| members.first())
+            })
+            .map(|member| member.value.clone())
+            .unwrap_or(Value::Null),
+        MilkPropType::Vec4 | MilkPropType::Vec2 => prop.default.clone().unwrap_or(Value::Null),
+        MilkPropType::Texture | MilkPropType::Event => Value::Null,
+    }
+}
+
 fn schema_for_isf(prop: &IsfProp) -> PropSchema {
     PropSchema {
         type_: prop.type_.as_str().to_string(),
@@ -1985,6 +2037,7 @@ fn collect_milkdrop_definitions(user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition
 #[cfg(test)]
 mod tests {
     use super::*;
+    use modv_renderers::milkdrop::MILKDROP_LOOK_PROP_NAMES;
 
     #[test]
     fn registry_knows_both_module_kinds() {
@@ -2964,21 +3017,39 @@ void main() { gl_FragColor = vec4(1.0); }
     }
 
     #[test]
-    fn milkdrop_format_props_are_empty() {
+    fn milkdrop_look_props_are_registered_with_defaults() {
         let dir = registry_temp_dir("modv-milk-props");
         write_milk_preset(&dir.join("Preset Name.mlk"), "Preset Name");
 
         let registry = ModuleRegistry::build_with_milkdrop(None, &[], std::slice::from_ref(&dir));
 
-        assert_eq!(registry.prop_names("Preset Name"), Vec::<String>::new());
-        assert!(registry.prop_schema("Preset Name", "anything").is_none());
-        assert!(registry.prop_schema("Preset Name", QUALITY_PROP).is_none());
+        let names = registry.prop_names("Preset Name");
+        assert_eq!(names.len(), MILKDROP_LOOK_PROP_NAMES.len());
+        for name in MILKDROP_LOOK_PROP_NAMES {
+            assert!(names.iter().any(|declared| declared == name), "{name}");
+        }
+        let decay = registry
+            .prop_schema("Preset Name", "decay")
+            .expect("decay schema");
+        assert_eq!(decay.type_, "float");
+        assert_eq!(decay.default, Some(json!(0.98)));
         assert_eq!(
             registry
-                .default_props("Preset Name")
-                .expect("empty prop defaults still resolve"),
-            json!({})
+                .prop_schema("Preset Name", "wave_mode")
+                .expect("wave mode schema")
+                .type_,
+            "enum"
         );
+        assert!(
+            registry.prop_schema("Preset Name", "anything").is_none(),
+            "unknown props stay unknown"
+        );
+        assert!(registry.prop_schema("Preset Name", QUALITY_PROP).is_none());
+        let defaults = registry
+            .default_props("Preset Name")
+            .expect("prop defaults resolve");
+        assert_eq!(defaults["decay"], json!(0.98));
+        assert_eq!(defaults["wave_mode"], json!(0));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -3116,7 +3187,20 @@ void main() { gl_FragColor = vec4(1.0); }
             entry["meta"],
             json!(registry.meta_fields("Preset Name").expect("meta fields"))
         );
-        assert_eq!(entry["props"], json!({}), "no format-specific props yet");
+        assert_eq!(entry["props"]["decay"]["default"], json!(0.98));
+        assert_eq!(entry["props"]["wave_mode"]["type"], json!("enum"));
+        assert_eq!(
+            registry
+                .default_props("Preset Name")
+                .expect("MilkDrop prop defaults")["decay"],
+            json!(0.98)
+        );
+        assert!(
+            entry["props"]
+                .as_object()
+                .is_some_and(|props| props.contains_key("decay")),
+            "MilkDrop modules expose the look controls"
+        );
 
         // Existing kinds are still registered alongside the new bucket.
         for name in ["Bands", "Ball", "Point10 Chromatic Line"] {
