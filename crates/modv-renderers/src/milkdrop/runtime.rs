@@ -28,56 +28,48 @@
 //!
 //! # Render pipeline (Layers 5b + 5c)
 //!
-//! [`MilkRuntime::render`] encodes one command buffer with six full-screen
-//! passes plus an optional overlay pass, in MilkDrop's order:
+//! [`MilkRuntime::render`] encodes one command buffer in MilkDrop/Butterchurn
+//! order:
 //!
-//! 1. **warp** — the translated warp WGSL resamples the previous composited
-//!    frame (`sampler_main`) at the per-pixel `uv_orig` varying emitted by the
-//!    mesh vertex stage. With `decay >= 1` there is no prior-frame feedback, so
-//!    the warp stage binds a neutral (black) texture instead.
-//! 2. **blur1/2/3** — populate the three `GetBlur{1,2,3}` targets with a
-//!    normalized 5x5 Gaussian kernel (separable `[1,4,6,4,1]` weights) whose
-//!    radius comes from the `b1n`/`b2n`/`b3n` base vals. Each level blurs the
-//!    previous one, so energy spreads into neighbouring texels.
+//! 1. **warp** — the translated warp WGSL resamples the previous **pre-post**
+//!    composite (`sampler_main`) through the CPU-warped mesh, applying
+//!    `fDecay` in the default body. Feedback is the warp+overlay image, never
+//!    the filtered display output: feeding gamma/darken/solarize back makes
+//!    them compound into noise (the original witchcraft bug).
+//! 2. **blur1/2/3** — populate the three `GetBlur{1,2,3}` targets from the
+//!    warped image with a normalized 5x5 Gaussian kernel whose radius comes
+//!    from the `b1n`/`b2n`/`b3n` base vals.
 //! 3. **comp** — the translated comp WGSL samples the warped frame and produces
 //!    the composite colour.
-//! 4. **overlays (Layer 5c)** — when at least one wave/shape was evaluated,
-//!    [`evaluate_overlays`]' results are drawn as `LineList` primitives onto
-//!    the comp target, between comp and output. When there are no overlays this
-//!    pass is skipped entirely, so the six-pass path is byte-for-byte unchanged.
-//! 5. **output** — post-processing only. Feedback is applied by the default
-//!    warp body (`previous * fDecay`), so higher `fDecay` keeps more of the
-//!    previous frame — 1 keeps it all; `decay == 0` is the derived-Default sentinel
-//!    are passthrough) followed by post-processing into the caller-supplied
-//!    target. `gammaadj`, `invert`, `red_blue`, `brighten` (`1-(1-x)^2`),
-//!    `darken` (`x^2`) and `solarize` (`2*x*(1-x)`) follow MilkDrop 2's
-//!    `milkdropfs.cpp`. The exact arithmetic lives in `OUTPUT_FRAGMENT_WGSL`.
+//! 4. **overlays (Layer 5c)** — enabled waves/shapes are drawn onto the comp
+//!    target (`LineList` or `PointList`) *before* post, exactly like
+//!    `DrawCustomWaves()` → `ShowToUser()`.
+//! 5. **feedback copy** — the pre-post composite (warp + overlays) is copied to
+//!    the internal feedback target for the next frame.
+//! 6. **post** — video echo (`echo_zoom`/`echo_alpha`/`echo_orient`), gamma,
+//!    the legacy hue shader (`fShader`), then `brighten` (`sqrt(x)`), `darken`
+//!    (`x^2`), `solarize` (`4*x*(1-x)`), `invert` and red/blue swap, matching
+//!    Butterchurn's composite shader. This output is display-only.
 //!
-//! [`MilkGpuTargets`] owns the five `Rgba8Unorm` intermediate textures and
-//! reallocates them only when the size changes. No mesh UV grid is uploaded:
-//! the full-screen vertex stage emits an upright `uv_orig` at `@location(0)`
-//! and both translated stages read it as an interpolated varying (the uniform
-//! block keeps a same-offset `uv_orig_u` slot only for byte-layout stability).
-//! The audio wave copied onto [`MilkInstance`] feeds the wave overlay's
-//! per-point equations (see below); the spectrum bytes are not yet consumed by
-//! any pass.
+//! [`MilkGpuTargets`] owns the six `Rgba8Unorm` intermediate textures (warp,
+//! comp, feedback, three blur levels) and reallocates them only on a size
+//! change. The warp mesh's CPU-computed UV grid is uploaded every frame.
 //!
 //! # Overlay subset and error isolation (Layer 5c)
 //!
 //! Up to four enabled waves and four shapes are compiled once per preset and
-//! evaluated per frame. This is the *primitive subset* of MilkDrop's overlay
-//! engine, chosen to stay deterministic and allocation-light on the GPU path:
+//! evaluated per frame:
 //!
-//! * A **wave** is a `LineList` polyline over `x/y` points from its `point_eqs`;
-//!   every [`WAVE_VERTEX_STRIDE`]th point is kept. A **shape** is a closed
-//!   regular polygon whose `sides`/`cx`/`cy`/`radius`/`rot` come from the frame
-//!   pool. Each vertex carries its own NDC position and clamped `r/g/b/a`
-//!   colour; there are no textures or bind groups.
-//! * Solid 1-pixel lines are drawn (no thick/dotted/textured waves). The
-//!   `additive` variable selects one of two cached blend states. Per-wave
-//!   variables seeded for compatibility but not consumed by this subset
-//!   (`border_*`, `thick`, `usedots`, `spectrum`, the secondary colour, ...)
-//!   are still written to the pool so preset equations can read them.
+//! * A **wave** is a polyline or point cloud over `x/y` points from its
+//!   `point_eqs`; `wavecode_<i>_bUseDots` selects `PointList`, and the audio
+//!   value/spectrum source follows Butterchurn's `customWaveform.js` scaling,
+//!   smoothing, `sep`, `scaling` and per-point colour reset. A **shape** is a
+//!   closed regular polygon whose `sides`/`cx`/`cy`/`radius`/`rot` come from
+//!   the frame pool. Each vertex carries its own NDC position and clamped
+//!   `r/g/b/a` colour.
+//! * The built-in waveform is drawn **alongside** custom waves (MilkDrop's
+//!   `DrawCustomWaves(); DrawWave(...)`), with modes 0–7 ported from
+//!   Butterchurn's `basicWaveform.js`.
 //! * Every section is isolated: a parse failure at compile time marks only
 //!   that section failed and is logged; a runtime EEL error returns a message
 //!   that the caller logs and skips for that section alone. Errors are never
@@ -96,9 +88,10 @@
 //!    axis is `1.0` and the larger axis carries the ratio: for `w >= h`,
 //!    `aspectx = 1.0` and `aspecty = h / w`; otherwise `aspectx = w / h` and
 //!    `aspecty = 1.0`.
-//! 3. Audio is mapped as `bass = audio.bass * 2.0`, `mid = audio.mid * 2.0`,
-//!    `treb = audio.treble * 2.0`. The `*_att` followers are per-instance and
-//!    persist across frames: `att += (value - att) * 0.2`, starting at `0.0`.
+//! 3. Audio is mapped to MilkDrop's *relative* band contract: the current
+//!    analyser band divided by a slow per-instance average, so a steady
+//!    passage sits near `1.0` and transients rise above it. The fast `*_att`
+//!    followers divide the same slow average. Both are clamped to `0..=4`.
 //! 4. [`evaluate_mesh`] walks a `(meshx + 1) × (meshy + 1)` vertex grid. Each
 //!    vertex gets `x`/`y` normalised to `-1.0..=1.0` (center at `(0, 0)`,
 //!    `y` increasing upward), `rad = hypot(x, y)` and `ang = atan2(y, x)`, then
@@ -124,7 +117,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::isf::runtime::BoundedCache;
 use crate::milkdrop::eel::{CompiledEquations, Globals, VarPool, compile, run_frame, run_pixel};
-use crate::milkdrop::preset::{MilkBaseVals, MilkDocument, MilkShader, extract_shader_body};
+use crate::milkdrop::preset::{
+    MilkBaseVals, MilkDocument, MilkShader, MilkWaveVals, extract_shader_body,
+};
 use crate::milkdrop::q_uniforms::{MILK_Q_BINDING, Q_UNIFORM_MEMBERS};
 use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_milk_shader};
 
@@ -132,20 +127,15 @@ use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_
 // root re-export) stays unchanged; the definition lives with the shared layout.
 pub use crate::milkdrop::q_uniforms::MILK_Q_STRIDE;
 
-/// MilkDrop scales each raw audio band by two before exposing it to EEL.
-const AUDIO_GAIN: f32 = 2.0;
-/// Per-frame interpolation rate for the `*_att` band follower variables.
+/// Per-frame interpolation rate for the fast `*_att` band follower variables.
 const BAND_FOLLOWER_RATE: f32 = 0.2;
-/// Warp displacement is `warp * warpscale * WARP_AMOUNT_SCALE`.
-const WARP_AMOUNT_SCALE: f32 = 0.01;
 /// Denominators smaller than this are treated as degenerate in the warp mesh.
 const WARP_EPS: f32 = 1e-6;
 /// Sampling UV used when the warp arithmetic would otherwise be non-finite.
 const UV_FALLBACK: f32 = 0.5;
-/// Upper bound on wave sample points evaluated per section (EEL iteration cap).
-const MAX_WAVE_SAMPLES: usize = 1024;
-/// Sample count used when the frame carries no audio wave data.
-const DEFAULT_WAVE_SAMPLES: usize = 512;
+/// Upper bound on wave sample points evaluated per section (MilkDrop's
+/// Butterchurn limit is 512 samples per custom wave).
+const MAX_WAVE_SAMPLES: usize = 512;
 /// Draw every Nth evaluated wave point as a line segment (keeps vertex counts small).
 const WAVE_VERTEX_STRIDE: usize = 1;
 /// Bytes in the single-`vec4` uniform that carries one blur level's texel radius.
@@ -332,54 +322,112 @@ fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Final output pass. Applies MilkDrop's post filters to the composited frame
-/// (feedback is already baked into the warp stage), then
-/// applies MilkDrop 2's post ops in order: gamma adjust, brighten, darken,
-/// solarize, invert and red/blue stereo swap. `brighten`/`darken`/`solarize`
-/// are booleans in a `.mlk` (their per-pixel `q` equations are not evaluated
-/// here), so the faithful fixed filters from `milkdropfs.cpp` are used:
-/// `brighten = 1-(1-x)^2`, `darken = x^2`, `solarize = 2*x*(1-x)`.
-const OUTPUT_FRAGMENT_WGSL: &str = r#"
-struct MilkOutputUniforms {
-    _pad0: vec4<f32>, _pad1: vec4<f32>, _pad2: vec4<f32>, _pad3: vec4<f32>,
-    _pad4: vec4<f32>, _pad5: vec4<f32>, _pad6: vec4<f32>, _pad7: vec4<f32>,
-    _pad8: vec4<f32>, _pad9: vec4<f32>, _pad10: vec4<f32>, _pad11: vec4<f32>,
-    _pad12: vec4<f32>, // keep the controls clear of the ang slot (bytes 192..=199)
-    gammaadj: f32,
-    brighten: f32,
-    darken: f32,
-    invert: f32,
-    solarize: f32,
-    red_blue: f32,
-    rand_frame: f32,
-    rand_preset: f32,
-    brightness: f32,
-    decay: f32,
+/// Straight copy used to seed the internal feedback target from the caller's
+/// previous frame on the first render after allocation.
+const COPY_FRAGMENT_WGSL: &str = r#"
+struct CopyUniforms { _pad: vec4<f32> }
+@group(0) @binding(0) var<uniform> copy_params: CopyUniforms;
+@group(0) @binding(1) var src_texture: texture_2d<f32>;
+@group(0) @binding(2) var src_sampler: sampler;
+struct MilkFragIn { @location(0) uv: vec2<f32> }
+@fragment
+fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
+    return textureSample(src_texture, src_sampler, input.uv);
 }
-@group(0) @binding(0) var<uniform> params: MilkOutputUniforms;
+"#;
+
+/// Final composite/post pass. This is the MilkDrop 1 "show to user" chain:
+/// video echo (two zoomed/oriented copies mixed by `echo_alpha`), gamma
+/// brightness (the old additive redraws are a multiply), the legacy hue shader
+/// (`fShader`), then the fixed `brighten`/`darken`/`solarize`/`invert` filters.
+///
+/// Overlays are drawn onto the composite target *before* this pass, exactly
+/// like MilkDrop's `DrawCustomWaves` → `ShowToUser` order. The warp stage's
+/// `decay` remains the only feedback multiplier; this pass never reads the
+/// previous frame.
+const POST_FRAGMENT_WGSL: &str = r#"
+struct MilkPostUniforms {
+    time_gamma_fshader_echo_zoom: vec4<f32>,
+    echo_alpha_echo_orient_brighten_darken: vec4<f32>,
+    solarize_invert_red_blue_legacy: vec4<f32>,
+    rand_start: vec4<f32>,
+    brightness_decay_pad: vec4<f32>,
+}
+@group(0) @binding(0) var<uniform> post: MilkPostUniforms;
 @group(0) @binding(1) var src_texture: texture_2d<f32>;
 @group(0) @binding(2) var src_sampler: sampler;
 @group(0) @binding(3) var prev_texture: texture_2d<f32>;
 @group(0) @binding(4) var prev_sampler: sampler;
 struct MilkFragIn { @location(0) uv: vec2<f32> }
+
+fn hue_corner(index: f32) -> vec3<f32> {
+    let t = post.time_gamma_fshader_echo_zoom.x;
+    var c = vec3<f32>(
+        0.6 + 0.3 * sin(t * 30.0 * 0.0143 + 3.0 + index * 21.0 + post.rand_start.w),
+        0.6 + 0.3 * sin(t * 30.0 * 0.0107 + 1.0 + index * 13.0 + post.rand_start.y),
+        0.6 + 0.3 * sin(t * 30.0 * 0.0129 + 6.0 + index * 9.0 + post.rand_start.z),
+    );
+    let max_shade = max(c.x, max(c.y, c.z));
+    return vec3<f32>(0.5) + 0.5 * (c / max(max_shade, 1e-6));
+}
+
+fn hue_at(uv: vec2<f32>) -> vec3<f32> {
+    let x = uv.x;
+    let y = uv.y;
+    let c0 = hue_corner(0.0);
+    let c1 = hue_corner(1.0);
+    let c2 = hue_corner(2.0);
+    let c3 = hue_corner(3.0);
+    return c0 * x * y + c1 * (1.0 - x) * y + c2 * x * (1.0 - y)
+        + c3 * (1.0 - x) * (1.0 - y);
+}
+
 @fragment
 fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
+    let gamma = post.time_gamma_fshader_echo_zoom.y;
+    let fshader = post.time_gamma_fshader_echo_zoom.z;
+    let echo_zoom = post.time_gamma_fshader_echo_zoom.w;
+    let echo_alpha = post.echo_alpha_echo_orient_brighten_darken.x;
+    let echo_orient = post.echo_alpha_echo_orient_brighten_darken.y;
+    let brighten = post.echo_alpha_echo_orient_brighten_darken.z;
+    let darken = post.echo_alpha_echo_orient_brighten_darken.w;
+    let solarize = post.solarize_invert_red_blue_legacy.x;
+    let invert = post.solarize_invert_red_blue_legacy.y;
+    let red_blue = post.solarize_invert_red_blue_legacy.z;
+    let legacy = post.solarize_invert_red_blue_legacy.w;
+
     var c = textureSample(src_texture, src_sampler, input.uv).rgb;
-    // Feedback lives in the warp pass (the default warp multiplies the
-    // previous frame by `fDecay`). The output pass only post-processes the
-    // composited frame; mixing `previous` here would double-apply decay.
-    if (params.gammaadj > 0.0 && params.gammaadj != 1.0) {
-        c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / params.gammaadj));
+
+    if (legacy > 0.5) {
+        // Video echo: orientation flips bit 0 horizontally and bit 1
+        // vertically; `echo_zoom` scales around the centre.
+        let orient_h = fract(echo_orient * 0.5) * 2.0;
+        let orient_x = select(1.0, -1.0, orient_h >= 1.0);
+        let orient_y = select(1.0, -1.0, echo_orient >= 2.0);
+        let zoom = max(abs(echo_zoom), 0.001);
+        let uv_echo = (input.uv - vec2<f32>(0.5)) * (1.0 / zoom)
+            * vec2<f32>(orient_x, orient_y) + vec2<f32>(0.5);
+        let echoed = textureSample(src_texture, src_sampler, uv_echo).rgb;
+        c = mix(c, echoed, clamp(echo_alpha, 0.0, 1.0));
     }
-    // Faithful MilkDrop 2 filters (milkdropfs.cpp): brighten = 1-(1-x)^2,
-    // darken = x^2 and solarize = 2*x*(1-x). The flags are booleans in a .mlk.
-    if (params.brighten != 0.0) {
-        c = vec3<f32>(1.0) - (vec3<f32>(1.0) - c) * (vec3<f32>(1.0) - c);
+
+    // MilkDrop's gamma adjustment redraws the image additively `gamma` times,
+    // which is a multiply in the continuous domain. The old test fixtures use
+    // gammaadj == 1 for a neutral pass.
+    c = c * max(gamma, 0.0);
+
+    if (legacy > 0.5 && fshader > 0.001) {
+        let hue = hue_at(input.uv);
+        c = c * mix(vec3<f32>(1.0), hue, clamp(fshader, 0.0, 1.0));
     }
-    if (params.darken != 0.0) { c = c * c; }
-    if (params.solarize != 0.0) { c = 2.0 * c * (vec3<f32>(1.0) - c); }
-    if (params.invert != 0.0) { c = vec3<f32>(1.0) - c; }
-    if (params.red_blue != 0.0) { c = vec3<f32>(c.b, c.g, c.r); }
+
+    if (brighten != 0.0) {
+        c = sqrt(max(c, vec3<f32>(0.0)));
+    }
+    if (darken != 0.0) { c = c * c; }
+    if (solarize != 0.0) { c = 4.0 * c * (vec3<f32>(1.0) - c); }
+    if (invert != 0.0) { c = vec3<f32>(1.0) - c; }
+    if (red_blue != 0.0) { c = vec3<f32>(c.b, c.g, c.r); }
     return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
 "#;
@@ -524,6 +572,20 @@ impl MilkGpuCache {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
                 min_binding_size: wgpu::BufferSize::new(MILK_UNIFORM_STRIDE as u64),
+            },
+            count: None,
+        }
+    }
+
+    /// The post/legacy-composite uniform binding (five `vec4`s).
+    fn post_uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(MILK_POST_UNIFORM_BYTES as u64),
             },
             count: None,
         }
@@ -676,7 +738,7 @@ impl MilkGpuCache {
                 &wgpu::BindGroupLayoutDescriptor {
                     label: Some("modV MilkDrop output layout"),
                     entries: &[
-                        Self::uniform_entry(0),
+                        Self::post_uniform_entry(0),
                         Self::texture_entry(1),
                         Self::sampler_entry(2),
                         Self::texture_entry(3),
@@ -952,6 +1014,9 @@ pub struct MilkCompiledPreset {
     pub pixel: CompiledEquations,
     pub warp: CompiledMilkShader,
     pub comp: CompiledMilkShader,
+    /// True when the preset has no custom composite shader body, so the
+    /// legacy MilkDrop 1 video-echo/hue/post chain applies.
+    pub legacy_composite: bool,
     /// One compiled program per *enabled* wave section (Layer 5c). Added
     /// additively; existing fields and behaviour are unchanged.
     pub waves: Vec<WaveProgram>,
@@ -982,6 +1047,8 @@ pub struct WaveProgram {
     pub init: CompiledEquations,
     pub frame: CompiledEquations,
     pub point: CompiledEquations,
+    /// Authored per-section scalars (samples/sep/scaling/smoothing/colour).
+    pub values: MilkWaveVals,
     /// From `wavecode_<i>_bUseDots`: draw points instead of a polyline.
     pub dots: bool,
 }
@@ -1035,12 +1102,8 @@ pub struct OverlayFrame {
 /// same buffer can be used with dynamic offsets on every backend.
 pub const MILK_UNIFORM_STRIDE: usize = 256;
 
-/// Byte offset of the first output-pass control scalar in the shared uniform
-/// buffer. This sits past byte 199 so it cannot overlap the `ang` vec2 slot of
-/// the warp/comp `MilkUniforms` layout (bytes 192..=199). It is mirrored by the
-/// 13 `vec4` pads that precede the controls in `OUTPUT_FRAGMENT_WGSL`'s
-/// `MilkOutputUniforms` struct.
-const OUTPUT_CONTROLS_OFFSET: usize = 208;
+/// Bytes in the post/legacy-composite uniform block (five `vec4`s).
+pub const MILK_POST_UNIFORM_BYTES: usize = 80;
 
 /// Typed failures from compiling or driving a MilkDrop preset.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1195,28 +1258,130 @@ impl MilkUniforms {
         write_vec2(&mut bytes, 184, [0.5, 0.5]); // rad
         write_vec2(&mut bytes, 192, [0.0, 0.0]); // ang
 
-        // Output-pass controls (see OUTPUT_FRAGMENT_WGSL). Kept past the `ang`
-        // vec2 so the warp/comp and output layouts never share a byte.
-        let output_controls = [
-            base.gammaadj as f32,
-            if base.brighten { 1.0 } else { 0.0 },
-            if base.darken { 1.0 } else { 0.0 },
-            if base.invert { 1.0 } else { 0.0 },
-            if base.solarize { 1.0 } else { 0.0 }, // faithful 2*x*(1-x)
-            if base.red_blue { 1.0 } else { 0.0 },
-            rand_frame,
-            rand_preset,
-            base.brightness as f32,
-            base.decay as f32,
-        ];
-        for (index, value) in output_controls.iter().enumerate() {
-            write_f32(&mut bytes, OUTPUT_CONTROLS_OFFSET + index * 4, *value);
-        }
-
         Self { bytes }
     }
 
     /// The WGSL-aligned bytes to upload into `@group(0) @binding(0)`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+}
+
+/// Four-corner colours of MilkDrop's legacy hue shader at `time`.
+///
+/// This is the host-side twin of the WGSL `hue_corner` function and follows
+/// Butterchurn/MilkDrop exactly: each corner channel is a sine of `time`,
+/// normalised by the largest channel and mapped to `[0.5, 1.0]`.
+pub fn hue_corner_colors(time: f32, rand_start: [f32; 4]) -> [[f32; 3]; 4] {
+    let mut out = [[1.0f32; 3]; 4];
+    for (index, corner) in out.iter_mut().enumerate() {
+        let i = index as f32;
+        corner[0] = 0.6 + 0.3 * (time * 30.0 * 0.0143 + 3.0 + i * 21.0 + rand_start[3]).sin();
+        corner[1] = 0.6 + 0.3 * (time * 30.0 * 0.0107 + 1.0 + i * 13.0 + rand_start[1]).sin();
+        corner[2] = 0.6 + 0.3 * (time * 30.0 * 0.0129 + 6.0 + i * 9.0 + rand_start[2]).sin();
+        let max = corner[0].max(corner[1]).max(corner[2]).max(1e-6);
+        for channel in corner.iter_mut() {
+            *channel = 0.5 + 0.5 * (*channel / max);
+        }
+    }
+    out
+}
+
+/// Bilinearly interpolate [`hue_corner_colors`] at `uv` (top-left origin,
+/// `[0, 1]`), matching Butterchurn's `generateCompColors`.
+pub fn hue_shader_at(uv: [f32; 2], corners: &[[f32; 3]; 4]) -> [f32; 3] {
+    let x = uv[0];
+    let y = uv[1];
+    std::array::from_fn(|channel| {
+        corners[0][channel] * x * y
+            + corners[1][channel] * (1.0 - x) * y
+            + corners[2][channel] * x * (1.0 - y)
+            + corners[3][channel] * (1.0 - x) * (1.0 - y)
+    })
+}
+
+/// Serialized post/legacy-composite uniform block for one frame.
+///
+/// Reads the **live** EEL values seeded and updated by [`begin_frame`], so a
+/// preset whose per-frame equations write `gamma = gv;`, `echo_alpha = ...`
+/// or `fshader = ...` drives the composite exactly like MilkDrop.
+pub struct MilkPostUniforms {
+    bytes: Vec<u8>,
+}
+
+impl MilkPostUniforms {
+    pub fn from_instance(instance: &MilkInstance) -> Self {
+        let mut bytes = vec![0u8; MILK_POST_UNIFORM_BYTES];
+        let base = &instance.compiled.doc.base;
+        let live = |name: &str, fallback: f64| {
+            let value = instance.pool.get(name);
+            if value.is_finite() {
+                value
+            } else {
+                fallback as f32
+            }
+        };
+        // `gamma` is MilkDrop 1's per-frame name; `gammaadj` is Butterchurn's.
+        // Seed both in `begin_frame`, and prefer `gamma` when it is non-zero.
+        let gamma_live = instance.pool.get("gamma");
+        let gamma = if gamma_live != 0.0 {
+            gamma_live
+        } else {
+            live("gammaadj", base.gammaadj)
+        };
+        let legacy = if instance.compiled.legacy_composite {
+            1.0
+        } else {
+            0.0
+        };
+        let values = [
+            instance.globals.time,
+            gamma,
+            live("fshader", base.shader),
+            live("echo_zoom", base.echo_zoom),
+            live("echo_alpha", base.echo_alpha),
+            live("echo_orient", base.echo_orient as f64),
+            if instance.pool.get("brighten") != 0.0 {
+                1.0
+            } else {
+                0.0
+            },
+            if instance.pool.get("darken") != 0.0 {
+                1.0
+            } else {
+                0.0
+            },
+            if instance.pool.get("solarize") != 0.0 {
+                1.0
+            } else {
+                0.0
+            },
+            if instance.pool.get("invert") != 0.0 {
+                1.0
+            } else {
+                0.0
+            },
+            if instance.pool.get("red_blue") != 0.0 {
+                1.0
+            } else {
+                0.0
+            },
+            legacy,
+            instance.rand_start[0],
+            instance.rand_start[1],
+            instance.rand_start[2],
+            instance.rand_start[3],
+            live("brightness", base.brightness),
+            live("decay", base.decay),
+            0.0,
+            0.0,
+        ];
+        for (index, value) in values.iter().enumerate() {
+            write_f32(&mut bytes, index * 4, *value);
+        }
+        Self { bytes }
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         self.bytes.clone()
     }
@@ -1255,14 +1420,20 @@ impl MilkQUniforms {
 
 /// Off-screen render targets owned by the MilkDrop GPU path.
 ///
-/// The warp, composite and three blur passes render into these textures; the
-/// final output pass writes into the caller-supplied module target. All targets
-/// are `Rgba8Unorm` and are reallocated only when the size changes.
+/// The warp, composite, feedback and three blur stages render into these
+/// textures; the final post pass writes into the caller-supplied module
+/// target. All targets are `Rgba8Unorm` and are reallocated only when the size
+/// changes.
 pub struct MilkGpuTargets {
     pub width: u32,
     pub height: u32,
     warp: Option<wgpu::Texture>,
     comp: Option<wgpu::Texture>,
+    /// Pre-post composite copied out for the next frame's warp input, matching
+    /// Butterchurn's `prevTexture` feedback contract (the post/filters output
+    /// is displayed but never fed back).
+    feedback: Option<wgpu::Texture>,
+    feedback_cleared: bool,
     blur: [Option<wgpu::Texture>; 3],
 }
 
@@ -1274,13 +1445,15 @@ impl MilkGpuTargets {
             height,
             warp: None,
             comp: None,
+            feedback: None,
+            feedback_cleared: false,
             blur: [None, None, None],
         };
         targets.allocate(device);
         targets
     }
 
-    /// Allocate (or replace) all five intermediate textures.
+    /// Allocate (or replace) all intermediate textures.
     fn allocate(&mut self, device: &wgpu::Device) {
         self.warp = Some(create_target(
             device,
@@ -1294,6 +1467,13 @@ impl MilkGpuTargets {
             self.height,
             "modV MilkDrop comp",
         ));
+        self.feedback = Some(create_target(
+            device,
+            self.width,
+            self.height,
+            "modV MilkDrop feedback",
+        ));
+        self.feedback_cleared = false;
         self.blur = [0, 1, 2].map(|index| {
             Some(create_target(
                 device,
@@ -1322,6 +1502,11 @@ impl MilkGpuTargets {
     /// Composite-pass target.
     pub fn comp_texture(&self) -> Option<&wgpu::Texture> {
         self.comp.as_ref()
+    }
+
+    /// Pre-post composite retained as next frame's warp feedback source.
+    pub fn feedback_texture(&self) -> Option<&wgpu::Texture> {
+        self.feedback.as_ref()
     }
 
     /// Blur target `index` (0, 1 or 2) feeding `GetBlur{1,2,3}`.
@@ -1389,17 +1574,20 @@ impl MilkRuntime {
         self.failures.clear();
     }
 
-    /// Execute one frame of the warp → blur → comp → output core into `output`.
+    /// Execute one frame of the warp → blur → comp → overlays → post core into
+    /// `output`.
     ///
-    /// `previous` is the last composited frame (bound as `sampler_main` for the
-    /// warp pass) and `targets` owns the intermediate warp/comp/blur textures.
-    /// A malformed shader yields [`MilkRuntimeError::Draw`] rather than a panic.
+    /// `previous` seeds the internal feedback texture on the first render after
+    /// allocation (or a resize). Subsequent frames feed the runtime's own
+    /// pre-post composite back into the warp; the filtered `output` is never
+    /// sampled again. `targets` owns the intermediate warp/comp/feedback/blur
+    /// textures. A malformed shader yields [`MilkRuntimeError::Draw`] rather
+    /// than a panic.
     ///
     /// `mesh`'s warped UV grid is uploaded for the warp pass, which draws the
     /// indexed mesh so `sampler_main` is sampled at each vertex's warped UV.
     /// The blur passes apply a real 5x5 Gaussian kernel whose radius is driven
-    /// by the `b1n`/`b2n`/`b3n` base vals; the output pass blends the previous
-    /// frame when `decay < 1`.
+    /// by the `b1n`/`b2n`/`b3n` base vals.
     pub fn render(
         &self,
         instance: &mut MilkInstance,
@@ -1450,15 +1638,23 @@ impl MilkRuntime {
             "fs_main",
             MilkLayout::Pass,
         )?;
-        let output_pipeline = cache.pipeline(
+        let copy_pipeline = cache.pipeline(
             device,
-            "output|v1".into(),
-            OUTPUT_FRAGMENT_WGSL,
+            "copy|v1".into(),
+            COPY_FRAGMENT_WGSL,
+            "fs_main",
+            MilkLayout::Pass,
+        )?;
+        let post_pipeline = cache.pipeline(
+            device,
+            "post|v2".into(),
+            POST_FRAGMENT_WGSL,
             "fs_main",
             MilkLayout::Output,
         )?;
 
-        // One 256-byte uniform slice serves every pass.
+        // One 256-byte uniform slice serves the warp/comp/blur-translated
+        // passes; the post stage has its own compact 80-byte block.
         let uniform_bytes = MilkUniforms::from_frame(instance, frame).to_bytes();
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("modV MilkDrop uniform buffer"),
@@ -1467,6 +1663,14 @@ impl MilkRuntime {
             mapped_at_creation: false,
         });
         queue.write_buffer(&uniform_buffer, 0, &uniform_bytes);
+        let post_bytes = MilkPostUniforms::from_instance(instance).to_bytes();
+        let post_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("modV MilkDrop post uniform buffer"),
+            size: MILK_POST_UNIFORM_BYTES as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&post_uniform_buffer, 0, &post_bytes);
         // The q block carries the instance's live `q1..q32` values to
         // `@group(0)` at `MILK_Q_BINDING`. Kept separate from the main uniform
         // so none of its byte offsets or the sampler bindings change.
@@ -1510,6 +1714,10 @@ impl MilkRuntime {
         let comp_view = targets
             .comp_texture()
             .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop comp target missing".into()))?
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let feedback_view = targets
+            .feedback_texture()
+            .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop feedback target missing".into()))?
             .create_view(&wgpu::TextureViewDescriptor::default());
         let blur_views: Vec<wgpu::TextureView> = (0..3)
             .map(|index| {
@@ -1556,10 +1764,10 @@ impl MilkRuntime {
             .clone()
             .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop output layout missing".into()))?;
 
-        // The warp stage always resamples the previous composited frame. The
-        // default warp body multiplies it by `fDecay`; hand-written fixtures
-        // with an unset (0) decay get a passthrough multiplier of 1.
-        let warp_main = previous;
+        // Butterchurn feeds the *pre-post* composite (warp + overlays) back
+        // into the next warp. The post-processed image is display-only; using
+        // it as feedback makes gamma/darken/solarize compound into noise.
+        let warp_main = &feedback_view;
         let warp_views = MilkSamplerViews {
             main: warp_main,
             dummy: &dummy_view,
@@ -1591,7 +1799,7 @@ impl MilkRuntime {
         let output_bind = output_bind_group(
             device,
             &output_layout,
-            &uniform_buffer,
+            &post_uniform_buffer,
             &comp_view,
             previous,
             &sampler,
@@ -1600,6 +1808,21 @@ impl MilkRuntime {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("modV MilkDrop frame"),
         });
+
+        // Freshly allocated feedback is seeded from the caller's previous
+        // frame once, then the runtime retains its own pre-post composite.
+        if !targets.feedback_cleared {
+            let seed_bind =
+                pass_bind_group(device, &pass_layout, &blur_uniforms[0], previous, &sampler);
+            encode_fullscreen_pass(
+                &mut encoder,
+                "milkdrop feedback seed",
+                &feedback_view,
+                &copy_pipeline,
+                &seed_bind,
+            );
+            targets.feedback_cleared = true;
+        }
 
         // warp: resample `previous` at each mesh vertex's warped UV, drawn as
         // an indexed triangle list so `zoom`/`rot`/`warp` base vals take effect.
@@ -1613,9 +1836,9 @@ impl MilkRuntime {
         );
         // blur1/2/3: populate the blur targets feeding GetBlur{1,2,3} with a
         // real Gaussian kernel whose radius comes from b1n/b2n/b3n. Each level
-        // blurs the previous one (blur1 starts from `previous`), so the three
-        // radii accumulate down the chain.
-        let blur_sources: [&wgpu::TextureView; 3] = [previous, &blur_views[0], &blur_views[1]];
+        // blurs the previous one (blur1 starts from the warped frame), so the
+        // three radii accumulate down the chain.
+        let blur_sources: [&wgpu::TextureView; 3] = [&warp_view, &blur_views[0], &blur_views[1]];
         for (index, source) in blur_sources.iter().enumerate() {
             let bind = pass_bind_group(
                 device,
@@ -1640,34 +1863,12 @@ impl MilkRuntime {
             &comp_pipeline,
             &comp_bind,
         );
-        // Layer 5c: evaluate overlays here because production callers drive a
-        // plain `begin_frame → evaluate_mesh → render` flow (see the compositor)
-        // and never call `evaluate_overlays()` themselves. Doing it inside
-        // `render` guarantees the enabled wave/shape sections reach the
-        // framebuffer regardless of the caller. This is idempotent:
-        // `evaluate_overlays` replaces (rather than appends to) the cached
-        // `instance.overlay_frame` and re-seeds the per-frame vars, so an
-        // explicit pre-render call followed by this one yields identical
-        // geometry and the pass below still draws each overlay exactly once.
-        // We deliberately do not cache an "already evaluated" flag on the
-        // instance: that would add new public state and could serve stale
-        // overlays if the frame changes, while the extra EEL pass is cheap.
-        // The `Result` is ignored on purpose: `evaluate_overlays` already logs
-        // and skips any individual section that fails, and a broken overlay
-        // must never fail the whole render -- the six-pass path stays exact.
+        // Layer 5c: evaluate overlays and draw them onto the composite target
+        // *before* the post/legacy composite, exactly like MilkDrop's
+        // `DrawCustomWaves()` → `ShowToUser()` order. Drawing after the filters
+        // would keep raw wave colours and break the feedback rings created when
+        // the filters re-shape warped intermediate values.
         let _ = evaluate_overlays(instance, frame);
-        // output: post-processing into the caller-supplied target.
-        encode_fullscreen_pass(
-            &mut encoder,
-            "milkdrop output",
-            output,
-            &output_pipeline,
-            &output_bind,
-        );
-        // MilkDrop draws waves/shapes *after* the comp post-processing, so a
-        // white wave stays white even when darken+solarize would map white to
-        // black. Drawing onto the final output target (with Load) preserves
-        // that ordering; with no overlays the six-pass path is unchanged.
         if !instance.overlay_frame.waves.is_empty() || !instance.overlay_frame.shapes.is_empty() {
             let alpha_pipeline = cache.overlay_pipeline(device, false, false)?;
             let additive_pipeline = cache.overlay_pipeline(device, true, false)?;
@@ -1677,7 +1878,7 @@ impl MilkRuntime {
                 device,
                 queue,
                 &mut encoder,
-                output,
+                &comp_view,
                 &instance.overlay_frame,
                 &alpha_pipeline,
                 &additive_pipeline,
@@ -1685,6 +1886,39 @@ impl MilkRuntime {
                 &additive_dots,
             );
         }
+        // Retain the pre-post composite (warp + overlays) as next frame's
+        // feedback source, before the echo/gamma/filter pass runs.
+        if let (Some(comp), Some(feedback)) = (targets.comp_texture(), targets.feedback_texture()) {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: comp,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: feedback,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: targets.width.max(1),
+                    height: targets.height.max(1),
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        // post: echo + gamma + legacy hue + fixed filters into the caller's
+        // target. This output is display-only; feedback comes from the copy
+        // above.
+        encode_fullscreen_pass(
+            &mut encoder,
+            "milkdrop post",
+            output,
+            &post_pipeline,
+            &output_bind,
+        );
 
         queue.submit(Some(encoder.finish()));
         Ok(())
@@ -1749,6 +1983,7 @@ pub fn compile_preset(
     .map_err(|e| fail(format!("warp shader: {e}")))?;
 
     let comp_src = extract_shader_body(&doc.comp);
+    let legacy_composite = comp_src.body.trim().is_empty();
     let comp = translate_milk_shader(
         &comp_src.prelude,
         effective_shader_body(&comp_src, MilkShaderStage::Comp),
@@ -1773,6 +2008,7 @@ pub fn compile_preset(
                 init,
                 frame,
                 point,
+                values: wave.values.clone(),
                 dots: wave.base.wave_dots,
             });
         } else {
@@ -1802,6 +2038,7 @@ pub fn compile_preset(
         pixel,
         warp,
         comp,
+        legacy_composite,
         waves,
         shapes,
     })
@@ -1817,9 +2054,16 @@ pub struct MilkInstance {
     pub globals: Globals,
     /// `[bass, mid, treble]` exponential followers, persistent across frames.
     pub band_att: [f32; 3],
+    /// Slow per-band average used to make `bass`/`mid`/`treb` *relative*
+    /// (Butterchurn's `longAvg`). The fast [`Self::band_att`] follower feeds
+    /// `bass_att`/`mid_att`/`treb_att`.
+    pub band_long_att: [f32; 3],
     pub frame_index: u32,
     /// Whether the init equations have run for this preset.
     pub init_done: bool,
+    /// Four deterministic per-preset phases for the legacy hue shader
+    /// (`rand_start` in MilkDrop/Butterchurn).
+    pub rand_start: [f32; 4],
     pub wave: Vec<f32>,
     pub byte_frequency_data: Vec<u8>,
     /// Persistent per-section overlay state (Layer 5c). Indexed in enabled-wave
@@ -1834,13 +2078,22 @@ pub struct MilkInstance {
 /// Build an instance for `compiled` whose `rand` draws are reproducible via
 /// `seed`.
 pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
+    // `rand_start` is independent of the EEL RNG stream: derive it from the
+    // same seed with a distinct mix so determinism and preset-to-preset variety
+    // both hold.
+    let mut rand_rng = crate::milkdrop::eel::Rng::new(
+        seed.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(0x1234_5678_9ABC_DEF0),
+    );
     MilkInstance {
         compiled,
         pool: VarPool::with_seed(seed),
         globals: Globals::default(),
         band_att: [0.0; 3],
+        band_long_att: [0.0; 3],
         frame_index: 0,
         init_done: false,
+        rand_start: std::array::from_fn(|_| rand_rng.next_f32()),
         wave: Vec::new(),
         byte_frequency_data: Vec::new(),
         wave_states: Vec::new(),
@@ -1849,85 +2102,296 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
     }
 }
 
-/// Normalised parameter `t` in `[0, 1]` for sample `index` of `samples`.
+/// MilkDrop's built-in waveform modes 0..=7.
 ///
-/// A single sample is pinned to the midpoint so the waveform stays centred.
-/// Shared by the compiled-wave and built-in-wave paths so both lay samples out
-/// identically before they are mapped into NDC.
-fn wave_sample_t(index: usize, samples: usize) -> f32 {
-    if samples > 1 {
-        index as f32 / (samples - 1) as f32
-    } else {
-        0.5
+/// This is a direct port of Butterchurn's `basicWaveform.js` (which follows
+/// `DrawWave` in MilkDrop). The preset's `nWaveMode` selects the mode and the
+/// per-frame variables `wave_x/y/scale/smoothing/mystery/a` drive it. The
+/// built-in wave is drawn **alongside** custom waves, not only when there are
+/// no `wavecode_*` sections.
+///
+/// Returns one overlay per disjoint polyline (mode 7 draws separate left/right
+/// lines). All overlays share the same colour/additive pool.
+fn evaluate_builtin_waves(instance: &MilkInstance, audio_wave: &[f32]) -> Vec<WaveOverlay> {
+    let pool = &instance.pool;
+    let max_samples = audio_wave.len().min(512);
+    if max_samples < 2 {
+        return Vec::new();
     }
-}
+    let source = &audio_wave[audio_wave.len() - max_samples..];
 
-/// Map a normalised sample parameter `t` in `[0, 1]` to NDC `x` in `[-1, 1]`.
-///
-/// Both wave paths use this so the polyline spans the full output width. The
-/// overlay vertex builder clamps `x` into `[-1, 1]`, so leaving the built-in
-/// wave at `t` would draw only the right half of the canvas.
-fn wave_ndc_x(t: f32) -> f32 {
-    t * 2.0 - 1.0
-}
-
-/// Synthesise the MilkDrop v1 built-in wave for presets that have no custom
-/// `wavecode_*` sections but still request a waveform through `wave_a > 0`.
-///
-/// The gate lives in [`evaluate_overlays`]: the built-in is only pushed when
-/// there are zero compiled custom-wave programs **and** `base.wave_a > 0`,
-/// so an enabled custom wave always keeps priority and the two never overlap.
-/// Unset EEL variables default to zero, so a preset that never writes the wave
-/// variables still produces a (flat, black) overlay rather than no overlay.
-///
-/// The overlay reuses the exact same surface as a compiled custom wave — a
-/// [`WaveOverlay`] with a colour/additive frame pool and one [`WavePoint`] per
-/// audio sample — so the existing GPU wave pass draws it without any changes.
-/// Colour comes from the frame-level EEL variables `wave_r/g/b` captured in
-/// `instance.pool` by `begin_frame`; alpha comes from `base.wave_a` clamped to
-/// `[0, 1]` and `additive` from `base.additivewave`. Position comes from the
-/// frame-level `wave_y` variable plus `base.wave_scale` times each audio sample,
-/// with `x` spanning the full `[-1, 1]` NDC width. All inputs are pure values,
-/// so identical audio/frames produce byte-identical overlays.
-fn evaluate_builtin_wave(
-    instance: &MilkInstance,
-    frame: &MilkFrameInfo,
-    samples: usize,
-) -> WaveOverlay {
-    let base = &instance.compiled.doc.base;
-    let mut pool = VarPool::new();
-
-    // `wave_r/g/b` are per-frame EEL variables written by the preset's frame
-    // equations (and captured in the instance pool by `begin_frame`). Alpha
-    // comes from the `wave_a` base value and is clamped into [0, 1] before it
-    // reaches the GPU colour pass; `additive` selects the blend state.
-    pool.set("r", instance.pool.get("wave_r"));
-    pool.set("g", instance.pool.get("wave_g"));
-    pool.set("b", instance.pool.get("wave_b"));
-    pool.set("a", (base.wave_a as f32).clamp(0.0, 1.0));
-    pool.set("additive", if base.additivewave { 1.0 } else { 0.0 });
-
-    let wave_y = instance.pool.get("wave_y");
-    let wave_scale = base.wave_scale as f32;
-    let mut points = Vec::with_capacity(samples);
-    for index in 0..samples {
-        let t = wave_sample_t(index, samples);
-        let audio_value = frame.audio.wave.get(index).copied().unwrap_or(0.0);
-        points.push(WavePoint {
-            x: wave_ndc_x(t),
-            y: wave_y + audio_value * wave_scale,
-            sample: t,
-            value1: audio_value,
-            value2: 0.0,
-            color: overlay_color(&pool),
-        });
+    let scale = pool.get("wave_scale");
+    let smooth = pool.get("wave_smoothing").clamp(0.0, 0.98);
+    let smooth2 = scale * (1.0 - smooth);
+    let mut wave = Vec::with_capacity(max_samples);
+    wave.push(source[0] * scale);
+    for index in 1..max_samples {
+        wave.push(source[index] * smooth2 + wave[index - 1] * smooth);
     }
 
-    WaveOverlay {
-        pool,
+    let mut alpha = pool.get("wave_a");
+    if pool.get("modwavealphabyvolume") > 0.5 {
+        let start = pool.get("modwavealphastart");
+        let end = pool.get("modwavealphaend");
+        if (end - start).abs() > 1e-6 {
+            let vol = (instance.globals.bass + instance.globals.mid + instance.globals.treb) / 3.0;
+            alpha *= (vol - start) / (end - start);
+        }
+    }
+    alpha = alpha.clamp(0.0, 1.0);
+    if alpha <= 0.001 {
+        return Vec::new();
+    }
+
+    let color = [
+        pool.get("wave_r").clamp(0.0, 1.0),
+        pool.get("wave_g").clamp(0.0, 1.0),
+        pool.get("wave_b").clamp(0.0, 1.0),
+        alpha,
+    ];
+    let mut overlay_pool = VarPool::new();
+    overlay_pool.set("r", color[0]);
+    overlay_pool.set("g", color[1]);
+    overlay_pool.set("b", color[2]);
+    overlay_pool.set("a", color[3]);
+    overlay_pool.set(
+        "additive",
+        if pool.get("additivewave") > 0.5 {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    let dots = pool.get("wave_dots") > 0.5;
+    let rt = instance.globals.aspectx;
+    let up = instance.globals.aspecty;
+    let width = instance.globals.pixelsx.max(1.0);
+    let mode = (pool.get("wave_mode").floor().max(0.0) as i64 % 8) as usize;
+    let pos_x = pool.get("wave_x") * 2.0 - 1.0;
+    let pos_y = pool.get("wave_y") * 2.0 - 1.0;
+    let time = instance.globals.time;
+    let param = pool.get("wave_mystery");
+    let len = wave.len();
+    let (wave_l, wave_r) = (&wave, &wave);
+
+    let point = |x: f32, y: f32, sample: f32| WavePoint {
+        x,
+        y,
+        sample,
+        value1: 0.0,
+        value2: 0.0,
+        color,
+    };
+    let build = |points: Vec<WavePoint>, dots: bool| WaveOverlay {
+        pool: overlay_pool.clone(),
         points,
         enabled: true,
-        dots: false,
+        dots,
+    };
+
+    match mode {
+        0 => {
+            // Circle / spiral.
+            let num = (len / 2 + 1).max(2);
+            let inv = 1.0 / (num - 1) as f32;
+            let offset = (len - num) / 2;
+            let mut p = Vec::with_capacity(num);
+            for i in 0..num - 1 {
+                let mut rad = 0.5 + 0.4 * wave_r[i + offset] + param;
+                let ang = i as f32 * inv * std::f32::consts::TAU + time * 0.2;
+                if i < num / 10 {
+                    let mix = i as f32 / (num as f32 * 0.1);
+                    let mix = 0.5 - 0.5 * (mix * std::f32::consts::PI).cos();
+                    let rad2 = 0.5 + 0.4 * wave_r[i + num + offset] + param;
+                    rad = (1.0 - mix) * rad2 + rad * mix;
+                }
+                p.push(point(
+                    rad * ang.cos() * up + pos_x,
+                    rad * ang.sin() * rt + pos_y,
+                    i as f32 * inv,
+                ));
+            }
+            if let Some(first) = p.first().copied() {
+                p.push(point(first.x, first.y, 1.0));
+            }
+            vec![build(p, dots)]
+        }
+        1 => {
+            let mut alpha_extra = alpha * 1.25;
+            alpha_extra = alpha_extra.clamp(0.0, 1.0);
+            let mut overlay_pool = overlay_pool.clone();
+            overlay_pool.set("a", alpha_extra);
+            let mut p = Vec::with_capacity(len / 2);
+            for i in 0..len / 2 {
+                let rad = 0.53 + 0.43 * wave_r[i] + param;
+                let ang = wave_l[(i + 32) % len] * 0.5 * std::f32::consts::PI + time * 2.3;
+                p.push(point(
+                    rad * ang.cos() * up + pos_x,
+                    rad * ang.sin() * rt + pos_y,
+                    i as f32 / (len / 2).max(1) as f32,
+                ));
+            }
+            vec![WaveOverlay {
+                pool: overlay_pool,
+                points: p,
+                enabled: true,
+                dots,
+            }]
+        }
+        2 | 3 => {
+            let mut overlay_pool = overlay_pool.clone();
+            let mut a = alpha
+                * if width < 1024.0 {
+                    0.09
+                } else if width < 2048.0 {
+                    0.11
+                } else {
+                    0.13
+                };
+            if mode == 3 {
+                a = (a * 1.3 * instance.globals.treb * instance.globals.treb).clamp(0.0, 1.0);
+            }
+            overlay_pool.set("a", a.clamp(0.0, 1.0));
+            let mut p = Vec::with_capacity(len);
+            for i in 0..len {
+                p.push(point(
+                    wave_r[i] * up + pos_x,
+                    wave_l[(i + 32) % len] * rt + pos_y,
+                    i as f32 / len as f32,
+                ));
+            }
+            vec![WaveOverlay {
+                pool: overlay_pool,
+                points: p,
+                enabled: true,
+                dots,
+            }]
+        }
+        4 => {
+            let num = len.min((width / 3.0) as usize).max(2);
+            let inv = 1.0 / num as f32;
+            let offset = (len - num) / 2;
+            let w1 = 0.45 + 0.5 * (param * 0.5 + 0.5);
+            let w2 = 1.0 - w1;
+            let mut positions: Vec<[f32; 2]> = Vec::with_capacity(num);
+            for i in 0..num {
+                let mut x =
+                    2.0 * i as f32 * inv + (pos_x - 1.0) + wave_r[(i + 25 + offset) % len] * 0.44;
+                let mut y = wave_l[i + offset] * 0.47 + pos_y;
+                if i > 1 {
+                    x = x * w2 + w1 * (positions[i - 1][0] * 2.0 - positions[i - 2][0]);
+                    y = y * w2 + w1 * (positions[i - 1][1] * 2.0 - positions[i - 2][1]);
+                }
+                positions.push([x, y]);
+            }
+            let points = positions
+                .iter()
+                .enumerate()
+                .map(|(i, p)| point(p[0], p[1], i as f32 / num as f32))
+                .collect();
+            vec![build(points, dots)]
+        }
+        5 => {
+            let mut overlay_pool = overlay_pool.clone();
+            let a = alpha
+                * if width < 1024.0 {
+                    0.09
+                } else if width < 2048.0 {
+                    0.11
+                } else {
+                    0.13
+                };
+            overlay_pool.set("a", a.clamp(0.0, 1.0));
+            let cos_rot = (time * 0.3).cos();
+            let sin_rot = (time * 0.3).sin();
+            let mut p = Vec::with_capacity(len);
+            for i in 0..len {
+                let ioff = (i + 32) % len;
+                let x0 = wave_r[i] * wave_l[ioff] + wave_l[i] * wave_r[ioff];
+                let y0 = wave_r[i] * wave_r[i] - wave_l[ioff] * wave_l[ioff];
+                p.push(point(
+                    (x0 * cos_rot - y0 * sin_rot) * (up + pos_x),
+                    (x0 * sin_rot + y0 * cos_rot) * (rt + pos_y),
+                    i as f32 / len as f32,
+                ));
+            }
+            vec![WaveOverlay {
+                pool: overlay_pool,
+                points: p,
+                enabled: true,
+                dots,
+            }]
+        }
+        6 | 7 => {
+            let mut num = (len / 2).max(2);
+            num = num.min((width / 3.0) as usize).max(2);
+            let offset = (len - num) / 2;
+            let ang = std::f32::consts::FRAC_PI_2 * param;
+            let mut dx = ang.cos();
+            let mut dy = ang.sin();
+            let mut edge_x = [
+                pos_x * (ang + std::f32::consts::FRAC_PI_2).cos() - dx * 3.0,
+                pos_x * (ang + std::f32::consts::FRAC_PI_2).cos() + dx * 3.0,
+            ];
+            let mut edge_y = [
+                pos_x * (ang + std::f32::consts::FRAC_PI_2).sin() - dy * 3.0,
+                pos_x * (ang + std::f32::consts::FRAC_PI_2).sin() + dy * 3.0,
+            ];
+            for i in 0..2 {
+                for j in 0..4 {
+                    let (clip, value) = match j {
+                        0 => (edge_x[i] > 1.1, 1.1),
+                        1 => (edge_x[i] < -1.1, -1.1),
+                        2 => (edge_y[i] > 1.1, 1.1),
+                        _ => (edge_y[i] < -1.1, -1.1),
+                    };
+                    if clip {
+                        let other = 1 - i;
+                        let (a, b) = if j < 2 {
+                            (edge_x[other], edge_x[i])
+                        } else {
+                            (edge_y[other], edge_y[i])
+                        };
+                        let t = (value - a) / (b - a);
+                        let dxi = edge_x[i] - edge_x[other];
+                        let dyi = edge_y[i] - edge_y[other];
+                        edge_x[i] = edge_x[other] + dxi * t;
+                        edge_y[i] = edge_y[other] + dyi * t;
+                    }
+                }
+            }
+            dx = (edge_x[1] - edge_x[0]) / num as f32;
+            dy = (edge_y[1] - edge_y[0]) / num as f32;
+            let ang2 = dy.atan2(dx);
+            let perp_dx = (ang2 + std::f32::consts::FRAC_PI_2).cos();
+            let perp_dy = (ang2 + std::f32::consts::FRAC_PI_2).sin();
+            let sep = if mode == 7 {
+                (pos_y * 0.5 + 0.5).powi(2)
+            } else {
+                0.0
+            };
+            let make_line = |samples: &[f32], sign: f32| {
+                let mut p = Vec::with_capacity(num);
+                for i in 0..num {
+                    let offset_amount = 0.25 * samples[(i + offset).min(len - 1)] + sign * sep;
+                    p.push(point(
+                        edge_x[0] + dx * i as f32 + perp_dx * offset_amount,
+                        edge_y[0] + dy * i as f32 + perp_dy * offset_amount,
+                        i as f32 / num as f32,
+                    ));
+                }
+                p
+            };
+            if mode == 7 {
+                vec![
+                    build(make_line(wave_l, 1.0), dots),
+                    build(make_line(wave_r, -1.0), dots),
+                ]
+            } else {
+                vec![build(make_line(wave_l, 0.0), dots)]
+            }
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -1948,8 +2412,8 @@ fn evaluate_builtin_wave(
 ///   frame equations. These defaults live in the tables above and any value a
 ///   preset's equations assign afterwards wins.
 /// * Wave `point_eqs` are then evaluated per sample point (bounded to
-///   [`MAX_WAVE_SAMPLES`]) with `x/y/sample/value1/value2`, producing
-///   [`WavePoint`]s on a copy-on-write fork of the frame pool.
+///   [`MAX_WAVE_SAMPLES`]) against the section's live pool with
+///   `x/y/sample/value1/value2`, producing [`WavePoint`]s in full-screen NDC.
 /// * The result is cached on `instance.overlay_frame` and returned by value so
 ///   [`MilkRuntime::render`] can draw it. Each section is evaluated behind its
 ///   own `Result`: on error only that section is logged and skipped (no panic,
@@ -1975,12 +2439,6 @@ pub fn evaluate_overlays(
             .resize_with(shape_count, OverlayState::default);
     }
 
-    let samples = if frame.audio.wave.is_empty() {
-        DEFAULT_WAVE_SAMPLES
-    } else {
-        frame.audio.wave.len().min(MAX_WAVE_SAMPLES)
-    };
-
     let mut result = OverlayFrame::default();
 
     for index in 0..wave_count {
@@ -1990,21 +2448,18 @@ pub fn evaluate_overlays(
             &globals,
             &instance.pool,
             &frame.audio.wave,
-            samples,
+            &frame.audio.byte_frequency_data,
         ) {
             Ok(overlay) => result.waves.push(overlay),
             Err(message) => eprintln!("MilkDrop: skipping wave {index}: {message}"),
         }
     }
-    // A v1 preset can request the classic built-in waveform purely through
-    // base values, with no compiled `wavecode_*` section. Synthesise it only
-    // when no custom wave program exists, so an enabled custom wave keeps
-    // priority and the two are never drawn on top of each other.
-    if wave_count == 0 && instance.compiled.doc.base.wave_a > 0.0 {
-        result
-            .waves
-            .push(evaluate_builtin_wave(instance, frame, samples));
-    }
+    // The built-in waveform is drawn in addition to any custom waves, exactly
+    // like MilkDrop's `DrawCustomWaves(); DrawWave(...)`. Its own `wave_a`
+    // gate is checked inside `evaluate_builtin_waves`.
+    result
+        .waves
+        .extend(evaluate_builtin_waves(instance, &frame.audio.wave));
     for index in 0..shape_count {
         match evaluate_one_shape(
             &instance.compiled.shapes[index],
@@ -2034,18 +2489,6 @@ fn seed_vars(pool: &mut VarPool, vars: &[(&str, f32)]) {
 /// deterministic default opaque-white value.
 const OVERLAY_COLOR_VARS: &[(&str, f32)] = &[("r", 1.0), ("g", 1.0), ("b", 1.0), ("a", 1.0)];
 
-/// Extra per-wave-frame variables. `samples` is dynamic (derived from the
-/// audio wave length) and is seeded separately by [`seed_wave_frame_vars`].
-const WAVE_FRAME_VARS: &[(&str, f32)] = &[
-    ("scaling", 1.0),
-    ("smoothing", 0.0),
-    ("sep", 0.0),
-    ("additive", 0.0),
-    ("usedots", 0.0),
-    ("spectrum", 0.0),
-    ("thick", 1.0),
-];
-
 /// Extra per-shape-frame variables, on top of [`OVERLAY_COLOR_VARS`]. The
 /// secondary colour and `border_*` are seeded for preset compatibility even
 /// though this subset only draws the primary-colour outline.
@@ -2070,13 +2513,26 @@ const SHAPE_FRAME_VARS: &[(&str, f32)] = &[
 ];
 
 /// Seed the runtime-owned variables a wave frame equation can read before it
-/// runs. These mirror the subset of MilkDrop's per-wave-frame variables that a
-/// preset's `frame_eqs` may reference; any value the preset assigns afterwards
-/// wins.
-fn seed_wave_frame_vars(pool: &mut VarPool, samples: usize) {
-    seed_vars(pool, OVERLAY_COLOR_VARS);
-    seed_vars(pool, WAVE_FRAME_VARS);
-    pool.set("samples", samples as f32);
+/// runs. These mirror MilkDrop's per-wave-frame variables; any value the
+/// preset assigns afterwards wins.
+fn seed_wave_frame_vars(pool: &mut VarPool, values: &MilkWaveVals, dots: bool) {
+    seed_vars(
+        pool,
+        &[
+            ("samples", values.samples as f32),
+            ("sep", values.sep as f32),
+            ("scaling", values.scaling as f32),
+            ("smoothing", values.smoothing as f32),
+            ("spectrum", if values.spectrum { 1.0 } else { 0.0 }),
+            ("usedots", if dots { 1.0 } else { 0.0 }),
+            ("thick", if values.draw_thick { 1.0 } else { 0.0 }),
+            ("additive", if values.additive { 1.0 } else { 0.0 }),
+            ("r", values.color[0] as f32),
+            ("g", values.color[1] as f32),
+            ("b", values.color[2] as f32),
+            ("a", values.color[3] as f32),
+        ],
+    );
 }
 
 /// Seed the runtime-owned variables a shape frame equation can read.
@@ -2102,15 +2558,16 @@ fn ensure_overlay_init(
 }
 
 /// Run one wave section: init once, seed + run frame equations, then evaluate
-/// the point equations for each bounded sample. Any EEL failure is returned as
-/// a message so the caller can isolate this section.
+/// the point equations for each sample of the smoothed audio/spectrum source.
+/// Any EEL failure is returned as a message so the caller can isolate this
+/// section.
 fn evaluate_one_wave(
     program: &WaveProgram,
     state: &mut OverlayState,
     globals: &Globals,
     frame_pool: &VarPool,
     audio_wave: &[f32],
-    samples: usize,
+    byte_frequency_data: &[u8],
 ) -> Result<WaveOverlay, String> {
     ensure_overlay_init(&program.init, state, globals)?;
 
@@ -2121,33 +2578,131 @@ fn evaluate_one_wave(
     state.pool.copy_q_from(frame_pool);
     state.pool.snapshot_q();
 
-    seed_wave_frame_vars(&mut state.pool, samples);
+    seed_wave_frame_vars(&mut state.pool, &program.values, program.dots);
     run_frame(&program.frame, &mut state.pool, globals).map_err(|e| format!("frame: {e}"))?;
 
     // MilkDrop evaluates frame and point equations against the same pool, so
     // user variables written per point (`mx`, `ma`, ...) persist into the next
     // frame. Several community presets random-walk those variables to build
     // their shapes; forking the pool here would freeze every wave at frame 1.
-    let mut points = Vec::with_capacity(samples);
-    for index in 0..samples {
-        let t = wave_sample_t(index, samples);
-        // Seed in MilkDrop's normalised screen space: a section with no
-        // `x/y` equations still spans the canvas, and equations that write
-        // `x/y` use the same [0, 1] convention as real presets.
-        let x = t;
-        let y = 0.5;
-        let audio_value = audio_wave.get(index).copied().unwrap_or(0.0);
-        state.pool.set("sample", t);
-        state.pool.set("value1", audio_value);
-        state.pool.set("value2", 0.0);
-        run_pixel(&program.point, &mut state.pool, x, y, 0.0, 0.0)
-            .map_err(|e| format!("point {index}: {e}"))?;
-        // Point equations use MilkDrop's normalised screen space (x=0 left,
-        // y=0 top); the GPU overlay pass expects NDC (-1..1, y up).
+    let source_max = audio_wave.len().min(MAX_WAVE_SAMPLES);
+    if source_max == 0 {
+        return Ok(WaveOverlay {
+            pool: state.pool.clone(),
+            points: Vec::new(),
+            enabled: true,
+            dots: program.dots,
+        });
+    }
+    let audio = &audio_wave[audio_wave.len() - source_max..];
+    let spectrum = state.pool.get("spectrum") != 0.0;
+    let mut authored_samples = state.pool.get("samples").floor().max(0.0) as usize;
+    authored_samples = authored_samples.min(source_max);
+    let sep = state.pool.get("sep").floor().max(0.0) as usize;
+    authored_samples = authored_samples.saturating_sub(sep);
+    if !(authored_samples >= 2 || (program.dots && authored_samples >= 1)) {
+        return Ok(WaveOverlay {
+            pool: state.pool.clone(),
+            points: Vec::new(),
+            enabled: true,
+            dots: program.dots,
+        });
+    }
+
+    let scaling = state.pool.get("scaling");
+    let smoothing = state.pool.get("smoothing").clamp(0.0, 0.98);
+    let wave_scale = frame_pool.get("wave_scale");
+    let scale = (if spectrum { 0.15 } else { 0.004 * 128.0 }) * scaling * wave_scale;
+
+    let spectrum_values: Vec<f32> = byte_frequency_data
+        .iter()
+        .take(source_max)
+        .map(|byte| *byte as f32 / 255.0)
+        .collect();
+    let (left_source, right_source): (&[f32], &[f32]) = if spectrum {
+        (&spectrum_values, &spectrum_values)
+    } else {
+        (audio, audio)
+    };
+    let (j0, j1, t) = if spectrum {
+        (
+            0usize,
+            0usize,
+            (source_max.saturating_sub(sep)).max(1) as f32 / authored_samples as f32,
+        )
+    } else {
+        (
+            ((source_max as f32 - authored_samples as f32) / 2.0 - sep as f32 / 2.0)
+                .floor()
+                .max(0.0) as usize,
+            ((source_max as f32 - authored_samples as f32) / 2.0 + sep as f32 / 2.0)
+                .floor()
+                .max(0.0) as usize,
+            1.0,
+        )
+    };
+
+    let mix1 = (smoothing * 0.98).max(0.0).powf(0.5);
+    let mix2 = 1.0 - mix1;
+    let mut points_l = vec![0.0; authored_samples];
+    let mut points_r = vec![0.0; authored_samples];
+    points_l[0] = left_source.get(j0).copied().unwrap_or(0.0);
+    points_r[0] = right_source.get(j1).copied().unwrap_or(0.0);
+    for j in 1..authored_samples {
+        let il = ((j as f32 * t) as usize + j0).min(source_max - 1);
+        let ir = ((j as f32 * t) as usize + j1).min(source_max - 1);
+        points_l[j] = left_source[il] * mix2 + points_l[j - 1] * mix1;
+        points_r[j] = right_source[ir] * mix2 + points_r[j - 1] * mix1;
+    }
+    for j in (0..authored_samples.saturating_sub(1)).rev() {
+        points_l[j] = points_l[j] * mix2 + points_l[j + 1] * mix1;
+        points_r[j] = points_r[j] * mix2 + points_r[j + 1] * mix1;
+    }
+    for j in 0..authored_samples {
+        points_l[j] *= scale;
+        points_r[j] *= scale;
+    }
+
+    // Butterchurn/MilkDrop custom-wave coordinates span the full output: the
+    // final image places `y=0` at the bottom and `y=1` at the top. Do not
+    // apply the warp aspect ratio here; doing so pushes most of the [0,1]
+    // range off-screen on a 16:9 frame.
+    let frame_r = state.pool.get("r");
+    let frame_g = state.pool.get("g");
+    let frame_b = state.pool.get("b");
+    let frame_a = state.pool.get("a");
+
+    let mut points = Vec::with_capacity(authored_samples);
+    for index in 0..authored_samples {
+        let value1 = points_l[index];
+        let value2 = points_r[index];
+        let sample = if authored_samples > 1 {
+            index as f32 / (authored_samples - 1) as f32
+        } else {
+            0.0
+        };
+        state.pool.set("sample", sample);
+        state.pool.set("value1", value1);
+        state.pool.set("value2", value2);
+        state.pool.set("x", 0.5 + value1);
+        state.pool.set("y", 0.5 + value2);
+        state.pool.set("r", frame_r);
+        state.pool.set("g", frame_g);
+        state.pool.set("b", frame_b);
+        state.pool.set("a", frame_a);
+        run_pixel(
+            &program.point,
+            &mut state.pool,
+            0.5 + value1,
+            0.5 + value2,
+            0.0,
+            0.0,
+        )
+        .map_err(|e| format!("point {index}: {e}"))?;
         points.push(WavePoint {
             x: state.pool.get("x") * 2.0 - 1.0,
-            y: 1.0 - 2.0 * state.pool.get("y"),
-            sample: state.pool.get("sample"),
+            y: state.pool.get("y") * 2.0 - 1.0,
+            sample,
             value1: state.pool.get("value1"),
             value2: state.pool.get("value2"),
             color: overlay_color(&state.pool),
@@ -2179,34 +2734,79 @@ fn evaluate_one_shape(
     })
 }
 
-/// Seed the frame-level wave variables (`wave_r/g/b/x/y`) from the preset's
-/// base vals into `pool`.
+/// Seed every base-valued per-frame variable from the preset before the
+/// per-frame equations run.
 ///
-/// [`begin_frame`] calls this after the init equations and immediately before
-/// the per-frame equations, because the ordering is significant:
-///
-/// - Self-referential EEL such as `wave_r = wave_r + 0.1;` must accumulate
-///   from the configured base value rather than from the pool's zero default,
-///   so the frame equations see a meaningful starting point.
-/// - These are frame-level values: each frame starts from the base and the
-///   frame equations decide the final value, keeping frames independent.
-///
-/// Because this runs on *every* frame (after the one-time init stage), a preset
-/// that assigns one of these variables only in its init equations has that
-/// assignment overwritten here on the first frame. Presets are expected to
-/// drive them from their frame equations. Tracking which variables init touched
-/// in order to preserve init-only overrides would add state this seeding does
-/// not have; the base values are deliberately left to win, matching the tested
-/// per-frame semantics.
-fn seed_wave_base_vals(pool: &mut VarPool, base: &MilkBaseVals) {
+/// MilkDrop assigns the base vals to their frame variables at the start of each
+/// frame; equations then read and overwrite them. That matters for
+/// self-referential code (`wave_r = wave_r + 0.1;`) and for presets that write
+/// `gamma`, `decay` or `echo_alpha` from EEL: without the seed those variables
+/// start at zero and the shader uniforms see the wrong value. The variable
+/// names here are the frame-level names, which differ from the base-val keys
+/// (`fGammaAdj` → `gamma`, `nWaveMode` → `wave_mode`, ...).
+fn seed_frame_base_vals(pool: &mut VarPool, base: &MilkBaseVals) {
+    let bool_val = |value: bool| if value { 1.0 } else { 0.0 };
     seed_vars(
         pool,
         &[
+            ("decay", base.decay as f32),
+            ("gamma", base.gammaadj as f32),
+            ("gammaadj", base.gammaadj as f32),
+            ("fshader", base.shader as f32),
+            ("zoom", base.zoom as f32),
+            ("zoomexp", base.zoomexp as f32),
+            ("warp", base.warp as f32),
+            ("rot", base.rot as f32),
+            ("cx", base.cx as f32),
+            ("cy", base.cy as f32),
+            ("dx", base.dx as f32),
+            ("dy", base.dy as f32),
+            ("sx", base.sx as f32),
+            ("sy", base.sy as f32),
+            ("echo_zoom", base.echo_zoom as f32),
+            ("echo_alpha", base.echo_alpha as f32),
+            ("echo_orient", base.echo_orient as f32),
+            ("wave_mode", base.wave_mode as f32),
+            ("old_wave_mode", base.wave_mode as f32),
             ("wave_r", base.wave_r as f32),
             ("wave_g", base.wave_g as f32),
             ("wave_b", base.wave_b as f32),
+            ("wave_a", base.wave_a as f32),
             ("wave_x", base.wave_x as f32),
             ("wave_y", base.wave_y as f32),
+            ("wave_scale", base.wave_scale as f32),
+            ("wave_smoothing", base.wave_smoothing as f32),
+            ("wave_mystery", base.wave_mystery as f32),
+            ("modwavealphastart", base.modwavealphastart as f32),
+            ("modwavealphaend", base.modwavealphaend as f32),
+            ("additivewave", bool_val(base.additivewave)),
+            ("wave_dots", bool_val(base.wave_dots)),
+            ("wave_thick", bool_val(base.wave_thick)),
+            ("wave_brighten", bool_val(base.wave_brighten)),
+            ("wrap", bool_val(base.wrap)),
+            ("darken_center", bool_val(base.darken_center)),
+            ("red_blue", bool_val(base.red_blue)),
+            ("brighten", bool_val(base.brighten)),
+            ("darken", bool_val(base.darken)),
+            ("solarize", bool_val(base.solarize)),
+            ("invert", bool_val(base.invert)),
+            ("warpanimspeed", base.warpanimspeed as f32),
+            ("warpscale", base.warpscale as f32),
+            ("mv_x", base.mv_x as f32),
+            ("mv_y", base.mv_y as f32),
+            ("mv_a", base.mv_a as f32),
+            ("mv_r", base.mv_r as f32),
+            ("mv_g", base.mv_g as f32),
+            ("mv_b", base.mv_b as f32),
+            ("mv_len", base.mv_len as f32),
+            ("ob_size", base.ob_size as f32),
+            ("ob_a", base.ob_a as f32),
+            ("ib_size", base.ib_size as f32),
+            ("ib_a", base.ib_a as f32),
+            ("b1n", base.b1n as f32),
+            ("b2n", base.b2n as f32),
+            ("b3n", base.b3n as f32),
+            ("brightness", base.brightness as f32),
         ],
     );
 }
@@ -2232,15 +2832,40 @@ pub fn begin_frame(
     }
 
     // (2) Rebuild the fifteen globals from this frame's geometry and audio.
+    // MilkDrop's EEL `bass`/`mid`/`treb` are *relative* levels: the current
+    // band divided by its slow average, so a steady passage sits around 1.0
+    // and transients rise above it. Our analyser exposes an absolute 0..1
+    // dB-mapped band, so divide by a per-instance follower to recover the
+    // same contract (presets gate on `above(bass, 1)` etc.).
     let audio = &frame.audio;
-    let values = [
-        audio.bass * AUDIO_GAIN,
-        audio.mid * AUDIO_GAIN,
-        audio.treble * AUDIO_GAIN,
-    ];
-    for (att, value) in instance.band_att.iter_mut().zip(values) {
-        *att += (value - *att) * BAND_FOLLOWER_RATE;
+    let raw_values = [audio.bass, audio.mid, audio.treble];
+    let first_frame = instance.frame_index == 0;
+    let long_rate = 0.992f32.powf(30.0 / frame.fps.max(1.0));
+    for ((att, long), raw) in instance
+        .band_att
+        .iter_mut()
+        .zip(instance.band_long_att.iter_mut())
+        .zip(raw_values)
+    {
+        if first_frame {
+            *att = raw;
+            *long = raw.max(1e-3);
+        } else {
+            *att += (raw - *att) * BAND_FOLLOWER_RATE;
+            *long += (raw - *long) * (1.0 - long_rate);
+        }
     }
+    let relative = |raw: f32, long: f32| (raw / long.max(1e-3)).clamp(0.0, 4.0);
+    let values = [
+        relative(raw_values[0], instance.band_long_att[0]),
+        relative(raw_values[1], instance.band_long_att[1]),
+        relative(raw_values[2], instance.band_long_att[2]),
+    ];
+    let relative_att = [
+        relative(instance.band_att[0], instance.band_long_att[0]),
+        relative(instance.band_att[1], instance.band_long_att[1]),
+        relative(instance.band_att[2], instance.band_long_att[2]),
+    ];
 
     let (aspectx, aspecty) = if frame.width >= frame.height {
         (1.0, frame.height as f32 / frame.width as f32)
@@ -2259,19 +2884,19 @@ pub fn begin_frame(
         aspectx,
         aspecty,
         bass: values[0],
-        bass_att: instance.band_att[0],
+        bass_att: relative_att[0],
         mid: values[1],
-        mid_att: instance.band_att[1],
+        mid_att: relative_att[1],
         treb: values[2],
-        treb_att: instance.band_att[2],
+        treb_att: relative_att[2],
     };
     instance.frame_index = frame.frame_index;
     instance.wave = frame.audio.wave.clone();
     instance.byte_frequency_data = frame.audio.byte_frequency_data.clone();
 
-    // Seed the frame-level wave variables before the per-frame equations run
-    // (see `seed_wave_base_vals` for why this ordering matters).
-    seed_wave_base_vals(&mut instance.pool, &instance.compiled.doc.base);
+    // Seed the frame-level variables from the base vals before the per-frame
+    // equations run (see `seed_frame_base_vals` for why this ordering matters).
+    seed_frame_base_vals(&mut instance.pool, &instance.compiled.doc.base);
 
     // (3) Per-frame equations: `run_frame` restores the captured q baseline
     // before injecting the globals, so q changes never leak into the next frame.
@@ -2324,37 +2949,81 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 
 /// Map a mesh vertex's `[-1, 1]` position to a warped sampling UV.
 ///
-/// This mirrors MilkDrop's warp mesh: warp displacement, rotation, zoom (with
-/// exponent), centre/offset (`cx`/`cy`/`dx`/`dy`) and per-axis stretch
-/// (`sx`/`sy`). Parameter values come from the EEL pool (per-frame overrides)
-/// with the preset's base vals as defaults. Every divisor is guarded so a
-/// hand-written fixture with all-zero base vals still yields finite,
-/// deterministic UVs; a non-finite result falls back to the texture centre.
-fn warped_uv(pool: &VarPool, base: &MilkBaseVals, x: f32, y: f32, time: f32) -> [f32; 2] {
-    let warp = warp_param(pool, "warp", base.warp);
-    let warp_anim = warp_param(pool, "warpanimspeed", base.warpanimspeed);
-    let warp_scale = warp_param(pool, "warpscale", base.warpscale);
-    let t = time * warp_anim;
-    let amount = warp * warp_scale * WARP_AMOUNT_SCALE;
-    let wx = x + amount * (t.sin() + (2.0 * t).sin());
-    let wy = y + amount * (t.cos() + (2.0 * t).cos());
-
-    let zoom = nonzero_or(warp_param(pool, "zoom", base.zoom), 1.0);
+/// This mirrors Butterchurn/MilkDrop's `default_warp` (`renderer.js`): the
+/// aspect-corrected radial zoom exponent, per-axis stretch, animated warp
+/// displacement, rotation about the screen centre, and the `dx/dy` offset.
+/// All parameters come from the live EEL pool (per-frame overrides) with the
+/// preset's base vals as defaults. Degenerate values are guarded so a fixture
+/// still yields finite UVs.
+fn warped_uv(
+    pool: &VarPool,
+    base: &MilkBaseVals,
+    x: f32,
+    y: f32,
+    time: f32,
+    aspect_x: f32,
+    aspect_y: f32,
+) -> [f32; 2] {
+    let mut zoom = nonzero_or(warp_param(pool, "zoom", base.zoom), 1.0);
     let zoomexp = warp_param(pool, "zoomexp", base.zoomexp);
-    let zoom_factor = nonzero_or(zoom.powf(zoomexp), 1.0);
-
-    let sx = nonzero_or(warp_param(pool, "sx", base.sx), 1.0);
-    let sy = nonzero_or(warp_param(pool, "sy", base.sy), 1.0);
-    let (sin_rot, cos_rot) = warp_param(pool, "rot", base.rot).sin_cos();
-    let rx = wx * cos_rot - wy * sin_rot;
-    let ry = wx * sin_rot + wy * cos_rot;
-
+    let rot = warp_param(pool, "rot", base.rot);
+    let warp = warp_param(pool, "warp", base.warp);
     let cx = warp_param(pool, "cx", base.cx);
     let cy = warp_param(pool, "cy", base.cy);
     let dx = warp_param(pool, "dx", base.dx);
     let dy = warp_param(pool, "dy", base.dy);
-    let u = (rx / (sx * zoom_factor) + cx + dx) * 0.5 + 0.5;
-    let v = (ry / (sy * zoom_factor) + cy + dy) * 0.5 + 0.5;
+    let sx = nonzero_or(warp_param(pool, "sx", base.sx), 1.0);
+    let sy = nonzero_or(warp_param(pool, "sy", base.sy), 1.0);
+    let warpscale = nonzero_or(warp_param(pool, "warpscale", base.warpscale), 1.0);
+    let warpanimspeed = warp_param(pool, "warpanimspeed", base.warpanimspeed);
+
+    if zoom.abs() < WARP_EPS {
+        zoom = WARP_EPS;
+    }
+    let rad = (x * x * aspect_x * aspect_x + y * y * aspect_y * aspect_y)
+        .max(0.0)
+        .sqrt();
+    let zoom_exp = zoomexp.powf(rad * 2.0 - 1.0);
+    let zoom_value = zoom.powf(zoom_exp);
+    let zoom_inv = if zoom_value.abs() < WARP_EPS {
+        1.0 / WARP_EPS
+    } else {
+        1.0 / zoom_value
+    };
+    let mut u = x * 0.5 * aspect_x * zoom_inv + 0.5;
+    let mut v = -y * 0.5 * aspect_y * zoom_inv + 0.5;
+    u = (u - cx) / sx + cx;
+    v = (v - cy) / sy + cy;
+
+    if warp.abs() > 1e-9 {
+        let warp_time = time * warpanimspeed;
+        let warp_scale_inv = 1.0 / warpscale;
+        let warp_f0 = 11.68 + 4.0 * (warp_time * 1.413 + 10.0).cos();
+        let warp_f1 = 8.77 + 3.0 * (warp_time * 1.113 + 7.0).cos();
+        let warp_f2 = 10.54 + 3.0 * (warp_time * 1.233 + 3.0).cos();
+        let warp_f3 = 11.49 + 4.0 * (warp_time * 0.933 + 5.0).cos();
+        u += warp
+            * 0.0035
+            * (warp_time * 0.333 + warp_scale_inv * (x * warp_f0 - y * warp_f3)).sin();
+        v += warp
+            * 0.0035
+            * (warp_time * 0.375 - warp_scale_inv * (x * warp_f2 + y * warp_f1)).cos();
+        u += warp
+            * 0.0035
+            * (warp_time * 0.753 - warp_scale_inv * (x * warp_f1 - y * warp_f2)).cos();
+        v += warp
+            * 0.0035
+            * (warp_time * 0.825 + warp_scale_inv * (x * warp_f0 + y * warp_f3)).sin();
+    }
+
+    let u2 = u - cx;
+    let v2 = v - cy;
+    let (sin_rot, cos_rot) = rot.sin_cos();
+    u = u2 * cos_rot - v2 * sin_rot + cx - dx;
+    v = u2 * sin_rot + v2 * cos_rot + cy - dy;
+    // Undo the aspect scaling so the full-screen mesh covers the whole texture.
+    u = (u - 0.5) / aspect_x.max(1e-6) + 0.5;
+    v = (v - 0.5) / aspect_y.max(1e-6) + 0.5;
     [finite_or(u, UV_FALLBACK), finite_or(v, UV_FALLBACK)]
 }
 
@@ -2394,6 +3063,8 @@ pub fn evaluate_mesh(
                 x,
                 y,
                 time,
+                instance.globals.aspectx,
+                instance.globals.aspecty,
             ));
         }
     }
@@ -2588,7 +3259,8 @@ fn create_target(device: &wgpu::Device, width: u32, height: u32, label: &str) ->
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
 }
@@ -2770,11 +3442,19 @@ fn output_bind_group(
     previous_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
+    let uniform_entry = wgpu::BindGroupEntry {
+        binding: 0,
+        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: uniform,
+            offset: 0,
+            size: wgpu::BufferSize::new(MILK_POST_UNIFORM_BYTES as u64),
+        }),
+    };
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("modV MilkDrop output bind group"),
         layout,
         entries: &[
-            uniform_bind_entry(uniform),
+            uniform_entry,
             texture_bind(1, view),
             sampler_bind(2, sampler),
             texture_bind(3, previous_view),
@@ -3088,7 +3768,7 @@ ret = uv;\n\
 }\n";
 
     fn doc_with(init: &str, frame: &str, pixel: &str, warp: &str, comp: &str) -> MilkDocument {
-        MilkDocument {
+        let mut doc = MilkDocument {
             version: 2,
             name: "fixture".to_string(),
             init_eqs: init.to_string(),
@@ -3097,7 +3777,11 @@ ret = uv;\n\
             warp: warp.to_string(),
             comp: comp.to_string(),
             ..Default::default()
-        }
+        };
+        // Most fixtures pin a custom wave; silence the built-in waveform so
+        // its extra overlay cannot mask the section under test.
+        doc.base.wave_a = 0.0;
+        doc
     }
 
     fn frame(bass: f32, mid: f32, treble: f32, index: u32, time: f64) -> MilkFrameInfo {
@@ -3160,11 +3844,10 @@ ret = uv;\n\
             "per-frame equations see baseline q1"
         );
 
-        // (2) band followers: value = audio*2, att += (value - att)*0.2.
-        // frame1: 0.2 / 0.1 / 0.4 ; frame2: 0.36 / 0.18 / 0.72.
-        approx!(a.globals.bass_att, 0.36, "bass_att across two frames");
-        approx!(a.globals.mid_att, 0.18, "mid_att across two frames");
-        approx!(a.globals.treb_att, 0.72, "treb_att across two frames");
+        // (2) band followers: relative levels sit at 1.0 for a steady input.
+        approx!(a.globals.bass_att, 1.0, "bass_att is relative");
+        approx!(a.globals.mid_att, 1.0, "mid_att is relative");
+        approx!(a.globals.treb_att, 1.0, "treb_att is relative");
 
         // (3) determinism: two fresh instances with the same seed agree.
         assert_eq!(a.globals, b.globals, "globals identical for equal seeds");
@@ -3204,14 +3887,14 @@ ret = uv;\n\
         approx!(instance.globals.meshy, 9.0);
         approx!(instance.globals.pixelsx, 1920.0);
         approx!(instance.globals.pixelsy, 1080.0);
-        approx!(instance.globals.bass, 1.0, "audio.bass * 2.0");
-        approx!(instance.globals.mid, 0.5, "audio.mid * 2.0");
-        approx!(instance.globals.treb, 2.0, "audio.treble * 2.0");
-        approx!(instance.globals.bass_att, 0.2, "first-frame bass follower");
-        approx!(instance.globals.mid_att, 0.1, "first-frame mid follower");
+        approx!(instance.globals.bass, 1.0, "relative bass is ~1");
+        approx!(instance.globals.mid, 1.0, "relative mid is ~1");
+        approx!(instance.globals.treb, 1.0, "relative treble is ~1");
+        approx!(instance.globals.bass_att, 1.0, "first-frame bass follower");
+        approx!(instance.globals.mid_att, 1.0, "first-frame mid follower");
         approx!(
             instance.globals.treb_att,
-            0.4,
+            1.0,
             "first-frame treble follower"
         );
         approx!(instance.globals.aspectx, 1.0, "landscape aspectx");
@@ -3235,6 +3918,86 @@ ret = uv;\n\
         begin_frame(&mut portrait, &fp).expect("portrait frame");
         approx!(portrait.globals.aspectx, 600.0 / 800.0, "portrait aspectx");
         approx!(portrait.globals.aspecty, 1.0, "portrait aspecty");
+    }
+
+    #[test]
+    fn canonical_warp_mesh_covers_the_full_texture() {
+        let doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("warp-full", &doc, &cache).expect("compiles");
+        let mut instance = new_instance(compiled, 1);
+        let mut f = frame(0.0, 0.0, 0.0, 1, 0.0);
+        f.width = 640;
+        f.height = 360;
+        f.meshx = 8;
+        f.meshy = 6;
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let mesh = evaluate_mesh(&mut instance, &f).expect("mesh");
+        let umin = mesh
+            .uvs
+            .iter()
+            .map(|uv| uv[0])
+            .fold(f32::INFINITY, f32::min);
+        let umax = mesh
+            .uvs
+            .iter()
+            .map(|uv| uv[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let vmin = mesh
+            .uvs
+            .iter()
+            .map(|uv| uv[1])
+            .fold(f32::INFINITY, f32::min);
+        let vmax = mesh
+            .uvs
+            .iter()
+            .map(|uv| uv[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            (umin - 0.0).abs() < 0.02 && (umax - 1.0).abs() < 0.02,
+            "landscape warp must span the full texture width, got u=[{umin},{umax}]"
+        );
+        assert!(
+            (vmin - 0.0).abs() < 0.02 && (vmax - 1.0).abs() < 0.02,
+            "landscape warp must span the full texture height, got v=[{vmin},{vmax}]"
+        );
+    }
+
+    #[test]
+    fn canonical_warp_centre_samples_the_texture_centre() {
+        let doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("warp-centre", &doc, &cache).expect("compiles");
+        let mut instance = new_instance(compiled, 1);
+        let f = frame(0.0, 0.0, 0.0, 1, 0.0);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let mesh = evaluate_mesh(&mut instance, &f).expect("mesh");
+        let centre = mesh.uvs[mesh.uvs.len() / 2];
+        assert!(
+            (centre[0] - 0.5).abs() < 0.01 && (centre[1] - 0.5).abs() < 0.01,
+            "cx=cy=0.5 must sample the texture centre, got {centre:?}"
+        );
+    }
+
+    #[test]
+    fn relative_band_transients_rise_above_one() {
+        let doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("relative-bands", &doc, &cache).expect("compiles");
+        let mut instance = new_instance(compiled, 1);
+
+        let steady = frame(0.5, 0.4, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &steady).expect("steady frame");
+        approx!(instance.globals.bass, 1.0, "first frame is the reference");
+
+        let transient = frame(1.0, 0.4, 0.3, 2, 0.032);
+        begin_frame(&mut instance, &transient).expect("transient frame");
+        assert!(
+            instance.globals.bass > 1.5,
+            "a doubled raw band must read above 1.0 relative to the slow average, got {}",
+            instance.globals.bass
+        );
+        approx!(instance.globals.mid, 1.0, "unchanged mid stays at 1.0");
     }
 
     #[test]
@@ -3442,7 +4205,26 @@ ret = uv;\n\
         let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
         let point = &overlays.waves[0].points[0];
         approx!(point.x, -1.0, "normalised x=0 is the left edge");
-        approx!(point.y, 1.0, "normalised y=0 is the top edge");
+        approx!(point.y, -1.0, "normalised y=0 is the bottom edge");
+    }
+
+    #[test]
+    fn custom_wave_y_spans_the_full_screen_height() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].values.samples = 2;
+        doc.waves[0].values.smoothing = 0.0;
+        doc.waves[0].point_eqs = "x = 0.5; y = sample;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-y-full", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x88);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        let points = &overlays.waves[0].points;
+        approx!(points[0].y, -1.0, "y=0 is the bottom edge");
+        approx!(points[1].y, 1.0, "y=1 is the top edge");
     }
 
     /// `q1..q32` written by the preset's top-level per-frame equations must be
@@ -3815,6 +4597,188 @@ ret = uv;\n\
         );
     }
 
+    // --- Legacy hue shader and post uniforms --------------------------------
+
+    #[test]
+    fn hue_corner_colours_match_the_milkdrop_shade_field() {
+        let rand_start = [0.1, 0.2, 0.3, 0.4];
+        let time = 1.75;
+        let corners = hue_corner_colors(time, rand_start);
+        for (index, corner) in corners.iter().enumerate() {
+            let max = corner[0].max(corner[1]).max(corner[2]);
+            approx!(max, 1.0, "corner {index} is normalised");
+            for channel in corner {
+                assert!(
+                    (0.5..=1.0).contains(channel),
+                    "corner {index} channel {channel} must be in [0.5, 1]"
+                );
+            }
+        }
+
+        // Bilinear weights: (1,1) is corner 0, (0,1) corner 1, (1,0) corner 2,
+        // (0,0) corner 3.
+        approx!(hue_shader_at([1.0, 1.0], &corners)[1], corners[0][1]);
+        approx!(hue_shader_at([0.0, 1.0], &corners)[1], corners[1][1]);
+        approx!(hue_shader_at([1.0, 0.0], &corners)[1], corners[2][1]);
+        approx!(hue_shader_at([0.0, 0.0], &corners)[1], corners[3][1]);
+    }
+
+    #[test]
+    fn post_uniforms_read_live_echo_gamma_hue_and_flags() {
+        let mut doc = MilkDocument {
+            version: 1,
+            name: "post-live".to_string(),
+            ..Default::default()
+        };
+        doc.base.echo_zoom = 0.5;
+        doc.base.echo_alpha = 0.25;
+        doc.base.echo_orient = 3;
+        doc.base.gammaadj = 2.0;
+        doc.base.shader = 0.5;
+        doc.base.darken = true;
+        doc.base.solarize = true;
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("post-live", &doc, &cache).expect("compiles");
+        let mut instance = new_instance(compiled, 0x5EED);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.5);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        // Per-frame EEL overrides must win over the base vals.
+        instance.pool.set("gamma", 3.25);
+        instance.pool.set("echo_alpha", 0.75);
+
+        let bytes = MilkPostUniforms::from_instance(&instance).to_bytes();
+        let read =
+            |offset: usize| f32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        approx!(read(0), 0.5, "time");
+        approx!(read(4), 3.25, "live gamma overrides fGammaAdj");
+        approx!(read(8), 0.5, "fshader");
+        approx!(read(12), 0.5, "echo_zoom");
+        approx!(read(16), 0.75, "live echo_alpha");
+        approx!(read(20), 3.0, "echo_orient");
+        approx!(read(24), 0.0, "brighten");
+        approx!(read(28), 1.0, "darken");
+        approx!(read(32), 1.0, "solarize");
+        approx!(read(44), 1.0, "legacy composite flag");
+        approx!(read(48), instance.rand_start[0], "rand_start[0]");
+        approx!(read(60), instance.rand_start[3], "rand_start[3]");
+    }
+
+    #[test]
+    fn legacy_composite_flag_tracks_whether_a_comp_body_exists() {
+        let cache = MilkFailureCache::new();
+        let legacy = doc_with("", "", "", VALID_WARP, "");
+        let compiled = compile_preset("legacy", &legacy, &cache).expect("compiles");
+        assert!(compiled.legacy_composite, "empty comp uses legacy post");
+
+        let custom = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        let compiled = compile_preset("custom", &custom, &cache).expect("compiles");
+        assert!(
+            !compiled.legacy_composite,
+            "custom comp owns post-processing"
+        );
+    }
+
+    #[test]
+    fn custom_wave_seeds_audio_value_and_xy_like_milkdrop() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].values.samples = 4;
+        doc.waves[0].values.smoothing = 0.0;
+        doc.waves[0].values.scaling = 1.0;
+        doc.base.wave_scale = 1.0;
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-audio", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x99);
+
+        let mut f = frame(0.0, 0.0, 0.0, 1, 0.016);
+        f.width = 640;
+        f.height = 640;
+        // The runtime consumes the most recent 512 samples and centres four of
+        // them at source indices 254..257, i.e. absolute indices 766..769.
+        for (index, sample) in f.audio.wave.iter_mut().enumerate().skip(766).take(4) {
+            *sample = (index as f32 - 766.0 + 1.0) / 4.0;
+        }
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        let wave = &overlays.waves[0];
+        assert_eq!(wave.points.len(), 4, "samples comes from the wave section");
+
+        for (index, point) in wave.points.iter().enumerate() {
+            let expected_value = (index as f32 + 1.0) / 4.0 * (0.004 * 128.0);
+            approx!(
+                point.value1,
+                expected_value,
+                "value1 is the scaled, smoothed audio sample at {index}"
+            );
+            approx!(
+                point.x,
+                expected_value * 2.0,
+                "x starts at 0.5 + value1 (square frame)"
+            );
+            approx!(
+                point.y,
+                expected_value * 2.0,
+                "y starts at 0.5 + value2 (mono right = left)"
+            );
+            approx!(point.sample, index as f32 / 3.0, "sample normalised 0..1");
+        }
+    }
+
+    #[test]
+    fn builtin_mode7_draws_two_separated_stereo_lines() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.version = 1;
+        doc.base.wave_mode = 7;
+        doc.base.wave_a = 1.0;
+        doc.base.wave_mystery = 0.0;
+        doc.base.wave_r = 1.0;
+        doc.base.wave_g = 0.0;
+        doc.base.wave_b = 0.0;
+        doc.base.wave_x = 0.5;
+        doc.base.wave_y = 0.5;
+        doc.base.wave_scale = 1.0;
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("mode7", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x7);
+        let f = sine_audio_frame();
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+
+        assert_eq!(
+            overlays.waves.len(),
+            2,
+            "mode 7 draws a left and a right line"
+        );
+        let mean_y = |wave: &WaveOverlay| {
+            wave.points.iter().map(|point| point.y).sum::<f32>() / wave.points.len() as f32
+        };
+        assert!(
+            mean_y(&overlays.waves[0]) > mean_y(&overlays.waves[1]),
+            "the two stereo lines must be separated by the wave position"
+        );
+        for wave in &overlays.waves {
+            approx!(wave.pool.get("r"), 1.0);
+            approx!(wave.pool.get("g"), 0.0);
+            approx!(wave.pool.get("a"), 1.0);
+        }
+    }
+
+    #[test]
+    fn rand_start_is_deterministic_and_varied_by_seed() {
+        let doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("rand-start", &doc, &cache).expect("compiles");
+        let a = new_instance(compiled.clone(), 42);
+        let b = new_instance(compiled.clone(), 42);
+        let c = new_instance(compiled, 43);
+        assert_eq!(a.rand_start, b.rand_start, "same seed is deterministic");
+        assert_ne!(a.rand_start, c.rand_start, "different seeds vary the hue");
+    }
+
     // --- Built-in noise samplers (RED) -------------------------------------
 
     #[test]
@@ -3947,13 +4911,16 @@ mod gpu_tests {
         }\n";
 
     fn doc_with_comp(comp_body: &str) -> MilkDocument {
-        MilkDocument {
+        let mut doc = MilkDocument {
             version: 2,
             name: "gpu-fixture".to_string(),
             warp: IDENTITY_WARP.to_string(),
             comp: format!("shader_body {{\n{comp_body}\n}}\n"),
             ..Default::default()
-        }
+        };
+        // Wave-specific fixtures opt the built-in waveform back in explicitly.
+        doc.base.wave_a = 0.0;
+        doc
     }
 
     /// Neutralise the output pass so the comp colour reaches the target
@@ -4759,29 +5726,51 @@ mod gpu_tests {
             .count()
     }
 
-    /// MilkDrop draws waves after the comp post-processing (gamma/darken/
-    /// solarize), so a bright preset wave stays bright even when the comp
-    /// filters would map white to black. Drawing overlays into the comp target
-    /// before the output pass applies those filters to the waves as well.
+    /// MilkDrop draws waves onto the composite *before* the post chain, so the
+    /// fixed darken+solarize filters apply to them as well. A white wave under
+    /// darken+solarize maps to black; the same wave without those filters stays
+    /// bright. This pins the `DrawCustomWaves` → `ShowToUser` ordering.
     #[test]
-    fn gpu_waves_survive_comp_post_processing() {
+    fn gpu_waves_are_drawn_before_comp_post_processing() {
         let (device, queue) = match gpu() {
             Some(pair) => pair,
             None => return,
         };
-        let mut doc = doc_with_comp("float3 ret = float3(0.0, 0.0, 0.0);");
-        doc.name = "wave-after-post".to_string();
-        identity_output(&mut doc);
-        doc.base.darken = true;
-        doc.base.solarize = true;
-        doc.waves[0].enabled = true;
-        doc.waves[0].frame_eqs = "r = 1; g = 1; b = 1; a = 1;".to_string();
+        let make_doc = |name: &str, filtered: bool| {
+            let mut doc = doc_with_comp("float3 ret = float3(0.0, 0.0, 0.0);");
+            doc.name = name.to_string();
+            identity_output(&mut doc);
+            if filtered {
+                doc.base.darken = true;
+                doc.base.solarize = true;
+            }
+            doc.waves[0].enabled = true;
+            doc.waves[0].frame_eqs = "r = 1; g = 1; b = 1; a = 1;".to_string();
+            doc.waves[0].point_eqs = "x = sample; y = 0.5;".to_string();
+            doc
+        };
 
         let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
-        let pixels = render_pixels(&device, &queue, &runtime, doc);
+        let plain = render_pixels(
+            &device,
+            &queue,
+            &runtime,
+            make_doc("wave-before-post", false),
+        );
+        let filtered = render_pixels(
+            &device,
+            &queue,
+            &runtime,
+            make_doc("wave-before-post-dark", true),
+        );
         assert!(
-            bright_count(&pixels) > 0,
-            "a white wave must survive darken+solarize post filters"
+            bright_count(&plain) > 0,
+            "the white wave must be visible without filters"
+        );
+        assert_eq!(
+            bright_count(&filtered),
+            0,
+            "darken+solarize must be applied to the wave (white -> black)"
         );
     }
 
@@ -4803,6 +5792,7 @@ mod gpu_tests {
         on.name = "wave-on".to_string();
         on.waves[0].enabled = true;
         on.waves[0].frame_eqs = "r = 1; g = 1; b = 1; a = 1;".to_string();
+        on.waves[0].point_eqs = "x = sample; y = 0.5;".to_string();
 
         let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
         let off_pixels = render_pixels(&device, &queue, &runtime, off);
@@ -4920,21 +5910,16 @@ mod gpu_tests {
         );
     }
 
-    /// Custom compiled waves keep priority: with one enabled `wavecode_*`
-    /// section the built-in wave must NOT also be drawn.
-    ///
-    /// CPU-side counts are used for the priority check (the two overlays can
-    /// overlap in pixel space); the control half verifies that the built-in
-    /// wave is synthesised once the custom wave is disabled. A GPU pixel check
-    /// confirms no red (built-in) pixels appear alongside the green custom
-    /// wave.
+    /// The built-in waveform is drawn alongside enabled custom waves, exactly
+    /// like MilkDrop's `DrawCustomWaves(); DrawWave(...)`. The custom wave is
+    /// green and the built-in red, so both colours must be present.
     #[test]
-    fn gpu_custom_wave_takes_priority_over_builtin() {
+    fn gpu_custom_and_builtin_waves_are_both_drawn() {
         let (device, queue) = match gpu() {
             Some(pair) => pair,
             None => {
                 eprintln!(
-                    "skipping gpu_custom_wave_takes_priority_over_builtin: no GPU adapter in this environment"
+                    "skipping gpu_custom_and_builtin_waves_are_both_drawn: no GPU adapter in this environment"
                 );
                 return;
             }
@@ -4942,7 +5927,8 @@ mod gpu_tests {
 
         let make_doc = || {
             let mut doc = builtin_wave_gpu_doc();
-            doc.name = "custom-wave-priority".to_string();
+            doc.name = "custom-and-builtin".to_string();
+            doc.base.wave_mode = 7;
             doc.waves[0].enabled = true;
             doc.waves[0].frame_eqs = "r = 0; g = 1; b = 0; a = 1;".to_string();
             doc.waves[0].point_eqs = "y = value1;".to_string();
@@ -4951,47 +5937,30 @@ mod gpu_tests {
 
         let f = sine_gpu_frame();
         let cache = MilkFailureCache::new();
-
-        let custom_doc = make_doc();
-        let mut custom = new_instance(
-            compile_preset("custom-priority", &custom_doc, &cache).expect("fixture compiles"),
+        let doc = make_doc();
+        let mut instance = new_instance(
+            compile_preset("custom-and-builtin", &doc, &cache).expect("fixture compiles"),
             7,
         );
-        begin_frame(&mut custom, &f).expect("begin_frame");
-        let custom_overlays = evaluate_overlays(&mut custom, &f).expect("evaluate_overlays");
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
         assert_eq!(
-            custom_overlays.waves.len(),
-            1,
-            "one custom wave + wave_a > 0 must draw exactly one wave (no double-draw)"
+            overlays.waves.len(),
+            3,
+            "one custom wave plus the two built-in mode-7 lines must all be evaluated"
         );
 
-        // Control: with the custom wave disabled the built-in wave must appear.
-        let mut control_doc = make_doc();
-        control_doc.waves[0].enabled = false;
-        let mut control = new_instance(
-            compile_preset("custom-priority-control", &control_doc, &cache)
-                .expect("fixture compiles"),
-            7,
-        );
-        begin_frame(&mut control, &f).expect("begin_frame");
-        let control_overlays = evaluate_overlays(&mut control, &f).expect("evaluate_overlays");
-        assert_eq!(
-            control_overlays.waves.len(),
-            1,
-            "with no custom waves, wave_a > 0 must produce exactly one built-in wave"
-        );
-
-        // Pixel-level guard: the custom wave is green, the built-in is red.
+        // Pixel-level guard: green from the custom wave and red from the
+        // built-in wave must both be visible.
         let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
         let pixels = render_pixels_with_frame(&device, &queue, &runtime, make_doc(), f);
         assert!(
             green_dominant_count(&pixels) > 0,
             "the custom green wave must be visible"
         );
-        assert_eq!(
-            red_dominant_count(&pixels),
-            0,
-            "the built-in red wave must not be drawn when a custom wave exists"
+        assert!(
+            red_dominant_count(&pixels) > 0,
+            "the built-in red waveform must be visible alongside the custom wave"
         );
     }
 
@@ -5191,10 +6160,9 @@ mod gpu_tests {
     }
 
     /// MilkDrop 2's classic composite filters are nonlinear, not fixed-strength
-    /// multiplies (milkdropfs.cpp): brighten = 1-(1-x)^2, darken = x^2 and
-    /// solarize = 2*x*(1-x). For a solid 0.25 comp these are 0.4375, 0.0625 and
-    /// 0.375 -> 112 / 16 / 96 in RGBA8, whereas a fixed 0.2 multiplier yields
-    /// 77 / 51 / 64. Each flag must move the pixels and land on the faithful
+    /// matches Butterchurn's composite shader: brighten = sqrt(x),
+    /// darken = x^2 and solarize = 4*x*(1-x). For a solid 0.25 comp these are
+    /// 0.5, 0.0625 and 0.75 -> 128 / 16 / 191 in RGBA8. Each flag must move the pixels and land on the faithful
     /// value; all flags off stays at 0.25 (64).
     #[test]
     fn gpu_post_processing_flags_use_faithful_filters() {
@@ -5225,9 +6193,9 @@ mod gpu_tests {
         assert_pixels_near(&baseline, [64, 64, 64], 8, "all post flags off");
         // Check the faithful values first (concise failures), then that each
         // flag moves the pixels relative to the all-off baseline.
-        assert_pixels_near(&brighten, [112, 112, 112], 8, "brighten (1-(1-x)^2)");
+        assert_pixels_near(&brighten, [128, 128, 128], 8, "brighten (sqrt)");
         assert_pixels_near(&darken, [16, 16, 16], 8, "darken (x^2)");
-        assert_pixels_near(&solarize, [96, 96, 96], 8, "solarize (2*x*(1-x))");
+        assert_pixels_near(&solarize, [191, 191, 191], 8, "solarize (4*x*(1-x))");
         assert_ne!(brighten, baseline, "brighten must change the output pixels");
         assert_ne!(darken, baseline, "darken must change the output pixels");
         assert_ne!(solarize, baseline, "solarize must change the output pixels");
@@ -5276,6 +6244,72 @@ mod gpu_tests {
                 );
             }
         }
+    }
+
+    /// Feedback must be the pre-post composite, not the displayed output.
+    ///
+    /// Butterchurn's `prevTexture` is the warped+overlay image; the comp/gamma/
+    /// filter pass writes only to the screen. Feeding the filtered output back
+    /// makes gamma/darken/solarize compound into noise (the original
+    /// witchcraft bug). With a solid 0.25 comp and `invert`, both frame 1 and
+    /// frame 2 must show 0.75: if the 0.75 output were fed back, frame 2 would
+    /// invert it back to 0.25.
+    #[test]
+    fn gpu_feedback_uses_the_pre_post_composite() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => return,
+        };
+        let mut doc = doc_with_comp("float3 ret = float3(0.25, 0.25, 0.25);");
+        doc.name = "feedback-prepost".to_string();
+        identity_output(&mut doc);
+        doc.base.invert = true;
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let (
+            mut instance,
+            frame,
+            mesh,
+            _previous,
+            previous_view,
+            _output,
+            _output_view,
+            mut targets,
+        ) = render_fixture(&device, &queue, &runtime, doc);
+
+        let first = test_texture(&device, WIDTH, HEIGHT, "feedback frame 1");
+        let first_view = first.create_view(&wgpu::TextureViewDescriptor::default());
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &first_view,
+            )
+            .expect("frame 1 renders");
+        let second = test_texture(&device, WIDTH, HEIGHT, "feedback frame 2");
+        let second_view = second.create_view(&wgpu::TextureViewDescriptor::default());
+        runtime
+            .render(
+                &mut instance,
+                &frame,
+                &mesh,
+                &previous_view,
+                &mut targets,
+                &second_view,
+            )
+            .expect("frame 2 renders");
+
+        let first_pixels = read_texture(&device, &queue, &first).expect("read frame 1");
+        let second_pixels = read_texture(&device, &queue, &second).expect("read frame 2");
+        assert_pixels_near(&first_pixels, [191, 191, 191], 8, "frame 1 inverted comp");
+        assert_pixels_near(
+            &second_pixels,
+            [191, 191, 191],
+            8,
+            "frame 2 must feed back the pre-post comp, not the inverted output",
+        );
     }
 
     /// MilkDrop's `fDecay` is the fraction of the previous frame that survives:

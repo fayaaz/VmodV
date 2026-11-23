@@ -69,7 +69,7 @@ pub struct MilkShader {
 ///
 /// Defaults are applied at parse time; only keys that appeared in the file
 /// override them. Unknown keys are recorded on the document, not here.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MilkBaseVals {
     pub decay: f64,
     pub gammaadj: f64,
@@ -126,6 +126,67 @@ pub struct MilkBaseVals {
     pub b2n: f64,
     pub b3n: f64,
     pub brightness: f64,
+    /// Legacy hue-shader amount (`fShader`); 1 tints the output by the
+    /// four-corner colour field, values between 0 and 1 blend it in.
+    pub shader: f64,
+}
+
+/// Per-section scalars for a custom wave (`wavecode_<i>_*`).
+///
+/// These are separate from [`MilkBaseVals`] because a wave section shadows the
+/// same property names with its own values: `samples`, `sep`, `scaling`,
+/// `smoothing`, `spectrum`, `thick`, `additive` and `r/g/b/a`. The defaults
+/// match Butterchurn's `waveBaseValsDefaults`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MilkWaveVals {
+    /// Authored sample count (`wavecode_<i>_samples`, clamped to 512 at runtime).
+    pub samples: usize,
+    /// Number of samples dropped from the centre for the stereo gap.
+    pub sep: usize,
+    pub scaling: f64,
+    pub smoothing: f64,
+    pub spectrum: bool,
+    pub draw_thick: bool,
+    pub additive: bool,
+    pub color: [f64; 4],
+}
+
+impl Default for MilkWaveVals {
+    fn default() -> Self {
+        Self {
+            samples: 512,
+            sep: 0,
+            scaling: 1.0,
+            smoothing: 0.5,
+            spectrum: false,
+            draw_thick: false,
+            additive: false,
+            color: [1.0; 4],
+        }
+    }
+}
+
+impl MilkWaveVals {
+    /// Apply one `wavecode_<i>_<prop>` scalar. Returns `false` when the
+    /// property is not wave-specific so the caller can fall back to the
+    /// shared base-val table (`enabled`, `bUseDots`, ...).
+    fn set_prop(&mut self, prop: &str, value: &str) -> bool {
+        match prop {
+            "samples" | "nsamples" => self.samples = parse_usize(value),
+            "sep" => self.sep = parse_usize(value),
+            "scaling" => self.scaling = parse_f64(value),
+            "smoothing" => self.smoothing = parse_f64(value),
+            "spectrum" | "bspectrum" => self.spectrum = parse_bool(value),
+            "thick" | "bdrawthick" | "drawthick" => self.draw_thick = parse_bool(value),
+            "additive" | "badditive" => self.additive = parse_bool(value),
+            "r" => self.color[0] = parse_f64(value),
+            "g" => self.color[1] = parse_f64(value),
+            "b" => self.color[2] = parse_f64(value),
+            "a" => self.color[3] = parse_f64(value),
+            _ => return false,
+        }
+        true
+    }
 }
 
 /// One of the four wave sections.
@@ -134,6 +195,8 @@ pub struct MilkWave {
     /// From `wavecode_<i>_enabled`; false means the section is ignored.
     pub enabled: bool,
     pub base: MilkBaseVals,
+    /// Wave-specific scalars (sample count, stereo gap, colour, ...).
+    pub values: MilkWaveVals,
     pub init_eqs: String,
     pub frame_eqs: String,
     pub point_eqs: String,
@@ -185,7 +248,7 @@ impl MilkDocument {
 /// Canonical MilkDrop base values applied before any file overrides.
 fn default_base_vals() -> MilkBaseVals {
     MilkBaseVals {
-        decay: 1.0,
+        decay: 0.98,
         gammaadj: 2.0,
         zoom: 1.0,
         zoomexp: 1.0,
@@ -197,49 +260,50 @@ fn default_base_vals() -> MilkBaseVals {
         dy: 0.0,
         sx: 1.0,
         sy: 1.0,
-        echo_zoom: 1.0,
-        echo_alpha: 1.0,
+        echo_zoom: 2.0,
+        echo_alpha: 0.0,
         echo_orient: 0,
         wave_mode: 0,
         additivewave: false,
         wave_dots: false,
         wave_thick: false,
         wave_brighten: true,
-        wrap: false,
-        darken_center: true,
+        wrap: true,
+        darken_center: false,
         red_blue: false,
         brighten: false,
         darken: false,
         solarize: false,
         invert: false,
-        wave_a: 1.0,
-        wave_r: 0.5,
-        wave_g: 0.5,
-        wave_b: 0.5,
+        wave_a: 0.8,
+        wave_r: 1.0,
+        wave_g: 1.0,
+        wave_b: 1.0,
         wave_x: 0.5,
         wave_y: 0.5,
         wave_scale: 1.0,
-        wave_smoothing: 0.0,
-        wave_mystery: 1.0,
-        modwavealphastart: 0.0,
-        modwavealphaend: 1.0,
+        wave_smoothing: 0.75,
+        wave_mystery: 0.0,
+        modwavealphastart: 0.75,
+        modwavealphaend: 0.95,
         warpanimspeed: 1.0,
         warpscale: 1.0,
-        mv_x: 0,
-        mv_y: 0,
+        mv_x: 12,
+        mv_y: 9,
         mv_a: 1.0,
-        mv_r: 0.0,
-        mv_g: 0.0,
-        mv_b: 0.0,
-        mv_len: 0.0,
-        ob_size: 0.02,
-        ob_a: 1.0,
-        ib_size: 0.02,
-        ib_a: 1.0,
+        mv_r: 1.0,
+        mv_g: 1.0,
+        mv_b: 1.0,
+        mv_len: 0.9,
+        ob_size: 0.01,
+        ob_a: 0.0,
+        ib_size: 0.01,
+        ib_a: 0.0,
         b1n: 0.0,
         b2n: 0.0,
         b3n: 0.0,
         brightness: 1.0,
+        shader: 0.0,
     }
 }
 
@@ -247,8 +311,22 @@ fn parse_f64(value: &str) -> f64 {
     value.trim().parse::<f64>().unwrap_or(0.0)
 }
 
+impl Default for MilkBaseVals {
+    fn default() -> Self {
+        default_base_vals()
+    }
+}
+
 fn parse_i64(value: &str) -> i64 {
     value.trim().parse::<i64>().unwrap_or(0)
+}
+
+fn parse_usize(value: &str) -> usize {
+    value
+        .trim()
+        .parse::<f64>()
+        .map(|value| value.max(0.0) as usize)
+        .unwrap_or(0)
 }
 
 fn parse_bool(value: &str) -> bool {
@@ -490,6 +568,10 @@ static BASE_VALS: &[BaseVal] = &[
         keys: &["brightness", "fbrightness"],
         set: |b, v| b.brightness = parse_f64(v),
     },
+    BaseVal {
+        keys: &["fshader", "shader"],
+        set: |b, v| b.shader = parse_f64(v),
+    },
 ];
 
 /// Metadata keys that are valid in a preset but carry no scalar state.
@@ -501,7 +583,6 @@ static BASE_VALS: &[BaseVal] = &[
 static METADATA_KEYS: &[&str] = &[
     "milkdrop_preset_version",
     "frating",
-    "fshader",
     "fpreview",
     "psversion",
     "psversion_warp",
@@ -543,6 +624,8 @@ impl EqLines {
 struct SectionAcc {
     enabled: bool,
     base: MilkBaseVals,
+    wave_values: MilkWaveVals,
+    wave_section: bool,
     init: EqLines,
     frame: EqLines,
     point: EqLines,
@@ -556,11 +639,21 @@ impl SectionAcc {
         }
     }
 
+    fn new_wave() -> Self {
+        Self {
+            wave_section: true,
+            ..Self::new()
+        }
+    }
+
     /// Apply a `wavecode_<i>_*` / `shapecode_<i>_*` property. `enabled` is the
-    /// only non-scalar property; every other property is a base val.
+    /// only non-scalar property; wave-specific scalars have their own table and
+    /// everything else falls back to the shared base vals.
     fn set_prop(&mut self, prop: &str, value: &str, diagnostics: &mut Vec<String>) {
         if prop == "enabled" {
             self.enabled = parse_bool(value);
+        } else if self.wave_section && self.wave_values.set_prop(prop, value) {
+            // handled by the wave-specific table
         } else {
             apply_base_val(&mut self.base, prop, value, diagnostics);
         }
@@ -727,7 +820,7 @@ pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseE
     let mut pixel_eqs = EqLines::default();
     let mut warp_lines = EqLines::default();
     let mut comp_lines = EqLines::default();
-    let mut wave_acc: [SectionAcc; SECTION_COUNT] = std::array::from_fn(|_| SectionAcc::new());
+    let mut wave_acc: [SectionAcc; SECTION_COUNT] = std::array::from_fn(|_| SectionAcc::new_wave());
     let mut shape_acc: [SectionAcc; SECTION_COUNT] = std::array::from_fn(|_| SectionAcc::new());
 
     for line in normalized.lines().skip(section_start + 1) {
@@ -800,6 +893,7 @@ pub fn parse_milk(src: &str, file_stem: &str) -> Result<MilkDocument, MilkParseE
     let waves = wave_acc.map(|section| MilkWave {
         enabled: section.enabled,
         base: section.base,
+        values: section.wave_values,
         init_eqs: section.init.into_source(),
         frame_eqs: section.frame.into_source(),
         point_eqs: section.point.into_source(),
@@ -848,7 +942,7 @@ per_frame_1=wave_y = 0.5;
         let doc = parse_milk(V1, "v1_preset").expect("v1 preset parses");
         assert_eq!(doc.version, 1, "no version marker means v1");
         assert_eq!(doc.name, "v1_preset", "name comes from the file stem");
-        assert!((doc.base.decay - 1.0).abs() < 1e-9, "default decay");
+        assert!((doc.base.decay - 0.98).abs() < 1e-9, "default decay");
         assert!((doc.base.zoom - 1.0).abs() < 1e-9, "default zoom");
         assert!((doc.base.cx - 0.5).abs() < 1e-9, "default cx");
         assert!((doc.base.cy - 0.5).abs() < 1e-9, "default cy");
@@ -860,7 +954,7 @@ per_frame_1=wave_y = 0.5;
         assert_eq!(doc.version, 2, "MILKDROP_PRESET_VERSION=201 means v2");
         assert_eq!(doc.name, "v2_preset");
         assert!(
-            (doc.base.decay - 1.0).abs() < 1e-9,
+            (doc.base.decay - 0.98).abs() < 1e-9,
             "defaults still apply in v2"
         );
     }
@@ -926,6 +1020,57 @@ per_frame_1=wave_y = 0.5;
         assert!(
             !doc.diagnostics.iter().any(|d| d.contains("busedots")),
             "the real preset spelling must not be diagnosed as unknown"
+        );
+    }
+
+    #[test]
+    fn wavecode_scalars_and_colours_are_parsed_without_diagnostics() {
+        let src = "\
+[preset00]
+wavecode_0_enabled=1
+wavecode_0_samples=512
+wavecode_0_sep=3
+wavecode_0_scaling=1.25
+wavecode_0_smoothing=0.5
+wavecode_0_bSpectrum=1
+wavecode_0_bDrawThick=1
+wavecode_0_bAdditive=1
+wavecode_0_r=0.1
+wavecode_0_g=0.2
+wavecode_0_b=0.3
+wavecode_0_a=0.4
+";
+        let doc = parse_milk(src, "wave-vals").expect("parses");
+        let wave = &doc.waves[0];
+        assert_eq!(wave.values.samples, 512);
+        assert_eq!(wave.values.sep, 3);
+        assert!((wave.values.scaling - 1.25).abs() < 1e-9);
+        assert!((wave.values.smoothing - 0.5).abs() < 1e-9);
+        assert!(wave.values.spectrum, "bSpectrum selects the FFT source");
+        assert!(wave.values.draw_thick, "bDrawThick selects a thick stroke");
+        assert!(wave.values.additive, "bAdditive selects additive blending");
+        for (actual, expected) in wave.values.color.iter().zip([0.1, 0.2, 0.3, 0.4]) {
+            assert!((actual - expected).abs() < 1e-9, "colour {expected}");
+        }
+        assert!(
+            !doc.diagnostics.iter().any(|d| d.contains("wavecode")),
+            "wave-specific scalars must not be reported as unknown: {:?}",
+            doc.diagnostics
+        );
+    }
+
+    #[test]
+    fn fshader_base_val_is_parsed_for_the_legacy_hue_shader() {
+        let src = "[preset00]\nfShader=1.000000\n";
+        let doc = parse_milk(src, "hue").expect("parses");
+        assert!(
+            (doc.base.shader - 1.0).abs() < 1e-9,
+            "fShader must reach MilkBaseVals::shader, got {}",
+            doc.base.shader
+        );
+        assert!(
+            !doc.diagnostics.iter().any(|d| d.contains("fshader")),
+            "fShader is a known base val, not metadata"
         );
     }
 

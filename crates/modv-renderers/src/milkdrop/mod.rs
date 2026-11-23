@@ -54,7 +54,7 @@ mod q_uniforms;
 
 pub use preset::{
     MilkBaseVals, MilkDocument, MilkEquationSet, MilkParseError, MilkShader, MilkShape, MilkWave,
-    extract_shader_body, parse_milk,
+    MilkWaveVals, extract_shader_body, parse_milk,
 };
 
 pub use eel::{
