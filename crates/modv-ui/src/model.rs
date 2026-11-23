@@ -2288,6 +2288,10 @@ impl SceneCellView {
 pub struct ModuleMetaView {
     pub name: String,
     pub module_type: String,
+    /// The renderer that actually owns this module (`shader`, `2d`,
+    /// `point10`, `isf`, `milkdrop`). Unlike `module_type` this is authoritative:
+    /// Point10 scenes register as `module_type: "2d"` for legacy compatibility.
+    pub kind: String,
     pub category: String,
     pub author: String,
     pub version: String,

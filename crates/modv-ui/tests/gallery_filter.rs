@@ -8,6 +8,7 @@ fn module(name: &str, module_type: &str, category: &str) -> ModuleMetaView {
     ModuleMetaView {
         name: name.to_string(),
         module_type: module_type.to_string(),
+        kind: module_type.to_string(),
         category: category.to_string(),
         author: "modV".to_string(),
         version: "1.0".to_string(),
@@ -211,11 +212,13 @@ fn search_matches_author_case_insensitively_and_trims_whitespace() {
 // `Point10` author. A plain 2D module must therefore never match a Point10
 // type query, despite sharing that `module_type`.
 
-/// Like `module`, but lets a fixture vary its author.
+/// Like `module`, but for a Point10 scene: the renderer kind is authoritative
+/// even though Point10 registers with the legacy `module_type` of `"2d"`.
 fn module_by(name: &str, module_type: &str, category: &str, author: &str) -> ModuleMetaView {
     ModuleMetaView {
         name: name.to_string(),
         module_type: module_type.to_string(),
+        kind: "point10".to_string(),
         category: category.to_string(),
         author: author.to_string(),
         version: "1.0".to_string(),

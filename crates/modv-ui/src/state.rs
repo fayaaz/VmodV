@@ -1644,18 +1644,40 @@ impl GalleryCategory {
 
 /// The Gallery's visible modules for a category and search text.
 ///
-/// The search matches the module name or author, case-insensitively, and a
-/// whitespace-only query behaves like an empty one. There is deliberately no
-/// tile cap: the Gallery scrolls instead of truncating the registry.
+/// The remaining search terms match the module name or author,
+/// case-insensitively, and a whitespace-only query behaves like an empty one.
+/// A `type:<token>` directive restricts results to modules of that renderer
+/// kind (`shader`, `2d`, `point10`, `isf`, `milkdrop`), using the authoritative
+/// [`ModuleMetaView::kind`] rather than the legacy `module_type`. An unknown
+/// token matches nothing. There is deliberately no tile cap: the Gallery
+/// scrolls instead of truncating the registry.
 pub fn filter_gallery_modules<'a>(
     registered: &'a [ModuleMetaView],
     category: GalleryCategory,
     search: &str,
 ) -> Vec<&'a ModuleMetaView> {
-    let filter = search.trim().to_ascii_lowercase();
+    let mut type_terms: Vec<String> = Vec::new();
+    let mut text_terms: Vec<&str> = Vec::new();
+    for term in search.split_whitespace() {
+        let lowered = term.to_ascii_lowercase();
+        if let Some(token) = lowered.strip_prefix("type:") {
+            if !matches!(token, "shader" | "2d" | "point10" | "isf" | "milkdrop") {
+                return Vec::new();
+            }
+            type_terms.push(token.to_string());
+        } else {
+            text_terms.push(term);
+        }
+    }
+    let filter = text_terms.join(" ").to_ascii_lowercase();
     registered
         .iter()
         .filter(|module| category.matches(module.gallery_category()))
+        .filter(|module| {
+            type_terms
+                .iter()
+                .all(|kind| module.kind.eq_ignore_ascii_case(kind))
+        })
         .filter(|module| {
             filter.is_empty()
                 || module.name.to_ascii_lowercase().contains(&filter)

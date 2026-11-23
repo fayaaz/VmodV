@@ -187,6 +187,19 @@ pub enum ModuleKind {
     Milkdrop,
 }
 
+impl ModuleKind {
+    /// The stable Gallery search token for this renderer.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shader => "shader",
+            Self::TwoD => "2d",
+            Self::Point10 => "point10",
+            Self::Isf => "isf",
+            Self::Milkdrop => "milkdrop",
+        }
+    }
+}
+
 /// A registered 2D module: its static metadata and prop descriptors, factored
 /// out of the module instance so the store can answer without building one.
 #[derive(Clone, Debug, PartialEq)]

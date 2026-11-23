@@ -19,6 +19,7 @@ fn meta(name: &str) -> modv_ui::ModuleMetaView {
     modv_ui::ModuleMetaView {
         name: name.to_string(),
         module_type: "shader".to_string(),
+        kind: String::new(),
         category: "effects".to_string(),
         author: "modV".to_string(),
         version: "1.0".to_string(),

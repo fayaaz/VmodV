@@ -4614,7 +4614,7 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         let search = ui
             .add(
                 egui::TextEdit::singleline(&mut state.search)
-                    .hint_text("Search modules  (Ctrl+K)")
+                    .hint_text("Search modules  (type:isf)  (Ctrl+K)")
                     .desired_width(search_width),
             )
             .on_hover_text("Double-click a tile to add it to the selected Group");

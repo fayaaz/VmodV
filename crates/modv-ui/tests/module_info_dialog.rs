@@ -19,6 +19,7 @@ fn harness() -> Harness<'static, UiState> {
         registered: vec![ModuleMetaView {
             name: "Boxinator".to_string(),
             module_type: "isf".to_string(),
+            kind: String::new(),
             category: "3d-scenes".to_string(),
             author: "mojovideotech".to_string(),
             version: "1.0".to_string(),

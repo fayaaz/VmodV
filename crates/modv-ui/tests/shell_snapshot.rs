@@ -15,6 +15,7 @@ fn meta(name: &str, module_type: &str, category: &str) -> ModuleMetaView {
     ModuleMetaView {
         name: name.to_string(),
         module_type: module_type.to_string(),
+        kind: String::new(),
         category: category.to_string(),
         author: "modV".to_string(),
         version: "1.0".to_string(),

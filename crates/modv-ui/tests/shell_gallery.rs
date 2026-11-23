@@ -44,6 +44,7 @@ fn gallery_meta(name: &str, module_type: &str) -> ModuleMetaView {
     ModuleMetaView {
         name: name.to_string(),
         module_type: module_type.to_string(),
+        kind: module_type.to_string(),
         category: if module_type == "isf" {
             "3d-scenes".to_string()
         } else {
