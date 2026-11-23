@@ -2,7 +2,9 @@
   <img src="resources/icon.png" alt="VmodV logo" width="128" />
 </p>
 
+<p align="center">
 # VmodV
+</p>
 
 <p align="center">
   <a href="https://github.com/fayaaz/VmodV/releases/latest">
