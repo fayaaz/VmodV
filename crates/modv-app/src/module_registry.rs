@@ -3376,3 +3376,223 @@ void main() { gl_FragColor = vec4(1.0); }
         );
     }
 }
+
+#[cfg(test)]
+mod user_module_registry_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // ============================ RED-ONLY SHIM ============================
+    // `ModuleRegistry::with_user_modules` is the API under test. Its real
+    // implementation does NOT exist in RED, so this no-op keeps the test
+    // compiling and failing on the assertion (module not registered) rather
+    // than on a compile error. GREEN MUST delete this entire `impl` block and
+    // add the real builder method to the main `impl ModuleRegistry` above.
+    impl ModuleRegistry {
+        pub fn with_user_modules(self, _dirs: &[PathBuf]) -> Self {
+            self
+        }
+    }
+    // ========================== END RED-ONLY SHIM ==========================
+
+    const USER_WGSL: &str = "@fragment fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> { return vec4<f32>(p.x / 100.0, p.y / 100.0, 0.0, 1.0); } // SINE_FIELD_SOURCE_SENTINEL";
+    const COLLISION_WGSL: &str = "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); } // USER_COLLISION_SENTINEL";
+
+    struct FixtureDir {
+        root: PathBuf,
+    }
+
+    impl FixtureDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            let root = std::env::temp_dir().join(format!(
+                "vmodv_user_module_registry_{}_{}_{}",
+                std::process::id(),
+                nanos,
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&root).expect("create fixture root");
+            Self { root }
+        }
+
+        fn write(&self, relative: &str, contents: &str) {
+            let path = self.root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create fixture subdirectory");
+            }
+            fs::write(path, contents).expect("write fixture file");
+        }
+    }
+
+    impl Drop for FixtureDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn user_modules_registered_from_directories_and_collisions_ignored() {
+        let fixture = FixtureDir::new();
+        fixture.write(
+            "modules/00_sine.json",
+            r#"{
+                "name": "Sine Field",
+                "author": "Ada",
+                "version": "2.1.0",
+                "description": "A user-authored sine field",
+                "category": "effects",
+                "license": "MIT",
+                "wgsl": "sine.wgsl",
+                "entry": "fs_main",
+                "audio": true,
+                "previewWithOutput": false,
+                "props": [
+                    {"name":"u_speed","label":"Speed","type":"float","default":0.5,"min":0.0,"max":2.0,"step":0.05},
+                    {"name":"u_gain","type":"float","default":1.0}
+                ]
+            }"#,
+        );
+        fixture.write("modules/sine.wgsl", USER_WGSL);
+        // A descriptor sharing a built-in shader name must be ignored.
+        fixture.write(
+            "modules/01_collision.json",
+            &format!(
+                r#"{{"name":"Bands","wgslSource":"{COLLISION_WGSL}","props":[{{"name":"u_user_collision_prop","type":"float","default":1.0}}]}}"#
+            ),
+        );
+
+        let registry = ModuleRegistry::builtin().with_user_modules(&[fixture.root.join("modules")]);
+
+        let mut failures = Vec::new();
+
+        // (a) Registration as a shader module.
+        let kind = registry.kind("Sine Field");
+        if kind != Some(ModuleKind::Shader) {
+            failures.push(format!(
+                "kind(\"Sine Field\"): got {kind:?}, expected Some(Shader)"
+            ));
+        }
+
+        // (b) The descriptor's WGSL source and meta survive the conversion.
+        match registry.shader_module("Sine Field") {
+            Some(module) => {
+                if !module.fragment_wgsl.contains("SINE_FIELD_SOURCE_SENTINEL") {
+                    failures.push(format!(
+                        "shader_module(\"Sine Field\").fragment_wgsl: got {:?}, expected the sibling WGSL source",
+                        module.fragment_wgsl
+                    ));
+                }
+                if json!(module.meta_author) != json!("Ada") {
+                    failures.push(format!(
+                        "shader_module(\"Sine Field\").meta_author: got {:?}, expected \"Ada\"",
+                        json!(module.meta_author)
+                    ));
+                }
+                if json!(module.meta_version) != json!("2.1.0") {
+                    failures.push(format!(
+                        "shader_module(\"Sine Field\").meta_version: got {:?}, expected \"2.1.0\"",
+                        json!(module.meta_version)
+                    ));
+                }
+            }
+            None => failures.push("shader_module(\"Sine Field\") returned None".to_string()),
+        }
+        match registry.meta_fields("Sine Field") {
+            Some(meta) => {
+                if meta.get("category") != Some(&json!("effects")) {
+                    failures.push(format!(
+                        "meta_fields(\"Sine Field\").category: got {:?}, expected \"effects\"",
+                        meta.get("category")
+                    ));
+                }
+                if meta.get("previewWithOutput") != Some(&json!(false)) {
+                    failures.push(format!(
+                        "meta_fields(\"Sine Field\").previewWithOutput: got {:?}, expected false",
+                        meta.get("previewWithOutput")
+                    ));
+                }
+            }
+            None => failures.push("meta_fields(\"Sine Field\") returned None".to_string()),
+        }
+
+        // (c) The Gallery mirror includes the module and its declared props.
+        let registered = registry.registered_modules();
+        match registered.get("Sine Field") {
+            Some(entry) => {
+                let props = entry.get("props").and_then(Value::as_object);
+                if let Some(props) = props {
+                    for (name, min, max, default) in
+                        [("u_speed", 0.0, 2.0, 0.5), ("u_gain", 0.0, 1.0, 1.0)]
+                    {
+                        match props.get(name) {
+                            Some(schema) => {
+                                if schema.get("type") != Some(&json!("float"))
+                                    || schema.get("min") != Some(&json!(min))
+                                    || schema.get("max") != Some(&json!(max))
+                                    || schema.get("default") != Some(&json!(default))
+                                {
+                                    failures.push(format!(
+                                        "registered_modules()[\"Sine Field\"].props[\"{name}\"]: got {schema:?}, expected a float schema with min={min}, max={max}, default={default}"
+                                    ));
+                                }
+                            }
+                            None => failures.push(format!(
+                                "registered_modules()[\"Sine Field\"] is missing prop `{name}`"
+                            )),
+                        }
+                    }
+                } else {
+                    failures.push(format!(
+                        "registered_modules()[\"Sine Field\"].props is not an object: {entry:?}"
+                    ));
+                }
+            }
+            None => failures.push(format!(
+                "registered_modules() is missing \"Sine Field\" ({} entries total)",
+                registered.as_object().map_or(0, Map::len)
+            )),
+        }
+
+        // (d) A descriptor sharing a built-in name must be ignored entirely.
+        let bands: Vec<&ShaderModule> = registry
+            .shader_modules()
+            .iter()
+            .filter(|module| module.name == "Bands")
+            .collect();
+        if bands.len() != 1 {
+            failures.push(format!(
+                "shader modules named \"Bands\": got {}, expected 1 (built-in must not be duplicated)",
+                bands.len()
+            ));
+        }
+        if bands
+            .iter()
+            .any(|module| module.fragment_wgsl.contains("USER_COLLISION_SENTINEL"))
+        {
+            failures.push(
+                "the colliding user descriptor replaced the built-in Bands WGSL source".to_string(),
+            );
+        }
+        if registered
+            .get("Bands")
+            .and_then(|entry| entry.get("props"))
+            .and_then(Value::as_object)
+            .is_some_and(|props| props.contains_key("u_user_collision_prop"))
+        {
+            failures.push(
+                "the colliding user descriptor leaked its prop into the built-in Bands registry entry"
+                    .to_string(),
+            );
+        }
+
+        assert!(
+            failures.is_empty(),
+            "user modules must be registered from directories without shadowing built-ins:\n  {}",
+            failures.join("\n  ")
+        );
+    }
+}
