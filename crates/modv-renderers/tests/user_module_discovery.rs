@@ -5,34 +5,13 @@
 //! under their media folder. Discovery must find those descriptors, attach
 //! sibling WGSL source, skip malformed/hidden/temp files and deduplicate by
 //! module name — without touching GPU or registry code.
-//!
-//! # TEMPORARY RED SHIM — DELETE IN GREEN
-//!
-//! `load_user_modules` does not exist in production yet. The local shim below
-//! has the exact expected signature and returns an empty `Vec` so this test
-//! compiles today and fails on the assertion (never a compile error).
-//!
-//! GREEN implementer: delete the shim function and its comment block, add
-//! `load_user_modules` to the `use modv_renderers::user_module::{...}` import
-//! and implement discovery in `crates/modv-renderers/src/user_module.rs`.
-//! Keep the assertions unchanged.
 
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use modv_renderers::user_module::UserModuleDescriptor;
-
-// ---------------------------------------------------------------------------
-// BEGIN TEMPORARY RED SHIM (delete in GREEN, import the real API instead).
-// ---------------------------------------------------------------------------
-fn load_user_modules(_dirs: &[PathBuf]) -> Vec<UserModuleDescriptor> {
-    Vec::new()
-}
-// ---------------------------------------------------------------------------
-// END TEMPORARY RED SHIM.
-// ---------------------------------------------------------------------------
+use modv_renderers::user_module::{UserModuleDescriptor, load_user_modules};
 
 const SIBLING_WGSL: &str = "@fragment fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> { return vec4<f32>(p.x / 100.0, 0.0, 0.0, 1.0); }";
 const INLINE_WGSL: &str =

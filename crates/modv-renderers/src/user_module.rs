@@ -1,9 +1,15 @@
-//! Pure parser for user-authored WGSL + JSON module descriptors.
+//! Parser and filesystem discovery for user-authored WGSL + JSON modules.
 //!
-//! See BUGS.md item 5. This module deliberately does no filesystem access,
-//! environment reads or GPU work: it turns descriptor JSON (plus an optional
-//! sibling WGSL source string) into a validated [`UserModuleDescriptor`].
-//! Discovery and registration are handled elsewhere.
+//! See BUGS.md item 5. [`parse_user_module`] is pure: it turns descriptor JSON
+//! (plus an optional sibling WGSL source string) into a validated
+//! [`UserModuleDescriptor`]. [`load_user_modules`] finds those descriptors in
+//! user module directories and attaches the referenced WGSL source. No GPU or
+//! registry work happens here.
+
+use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Value};
 
@@ -35,6 +41,79 @@ pub struct UserModuleDescriptor {
     pub audio: bool,
     pub preview_with_output: bool,
     pub props: Vec<UserModuleProp>,
+}
+
+/// Discover user modules in `dirs`, returning them in deterministic path order.
+///
+/// Every directory is scanned for `.json` descriptors (case-insensitively).
+/// A descriptor either carries its WGSL inline (`wgslSource`) or names a
+/// sibling file (`wgsl`) next to the descriptor. Hidden/temp files, unreadable
+/// files, malformed descriptors and duplicate module names are skipped.
+pub fn load_user_modules(dirs: &[PathBuf]) -> Vec<UserModuleDescriptor> {
+    let mut paths = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        paths.extend(entries.filter_map(Result::ok).filter_map(|entry| {
+            let path = entry.path();
+            let is_json = path
+                .extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+            (is_json && !is_ignored_name(&path)).then_some(path)
+        }));
+    }
+    paths.sort();
+
+    let mut seen = HashSet::new();
+    let mut modules = Vec::new();
+    for path in paths {
+        let Ok(json) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&json) else {
+            continue;
+        };
+        let sibling = sibling_source(&path, value.as_object());
+        let Ok(descriptor) = parse_user_module(&json, sibling.as_deref()) else {
+            continue;
+        };
+        if seen.insert(descriptor.name.clone()) {
+            modules.push(descriptor);
+        }
+    }
+    modules
+}
+
+/// Hidden, backup and temporary file names are not user module descriptors.
+fn is_ignored_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| {
+            name.starts_with('.')
+                || name.starts_with('~')
+                || name.ends_with('~')
+                || name.ends_with(".tmp")
+        })
+}
+
+/// Read the sibling file named by a descriptor's `wgsl` field, if any.
+fn sibling_source(path: &Path, object: Option<&Map<String, Value>>) -> Option<String> {
+    let object = object?;
+    if optional_string_field(object, "wgslSource").is_some() {
+        return None;
+    }
+    let name = object.get("wgsl")?.as_str()?;
+    let relative = Path::new(name);
+    if !relative
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    let source = fs::read_to_string(path.parent()?.join(relative)).ok()?;
+    (!source.is_empty()).then_some(source)
 }
 
 /// Failures reported by the pure descriptor parser.
