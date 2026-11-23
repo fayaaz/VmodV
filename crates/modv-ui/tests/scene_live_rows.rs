@@ -83,13 +83,21 @@ fn snapshot() -> EngineSnapshot {
 }
 
 fn harness(size: [f32; 2]) -> Harness<'static, UiState> {
+    harness_with_performance(size, true)
+}
+
+fn harness_with_performance(
+    size: [f32; 2],
+    performance_enabled: bool,
+) -> Harness<'static, UiState> {
     let state = UiState::new();
     let mut harness = Harness::builder()
         .with_size(size)
         .with_accessibility_check(false)
         .build_ui_state(
             move |ui, state| {
-                let snapshot = snapshot();
+                let mut snapshot = snapshot();
+                snapshot.performance.enabled = performance_enabled;
                 modv_ui::panels::draw_scene_grid(
                     ui,
                     &snapshot,
@@ -224,24 +232,64 @@ fn performance_mode_ignores_the_applied_scene_when_rows_diverge() {
 }
 
 #[test]
-fn performance_off_keeps_the_applied_scene_as_a_whole_column() {
-    let rows = live_rows(&[(1, "scene-b")]);
+fn performance_off_marks_only_each_rows_live_cell_in_the_pure_decision() {
+    let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
 
-    for row in 0..3 {
-        assert_eq!(
-            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", row),
-            SceneCellHighlight::Applied,
-            "the applied Scene highlights every row while performance is off"
-        );
-    }
     assert_eq!(
-        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-b", 1),
-        SceneCellHighlight::None
+        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 0),
+        SceneCellHighlight::Live,
+        "row 0 is live on Scene A even with performance mode off"
     );
     assert_eq!(
-        scene_cell_highlight(false, None, &rows, "scene-a", 0),
+        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-b", 1),
+        SceneCellHighlight::Live,
+        "row 1 is live on Scene B even though Scene A is the applied Scene"
+    );
+    assert_eq!(
+        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 1),
         SceneCellHighlight::None,
-        "no applied Scene highlights nothing"
+        "the applied Scene must not light another row's live cell"
+    );
+    assert_eq!(
+        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 2),
+        SceneCellHighlight::None,
+        "the applied Scene must not light a row with no live Scene"
+    );
+}
+
+/// The user-visible regression from BUGS.md: with performance mode off the
+/// grid used to light the entire applied Scene column, hiding the fact that
+/// other rows were live on different Scenes. Only the actual per-row live
+/// cells may carry the LIVE marker.
+#[test]
+fn performance_off_marks_only_the_rows_live_scenes_in_the_grid() {
+    let harness = harness_with_performance([700.0, 480.0], false);
+
+    assert!(
+        harness.query_by_label("LIVE Aurora row 1").is_some(),
+        "row 0's live Scene must be marked in the grid with performance off"
+    );
+    assert!(
+        harness.query_by_label("LIVE Basalt row 2").is_some(),
+        "row 1's live Scene must be marked in the grid with performance off"
+    );
+
+    assert!(
+        harness.query_by_label("LIVE Aurora row 2").is_none(),
+        "the applied Scene must not light a whole column while other rows are live"
+    );
+    assert!(
+        harness.query_by_label("LIVE Aurora row 3").is_none(),
+        "the applied Scene must not light a row with no live Scene"
+    );
+    assert!(
+        harness.query_by_label("LIVE Basalt row 1").is_none(),
+        "Basalt is live only in row 1"
+    );
+    assert_eq!(
+        harness.get_all_by_label_contains("LIVE ").count(),
+        2,
+        "exactly one live cell per live row, never a whole column"
     );
 }
 

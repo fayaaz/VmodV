@@ -2484,24 +2484,41 @@ mod tests {
     }
 
     #[test]
-    fn performance_off_keeps_the_applied_scene_as_a_whole_column() {
-        let rows = live_rows(&[(1, "scene-b")]);
+    fn performance_off_marks_only_each_rows_live_cell() {
+        // Even with performance mode off, the live Group stamps are the
+        // authoritative per-row answer. The applied Scene must not light its
+        // whole column when other rows are live on different Scenes (BUGS.md).
+        let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
 
-        for row in 0..3 {
-            assert_eq!(
-                scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", row),
-                SceneCellHighlight::Applied,
-                "the applied Scene highlights every row while performance is off"
-            );
-        }
+        assert_eq!(
+            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 0),
+            SceneCellHighlight::Live,
+            "row 0 is live on Scene A even with performance mode off"
+        );
         assert_eq!(
             scene_cell_highlight(false, Some("scene-a"), &rows, "scene-b", 1),
-            SceneCellHighlight::None
+            SceneCellHighlight::Live,
+            "row 1 is live on Scene B even though Scene A is the applied Scene"
+        );
+        assert_eq!(
+            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 1),
+            SceneCellHighlight::None,
+            "the applied Scene must not light a row that is live on another Scene"
+        );
+        assert_eq!(
+            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 2),
+            SceneCellHighlight::None,
+            "the applied Scene must not light a row with no live Scene"
+        );
+        assert_eq!(
+            scene_cell_highlight(false, Some("scene-c"), &rows, "scene-c", 0),
+            SceneCellHighlight::None,
+            "an applied Scene that is not live in any row marks nothing"
         );
         assert_eq!(
             scene_cell_highlight(false, None, &rows, "scene-a", 0),
-            SceneCellHighlight::None,
-            "no applied Scene highlights nothing"
+            SceneCellHighlight::Live,
+            "per-row live Scenes are marked even without an applied Scene"
         );
     }
 }
