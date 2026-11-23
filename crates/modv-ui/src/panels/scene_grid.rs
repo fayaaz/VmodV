@@ -43,6 +43,10 @@ impl CellRef {
 pub struct SceneGridState {
     pub hovered: Option<CellRef>,
     pub copy_source: Option<CellRef>,
+    /// Whether `copy_source` came from a Ctrl+drag (as opposed to the menu's
+    /// Copy item). Only drag-originated copies are cancelled on pointer
+    /// release; a menu copy is a durable clipboard for Paste.
+    copy_is_drag: bool,
     /// Hover-preview requests drained by the shell after drawing.
     pub preview_requests: Vec<PreviewRequest>,
     last_preview_request: Option<std::time::Instant>,
@@ -143,13 +147,23 @@ fn timing_badge(timing: (f64, f64), unit: TimingUnit) -> String {
 }
 
 impl SceneGridState {
-    /// Start a Ctrl+drag copy from `cell`.
+    /// Remember `cell` as the copy clipboard (e.g. from the context menu).
+    /// This is durable: it survives pointer releases until cancelled.
     pub fn begin_copy(&mut self, cell: CellRef) {
         self.copy_source = Some(cell);
+        self.copy_is_drag = false;
+    }
+
+    /// Start a Ctrl+drag copy from `cell`. Drag-originated copies are cancelled
+    /// when the pointer is released outside a target cell.
+    pub fn begin_drag_copy(&mut self, cell: CellRef) {
+        self.copy_source = Some(cell);
+        self.copy_is_drag = true;
     }
 
     pub fn cancel_copy(&mut self) {
         self.copy_source = None;
+        self.copy_is_drag = false;
     }
 
     pub fn is_copying(&self) -> bool {
@@ -311,12 +325,27 @@ impl SceneGridState {
     /// for a same-cell drop (which cancels the drag without an action).
     pub fn drop_copy(&mut self, target: &CellRef) -> Option<UiAction> {
         let source = self.copy_source.take()?;
+        self.copy_is_drag = false;
         if source == *target {
             return None;
         }
         Some(UiAction::new(
             "scenes/copySceneCellToScene",
             copy_payload(&source, target),
+        ))
+    }
+
+    /// Queue a copy of the remembered clipboard cell into `target` without
+    /// consuming the clipboard, so Paste can be used repeatedly. Returns
+    /// `None` for a missing source or a same-cell paste.
+    pub fn paste_into(&self, target: &CellRef) -> Option<UiAction> {
+        let source = self.copy_source.as_ref()?;
+        if source == target {
+            return None;
+        }
+        Some(UiAction::new(
+            "scenes/copySceneCellToScene",
+            copy_payload(source, target),
         ))
     }
 }
@@ -528,7 +557,11 @@ pub fn draw_scene_grid(
     finish_drags(ui, snapshot, grid, &row_names, actions);
 
     // A copy drag released outside every cell is cancelled without an action.
-    if grid.copy_source.is_some() && ui.input(|input| input.pointer.any_released()) {
+    // A menu-initiated copy is a durable clipboard and must survive releases.
+    if grid.copy_source.is_some()
+        && grid.copy_is_drag
+        && ui.input(|input| input.pointer.any_released())
+    {
         grid.cancel_copy();
     }
 
@@ -1895,9 +1928,10 @@ fn draw_scene_cell(
     // Ctrl/Cmd+drag starts a cell copy.
     let copy_modifier = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
     if response.drag_started() && copy_modifier && !press_on_dot {
-        grid.begin_copy(target.clone());
+        grid.begin_drag_copy(target.clone());
     }
     if grid.copy_source.is_some()
+        && grid.copy_is_drag
         && response.hovered()
         && ui.input(|input| input.pointer.any_released())
         && let Some(action) = grid.drop_copy(&target)
@@ -2033,6 +2067,18 @@ fn scene_cell_menu(
     ui.separator();
     if ui.button("Copy cell (Ctrl+drag)").clicked() {
         grid.begin_copy(CellRef::new(scene.id.clone(), row));
+        ui.close();
+    }
+    if ui
+        .add_enabled(
+            grid.copy_source.is_some(),
+            egui::Button::new("Paste cell"),
+        )
+        .clicked()
+    {
+        if let Some(action) = grid.paste_into(&CellRef::new(scene.id.clone(), row)) {
+            actions.push(action);
+        }
         ui.close();
     }
     if ui
