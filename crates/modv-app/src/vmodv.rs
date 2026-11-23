@@ -5646,8 +5646,12 @@ module.exports = {
 
         // This is the builder startup/rescan must use: the media-folder paths
         // are resolved by `user_module_dirs` and handed to it unchanged.
-        let registry =
-            build_module_registry_with_user_modules(None, &[], &[], &[module_dir.clone()]);
+        let registry = build_module_registry_with_user_modules(
+            None,
+            &[],
+            &[],
+            std::slice::from_ref(&module_dir),
+        );
 
         assert_eq!(
             registry.kind("Gallery Sentinel"),
