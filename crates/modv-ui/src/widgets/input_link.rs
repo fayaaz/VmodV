@@ -29,7 +29,7 @@ pub fn link_row(
     state: &mut UiState,
 ) {
     ui.horizontal(|ui| {
-        link_row_content(ui, prop_name, input_id, snapshot, state);
+        link_row_inline(ui, prop_name, input_id, snapshot, state);
     });
 }
 
@@ -39,17 +39,6 @@ pub fn link_row(
 /// button stays visually attached to the prop it binds instead of floating in
 /// a disconnected row below it.
 pub fn link_row_inline(
-    ui: &mut egui::Ui,
-    prop_name: &str,
-    input_id: &str,
-    snapshot: &EngineSnapshot,
-    state: &mut UiState,
-) {
-    link_row_content(ui, prop_name, input_id, snapshot, state);
-}
-
-/// The row contents shared by [`link_row`] and [`link_row_inline`].
-fn link_row_content(
     ui: &mut egui::Ui,
     prop_name: &str,
     input_id: &str,

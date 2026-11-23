@@ -4171,13 +4171,10 @@ fn draw_prop(
             }
             // Keep the input link button on the same row as the prop editor so
             // it reads as attached to the value it binds.
-            let input_id = prop.input_id.as_deref();
-            let mut link = |ui: &mut egui::Ui| {
-                if let Some(input_id) = input_id {
+            let changed = if let Some(input_id) = prop.input_id.as_deref() {
+                let mut link = |ui: &mut egui::Ui| {
                     link_row_inline(ui, &prop.name, input_id, snapshot, state);
-                }
-            };
-            let changed = if input_id.is_some() {
+                };
                 control.draw_with_trailing(ui, Some(&mut link))
             } else {
                 control.draw(ui)
