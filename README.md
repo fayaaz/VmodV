@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/icon.png" alt="VmodV logo" width="128" />
+</p>
+
 # VmodV
 
 <p align="center">
@@ -11,16 +15,26 @@
     <img alt="Bundled third-party modules: see notices (some CC BY-NC-SA)" src="https://img.shields.io/badge/bundled%20modules-see%20notices-orange" />
   </a>
 </p>
-<p align="center">
-VmodV is a fork of <a href="https://github.com/vcync/modV">modV</a>: a modular audio
-visualisation environment. This tree is the VmodV Rust application — one
-<code>modv</code> binary with the engine, GPU compositor, media/audio capture and
-egui UI in-process.
-</p>
+
+*Modular audio visualisation for Linux*
+
+VmodV is a vjing app — with a timeline, **Scenes** and **Performance**.
+
+**tl;dr:** grab the latest AppImage or `.deb` from
+[Releases](https://github.com/fayaaz/VmodV/releases) and start vjing.
 
 <p align="center">
   <img src="docs/images/vmodv-ui.png" alt="The VmodV UI: Groups panel, live output preview, module Gallery, Scenes grid and Inspector" width="900" />
 </p>
+
+## What's inside
+
+- **Scenes** — snapshots of the live output: the Groups' state (modules, alpha,
+  effects) saved as a named Scene you can apply again or revisit later.
+- **Performance** — orchestrate the scenes: a timeline that plays scenes on the
+  performance grid, with individual transitionable groups.
+- **Modules** — ISF shader corpus, Point10 scenes, 2D modules and user-supplied
+  MilkDrop presets; audio-reactive inputs, MIDI, OSC, NDI and video capture.
 
 > **License note:** VmodV's own code is MIT-licensed. It also bundles
 > third-party modules and assets that are **not** MIT — several Shadertoy
@@ -31,67 +45,63 @@ egui UI in-process.
 > place and never redistributed — see
 > [docs/milkdrop-presets.md](docs/milkdrop-presets.md).
 
-## What this tree is
-
-- **Rust only.** `crates/` holds the whole application: `modv-engine`
-  (state/presets/Scenes/tweens), `modv-render` + `modv-renderers` (wgpu
-  compositor, shader/ISF/2D/Point10 renderers), `modv-media` (audio, GStreamer
-  video, MIDI/OSC/NDI), `modv-ipc`, `modv-ui` (egui panels) and `modv-app`
-  (the `modv` and `modv-engine` binaries).
-- **No Node, Yarn or Electron.** The UI is egui; there is no web renderer,
-  worker store or Electron main/preload process.
-- **Linux is the release target.** The AppImage and `.deb` bundle the binary,
-  the ISF corpus and the Point10 textures. Vulkan, PipeWire, ALSA and
-  GStreamer are host runtime dependencies (the `.deb` declares them).
-- The final Electron implementation is archived, not lost: see
-  [docs/legacy-electron.md](docs/legacy-electron.md).
-
 ## Install (Linux)
 
-Grab the latest build from the
-[Releases page](https://github.com/fayaaz/VmodV/releases). Stable releases
-(tags `vX.Y.Z`) are cut automatically from `main` by SemVer rules
+Linux only. Releases are cut from `main` automatically by SemVer rules
 (`feat:` → minor, `fix:` → patch, breaking → major) — see
-[docs/releasing.md](docs/releasing.md). Linux is the only supported
-platform.
+[docs/releasing.md](docs/releasing.md).
 
-**AppImage** (any distribution, no install):
+**AppImage** (any distro, no install):
 
 ```bash
-# download the latest VmodV-*.AppImage from the Releases page, then:
 chmod +x VmodV-*.AppImage
 ./VmodV-*.AppImage
 ```
 
-If FUSE is missing, either install `libfuse2`/`fuse` (package name varies by
-distro) or run `./VmodV-*.AppImage --appimage-extract-and-run`.
+If FUSE is missing, install `libfuse2`/`fuse` (package name varies by distro)
+or run `./VmodV-*.AppImage --appimage-extract-and-run`.
 
 **Debian/Ubuntu** (`.deb`, declares its runtime dependencies):
 
 ```bash
-# download the latest VmodV-*-amd64.deb from the Releases page, then:
 sudo apt install ./VmodV-*-amd64.deb
 modv
 ```
 
-Either way you need a Vulkan driver on the host (any modern GPU driver, or
+Either way you need a Vulkan driver (any modern GPU driver, or
 `mesa-vulkan-drivers` for the lavapipe software fallback), PipeWire or
 PulseAudio for audio capture, ALSA, and GStreamer with the base/good/bad
-plugin sets for video. The `.deb` pulls these in automatically; AppImage
-users must have them installed. Running from a Wayland session is preferred;
-X11/XWayland works as a fallback.
+plugin sets for video. The `.deb` pulls these in; AppImage users must have them
+installed. Wayland is preferred; X11/XWayland works as a fallback.
 
-User data (presets, Scenes, media profiles, logs) lives in
-`~/.config/VmodV` — set `MODV_USER_DATA` to override. The packaged launcher
-tees stderr into `~/.config/VmodV/logs/vmodv-YYYY-MM-DD.log`; "Open logs" in
-the UI opens that folder.
+User data (presets, Scenes, media profiles, logs) lives in `~/.config/VmodV` —
+set `MODV_USER_DATA` to override. The packaged launcher tees stderr into
+`~/.config/VmodV/logs/vmodv-YYYY-MM-DD.log`; "Open logs" in the UI opens that
+folder.
 
-## Prerequisites
+## Windows and macOS (best effort)
 
-The host only needs **Docker (with Buildx)** and **make**. Rust, cargo and all
-build dependencies live in the Docker toolchain image.
+Each release also carries portable builds — no installers, and no Linux feature
+parity.
+
+**Windows**: unzip `VmodV-Windows-x86_64-portable-<version>.zip` and run
+`VmodV.cmd`. GStreamer ships inside the ZIP.
+
+**macOS**: unzip `VmodV-macOS-arm64-portable-<version>.zip` (Apple Silicon) or
+`VmodV-macOS-x86_64-portable-<version>.zip` (Intel), install GStreamer
+(`brew install gstreamer gst-plugins-base`) and run `VmodV.command`. The
+bundle is ad-hoc signed; if macOS blocks it, run
+`xattr -dr com.apple.quarantine VmodV.app VmodV.command`.
+
+Cameras, screen capture and system-audio monitor capture are Linux-only
+(V4L2/PipeWire); rendering, audio input and MIDI work. User data goes to
+`%APPDATA%\VmodV` on Windows and `~/Library/Application Support/VmodV` on
+macOS; `MODV_USER_DATA` overrides both.
 
 ## Build
+
+The host only needs Docker (with Buildx) and make — Rust, cargo and all build
+dependencies live in the Docker toolchain image.
 
 ```bash
 make build            # VmodV AppImage + .deb in dist/
@@ -117,8 +127,8 @@ Artifacts:
 ## Development
 
 ```bash
-make dev          # VmodV shell, release profile (Wayland preferred, X11 fallback)
-make vmodv-debug # VmodV shell, debug profile
+make dev          # the app, release profile (Wayland preferred, X11 fallback)
+make vmodv-debug # debug profile
 make engine-run   # same binary through the engine entry point
 ```
 
@@ -137,12 +147,20 @@ make engine-lint                                    # clippy -D warnings + rustf
 make format                                         # cargo fmt --all
 ```
 
-The e2e harness launches the real `modv` binary under Xvfb (lavapipe provides
-Vulkan when no hardware adapter is available). See
-[docs/vmodv-e2e.md](docs/vmodv-e2e.md) for the control protocol and
-[docs/vmodv-parity-map.md](docs/vmodv-parity-map.md) for coverage.
+The e2e harness drives the real `modv` binary over a JSON-lines control
+socket; it prefers the host Wayland session, falls back to X11, and starts
+Xvfb when there's no display at all. See
+[docs/vmodv-e2e.md](docs/vmodv-e2e.md) and
+[docs/vmodv-parity-map.md](docs/vmodv-parity-map.md).
 
-## Project layout
+## Under the hood
+
+`crates/` is the whole app: `modv-engine` (state, Scenes, performance timing,
+presets), `modv-render` + `modv-renderers` (wgpu compositor, ISF/2D/Point10),
+`modv-media` (audio, GStreamer video, MIDI/OSC/NDI), `modv-ui` (egui panels)
+and `modv-app` (the `modv` binary). VmodV is a fork of modV; the final Electron
+implementation is archived on `legacy-electron` — see
+[docs/legacy-electron.md](docs/legacy-electron.md).
 
 | Path | Purpose |
 | --- | --- |
