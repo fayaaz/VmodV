@@ -332,6 +332,17 @@ pub fn user_milkdrop_dirs_with_override(
     dirs
 }
 
+// ============================ RED-ONLY SHIM ============================
+// `media_profiles::user_module_dirs` is the API under test. It does NOT exist
+// in RED, so this empty standalone keeps the test compiling and failing on the
+// assertion (no directories returned) rather than on a compile error. GREEN
+// MUST delete this function and add the real one beside `user_isf_dirs`.
+#[cfg(test)]
+fn user_module_dirs(_media_root: &Path, _profile: &str) -> Vec<PathBuf> {
+    Vec::new()
+}
+// ========================== END RED-ONLY SHIM ==========================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,6 +533,40 @@ mod tests {
         assert!(
             !dirs.contains(&media.join("default/isf")),
             "other profiles are not searched"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn user_module_dirs_include_shared_and_profile_folders() {
+        let root = temp_dir("modv-profile-modules");
+        let media = root.join("media");
+        create_profile(&media, "default").expect("default profile");
+        create_profile(&media, "alpha").expect("alpha profile");
+        // `create_profile` makes `<media>/<profile>/module`; the flat corpus
+        // folder is the legacy-compatible search location.
+        std::fs::create_dir_all(media.join("module")).expect("flat module folder");
+
+        let dirs = user_module_dirs(&media, "alpha");
+
+        let mut expected = vec![media.join("module"), media.join("alpha/module")];
+        expected.sort();
+        assert_eq!(
+            dirs, expected,
+            "exactly the shared and active-profile module folders, sorted"
+        );
+        assert!(
+            !dirs.contains(&media.join("default/module")),
+            "other profiles are not searched"
+        );
+
+        // Dedupe edge case: a profile whose folder collapses onto the flat
+        // module folder must not return the same path twice.
+        let collapsed = user_module_dirs(&media, "");
+        assert_eq!(
+            collapsed,
+            vec![media.join("module")],
+            "duplicate candidate paths are removed"
         );
         let _ = std::fs::remove_dir_all(root);
     }

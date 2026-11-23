@@ -4905,6 +4905,34 @@ impl ApplicationHandler for VmodvApp {
     }
 }
 
+// ============================ RED-ONLY SHIM ============================
+// The two functions below are the app-level APIs under test. Neither exists
+// in RED, so these no-op/ignoring versions keep the tests compiling and
+// failing on their assertions rather than on compile errors. GREEN MUST delete
+// both: `user_module_dirs` becomes the real app-level resolver (mirroring
+// `user_isf_dirs`, with an optional `MODV_USER_MODULE_DIR` override) and
+// `build_module_registry_with_user_modules` becomes the registry builder used
+// by startup and `rescan_modules` to apply `ModuleRegistry::with_user_modules`.
+#[cfg(test)]
+fn user_module_dirs(_media_root: &Path, _profile: &str) -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(test)]
+fn build_module_registry_with_user_modules(
+    isf_dir: Option<&Path>,
+    extra_isf_dirs: &[PathBuf],
+    milkdrop_dirs: &[PathBuf],
+    _user_module_dirs: &[PathBuf],
+) -> Arc<crate::module_registry::ModuleRegistry> {
+    Arc::new(crate::module_registry::ModuleRegistry::build_with_milkdrop(
+        isf_dir,
+        extra_isf_dirs,
+        milkdrop_dirs,
+    ))
+}
+// ========================== END RED-ONLY SHIM ==========================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5538,6 +5566,75 @@ module.exports = {
             "a switch must not keep scanning the previous profile"
         );
         assert!(!dirs.contains(&root.join("media/live/video")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn user_module_dirs_follow_the_active_profile() {
+        let root = temp_dir("modv-user-modules");
+        std::fs::create_dir_all(root.join("media/module")).expect("flat module");
+        std::fs::create_dir_all(root.join("media/default/module")).expect("default module");
+        std::fs::create_dir_all(root.join("media/live/module")).expect("live module");
+        std::fs::create_dir_all(root.join("media/live/video")).expect("other folder");
+
+        let dirs = user_module_dirs(&root.join("media"), "live");
+
+        assert!(
+            dirs.contains(&root.join("media/module")),
+            "legacy flat folder"
+        );
+        assert!(
+            dirs.contains(&root.join("media/live/module")),
+            "active profile"
+        );
+        assert!(
+            !dirs.contains(&root.join("media/default/module")),
+            "a profile switch must not keep scanning the previous profile"
+        );
+        assert!(!dirs.contains(&root.join("media/live/video")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn user_module_pair_from_the_media_folder_is_registered_by_the_registry_builder() {
+        use crate::module_registry::ModuleKind;
+
+        let root = temp_dir("modv-user-module-wiring");
+        let module_dir = root.join("media/live/module");
+        std::fs::create_dir_all(&module_dir).expect("module folder");
+        std::fs::write(
+            module_dir.join("00_gallery_sentinel.json"),
+            r#"{
+                "name": "Gallery Sentinel",
+                "author": "Ada",
+                "version": "1.0.0",
+                "wgsl": "sentinel.wgsl",
+                "props": [{"name":"u_amount","label":"Amount","type":"float","default":0.5}]
+            }"#,
+        )
+        .expect("descriptor");
+        std::fs::write(
+            module_dir.join("sentinel.wgsl"),
+            "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(0.25); } // GALLERY_SENTINEL_SOURCE",
+        )
+        .expect("wgsl");
+
+        // This is the builder startup/rescan must use: the media-folder paths
+        // are resolved by `user_module_dirs` and handed to it unchanged.
+        let registry =
+            build_module_registry_with_user_modules(None, &[], &[], &[module_dir.clone()]);
+
+        assert_eq!(
+            registry.kind("Gallery Sentinel"),
+            Some(ModuleKind::Shader),
+            "the user module from the media folder must reach the Gallery"
+        );
+        assert!(
+            registry
+                .shader_module("Gallery Sentinel")
+                .is_some_and(|module| module.fragment_wgsl.contains("GALLERY_SENTINEL_SOURCE")),
+            "the sibling WGSL from the media folder must be registered"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
