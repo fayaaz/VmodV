@@ -2598,6 +2598,7 @@ impl Compositor {
                 bass: frame.audio.bass,
                 mid: frame.audio.mid,
                 treble: frame.audio.treble,
+                sample_rate: frame.audio.sample_rate,
                 wave: frame.audio.wave.to_vec(),
                 byte_frequency_data: frame.audio.byte_frequency_data.to_vec(),
             },

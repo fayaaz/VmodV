@@ -88,10 +88,11 @@
 //!    axis is `1.0` and the larger axis carries the ratio: for `w >= h`,
 //!    `aspectx = 1.0` and `aspecty = h / w`; otherwise `aspectx = w / h` and
 //!    `aspecty = 1.0`.
-//! 3. Audio is mapped to MilkDrop's *relative* band contract: the current
-//!    analyser band divided by a slow per-instance average, so a steady
-//!    passage sits near `1.0` and transients rise above it. The fast `*_att`
-//!    followers divide the same slow average. Both are clamped to `0..=4`.
+//! 3. Audio follows Butterchurn's relative band contract: FFT band sums
+//!    (bass 20–320 Hz, mid 320–2800 Hz, treble 2800–11025 Hz) divided by slow
+//!    per-instance averages, so a steady passage settles near `1.0` and
+//!    transients rise above it. The fast `*_att` followers divide the same
+//!    slow average. Values are clamped to `0..=16`.
 //! 4. [`evaluate_mesh`] walks a `(meshx + 1) × (meshy + 1)` vertex grid. Each
 //!    vertex gets `x`/`y` normalised to `-1.0..=1.0` (center at `(0, 0)`,
 //!    `y` increasing upward), `rad = hypot(x, y)` and `ang = atan2(y, x)`, then
@@ -127,8 +128,6 @@ use crate::milkdrop::translate::{CompiledMilkShader, MilkShaderStage, translate_
 // root re-export) stays unchanged; the definition lives with the shared layout.
 pub use crate::milkdrop::q_uniforms::MILK_Q_STRIDE;
 
-/// Per-frame interpolation rate for the fast `*_att` band follower variables.
-const BAND_FOLLOWER_RATE: f32 = 0.2;
 /// Denominators smaller than this are treated as degenerate in the warp mesh.
 const WARP_EPS: f32 = 1e-6;
 /// Sampling UV used when the warp arithmetic would otherwise be non-finite.
@@ -986,6 +985,8 @@ pub struct MilkAudio {
     pub bass: f32,
     pub mid: f32,
     pub treble: f32,
+    /// Capture sample rate, used to map FFT bins to MilkDrop's band ranges.
+    pub sample_rate: f32,
     pub wave: Vec<f32>,
     pub byte_frequency_data: Vec<u8>,
 }
@@ -2058,6 +2059,8 @@ pub struct MilkInstance {
     /// (Butterchurn's `longAvg`). The fast [`Self::band_att`] follower feeds
     /// `bass_att`/`mid_att`/`treb_att`.
     pub band_long_att: [f32; 3],
+    /// Current FFT band sums (Butterchurn's `imm`) for this frame.
+    pub band_imm: [f32; 3],
     pub frame_index: u32,
     /// Whether the init equations have run for this preset.
     pub init_done: bool,
@@ -2091,6 +2094,7 @@ pub fn new_instance(compiled: MilkCompiledPreset, seed: u64) -> MilkInstance {
         globals: Globals::default(),
         band_att: [0.0; 3],
         band_long_att: [0.0; 3],
+        band_imm: [0.0; 3],
         frame_index: 0,
         init_done: false,
         rand_start: std::array::from_fn(|_| rand_rng.next_f32()),
@@ -2832,34 +2836,70 @@ pub fn begin_frame(
     }
 
     // (2) Rebuild the fifteen globals from this frame's geometry and audio.
-    // MilkDrop's EEL `bass`/`mid`/`treb` are *relative* levels: the current
-    // band divided by its slow average, so a steady passage sits around 1.0
-    // and transients rise above it. Our analyser exposes an absolute 0..1
-    // dB-mapped band, so divide by a per-instance follower to recover the
-    // same contract (presets gate on `above(bass, 1)` etc.).
+    // Butterchurn's `bass`/`mid`/`treb` are FFT band sums divided by slow
+    // per-band averages, so a steady passage settles near 1.0 and transients
+    // rise above it. Derive the sums from the byte spectrum (the same source
+    // Butterchurn's `AudioLevels` uses) rather than the engine's dB-mapped
+    // features, which suppressed mid/treble leakage and changed preset walks.
     let audio = &frame.audio;
-    let raw_values = [audio.bass, audio.mid, audio.treble];
+    let sample_rate = if audio.sample_rate.is_finite() && audio.sample_rate > 0.0 {
+        audio.sample_rate
+    } else {
+        48_000.0
+    };
+    let bins = audio.byte_frequency_data.len().max(1);
+    let bucket_hz = sample_rate / (bins as f32 * 2.0);
+    let bin_index =
+        |hz: f32| (((hz / bucket_hz).round() as isize) - 1).clamp(0, bins as isize - 1) as usize;
+    let starts = [bin_index(20.0), bin_index(320.0), bin_index(2800.0)];
+    let stops = [bin_index(320.0), bin_index(2800.0), bin_index(11025.0)];
+    let mut imm = [0.0f32; 3];
+    if audio.byte_frequency_data.iter().any(|byte| *byte != 0) {
+        for (band, (start, stop)) in starts.iter().zip(stops).enumerate() {
+            let end = stop.max(start + 1).min(bins);
+            let start = (*start).min(end);
+            imm[band] = audio.byte_frequency_data[start..end]
+                .iter()
+                .map(|byte| *byte as f32 / 255.0)
+                .sum();
+        }
+    } else {
+        // Fallback for callers that provide only the engine's band features.
+        imm = [
+            audio.bass.max(0.0) * 8.0,
+            audio.mid.max(0.0) * 32.0,
+            audio.treble.max(0.0) * 64.0,
+        ];
+    }
     let first_frame = instance.frame_index == 0;
+    let avg_rate = 0.2f32.powf(30.0 / frame.fps.max(1.0));
     let long_rate = 0.992f32.powf(30.0 / frame.fps.max(1.0));
-    for ((att, long), raw) in instance
+    for ((avg, long), raw) in instance
         .band_att
         .iter_mut()
         .zip(instance.band_long_att.iter_mut())
-        .zip(raw_values)
+        .zip(imm)
     {
         if first_frame {
-            *att = raw;
+            *avg = raw;
             *long = raw.max(1e-3);
         } else {
-            *att += (raw - *att) * BAND_FOLLOWER_RATE;
+            *avg += (raw - *avg) * avg_rate;
             *long += (raw - *long) * (1.0 - long_rate);
         }
     }
-    let relative = |raw: f32, long: f32| (raw / long.max(1e-3)).clamp(0.0, 4.0);
+    instance.band_imm = imm;
+    let relative = |value: f32, long: f32| {
+        if long < 0.001 {
+            1.0
+        } else {
+            (value / long).clamp(0.0, 16.0)
+        }
+    };
     let values = [
-        relative(raw_values[0], instance.band_long_att[0]),
-        relative(raw_values[1], instance.band_long_att[1]),
-        relative(raw_values[2], instance.band_long_att[2]),
+        relative(imm[0], instance.band_long_att[0]),
+        relative(imm[1], instance.band_long_att[1]),
+        relative(imm[2], instance.band_long_att[2]),
     ];
     let relative_att = [
         relative(instance.band_att[0], instance.band_long_att[0]),
@@ -3797,6 +3837,7 @@ ret = uv;\n\
                 bass,
                 mid,
                 treble,
+                sample_rate: 48_000.0,
                 wave: vec![0.0; 1024],
                 byte_frequency_data: vec![128; 1024],
             },
@@ -3986,18 +4027,24 @@ ret = uv;\n\
         let compiled = compile_preset("relative-bands", &doc, &cache).expect("compiles");
         let mut instance = new_instance(compiled, 1);
 
-        let steady = frame(0.5, 0.4, 0.3, 1, 0.016);
+        let mut steady = frame(0.5, 0.4, 0.3, 1, 0.016);
+        steady.audio.byte_frequency_data.fill(100);
         begin_frame(&mut instance, &steady).expect("steady frame");
         approx!(instance.globals.bass, 1.0, "first frame is the reference");
 
-        let transient = frame(1.0, 0.4, 0.3, 2, 0.032);
+        let mut transient = frame(1.0, 0.4, 0.3, 2, 0.032);
+        transient.audio.byte_frequency_data.fill(200);
         begin_frame(&mut instance, &transient).expect("transient frame");
         assert!(
             instance.globals.bass > 1.5,
-            "a doubled raw band must read above 1.0 relative to the slow average, got {}",
+            "a doubled FFT band must read above 1.0 relative to the slow average, got {}",
             instance.globals.bass
         );
-        approx!(instance.globals.mid, 1.0, "unchanged mid stays at 1.0");
+        assert!(
+            instance.globals.mid > 1.5,
+            "the same spectral rise reaches mid too, got {}",
+            instance.globals.mid
+        );
     }
 
     #[test]
@@ -4947,6 +4994,7 @@ mod gpu_tests {
                 bass: 0.5,
                 mid: 0.25,
                 treble: 0.75,
+                sample_rate: 48_000.0,
                 wave: vec![0.0; 1024],
                 byte_frequency_data: vec![128; 1024],
             },
