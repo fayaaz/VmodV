@@ -18,7 +18,9 @@ use crate::state::{
 use crate::theme;
 use crate::widgets::{DrawControl, TweenControl};
 
-/// Draw the link summary for one prop and open the editor on demand.
+/// Draw the link summary for one prop in its own row and open the editor on
+/// demand. Used by the Group/Module meta controls where a dedicated row is
+/// appropriate.
 pub fn link_row(
     ui: &mut egui::Ui,
     prop_name: &str,
@@ -27,49 +29,75 @@ pub fn link_row(
     state: &mut UiState,
 ) {
     ui.horizontal(|ui| {
-        if let Some(link) = snapshot.input_links.get(input_id) {
-            let summary = link_summary(link);
-            ui.label(
-                egui::RichText::new("LINK")
-                    .monospace()
-                    .size(10.0)
-                    .color(theme::ACCENT),
-            );
-            ui.label(egui::RichText::new(summary).size(11.0).color(theme::MUTED))
-                .on_hover_text(format!("input {input_id}"));
-            if ui.small_button("Edit").clicked() {
-                let title = focused_input_title(input_id, prop_name, snapshot);
-                state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
-            }
-            if ui.small_button("x").on_hover_text("Remove link").clicked() {
-                // Releasing the smoothing id keeps the evaluator registry from
-                // leaking entries the way the JS panel had to fix.
-                if let Some(id) = link.smoothing_id() {
-                    state.push_action("meyda/removeSmoothingId", serde_json::json!(id));
-                }
-                state.push_action(
-                    "inputs/removeInputLink",
-                    serde_json::json!({ "inputId": input_id }),
-                );
-            }
-        } else if ui
-            .small_button("+ link")
-            .on_hover_text("Bind this input to audio, draw, state, MIDI or OSC")
-            .clicked()
-        {
+        link_row_content(ui, prop_name, input_id, snapshot, state);
+    });
+}
+
+/// Draw the same link control inside an *existing* horizontal row.
+///
+/// The Inspector uses this from within the prop editor's own row so the link
+/// button stays visually attached to the prop it binds instead of floating in
+/// a disconnected row below it.
+pub fn link_row_inline(
+    ui: &mut egui::Ui,
+    prop_name: &str,
+    input_id: &str,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+) {
+    link_row_content(ui, prop_name, input_id, snapshot, state);
+}
+
+/// The row contents shared by [`link_row`] and [`link_row_inline`].
+fn link_row_content(
+    ui: &mut egui::Ui,
+    prop_name: &str,
+    input_id: &str,
+    snapshot: &EngineSnapshot,
+    state: &mut UiState,
+) {
+    if let Some(link) = snapshot.input_links.get(input_id) {
+        let summary = link_summary(link);
+        ui.label(
+            egui::RichText::new("LINK")
+                .monospace()
+                .size(10.0)
+                .color(theme::ACCENT),
+        );
+        ui.label(egui::RichText::new(summary).size(11.0).color(theme::MUTED))
+            .on_hover_text(format!("input {input_id}"));
+        if ui.small_button("Edit").clicked() {
             let title = focused_input_title(input_id, prop_name, snapshot);
             state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
         }
-
-        // The legacy E badge marks an input with an expression assignment,
-        // whether or not it also has an Input Link.
-        if let Some(assignment) = snapshot.expression_for_input(input_id) {
-            theme::badge(ui, "E", theme::ACCENT).on_hover_text(format!(
-                "Expression: {}\nClick Edit to change it",
-                assignment.expression
-            ));
+        if ui.small_button("x").on_hover_text("Remove link").clicked() {
+            // Releasing the smoothing id keeps the evaluator registry from
+            // leaking entries the way the JS panel had to fix.
+            if let Some(id) = link.smoothing_id() {
+                state.push_action("meyda/removeSmoothingId", serde_json::json!(id));
+            }
+            state.push_action(
+                "inputs/removeInputLink",
+                serde_json::json!({ "inputId": input_id }),
+            );
         }
-    });
+    } else if ui
+        .small_button("+ link")
+        .on_hover_text("Bind this input to audio, draw, state, MIDI or OSC")
+        .clicked()
+    {
+        let title = focused_input_title(input_id, prop_name, snapshot);
+        state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
+    }
+
+    // The legacy E badge marks an input with an expression assignment,
+    // whether or not it also has an Input Link.
+    if let Some(assignment) = snapshot.expression_for_input(input_id) {
+        theme::badge(ui, "E", theme::ACCENT).on_hover_text(format!(
+            "Expression: {}\nClick Edit to change it",
+            assignment.expression
+        ));
+    }
 }
 
 fn link_summary(link: &InputLinkView) -> String {

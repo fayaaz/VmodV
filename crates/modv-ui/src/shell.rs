@@ -31,7 +31,7 @@ use crate::state::{
 };
 use crate::tab_drag::{TabDrag, TabDropTarget, floating_bounds_for_drop};
 use crate::theme;
-use crate::widgets::input_link::{link_editor_window, link_row};
+use crate::widgets::input_link::{link_editor_window, link_row, link_row_inline};
 use crate::widgets::range_control::chip;
 use crate::widgets::texture_control::TextureControlChange;
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
@@ -1800,7 +1800,12 @@ fn inspector_content(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut U
     }
     for prop in &module.props {
         draw_prop(ui, &module.id, &module.module_name, prop, snapshot, state);
-        if let Some(input_id) = &prop.input_id {
+        // Numeric props draw their link control inside their own editor row
+        // (see `draw_prop`), so only the remaining prop types need a separate
+        // link row here.
+        if !matches!(prop.prop_type.as_str(), "float" | "int")
+            && let Some(input_id) = &prop.input_id
+        {
             link_row(ui, &prop.name, input_id, snapshot, state);
         }
         // The data-type component sub-inputs (Vec lanes,
@@ -4164,7 +4169,20 @@ fn draw_prop(
             if let Some(default) = prop.default.as_ref().and_then(serde_json::Value::as_f64) {
                 control = control.with_default(default);
             }
-            if control.draw(ui) {
+            // Keep the input link button on the same row as the prop editor so
+            // it reads as attached to the value it binds.
+            let input_id = prop.input_id.as_deref();
+            let mut link = |ui: &mut egui::Ui| {
+                if let Some(input_id) = input_id {
+                    link_row_inline(ui, &prop.name, input_id, snapshot, state);
+                }
+            };
+            let changed = if input_id.is_some() {
+                control.draw_with_trailing(ui, Some(&mut link))
+            } else {
+                control.draw(ui)
+            };
+            if changed {
                 state.push_action(
                     "modules/updateProp",
                     serde_json::json!({

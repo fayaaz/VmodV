@@ -167,6 +167,18 @@ impl RangeControl {
 
     /// Draw the control. Returns `true` when the value changed this frame.
     pub fn draw(&mut self, ui: &mut egui::Ui) -> bool {
+        self.draw_with_trailing(ui, None)
+    }
+
+    /// Draw the control with an optional extra widget at the end of the same
+    /// row. The Inspector uses this to keep a prop's input link button on the
+    /// same line as its editor; space is reserved up front so the slider is
+    /// never squeezed to zero.
+    pub fn draw_with_trailing(
+        &mut self,
+        ui: &mut egui::Ui,
+        mut trailing: Option<&mut dyn FnMut(&mut egui::Ui)>,
+    ) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
             ui.add_sized(
@@ -186,13 +198,23 @@ impl RangeControl {
 
             let value_width = 74.0;
             let reset_width = if self.default.is_some() { 22.0 } else { 0.0 };
-            let slider_width = (ui.available_width() - value_width - reset_width - 8.0).max(60.0);
+            // Reserve room for the trailing widget (the `+ link` small button)
+            // before sizing the slider so adding it cannot starve the control.
+            let trailing_width = if trailing.is_some() { 64.0 } else { 0.0 };
+            let slider_width =
+                (ui.available_width() - value_width - reset_width - trailing_width - 8.0).max(60.0);
             let slider = egui::Slider::new(&mut self.value, self.min..=self.max)
                 .show_value(false)
                 .trailing_fill(true);
             let slider_changed = ui
                 .scope(|ui| {
                     theme::slider_visuals(ui);
+                    // egui 0.37 sizes sliders from `spacing.slider_width` and
+                    // ignores `add_sized`, so shrink it in this scope when a
+                    // trailing widget shares the row.
+                    if trailing.is_some() {
+                        ui.style_mut().spacing.slider_width = slider_width;
+                    }
                     ui.add_sized([slider_width, 20.0], slider)
                 })
                 .inner
@@ -233,6 +255,10 @@ impl RangeControl {
                     .clicked()
             {
                 changed |= self.set_value(default);
+            }
+
+            if let Some(trailing) = trailing.as_mut() {
+                trailing(ui);
             }
         });
 
