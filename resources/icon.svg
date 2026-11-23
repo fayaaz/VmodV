@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VmodV app icon. Derived from the legacy modV mark (resources/legacy-modv-logo.svg):
+  black disc, neon-green strokes, and the legacy right-hand V mirrored on the left
+  so the mark reads V-M-V.
+
+  The 276.7-unit artboard, circle centre and path data are the legacy geometry.
+  The new left V is a copy of the right V, scaled with the rest of the mark.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 276.7 276.7" width="1024" height="1024">
+  <title>VmodV</title>
+  <circle cx="138.35" cy="138.35" r="134.85"
+          fill="#000000" stroke="#00E676" stroke-width="6"/>
+
+  <!-- New V on the left: the legacy right-hand V, mirrored in placement. -->
+  <g transform="translate(-71.770 42.030) scale(0.7)">
+    <path d="M187.6,189.2 c-1.2,2 -4,2 -5.2,0 l-56.9,-98.7
+             c-1.2,-2 0.3,-4.5 2.5,-4.5 h113.8 c2.5,0 3.7,2.5 2.7,4.5 L187.6,189.2 z"
+          fill="#000000" stroke="#00E676" stroke-width="10"
+          stroke-linejoin="round"/>
+  </g>
+
+  <!-- Legacy modV mark: the M with its diamond cut-out, plus the right-hand V. -->
+  <g transform="translate(88.770 41.610) scale(0.7)">
+    <path d="M172.2,190.9 H117 c-1,0 -2,-0.5 -2.5,-1.5 l-11.1,-19.3 l-10.9,19
+             c-0.5,1 -1.5,1.5 -2.5,1.5 H34.8 c-2.3,0 -3.7,-2.5 -2.5,-4.5
+             l56.9,-98.6 c1,-2 4,-2 5.3,0 l9.1,16 l9.2,-16 c1,-2 4,-2 5.2,0
+             l56.7,98.9 C175.9,188.4 174.4,190.9 172.2,190.9 z"
+          fill="#000000" stroke="#00E676" stroke-width="10"
+          stroke-linejoin="round"/>
+    <path d="M121.8,135.2 l-18.2,-31.7 l-18.4,32 c-0.5,1 -0.5,2 0,3
+             l18.2,31.6 l18.4,-31.9 C122.3,137.2 122.3,136.2 121.8,135.2 z"
+          fill="#000000" stroke="#00E676" stroke-width="10"
+          stroke-linejoin="round"/>
+    <path d="M187.6,189.2 c-1.2,2 -4,2 -5.2,0 l-56.9,-98.7
+             c-1.2,-2 0.3,-4.5 2.5,-4.5 h113.8 c2.5,0 3.7,2.5 2.7,4.5 L187.6,189.2 z"
+          fill="#000000" stroke="#00E676" stroke-width="10"
+          stroke-linejoin="round"/>
+  </g>
+</svg>
