@@ -23,11 +23,12 @@ cpal = "0.18.2"
 # Video capture (WS-10): cameras (v4l2), video files (decodebin) and PipeWire
 # screen sources all go through one GStreamer graph, which is what the legacy
 # renderer's getUserMedia/getDisplayMedia/WebCodecs trio did in JS.
-# The 0.24 series targets GStreamer 1.26, the version in the engine image.
+# The 0.25 series targets GStreamer 1.28; the 1.26 in the engine image is
+# still supported through gstreamer-sys' version-gated bindings.
 # Aliased to the `gst*` names the gstreamer-rs examples use.
-gst = { package = "gstreamer", version = "0.24.5" }
-gst-app = { package = "gstreamer-app", version = "0.24.5" }
-gst-video = { package = "gstreamer-video", version = "0.24.5" }
+gst = { package = "gstreamer", version = "0.25.4" }
+gst-app = { package = "gstreamer-app", version = "0.25.2" }
+gst-video = { package = "gstreamer-video", version = "0.25.4" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # XDG desktop portal ScreenCast (WS-10): the engine asks the compositor's
