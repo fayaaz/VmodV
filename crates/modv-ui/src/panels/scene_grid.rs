@@ -589,11 +589,10 @@ fn draw_scene_column(
         // drift away from the others.
         ui.spacing_mut().item_spacing.y = 0.0;
         let applied = snapshot.performance.current_scene_id.as_deref() == Some(scene.id.as_str());
-        // In performance mode every row advances on its own, so an applied
-        // Scene header must not read like a whole live column: it keeps only
-        // a thin dim accent and an `APPLIED` tag. The accent column highlight
-        // belongs to performance-off mode, where the applied Scene really is
-        // live in every row.
+        // The header marks the applied Scene in both modes; that is distinct
+        // from the per-row live cells. In performance mode every row advances
+        // on its own, so the applied header keeps only a thin dim accent and
+        // an `APPLIED` tag rather than implying a whole live column.
         let per_row = snapshot.performance.enabled;
         let renaming = grid
             .renaming
@@ -1579,30 +1578,23 @@ fn scene_dialogs(
     }
 }
 
-/// How one Scene cell is highlighted against the live state.
+/// Whether one Scene cell is marked as its row's live Scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SceneCellHighlight {
-    /// Performance mode is off and the engine renders this whole Scene.
-    Applied,
-    /// Performance mode is on and this cell is its row's live Scene.
+    /// This cell is its row's live Scene.
     Live,
-    /// The cell belongs to neither the live row nor an applied Scene.
+    /// This cell is not its row's live Scene.
     None,
 }
 
-/// Decide how a cell is marked.
+/// Decide whether a cell is marked as its row's live Scene.
 ///
 /// The authoritative per-row live Scenes (`active_scene_rows`, derived from
-/// live Group stamps) decide the marking in both modes: only the cell whose
-/// Scene id matches `active_scene_rows[row]` is [`SceneCellHighlight::Live`].
-/// The applied Scene no longer lights a whole column when other rows are live
-/// on different Scenes (BUGS.md). A row with no live entry marks nothing.
-///
-/// `performance_enabled` and `applied_scene_id` are kept in the signature for
-/// callers, but no longer affect the decision.
+/// live Group stamps) decide this in both modes: only the cell whose Scene id
+/// matches `active_scene_rows[row]` is [`SceneCellHighlight::Live`]. The
+/// applied Scene never lights a whole column when other rows are live on
+/// different Scenes (BUGS.md). A row with no live entry marks nothing.
 pub fn scene_cell_highlight(
-    _performance_enabled: bool,
-    _applied_scene_id: Option<&str>,
     active_scene_rows: &BTreeMap<usize, String>,
     scene_id: &str,
     row: usize,
@@ -1705,21 +1697,11 @@ fn draw_scene_cell(
         }
     }
 
-    let highlight = scene_cell_highlight(
-        snapshot.performance.enabled,
-        snapshot.performance.current_scene_id.as_deref(),
-        &snapshot.active_scene_rows,
-        &scene.id,
-        row,
-    );
+    let highlight = scene_cell_highlight(&snapshot.active_scene_rows, &scene.id, row);
     let live = highlight == SceneCellHighlight::Live;
-    // Performance off keeps the historical applied-column highlight; with
-    // performance on the applied Scene is not live in this row unless
-    // `active_scene_rows` says so, so the cell stays unmarked.
-    let current = live || highlight == SceneCellHighlight::Applied;
     let copying = grid.copy_source.as_ref() == Some(&target);
     let enable_style = cell_enable_style(cell.disabled);
-    let fill = if copying || current {
+    let fill = if copying || live {
         theme::ACCENT_DIM
     } else if hovered {
         theme::PANEL_ALT
@@ -1731,7 +1713,7 @@ fn draw_scene_cell(
     painter.rect_filled(rect, CornerRadius::same(0), fill);
     let border = if let Some(colour) = enable_style.border {
         colour
-    } else if copying || current {
+    } else if copying || live {
         theme::ACCENT
     } else if hovered {
         theme::MUTED
@@ -1741,7 +1723,7 @@ fn draw_scene_cell(
     painter.rect_stroke(
         rect,
         CornerRadius::same(0),
-        Stroke::new(if copying || current { 1.5 } else { 1.0 }, border),
+        Stroke::new(if copying || live { 1.5 } else { 1.0 }, border),
         StrokeKind::Inside,
     );
 
@@ -2434,22 +2416,22 @@ mod tests {
         let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
 
         assert_eq!(
-            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-a", 0),
+            scene_cell_highlight(&rows, "scene-a", 0),
             SceneCellHighlight::Live,
             "row 0 is live on Scene A"
         );
         assert_eq!(
-            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-b", 1),
+            scene_cell_highlight(&rows, "scene-b", 1),
             SceneCellHighlight::Live,
             "row 1 is live on Scene B"
         );
         assert_eq!(
-            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-a", 1),
+            scene_cell_highlight(&rows, "scene-a", 1),
             SceneCellHighlight::None,
             "Scene A is not live in row 1 even though it is the applied Scene"
         );
         assert_eq!(
-            scene_cell_highlight(true, Some("scene-a"), &rows, "scene-c", 2),
+            scene_cell_highlight(&rows, "scene-c", 2),
             SceneCellHighlight::None,
             "a row with no live entry marks nothing"
         );
@@ -2463,17 +2445,17 @@ mod tests {
         // B/1 are live. C never gets a whole-column highlight.
         for row in 0..3 {
             assert_eq!(
-                scene_cell_highlight(true, Some("scene-c"), &rows, "scene-c", row),
+                scene_cell_highlight(&rows, "scene-c", row),
                 SceneCellHighlight::None,
                 "applied Scene C is not live at row {row}"
             );
         }
         assert_eq!(
-            scene_cell_highlight(true, Some("scene-c"), &rows, "scene-a", 0),
+            scene_cell_highlight(&rows, "scene-a", 0),
             SceneCellHighlight::Live
         );
         assert_eq!(
-            scene_cell_highlight(true, Some("scene-c"), &rows, "scene-b", 1),
+            scene_cell_highlight(&rows, "scene-b", 1),
             SceneCellHighlight::Live
         );
     }
@@ -2486,32 +2468,32 @@ mod tests {
         let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
 
         assert_eq!(
-            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 0),
+            scene_cell_highlight(&rows, "scene-a", 0),
             SceneCellHighlight::Live,
             "row 0 is live on Scene A even with performance mode off"
         );
         assert_eq!(
-            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-b", 1),
+            scene_cell_highlight(&rows, "scene-b", 1),
             SceneCellHighlight::Live,
             "row 1 is live on Scene B even though Scene A is the applied Scene"
         );
         assert_eq!(
-            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 1),
+            scene_cell_highlight(&rows, "scene-a", 1),
             SceneCellHighlight::None,
             "the applied Scene must not light a row that is live on another Scene"
         );
         assert_eq!(
-            scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 2),
+            scene_cell_highlight(&rows, "scene-a", 2),
             SceneCellHighlight::None,
             "the applied Scene must not light a row with no live Scene"
         );
         assert_eq!(
-            scene_cell_highlight(false, Some("scene-c"), &rows, "scene-c", 0),
+            scene_cell_highlight(&rows, "scene-c", 0),
             SceneCellHighlight::None,
             "an applied Scene that is not live in any row marks nothing"
         );
         assert_eq!(
-            scene_cell_highlight(false, None, &rows, "scene-a", 0),
+            scene_cell_highlight(&rows, "scene-a", 0),
             SceneCellHighlight::Live,
             "per-row live Scenes are marked even without an applied Scene"
         );

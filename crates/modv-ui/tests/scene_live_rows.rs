@@ -191,20 +191,20 @@ fn performance_mode_marks_only_each_rows_live_cell_in_the_pure_decision() {
     let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
 
     assert_eq!(
-        scene_cell_highlight(true, Some("scene-a"), &rows, "scene-a", 0),
+        scene_cell_highlight(&rows, "scene-a", 0),
         SceneCellHighlight::Live
     );
     assert_eq!(
-        scene_cell_highlight(true, Some("scene-a"), &rows, "scene-b", 1),
+        scene_cell_highlight(&rows, "scene-b", 1),
         SceneCellHighlight::Live
     );
     assert_eq!(
-        scene_cell_highlight(true, Some("scene-a"), &rows, "scene-a", 1),
+        scene_cell_highlight(&rows, "scene-a", 1),
         SceneCellHighlight::None,
         "Scene A is not live in row 1 even though it is the applied Scene"
     );
     assert_eq!(
-        scene_cell_highlight(true, Some("scene-a"), &rows, "scene-c", 2),
+        scene_cell_highlight(&rows, "scene-c", 2),
         SceneCellHighlight::None,
         "a row with no live entry marks nothing"
     );
@@ -216,17 +216,17 @@ fn performance_mode_ignores_the_applied_scene_when_rows_diverge() {
 
     for row in 0..3 {
         assert_eq!(
-            scene_cell_highlight(true, Some("scene-c"), &rows, "scene-c", row),
+            scene_cell_highlight(&rows, "scene-c", row),
             SceneCellHighlight::None,
             "applied Scene C is not live at row {row}"
         );
     }
     assert_eq!(
-        scene_cell_highlight(true, Some("scene-c"), &rows, "scene-a", 0),
+        scene_cell_highlight(&rows, "scene-a", 0),
         SceneCellHighlight::Live
     );
     assert_eq!(
-        scene_cell_highlight(true, Some("scene-c"), &rows, "scene-b", 1),
+        scene_cell_highlight(&rows, "scene-b", 1),
         SceneCellHighlight::Live
     );
 }
@@ -236,22 +236,22 @@ fn performance_off_marks_only_each_rows_live_cell_in_the_pure_decision() {
     let rows = live_rows(&[(0, "scene-a"), (1, "scene-b")]);
 
     assert_eq!(
-        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 0),
+        scene_cell_highlight(&rows, "scene-a", 0),
         SceneCellHighlight::Live,
         "row 0 is live on Scene A even with performance mode off"
     );
     assert_eq!(
-        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-b", 1),
+        scene_cell_highlight(&rows, "scene-b", 1),
         SceneCellHighlight::Live,
         "row 1 is live on Scene B even though Scene A is the applied Scene"
     );
     assert_eq!(
-        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 1),
+        scene_cell_highlight(&rows, "scene-a", 1),
         SceneCellHighlight::None,
         "the applied Scene must not light another row's live cell"
     );
     assert_eq!(
-        scene_cell_highlight(false, Some("scene-a"), &rows, "scene-a", 2),
+        scene_cell_highlight(&rows, "scene-a", 2),
         SceneCellHighlight::None,
         "the applied Scene must not light a row with no live Scene"
     );
