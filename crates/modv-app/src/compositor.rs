@@ -598,9 +598,13 @@ struct MilkdropInstance {
     instance: MilkInstance,
     /// Warp/comp/blur intermediate targets.
     gpu: MilkGpuTargets,
-    /// The module-sized output target, rebuilt on resize.
+    /// The most recently rendered module-sized output, registered in the frame
+    /// graph. Rebuilt on resize; ping-pongs with [`Self::feedback`] so the warp
+    /// pass can resample the preset's own previous frame.
     target: Option<OutputTexture>,
-    /// Size the target was allocated for.
+    /// The other half of the output ping-pong, used as the next render target.
+    feedback: Option<OutputTexture>,
+    /// Size the targets were allocated for.
     size: Option<(u32, u32)>,
 }
 
@@ -2505,14 +2509,6 @@ impl Compositor {
         let (width, height) = self.module_target_size(module);
         let texture_id = milkdrop_texture_id(module_id);
 
-        // The group canvas is the previous composited frame — the warp pass
-        // samples it through `sampler_main`. This is the MilkDrop analogue of
-        // the canvas view the ISF path passes to its image inputs.
-        let Some(group_texture) = self.surfaces.get(target).cloned() else {
-            return Ok(());
-        };
-        let previous = group_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
         // Compile + instantiate lazily, once per module id. `compile_preset`
         // records its own failure in the runtime's shared cache; a failure
         // here disables only this instance.
@@ -2540,37 +2536,48 @@ impl Compositor {
                     instance,
                     gpu,
                     target: None,
+                    feedback: None,
                     size: None,
                 },
             );
         }
 
-        // The module target is output-sized and rebuilt only on a size change.
+        // Two output-sized targets ping-pong: `target` holds the most recent
+        // frame (and feeds the next warp pass), `feedback` is rendered into now.
+        // Both are rebuilt only on a size change.
         let needs_target = self
             .milkdrop
             .get(module_id)
-            .map(|milk| milk.target.is_none() || milk.size != Some((width, height)))
+            .map(|milk| {
+                milk.target.is_none()
+                    || milk.feedback.is_none()
+                    || milk.size != Some((width, height))
+            })
             .unwrap_or(true);
-        let new_target = if needs_target {
-            let texture =
-                self.create_output_texture(&format!("modv-milkdrop-{module_id}"), width, height);
-            self.clear_texture(&texture.texture, "milkdrop-allocate");
-            Some(texture)
-        } else {
-            None
-        };
-
-        // The gate holds an owned view clone so `new_target` can be moved into
-        // the instance inside the borrow-split block below.
-        let output_view = match &new_target {
-            Some(texture) => Some(texture.view.clone()),
-            None => self
+        if needs_target {
+            let front =
+                self.create_output_texture(&format!("modv-milkdrop-{module_id}-a"), width, height);
+            let back =
+                self.create_output_texture(&format!("modv-milkdrop-{module_id}-b"), width, height);
+            self.clear_texture(&front.texture, "milkdrop-allocate");
+            self.clear_texture(&back.texture, "milkdrop-allocate");
+            let milk = self
                 .milkdrop
-                .get(module_id)
-                .and_then(|milk| milk.target.as_ref())
-                .map(|texture| texture.view.clone()),
-        };
-        let Some(output_view) = output_view else {
+                .get_mut(module_id)
+                .expect("MilkDrop instance was just inserted");
+            milk.target = Some(front);
+            milk.feedback = Some(back);
+            milk.size = Some((width, height));
+        }
+
+        // Owned view clones so the mutable instance borrow can happen below.
+        let Some((previous, output_view)) = (|| {
+            let milk = self.milkdrop.get(module_id)?;
+            Some((
+                milk.target.as_ref()?.view.clone(),
+                milk.feedback.as_ref()?.view.clone(),
+            ))
+        })() else {
             return Ok(());
         };
 
@@ -2608,10 +2615,6 @@ impl Compositor {
             let Some(milk) = milkdrop.get_mut(module_id) else {
                 return Ok(());
             };
-            if let Some(texture) = new_target {
-                milk.target = Some(texture);
-                milk.size = Some((width, height));
-            }
             begin_frame(&mut milk.instance, &milk_frame)
                 .map_err(|error| format!("frame: {error:?}"))?;
             let mesh = evaluate_mesh(&mut milk.instance, &milk_frame)
@@ -2625,7 +2628,10 @@ impl Compositor {
                     &mut milk.gpu,
                     &output_view,
                 )
-                .map_err(|error| format!("draw: {error:?}"))
+                .map_err(|error| format!("draw: {error:?}"))?;
+            // The texture just rendered becomes next frame's feedback source.
+            std::mem::swap(&mut milk.target, &mut milk.feedback);
+            Ok(())
         })();
 
         if let Err(error) = render_result {
@@ -7851,6 +7857,51 @@ void main(void) {
         assert!(
             !compositor.failed_milkdrop.contains("module-a"),
             "a valid .mlk preset was disabled"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MilkDrop's warp pass must resample the preset's own previous output, not
+    /// the (initially black) group canvas. Two ping-pong output textures make
+    /// that possible; without the swap the feedback loop never accumulates.
+    #[test]
+    fn milkdrop_feedback_uses_the_previous_own_output() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some((registry, dir)) = milkdrop_registry() else {
+            return;
+        };
+        let mut compositor = Compositor::with_registry(&engine.device, &engine.queue, registry);
+        compositor.resize(SIZE, SIZE);
+        let state = milkdrop_state(&[("module-a", "Valid Preset")]);
+
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("first MilkDrop frame renders");
+        let first = format!(
+            "{:?}",
+            compositor.milkdrop["module-a"]
+                .target
+                .as_ref()
+                .unwrap()
+                .texture
+        );
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("second MilkDrop frame renders");
+        let second = format!(
+            "{:?}",
+            compositor.milkdrop["module-a"]
+                .target
+                .as_ref()
+                .unwrap()
+                .texture
+        );
+
+        assert_ne!(
+            first, second,
+            "the MilkDrop output must ping-pong so the previous frame can feed the warp pass"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

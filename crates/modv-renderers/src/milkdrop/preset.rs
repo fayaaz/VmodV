@@ -339,7 +339,7 @@ static BASE_VALS: &[BaseVal] = &[
         set: |b, v| b.additivewave = parse_bool(v),
     },
     BaseVal {
-        keys: &["wave_dots", "bwavedots"],
+        keys: &["wave_dots", "bwavedots", "busedots"],
         set: |b, v| b.wave_dots = parse_bool(v),
     },
     BaseVal {
@@ -603,30 +603,42 @@ fn push_numbered(key: &str, value: &str, sets: &mut [(&str, &mut EqLines)]) -> b
     false
 }
 
-/// Convert a 1-based `wavecode_*` / `shapecode_*` section number into a 0-based
-/// slot index, returning `None` for `0` or an out-of-range value.
+/// Map a `wavecode_*` / `shapecode_*` section number to its slot index.
 ///
-/// MilkDrop numbers sections from 1, hence the `i - 1`. The range check runs
-/// before the subtraction, and [`bool::then`] evaluates its closure lazily, so
-/// a malformed `*_0_*` key can never underflow `usize`.
+/// MilkDrop numbers custom overlay sections from **0** to 3 (`wavecode_0_*`
+/// through `wavecode_3_*` in the official preset pack), so the number is used
+/// directly. Out-of-range numbers are ignored rather than clamped.
 fn section_index(num: &str) -> Option<usize> {
     let i = num.parse::<usize>().ok()?;
-    (1..=SECTION_COUNT).contains(&i).then(|| i - 1)
+    (i < SECTION_COUNT).then_some(i)
 }
 
-/// Parse `wavecode_<i>_<prop>` / `shapecode_<i>_<prop>`; `i` is 1-based.
+/// Parse `wavecode_<i>_<prop>` / `shapecode_<i>_<prop>`.
 fn parse_section_prop(rest: &str) -> Option<(usize, &str)> {
     let (num, prop) = rest.split_once('_')?;
     Some((section_index(num)?, prop))
 }
 
-/// Parse `wave_<i>_<kind>[_N]` / `shape_<i>_<kind>[_N]`.
+/// Parse `wave_<i>_<kind><N>` / `shape_<i>_<kind><N>`.
+///
+/// Real presets write the equation number directly after the kind
+/// (`wave_0_per_point1`, `wave_2_per_frame12`), but the underscore-separated
+/// spelling (`wave_0_per_point_1`) is accepted too. A kind with no trailing
+/// number defaults to line 0.
 fn parse_section_eq(rest: &str) -> Option<(usize, &str, usize)> {
     let (num, tail) = rest.split_once('_')?;
     let i = section_index(num)?;
     let (kind, index) = match tail.rsplit_once('_') {
-        Some((kind, n)) => (kind, n.parse::<usize>().ok()?),
-        None => (tail, 0),
+        Some((kind, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
+            (kind, n.parse::<usize>().ok()?)
+        }
+        _ => match tail.find(|c: char| c.is_ascii_digit()) {
+            Some(split) => {
+                let (kind, digits) = tail.split_at(split);
+                (kind, digits.parse::<usize>().ok()?)
+            }
+            None => (tail, 0),
+        },
     };
     Some((i, kind, index))
 }
@@ -904,17 +916,31 @@ per_frame_1=wave_y = 0.5;
     }
 
     #[test]
+    fn wavecode_busedots_is_a_known_section_base_val() {
+        let src = "[preset00]\nwavecode_0_enabled=1\nwavecode_0_bUseDots=1\n";
+        let doc = parse_milk(src, "dots").expect("parses");
+        assert!(
+            doc.waves[0].base.wave_dots,
+            "wavecode_<i>_bUseDots must select dotted rendering"
+        );
+        assert!(
+            !doc.diagnostics.iter().any(|d| d.contains("busedots")),
+            "the real preset spelling must not be diagnosed as unknown"
+        );
+    }
+
+    #[test]
     fn active_waves_and_shapes_keep_only_enabled_sections() {
         let src = "\
 [preset00]
-wavecode_1_enabled=1
-wavecode_2_enabled=0
-shapecode_1_enabled=1
-shapecode_2_enabled=0
-wave_1_per_frame_1=wave_a = 1.0;
-wave_2_per_frame_1=wave_a = 2.0;
-shape_1_per_frame_1=shape_a = 1.0;
-shape_2_per_frame_1=shape_a = 2.0;
+wavecode_0_enabled=1
+wavecode_1_enabled=0
+shapecode_0_enabled=1
+shapecode_1_enabled=0
+wave_0_per_frame1=wave_a = 1.0;
+wave_1_per_frame1=wave_a = 2.0;
+shape_0_per_frame1=shape_a = 1.0;
+shape_1_per_frame1=shape_a = 2.0;
 ";
         let doc = parse_milk(src, "sections").expect("parses");
         assert_eq!(doc.active_waves().len(), 1, "one enabled wave");
@@ -1319,10 +1345,40 @@ shape_1_per_point_1=`ignored = 1;
         );
     }
 
-    /// Real v2 preset `Bioluminescent Abyss.milk` has `wavecode_0_*` keys.
-    /// `section_index("0")` eagerly evaluates `i - 1` in `.then_some(...)`,
-    /// underflowing in debug builds. Index 0 is invalid (1-based sections) but
-    /// must be ignored gracefully, never panic.
+    /// Real presets number their custom wave/shape sections from 0 and write
+    /// equation indices directly after the kind (`wave_0_per_point1`), with no
+    /// underscore before the number. All 552 presets in the official MilkDrop
+    /// pack use this spelling, so dropping either form silently replaces the
+    /// custom overlay with the built-in waveform.
+    #[test]
+    fn zero_based_sections_with_trailing_digit_eq_keys_are_parsed() {
+        let src = concat!(
+            "[preset00]\n",
+            "wavecode_0_enabled=1\n",
+            "wavecode_0_samples=512\n",
+            "wave_0_init1=t1 = 7;\n",
+            "wave_0_per_frame1=wave_a = 1.0;\n",
+            "wave_0_per_point1=x = sample;\n",
+            "wave_0_per_point2=y = sample * 2;\n",
+            "shapecode_0_enabled=1\n",
+            "shape_0_per_frame1=shape_a = 1.0;\n",
+        );
+        let doc = parse_milk(src, "zero_based").expect("parses");
+        assert_eq!(doc.active_waves().len(), 1, "wave 0 must be active");
+        assert_eq!(doc.active_shapes().len(), 1, "shape 0 must be active");
+        assert!(doc.waves[0].init_eqs.contains("t1 = 7;"), "init eqs kept");
+        assert!(doc.waves[0].frame_eqs.contains("wave_a = 1.0;"));
+        assert!(
+            doc.waves[0].point_eqs.contains("x = sample;")
+                && doc.waves[0].point_eqs.contains("y = sample * 2;"),
+            "per_point1/2 must be collected in numeric order, got {:?}",
+            doc.waves[0].point_eqs
+        );
+        assert!(doc.shapes[0].frame_eqs.contains("shape_a = 1.0;"));
+    }
+
+    /// Section 0 is valid; out-of-range section numbers must be ignored
+    /// gracefully rather than panicking or aliasing a valid slot.
     #[test]
     fn zero_indexed_wavecode_and_shapecode_do_not_panic() {
         let src = concat!(
@@ -1332,6 +1388,8 @@ shape_1_per_point_1=`ignored = 1;
             "shapecode_0_enabled=1\n",
             "wavecode_1_enabled=1\n",
             "shapecode_1_enabled=1\n",
+            "wavecode_4_enabled=1\n",
+            "shapecode_4_enabled=1\n",
         );
 
         let result = std::panic::catch_unwind(|| parse_milk(src, "zero_index"));
@@ -1342,13 +1400,13 @@ shape_1_per_point_1=`ignored = 1;
 
         assert_eq!(
             doc.active_waves().len(),
-            1,
-            "only the valid wave 1 section is active"
+            2,
+            "sections 0 and 1 are both valid and active"
         );
         assert_eq!(
             doc.active_shapes().len(),
-            1,
-            "only the valid shape 1 section is active"
+            2,
+            "sections 0 and 1 are both valid and active"
         );
     }
 }

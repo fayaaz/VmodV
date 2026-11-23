@@ -357,6 +357,20 @@ impl VarPool {
         }
     }
 
+    /// Copy `q1..q32` from another pool.
+    ///
+    /// Overlay sections use their own [`VarPool`]s, but MilkDrop runs their
+    /// frame/point equations against the same live q values as the preset's
+    /// per-frame equations. Seeding them from the frame pool keeps presets
+    /// that drive waves with `q1`/`q2` working.
+    pub fn copy_q_from(&mut self, other: &VarPool) {
+        for i in 1..=32 {
+            let key = format!("q{i}");
+            let value = other.vars.get(&key).copied().unwrap_or(0.0);
+            self.vars.insert(key, value);
+        }
+    }
+
     /// Read a `megabuf` slot.
     pub fn megabuf(&self, index: usize) -> f32 {
         self.megabuf.get(index).copied().unwrap_or(0.0)
@@ -1425,7 +1439,9 @@ pub fn run_pixel(
     rad: f32,
     ang: f32,
 ) -> Result<(), EelError> {
-    pool.reset_q();
+    // No `reset_q()` here: per-point/per-pixel equations run after the frame
+    // equations and must see the q values those equations produced. The
+    // per-frame reset already happened in `run_frame`.
     pool.set("x", x);
     pool.set("y", y);
     pool.set("rad", rad);
@@ -1733,6 +1749,20 @@ mod tests {
         let mut pool = VarPool::with_seed(1);
         run_frame(&eq, &mut pool, &globals).expect("runs");
         approx!(pool.get("sum"), 105.0, "sum of all injected globals");
+    }
+
+    /// Per-point/per-pixel EEL runs after the per-frame equations, so it must
+    /// see the q values those equations produced. `snapshot_q` stores the
+    /// *frame start* baseline; restoring it inside `run_pixel` discards the
+    /// frame's own q state and breaks presets that drive waves with `q1`.
+    #[test]
+    fn run_pixel_keeps_q_values_written_by_the_frame_equations() {
+        let eq = compile("out = q1;", 2).expect("compiles");
+        let mut pool = VarPool::with_seed(1);
+        pool.snapshot_q(); // baseline q1 = 0
+        pool.set("q1", 7.0); // per-frame equation result
+        run_pixel(&eq, &mut pool, 0.0, 0.0, 0.0, 0.0).expect("runs");
+        approx!(pool.get("out"), 7.0, "per-point equations see frame q1");
     }
 
     #[test]

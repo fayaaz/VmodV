@@ -45,8 +45,9 @@
 //!    [`evaluate_overlays`]' results are drawn as `LineList` primitives onto
 //!    the comp target, between comp and output. When there are no overlays this
 //!    pass is skipped entirely, so the six-pass path is byte-for-byte unchanged.
-//! 5. **output** — feedback blending (`mix(previous, current, decay)` for
-//!    `0 < decay < 1`; `decay == 1` and the `decay == 0` derived-Default sentinel
+//! 5. **output** — post-processing only. Feedback is applied by the default
+//!    warp body (`previous * fDecay`), so higher `fDecay` keeps more of the
+//!    previous frame — 1 keeps it all; `decay == 0` is the derived-Default sentinel
 //!    are passthrough) followed by post-processing into the caller-supplied
 //!    target. `gammaadj`, `invert`, `red_blue`, `brighten` (`1-(1-x)^2`),
 //!    `darken` (`x^2`) and `solarize` (`2*x*(1-x)`) follow MilkDrop 2's
@@ -146,7 +147,7 @@ const MAX_WAVE_SAMPLES: usize = 1024;
 /// Sample count used when the frame carries no audio wave data.
 const DEFAULT_WAVE_SAMPLES: usize = 512;
 /// Draw every Nth evaluated wave point as a line segment (keeps vertex counts small).
-const WAVE_VERTEX_STRIDE: usize = 4;
+const WAVE_VERTEX_STRIDE: usize = 1;
 /// Bytes in the single-`vec4` uniform that carries one blur level's texel radius.
 const SMALL_UNIFORM_BYTES: u64 = 16;
 /// Base blur radius in texels, added to a level's `b1n`/`b2n`/`b3n` strength.
@@ -331,8 +332,8 @@ fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Final output pass. Blends `previous` into the composited frame for a
-/// fractional `decay` in `(0, 1)` (`mix(previous, current, decay)`), then
+/// Final output pass. Applies MilkDrop's post filters to the composited frame
+/// (feedback is already baked into the warp stage), then
 /// applies MilkDrop 2's post ops in order: gamma adjust, brighten, darken,
 /// solarize, invert and red/blue stereo swap. `brighten`/`darken`/`solarize`
 /// are booleans in a `.mlk` (their per-pixel `q` equations are not evaluated
@@ -364,15 +365,9 @@ struct MilkFragIn { @location(0) uv: vec2<f32> }
 @fragment
 fn fs_main(input: MilkFragIn) -> @location(0) vec4<f32> {
     var c = textureSample(src_texture, src_sampler, input.uv).rgb;
-    // MilkDrop feedback: for a fractional decay in (0, 1) the previous
-    // composited frame bleeds into the current one via `mix`. decay == 1 is the
-    // no-feedback case; decay == 0 is the derived-Default "unset" sentinel used
-    // by test fixtures and is treated as passthrough too. Sample `previous`
-    // unconditionally because `textureSample` needs uniform control flow.
-    let previous = textureSample(prev_texture, prev_sampler, input.uv).rgb;
-    if (params.decay > 0.0 && params.decay < 1.0) {
-        c = mix(previous, c, clamp(params.decay, 0.0, 1.0));
-    }
+    // Feedback lives in the warp pass (the default warp multiplies the
+    // previous frame by `fDecay`). The output pass only post-processes the
+    // composited frame; mixing `previous` here would double-apply decay.
     if (params.gammaadj > 0.0 && params.gammaadj != 1.0) {
         c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / params.gammaadj));
     }
@@ -842,12 +837,13 @@ impl MilkGpuCache {
         &mut self,
         device: &wgpu::Device,
         additive: bool,
+        dots: bool,
     ) -> Result<wgpu::RenderPipeline, MilkRuntimeError> {
-        let key = if additive {
-            "overlay|additive".to_string()
-        } else {
-            "overlay|alpha".to_string()
-        };
+        let key = format!(
+            "overlay|{}|{}",
+            if additive { "additive" } else { "alpha" },
+            if dots { "points" } else { "lines" }
+        );
         if let Some(pipeline) = self.pipelines.get(&key) {
             return Ok(pipeline.clone());
         }
@@ -890,7 +886,11 @@ impl MilkGpuCache {
                 buffers: &[Some(overlay_vertex_layout())],
             },
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: if dots {
+                    wgpu::PrimitiveTopology::PointList
+                } else {
+                    wgpu::PrimitiveTopology::LineList
+                },
                 ..Default::default()
             },
             depth_stencil: None,
@@ -982,6 +982,8 @@ pub struct WaveProgram {
     pub init: CompiledEquations,
     pub frame: CompiledEquations,
     pub point: CompiledEquations,
+    /// From `wavecode_<i>_bUseDots`: draw points instead of a polyline.
+    pub dots: bool,
 }
 
 /// One compiled shape overlay: its init/frame EEL equation sets.
@@ -999,6 +1001,8 @@ pub struct WavePoint {
     pub sample: f32,
     pub value1: f32,
     pub value2: f32,
+    /// RGBA written by the point equations for this sample, clamped to [0, 1].
+    pub color: [f32; 4],
 }
 
 /// Per-frame evaluated state of one wave overlay.
@@ -1007,6 +1011,8 @@ pub struct WaveOverlay {
     pub pool: VarPool,
     pub points: Vec<WavePoint>,
     pub enabled: bool,
+    /// Draw one point per sample instead of connecting them with lines.
+    pub dots: bool,
 }
 
 /// Per-frame evaluated state of one shape overlay.
@@ -1550,15 +1556,10 @@ impl MilkRuntime {
             .clone()
             .ok_or_else(|| MilkRuntimeError::Draw("MilkDrop output layout missing".into()))?;
 
-        // With decay >= 1 there is no prior-frame feedback: the warp stage has
-        // no previous composited frame to resample, so bind the neutral 1x1
-        // texture instead. This keeps the composite independent of `previous`
-        // in that mode (and leaves the decay=0/0<decay<1 paths unchanged).
-        let warp_main = if instance.compiled.doc.base.decay >= 1.0 {
-            &dummy_view
-        } else {
-            previous
-        };
+        // The warp stage always resamples the previous composited frame. The
+        // default warp body multiplies it by `fDecay`; hand-written fixtures
+        // with an unset (0) decay get a passthrough multiplier of 1.
+        let warp_main = previous;
         let warp_views = MilkSamplerViews {
             main: warp_main,
             dummy: &dummy_view,
@@ -1655,22 +1656,6 @@ impl MilkRuntime {
         // and skips any individual section that fails, and a broken overlay
         // must never fail the whole render -- the six-pass path stays exact.
         let _ = evaluate_overlays(instance, frame);
-        // Draw wave/shape overlay primitives onto the comp target so the output
-        // pass (which samples comp_view) sees them. When no overlays were
-        // evaluated the existing six-pass path is unchanged.
-        if !instance.overlay_frame.waves.is_empty() || !instance.overlay_frame.shapes.is_empty() {
-            let alpha_pipeline = cache.overlay_pipeline(device, false)?;
-            let additive_pipeline = cache.overlay_pipeline(device, true)?;
-            encode_overlay_passes(
-                device,
-                queue,
-                &mut encoder,
-                &comp_view,
-                &instance.overlay_frame,
-                &alpha_pipeline,
-                &additive_pipeline,
-            );
-        }
         // output: post-processing into the caller-supplied target.
         encode_fullscreen_pass(
             &mut encoder,
@@ -1679,6 +1664,27 @@ impl MilkRuntime {
             &output_pipeline,
             &output_bind,
         );
+        // MilkDrop draws waves/shapes *after* the comp post-processing, so a
+        // white wave stays white even when darken+solarize would map white to
+        // black. Drawing onto the final output target (with Load) preserves
+        // that ordering; with no overlays the six-pass path is unchanged.
+        if !instance.overlay_frame.waves.is_empty() || !instance.overlay_frame.shapes.is_empty() {
+            let alpha_pipeline = cache.overlay_pipeline(device, false, false)?;
+            let additive_pipeline = cache.overlay_pipeline(device, true, false)?;
+            let alpha_dots = cache.overlay_pipeline(device, false, true)?;
+            let additive_dots = cache.overlay_pipeline(device, true, true)?;
+            encode_overlay_passes(
+                device,
+                queue,
+                &mut encoder,
+                output,
+                &instance.overlay_frame,
+                &alpha_pipeline,
+                &additive_pipeline,
+                &alpha_dots,
+                &additive_dots,
+            );
+        }
 
         queue.submit(Some(encoder.finish()));
         Ok(())
@@ -1688,16 +1694,24 @@ impl MilkRuntime {
 /// Default identity shader body for presets with no `shader_body` at all
 /// (notably v1 presets, which predate per-stage HLSL). Sampling the previous
 /// frame at the mesh UV makes warp and comp pass-through stages.
-const DEFAULT_SHADER_BODY: &str = "float3 ret = tex2D(sampler_main, uv_orig).rgb;\n";
+/// MilkDrop's default warp multiplies the previous frame by `fDecay`; 1 keeps
+/// the whole frame, 0 discards it. The identity composite then just passes that
+/// warped frame through, so the two default stages must not both apply decay.
+const DEFAULT_WARP_BODY: &str =
+    "float3 ret = tex2D(sampler_main, uv_orig).rgb * (decay > 0.0 ? decay : 1.0);\n";
+const DEFAULT_COMP_BODY: &str = "float3 ret = tex2D(sampler_main, uv_orig).rgb;\n";
 
 /// The body to translate for one stage: the preset's own body verbatim, or the
 /// identity body when it is empty. v1 presets carry no `shader_body`, so without
 /// this substitution `ret` would be undeclared and the translated shader would
 /// fail naga validation. Sampling the previous frame keeps such stages as
 /// pass-through instead.
-fn effective_shader_body(shader: &MilkShader) -> &str {
+fn effective_shader_body(shader: &MilkShader, stage: MilkShaderStage) -> &str {
     if shader.body.trim().is_empty() {
-        DEFAULT_SHADER_BODY
+        match stage {
+            MilkShaderStage::Warp => DEFAULT_WARP_BODY,
+            MilkShaderStage::Comp => DEFAULT_COMP_BODY,
+        }
     } else {
         &shader.body
     }
@@ -1729,7 +1743,7 @@ pub fn compile_preset(
     let warp_src = extract_shader_body(&doc.warp);
     let warp = translate_milk_shader(
         &warp_src.prelude,
-        effective_shader_body(&warp_src),
+        effective_shader_body(&warp_src, MilkShaderStage::Warp),
         MilkShaderStage::Warp,
     )
     .map_err(|e| fail(format!("warp shader: {e}")))?;
@@ -1737,7 +1751,7 @@ pub fn compile_preset(
     let comp_src = extract_shader_body(&doc.comp);
     let comp = translate_milk_shader(
         &comp_src.prelude,
-        effective_shader_body(&comp_src),
+        effective_shader_body(&comp_src, MilkShaderStage::Comp),
         MilkShaderStage::Comp,
     )
     .map_err(|e| fail(format!("comp shader: {e}")))?;
@@ -1755,7 +1769,12 @@ pub fn compile_preset(
         let frame_wave = compile(&wave.frame_eqs, version).ok();
         let point_wave = compile(&wave.point_eqs, version).ok();
         if let (Some(init), Some(frame), Some(point)) = (init_wave, frame_wave, point_wave) {
-            waves.push(WaveProgram { init, frame, point });
+            waves.push(WaveProgram {
+                init,
+                frame,
+                point,
+                dots: wave.base.wave_dots,
+            });
         } else {
             failures.mark_failed(&format!("{name}/wave{index}"));
             eprintln!("MilkDrop {name}: skipping malformed wave {index}");
@@ -1900,6 +1919,7 @@ fn evaluate_builtin_wave(
             sample: t,
             value1: audio_value,
             value2: 0.0,
+            color: overlay_color(&pool),
         });
     }
 
@@ -1907,6 +1927,7 @@ fn evaluate_builtin_wave(
         pool,
         points,
         enabled: true,
+        dots: false,
     }
 }
 
@@ -1967,6 +1988,7 @@ pub fn evaluate_overlays(
             &instance.compiled.waves[index],
             &mut instance.wave_states[index],
             &globals,
+            &instance.pool,
             &frame.audio.wave,
             samples,
         ) {
@@ -2086,36 +2108,49 @@ fn evaluate_one_wave(
     program: &WaveProgram,
     state: &mut OverlayState,
     globals: &Globals,
+    frame_pool: &VarPool,
     audio_wave: &[f32],
     samples: usize,
 ) -> Result<WaveOverlay, String> {
     ensure_overlay_init(&program.init, state, globals)?;
 
+    // MilkDrop shares the live q values between the frame and overlay
+    // equations. Seed this section's q baseline from the frame pool so the
+    // wave's own frame equations (and, through them, its point equations) see
+    // `q1..q32` written by the preset's top-level `per_frame` equations.
+    state.pool.copy_q_from(frame_pool);
+    state.pool.snapshot_q();
+
     seed_wave_frame_vars(&mut state.pool, samples);
     run_frame(&program.frame, &mut state.pool, globals).map_err(|e| format!("frame: {e}"))?;
 
-    // Point equations run on a fork so the frame-level pool (r/g/b/a, t1..t8,
-    // samples, ...) survives unchanged for both the returned overlay and the
-    // GPU colour pass. `VarPool`'s megabuf is copy-on-write, so this fork (and
-    // the returned-overlay clone below) only copies the 4 MiB buffer if a
-    // point equation actually writes to it — typically zero copies per frame.
-    let mut point_pool = state.pool.clone();
+    // MilkDrop evaluates frame and point equations against the same pool, so
+    // user variables written per point (`mx`, `ma`, ...) persist into the next
+    // frame. Several community presets random-walk those variables to build
+    // their shapes; forking the pool here would freeze every wave at frame 1.
     let mut points = Vec::with_capacity(samples);
     for index in 0..samples {
         let t = wave_sample_t(index, samples);
-        let x = wave_ndc_x(t);
+        // Seed in MilkDrop's normalised screen space: a section with no
+        // `x/y` equations still spans the canvas, and equations that write
+        // `x/y` use the same [0, 1] convention as real presets.
+        let x = t;
+        let y = 0.5;
         let audio_value = audio_wave.get(index).copied().unwrap_or(0.0);
-        point_pool.set("sample", t);
-        point_pool.set("value1", audio_value);
-        point_pool.set("value2", 0.0);
-        run_pixel(&program.point, &mut point_pool, x, audio_value, 0.0, 0.0)
+        state.pool.set("sample", t);
+        state.pool.set("value1", audio_value);
+        state.pool.set("value2", 0.0);
+        run_pixel(&program.point, &mut state.pool, x, y, 0.0, 0.0)
             .map_err(|e| format!("point {index}: {e}"))?;
+        // Point equations use MilkDrop's normalised screen space (x=0 left,
+        // y=0 top); the GPU overlay pass expects NDC (-1..1, y up).
         points.push(WavePoint {
-            x: point_pool.get("x"),
-            y: point_pool.get("y"),
-            sample: point_pool.get("sample"),
-            value1: point_pool.get("value1"),
-            value2: point_pool.get("value2"),
+            x: state.pool.get("x") * 2.0 - 1.0,
+            y: 1.0 - 2.0 * state.pool.get("y"),
+            sample: state.pool.get("sample"),
+            value1: state.pool.get("value1"),
+            value2: state.pool.get("value2"),
+            color: overlay_color(&state.pool),
         });
     }
 
@@ -2123,6 +2158,7 @@ fn evaluate_one_wave(
         pool: state.pool.clone(),
         points,
         enabled: true,
+        dots: program.dots,
     })
 }
 
@@ -2861,15 +2897,22 @@ fn overlay_color(pool: &VarPool) -> [f32; 4] {
 /// points remain after striding.
 fn wave_overlay_vertices(wave: &WaveOverlay) -> Vec<f32> {
     let mut out = Vec::new();
-    let color = overlay_color(&wave.pool);
-    let mut previous: Option<[f32; 2]> = None;
+    let mut previous: Option<([f32; 2], [f32; 4])> = None;
     let mut emitted = 0usize;
     for point in wave.points.iter().step_by(WAVE_VERTEX_STRIDE) {
-        let current = [point.x.clamp(-1.0, 1.0), point.y.clamp(-1.0, 1.0)];
-        if let Some(start) = previous {
-            out.extend_from_slice(&[start[0], start[1], color[0], color[1], color[2], color[3]]);
+        let current = (
+            [point.x.clamp(-1.0, 1.0), point.y.clamp(-1.0, 1.0)],
+            point.color,
+        );
+        if let Some(([sx, sy], sc)) = previous {
+            out.extend_from_slice(&[sx, sy, sc[0], sc[1], sc[2], sc[3]]);
             out.extend_from_slice(&[
-                current[0], current[1], color[0], color[1], color[2], color[3],
+                current.0[0],
+                current.0[1],
+                current.1[0],
+                current.1[1],
+                current.1[2],
+                current.1[3],
             ]);
             emitted += 1;
         }
@@ -2877,6 +2920,25 @@ fn wave_overlay_vertices(wave: &WaveOverlay) -> Vec<f32> {
     }
     if emitted == 0 {
         out.clear();
+    }
+    out
+}
+
+/// Build `PointList` vertices for a `bUseDots` wave: one vertex per sample.
+/// Dotted presets rely on this because their points can be closer than one
+/// pixel, which makes the line-list path rasterise nothing at all.
+fn wave_overlay_point_vertices(wave: &WaveOverlay) -> Vec<f32> {
+    let mut out = Vec::with_capacity(wave.points.len() * 6);
+    for point in &wave.points {
+        let color = point.color;
+        out.extend_from_slice(&[
+            point.x.clamp(-1.0, 1.0),
+            point.y.clamp(-1.0, 1.0),
+            color[0],
+            color[1],
+            color[2],
+            color[3],
+        ]);
     }
     out
 }
@@ -2910,6 +2972,7 @@ fn shape_overlay_vertices(shape: &ShapeOverlay) -> Vec<f32> {
 /// Encode one render pass that draws all evaluated overlays onto `comp_view`.
 /// Each overlay gets a small vertex buffer uploaded from the CPU results; the
 /// pipeline (alpha vs additive) is chosen from its `additive` variable.
+#[allow(clippy::too_many_arguments)]
 fn encode_overlay_passes(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -2918,15 +2981,21 @@ fn encode_overlay_passes(
     overlays: &OverlayFrame,
     alpha_pipeline: &wgpu::RenderPipeline,
     additive_pipeline: &wgpu::RenderPipeline,
+    alpha_dots: &wgpu::RenderPipeline,
+    additive_dots: &wgpu::RenderPipeline,
 ) {
-    let mut draws: Vec<(Vec<f32>, bool)> = Vec::new();
+    let mut draws: Vec<(Vec<f32>, bool, bool)> = Vec::new();
     for wave in &overlays.waves {
         if !wave.enabled {
             continue;
         }
-        let vertices = wave_overlay_vertices(wave);
+        let vertices = if wave.dots {
+            wave_overlay_point_vertices(wave)
+        } else {
+            wave_overlay_vertices(wave)
+        };
         if !vertices.is_empty() {
-            draws.push((vertices, wave.pool.get("additive") > 0.5));
+            draws.push((vertices, wave.pool.get("additive") > 0.5, wave.dots));
         }
     }
     for shape in &overlays.shapes {
@@ -2935,7 +3004,7 @@ fn encode_overlay_passes(
         }
         let vertices = shape_overlay_vertices(shape);
         if !vertices.is_empty() {
-            draws.push((vertices, false));
+            draws.push((vertices, false, false));
         }
     }
     if draws.is_empty() {
@@ -2958,7 +3027,7 @@ fn encode_overlay_passes(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    for (vertices, additive) in draws {
+    for (vertices, additive, dots) in draws {
         let bytes = f32_bytes(&vertices);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("modV MilkDrop overlay vertices"),
@@ -2967,10 +3036,11 @@ fn encode_overlay_passes(
             mapped_at_creation: false,
         });
         queue.write_buffer(&buffer, 0, &bytes);
-        pass.set_pipeline(if additive {
-            additive_pipeline
-        } else {
-            alpha_pipeline
+        pass.set_pipeline(match (additive, dots) {
+            (false, false) => alpha_pipeline,
+            (true, false) => additive_pipeline,
+            (false, true) => alpha_dots,
+            (true, true) => additive_dots,
         });
         pass.set_vertex_buffer(0, buffer.slice(..));
         let vertex_count = (vertices.len() / 6) as u32;
@@ -3351,6 +3421,140 @@ ret = uv;\n\
             wave.points[0].value1,
             7.0,
             "t1 carries into point equations"
+        );
+    }
+
+    /// MilkDrop wave point equations write normalised screen coordinates
+    /// (`x=0` left, `y=0` top), while the GPU overlay pass consumes NDC. A
+    /// custom wave that writes `(0, 0)` must land on the top-left corner.
+    #[test]
+    fn custom_wave_normalised_xy_are_mapped_to_ndc() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].point_eqs = "x = 0; y = 0;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-xy", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x55);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        let point = &overlays.waves[0].points[0];
+        approx!(point.x, -1.0, "normalised x=0 is the left edge");
+        approx!(point.y, 1.0, "normalised y=0 is the top edge");
+    }
+
+    /// `q1..q32` written by the preset's top-level per-frame equations must be
+    /// visible to `wave_0_per_pointN`. Real presets such as shifter's
+    /// "tumbling cubes (ripples)" drive their whole 3D projection from q1/q2;
+    /// losing them collapses every sample onto one point and draws nothing.
+    #[test]
+    fn wave_point_equations_see_q_values_from_the_frame() {
+        let mut doc = doc_with("", "q1 = 7;", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].point_eqs = "x = q1 / 10; y = 0.5;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-q", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x44);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        assert!(!overlays.waves.is_empty(), "wave is evaluated");
+        approx!(
+            overlays.waves[0].points[0].x,
+            0.4,
+            "per-point equations must see q1 from the frame equations (0.7 normalised = 0.4 NDC)"
+        );
+    }
+
+    /// Real presets (for example `shifter - tumbling cubes (ripples).milk`)
+    /// compute `r/g/b` inside `wave_0_per_pointN`, so each sample needs its own
+    /// colour. Using one frame-level colour for the whole polyline renders the
+    /// wave monochrome instead of the preset's rainbow.
+    #[test]
+    fn wave_per_point_colours_reach_the_vertex_buffer() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].point_eqs = "r = sample; g = 1 - sample; b = 0.25; a = 0.5;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-colours", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x33);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        let wave = &overlays.waves[0];
+        assert!(wave.points.len() >= 2, "point equations produce samples");
+
+        let verts = wave_overlay_vertices(wave);
+        assert_eq!(
+            verts.len(),
+            (wave.points.len() - 1) * 12,
+            "every evaluated sample must contribute a line segment"
+        );
+        assert_ne!(
+            &verts[2..6],
+            &verts[verts.len() - 4..],
+            "vertex colours must follow the per-point equations, got {verts:?}"
+        );
+    }
+
+    /// MilkDrop has a single variable pool: user variables written by
+    /// `wave_0_per_pointN` survive into the next frame. Presets such as
+    /// "witchcraft (i'm melting)" random-walk `mx/my` in their point equations
+    /// and rely on that walk accumulating across frames to draw a ring.
+    #[test]
+    fn wave_point_variables_persist_across_frames() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].point_eqs = "mx = mx + 1; x = 0.5; y = 0.5;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-persist", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x66);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let first = evaluate_overlays(&mut instance, &f).expect("evaluate");
+        let after_first = first.waves[0].pool.get("mx");
+        assert!(
+            after_first > 0.0,
+            "point equations must write the live pool"
+        );
+
+        begin_frame(&mut instance, &f).expect("begin_frame");
+        let second = evaluate_overlays(&mut instance, &f).expect("evaluate");
+        approx!(
+            second.waves[0].pool.get("mx"),
+            after_first * 2.0,
+            "point variables must carry into the next frame"
+        );
+    }
+
+    #[test]
+    fn dotted_wave_emits_one_vertex_per_sample() {
+        let mut doc = doc_with("", "", "", VALID_WARP, VALID_COMP);
+        doc.waves[0].enabled = true;
+        doc.waves[0].base.wave_dots = true;
+        doc.waves[0].point_eqs = "x = sample; y = 0.5;".to_string();
+
+        let cache = MilkFailureCache::new();
+        let compiled = compile_preset("wave-dots", &doc, &cache).expect("fixture compiles");
+        let mut instance = new_instance(compiled, 0x77);
+        let f = frame(0.1, 0.2, 0.3, 1, 0.016);
+        begin_frame(&mut instance, &f).expect("begin_frame");
+
+        let overlays = evaluate_overlays(&mut instance, &f).expect("evaluate_overlays");
+        let wave = &overlays.waves[0];
+        assert!(wave.dots, "the section's bUseDots flag reaches the overlay");
+        assert_eq!(
+            wave_overlay_point_vertices(wave).len(),
+            wave.points.len() * 6,
+            "dots mode draws one RGBA vertex per sample"
         );
     }
 
@@ -4555,6 +4759,32 @@ mod gpu_tests {
             .count()
     }
 
+    /// MilkDrop draws waves after the comp post-processing (gamma/darken/
+    /// solarize), so a bright preset wave stays bright even when the comp
+    /// filters would map white to black. Drawing overlays into the comp target
+    /// before the output pass applies those filters to the waves as well.
+    #[test]
+    fn gpu_waves_survive_comp_post_processing() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => return,
+        };
+        let mut doc = doc_with_comp("float3 ret = float3(0.0, 0.0, 0.0);");
+        doc.name = "wave-after-post".to_string();
+        identity_output(&mut doc);
+        doc.base.darken = true;
+        doc.base.solarize = true;
+        doc.waves[0].enabled = true;
+        doc.waves[0].frame_eqs = "r = 1; g = 1; b = 1; a = 1;".to_string();
+
+        let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+        let pixels = render_pixels(&device, &queue, &runtime, doc);
+        assert!(
+            bright_count(&pixels) > 0,
+            "a white wave must survive darken+solarize post filters"
+        );
+    }
+
     #[test]
     fn gpu_wave_overlay_enabled_changes_pixels_vs_disabled() {
         let (device, queue) = match gpu() {
@@ -5048,25 +5278,74 @@ mod gpu_tests {
         }
     }
 
-    /// With `decay < 1` a non-zero previous frame must influence the output even
-    /// when the comp shader is fixed; `decay == 1` must ignore it. Rendering the
-    /// same setup twice must be byte-identical. The comp samples `sampler_main`
-    /// and adds a constant so the signal is observable whether the faithful
-    /// implementation applies feedback in the warp or in the output pass.
+    /// MilkDrop's `fDecay` is the fraction of the previous frame that survives:
+    /// 0.98 means long trails, 0.1 means almost none. The default warp body
+    /// applies it as `previous * fDecay`, so a higher value is brighter.
+    #[test]
+    fn gpu_higher_decay_keeps_more_of_the_previous_frame() {
+        let (device, queue) = match gpu() {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let render = |name: &str, decay: f64| -> Vec<u8> {
+            let mut doc = MilkDocument {
+                name: name.to_string(),
+                ..Default::default()
+            };
+            identity_output(&mut doc);
+            doc.base.decay = decay;
+            let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
+            let (
+                mut instance,
+                frame,
+                mesh,
+                previous_texture,
+                _previous_view,
+                output,
+                output_view,
+                mut targets,
+            ) = render_fixture(&device, &queue, &runtime, doc);
+            clear_to(&device, &queue, &previous_texture, [1.0, 1.0, 1.0, 1.0]);
+            let previous_view =
+                previous_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            runtime
+                .render(
+                    &mut instance,
+                    &frame,
+                    &mesh,
+                    &previous_view,
+                    &mut targets,
+                    &output_view,
+                )
+                .expect("decay render");
+            read_texture(&device, &queue, &output).expect("read output back")
+        };
+
+        let high = render("decay-high", 0.9);
+        let low = render("decay-low", 0.1);
+        assert!(
+            high[0] > low[0],
+            "fDecay=0.9 must retain more of the bright previous frame than 0.1: {} vs {}",
+            high[0],
+            low[0]
+        );
+    }
+
+    /// With a default warp/comp, the previous frame reaches the output scaled
+    /// by `fDecay`; rendering the same inputs twice must be byte-identical.
     #[test]
     fn gpu_decay_feedback_depends_on_previous_frame() {
         let (device, queue) = match gpu() {
             Some(pair) => pair,
-            None => {
-                eprintln!("skipping gpu_decay_feedback_depends_on_previous_frame: no GPU adapter");
-                return;
-            }
+            None => return,
         };
 
         let render = |name: &str, decay: f64, previous: [f64; 4]| -> Vec<u8> {
-            let mut doc =
-                doc_with_comp("float3 ret = tex2D(sampler_main, uv_orig).rgb * 0.5 + 0.25;");
-            doc.name = name.to_string();
+            let mut doc = MilkDocument {
+                name: name.to_string(),
+                ..Default::default()
+            };
             identity_output(&mut doc);
             doc.base.decay = decay;
             let runtime = MilkRuntime::new(Arc::new(device.clone()), Arc::new(queue.clone()), 4);
@@ -5097,29 +5376,10 @@ mod gpu_tests {
         };
 
         let feedback = render("decay-on", 0.5, [0.9, 0.9, 0.9, 1.0]);
-        let no_feedback = render("decay-off", 1.0, [0.9, 0.9, 0.9, 1.0]);
         let dark_previous = render("decay-dark", 0.5, [0.0, 0.0, 0.0, 1.0]);
-        let no_feedback_dark = render("decay-off-dark", 1.0, [0.0, 0.0, 0.0, 1.0]);
-
-        let first_rgb = |pixels: &[u8]| -> [u8; 3] { [pixels[0], pixels[1], pixels[2]] };
-        assert_ne!(
-            first_rgb(&feedback),
-            first_rgb(&no_feedback),
-            "decay < 1 must feed the previous frame into the output: first pixel {:?} vs {:?}",
-            first_rgb(&feedback),
-            first_rgb(&no_feedback)
-        );
-        assert_ne!(
-            feedback, no_feedback,
-            "every pixel: decay < 1 must feed the previous frame into the output"
-        );
         assert_ne!(
             feedback, dark_previous,
-            "with decay < 1 a bright previous frame must change the output"
-        );
-        assert_eq!(
-            no_feedback, no_feedback_dark,
-            "decay == 1 must make the output independent of the previous frame"
+            "a bright previous frame must change the output when decay > 0"
         );
         assert_eq!(
             feedback,
