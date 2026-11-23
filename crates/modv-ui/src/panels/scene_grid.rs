@@ -1592,28 +1592,23 @@ pub enum SceneCellHighlight {
 
 /// Decide how a cell is marked.
 ///
-/// With performance mode off the engine renders the applied Scene as a whole,
-/// so every cell in that column is an [`SceneCellHighlight::Applied`] cell.
-/// With performance mode on each row advances independently: only the cell
-/// whose Scene id matches `active_scene_rows[row]` is
-/// [`SceneCellHighlight::Live`], even if the applied Scene names a different
-/// Scene (or the same Scene in another row). A row with no live entry marks
-/// nothing.
+/// The authoritative per-row live Scenes (`active_scene_rows`, derived from
+/// live Group stamps) decide the marking in both modes: only the cell whose
+/// Scene id matches `active_scene_rows[row]` is [`SceneCellHighlight::Live`].
+/// The applied Scene no longer lights a whole column when other rows are live
+/// on different Scenes (BUGS.md). A row with no live entry marks nothing.
+///
+/// `performance_enabled` and `applied_scene_id` are kept in the signature for
+/// callers, but no longer affect the decision.
 pub fn scene_cell_highlight(
-    performance_enabled: bool,
-    applied_scene_id: Option<&str>,
+    _performance_enabled: bool,
+    _applied_scene_id: Option<&str>,
     active_scene_rows: &BTreeMap<usize, String>,
     scene_id: &str,
     row: usize,
 ) -> SceneCellHighlight {
-    if performance_enabled {
-        if active_scene_rows.get(&row).is_some_and(|id| id == scene_id) {
-            SceneCellHighlight::Live
-        } else {
-            SceneCellHighlight::None
-        }
-    } else if applied_scene_id == Some(scene_id) {
-        SceneCellHighlight::Applied
+    if active_scene_rows.get(&row).is_some_and(|id| id == scene_id) {
+        SceneCellHighlight::Live
     } else {
         SceneCellHighlight::None
     }
