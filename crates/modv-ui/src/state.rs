@@ -272,6 +272,8 @@ pub struct UiState {
     /// The drawn-curve window currently open, if any.
     pub draw_editor: Option<DrawCurveEditor>,
     pub show_bpm: bool,
+    /// The module whose info/licence window is open, if any.
+    pub module_info: Option<ModuleMetaView>,
     pub show_search: bool,
     pub command_query: String,
     pub command_selection: usize,
@@ -1251,6 +1253,7 @@ impl UiState {
             tween_editor: None,
             draw_editor: None,
             show_bpm: false,
+            module_info: None,
             show_search: false,
             command_query: String::new(),
             command_selection: 0,
@@ -1389,6 +1392,11 @@ impl UiState {
     /// Push one engine action.
     pub fn push_action(&mut self, action: impl Into<String>, payload: Value) {
         self.actions.push(UiAction::new(action, payload));
+    }
+
+    /// Show the info/licence window for a registered module.
+    pub fn open_module_info(&mut self, module: ModuleMetaView) {
+        self.module_info = Some(module);
     }
 
     /// Open the focused-input link editor.

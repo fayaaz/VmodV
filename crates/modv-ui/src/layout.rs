@@ -218,6 +218,7 @@ pub const WINDOW_PALETTE: &str = "palette";
 pub const WINDOW_TEMPO: &str = "tempo";
 pub const WINDOW_SHORTCUTS: &str = "shortcuts";
 pub const WINDOW_ABOUT: &str = "about";
+pub const WINDOW_MODULE_INFO: &str = "module_info";
 pub const WINDOW_SCENE_TIMING: &str = "scene_timing";
 pub const WINDOW_PERFORMANCE_ROW_NAMES: &str = "performance_row_names";
 pub const WINDOW_TWEEN_CURVE: &str = "tween_curve";

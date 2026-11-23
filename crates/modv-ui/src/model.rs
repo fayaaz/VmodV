@@ -2294,6 +2294,29 @@ pub struct ModuleMetaView {
     pub description: String,
 }
 
+/// The licence shown for a module in its info window.
+///
+/// Third-party terms are recorded in `THIRD_PARTY_NOTICES.md`: bundled ISF and
+/// Point10 modules are Shadertoy/Plane9 derivatives under CC BY-NC-SA, with a
+/// few Plane9 ports explicitly carrying version 4.0 headers. Modules whose
+/// provenance is not in that table direct the reader there instead of making
+/// up a licence.
+pub fn module_license(meta: &ModuleMetaView) -> &'static str {
+    match meta.name.as_str() {
+        "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube"
+        | "Square Tunnel" | "Wormhole" | "Around Plus" => {
+            "CC BY-NC-SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+        }
+        "Boxinator" | "CollapsingArchitecture" | "FractilianParabolicCircleInversion"
+        | "LogTransWarpSpiral" | "UltimateFlame" | "GreatBallOfFire" | "HexVortex"
+        | "UltimateSpiral" => "CC BY-NC-SA 3.0 (see THIRD_PARTY_NOTICES.md)",
+        _ if matches!(meta.module_type.as_str(), "isf" | "2d" | "3d") => {
+            "CC BY-NC-SA 3.0 (Shadertoy default; see THIRD_PARTY_NOTICES.md)"
+        }
+        _ => "See THIRD_PARTY_NOTICES.md for third-party licence terms",
+    }
+}
+
 impl ModuleMetaView {
     /// The Gallery section this module belongs to (`effects`, `2d-scenes`,
     /// `3d-scenes`), following `Gallery.vue`'s category fallback.

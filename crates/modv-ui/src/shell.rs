@@ -13,15 +13,15 @@ use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_wi
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
 use crate::group_drag::GroupDrag;
 use crate::layout::{
-    LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_PALETTE, WINDOW_SHORTCUTS,
-    WINDOW_TEMPO,
+    LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_MODULE_INFO, WINDOW_PALETTE,
+    WINDOW_SHORTCUTS, WINDOW_TEMPO,
 };
 use crate::library_drag::MediaLibraryDrag;
 use crate::model::{
     COMPOSITE_OPERATIONS, EngineSnapshot, InheritTarget, LibraryKind, MediaAction, MediaAssetView,
     MediaSourceView, ModuleMetaView, ModuleView, PropView, ScreenCaptureView, VideoTransportAction,
     VideoTransportView, asset_meta_label, format_duration, gallery_preview_key,
-    group_enabled_indicator, letterbox_rect, next_group_enabled, sample_rate_label,
+    group_enabled_indicator, letterbox_rect, module_license, next_group_enabled, sample_rate_label,
 };
 use crate::module_drag::{ModuleDrag, insertion_index, module_drop_action};
 use crate::panels::scene_grid::draw_scene_grid;
@@ -68,6 +68,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     central_panel(ui, snapshot, state);
     floating_tab_windows(ui.ctx(), snapshot, state);
     about_window(ui.ctx(), state);
+    module_info_window(ui.ctx(), state);
     shortcuts_window(ui.ctx(), state);
     file_dialog_window(ui.ctx(), state);
     profile_dialog_window(ui.ctx(), state);
@@ -111,7 +112,8 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         || state.show_search
         || state.show_shortcuts
         || state.show_about
-        || state.show_bpm;
+        || state.show_bpm
+        || state.module_info.is_some();
     if backspace
         && !ui.ctx().text_edit_focused()
         && !dialog_open
@@ -156,6 +158,7 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.show_search = false;
         state.show_shortcuts = false;
         state.show_about = false;
+        state.module_info = None;
         state.file_dialog = None;
         state.show_profile_dialog = false;
         state.profile_error = None;
@@ -4793,6 +4796,10 @@ fn gallery_tile(
             .color(theme::MUTED),
         );
         ui.separator();
+        if ui.button("Info").clicked() {
+            state.open_module_info(module.clone());
+            ui.close();
+        }
         if ui
             .add_enabled(
                 state.selected_group.is_some(),
@@ -5172,6 +5179,50 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
         state
             .layout
             .record_window_rect(WINDOW_ABOUT, response.response.rect);
+    }
+}
+
+/// The module info window opened from a Gallery tile's context menu.
+///
+/// Shows the module's Gallery metadata and its third-party licence, as recorded
+/// in `THIRD_PARTY_NOTICES.md`.
+fn module_info_window(ctx: &egui::Context, state: &mut UiState) {
+    let Some(meta) = state.module_info.clone() else {
+        return;
+    };
+    let mut open = true;
+    let window = restore_window(
+        egui::Window::new(format!("{} — Module info", meta.name))
+            .id(egui::Id::unique("modv-window:module-info"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .min_width(320.0)
+            .default_size([420.0, 300.0]),
+        WINDOW_MODULE_INFO,
+        &state.layout,
+    );
+    let response = window.show(ctx, |ui| {
+        ui.label(
+            egui::RichText::new(&meta.name)
+                .strong()
+                .size(18.0)
+                .color(theme::ACCENT),
+        );
+        ui.label(format!("Type: {}", meta.module_type));
+        ui.label(format!("Author: {}", meta.author));
+        ui.label(format!("Version: {}", meta.version));
+        ui.label(format!("License: {}", module_license(&meta)));
+        ui.separator();
+        ui.label(&meta.description);
+    });
+    if !open {
+        state.module_info = None;
+    }
+    if let Some(response) = response {
+        state
+            .layout
+            .record_window_rect(WINDOW_MODULE_INFO, response.response.rect);
     }
 }
 
