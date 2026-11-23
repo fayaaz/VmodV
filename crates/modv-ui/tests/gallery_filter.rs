@@ -203,3 +203,157 @@ fn search_matches_author_case_insensitively_and_trims_whitespace() {
         "whitespace-only search must behave like an empty search"
     );
 }
+
+// --- Searching by module type (`type:` queries) -----------------------------
+//
+// Point10 scenes register with `module_type: "2d"` for JS/preset compatibility
+// even though a Point10 renderer owns them; they are identified by their
+// `Point10` author. A plain 2D module must therefore never match a Point10
+// type query, despite sharing that `module_type`.
+
+/// Like `module`, but lets a fixture vary its author.
+fn module_by(name: &str, module_type: &str, category: &str, author: &str) -> ModuleMetaView {
+    ModuleMetaView {
+        name: name.to_string(),
+        module_type: module_type.to_string(),
+        category: category.to_string(),
+        author: author.to_string(),
+        version: "1.0".to_string(),
+        description: String::new(),
+    }
+}
+
+fn typed_modules() -> Vec<ModuleMetaView> {
+    vec![
+        module("Bands", "shader", "effects"),
+        module("Ring of Fire", "shader", "effects"),
+        module("Chromatic Line", "2d", "2d-scenes"),
+        module("Fire Chars", "2d", "2d-scenes"),
+        module_by("Point10 Boxy", "2d", "2d-scenes", "Point10"),
+        module_by("Point10 Rolling Fire", "2d", "2d-scenes", "Point10"),
+        module("Tunnel", "isf", "3d-scenes"),
+        module("Deep Sea", "isf", "3d-scenes"),
+        module("Strobe Riot", "milkdrop", "effects"),
+        module("Feedback Fractal", "milkdrop", "3d-scenes"),
+    ]
+}
+
+#[test]
+fn type_isf_query_selects_only_isf_modules_case_insensitively() {
+    let modules = typed_modules();
+    for query in ["type:isf", "TYPE:ISF", "  type:ISF  "] {
+        assert_eq!(
+            names(&filter_gallery_modules(
+                &modules,
+                GalleryCategory::All,
+                query
+            )),
+            vec!["Tunnel", "Deep Sea"],
+            "type tokens must be case-insensitive and tolerate surrounding whitespace: {query:?}"
+        );
+    }
+}
+
+#[test]
+fn type_shader_and_milkdrop_queries_select_only_their_own_modules() {
+    let modules = typed_modules();
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "type:shader"
+        )),
+        vec!["Bands", "Ring of Fire"]
+    );
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "type:milkdrop"
+        )),
+        vec!["Strobe Riot", "Feedback Fractal"]
+    );
+}
+
+#[test]
+fn type_point10_query_excludes_plain_2d_modules_sharing_the_module_type() {
+    let modules = typed_modules();
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "type:point10"
+        )),
+        vec!["Point10 Boxy", "Point10 Rolling Fire"],
+        "Point10 is a renderer kind: its modules register as module_type '2d', \
+         so a filter that merely matches module_type would also return \
+         'Chromatic Line' and 'Fire Chars'"
+    );
+}
+
+#[test]
+fn type_query_combines_with_free_text_and_the_gallery_category() {
+    let modules = typed_modules();
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "type:isf sea"
+        )),
+        vec!["Deep Sea"]
+    );
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "sea type:isf"
+        )),
+        vec!["Deep Sea"],
+        "the type token may appear before or after the free-text terms"
+    );
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::ThreeDScenes,
+            "type:isf"
+        )),
+        vec!["Tunnel", "Deep Sea"]
+    );
+    assert!(
+        filter_gallery_modules(&modules, GalleryCategory::Effects, "type:isf sea").is_empty(),
+        "category filtering still applies on top of a type query"
+    );
+}
+
+#[test]
+fn unknown_type_matches_nothing() {
+    let modules = typed_modules();
+    assert!(
+        filter_gallery_modules(&modules, GalleryCategory::All, "type:bogus").is_empty(),
+        "an unsupported type token must not fall back to an unfiltered list"
+    );
+}
+
+#[test]
+fn plain_text_search_keeps_its_original_name_and_author_semantics() {
+    let modules = vec![
+        module_by("Point10 Boxy", "2d", "2d-scenes", "Point10"),
+        module("Fire Chars", "2d", "2d-scenes"),
+    ];
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "  POINT10  "
+        )),
+        vec!["Point10 Boxy"]
+    );
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "modv"
+        )),
+        vec!["Fire Chars"]
+    );
+}
