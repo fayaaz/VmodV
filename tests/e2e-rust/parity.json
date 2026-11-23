@@ -1113,7 +1113,7 @@
           "status": "covered",
           "rust": [
             "crates/modv-ui/tests/scene_live_rows.rs:only_each_rows_live_cell_is_marked",
-            "crates/modv-ui/src/panels/scene_grid.rs:performance_off_keeps_the_applied_scene_as_a_whole_column"
+            "crates/modv-ui/src/panels/scene_grid.rs:performance_off_marks_only_each_rows_live_cell"
           ],
           "notes": ""
         },
