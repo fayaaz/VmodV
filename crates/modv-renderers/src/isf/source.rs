@@ -84,6 +84,7 @@
 //! | `IMG_PIXEL(s, c)` | `texture(s, (c) / RENDERSIZE)` |
 //! | `IMG_NORM_PIXEL(s, c)` | `VVSAMPLER_2DBYNORM(s, _s_imgRect, _s_imgSize, _s_flip, c)` |
 //! | `IMG_SIZE(s)` | `_s_imgSize` |
+//! | `isf_LoopedBuffer(s, size, c)` | `IMG_NORM_PIXEL(s, c)` (ISF v3 feedback helper; not in the JS parser — `size` is metadata, and the expansion then follows the `IMG_NORM_PIXEL` row) |
 //!
 //! `VVSAMPLER_2DBYPIXEL`/`BYNORM` are emitted as GLSL *macros* instead of the
 //! JavaScript functions: naga's GLSL front-end cannot take a combined
@@ -2336,15 +2337,27 @@ pub fn declares_identifier(source: &str, name: &str) -> bool {
 }
 
 /// Expand `IMG_THIS_PIXEL`, `IMG_THIS_NORM_PIXEL`, `IMG_PIXEL`,
-/// `IMG_NORM_PIXEL` and `IMG_SIZE`.
+/// `IMG_NORM_PIXEL`, `IMG_SIZE` and the ISF v3 `isf_LoopedBuffer` helper.
 ///
 /// This is the hand-written equivalent of `ISFParser.replaceSpecialFunctions`
-/// (`ISFParser.js:144-176`) and its two helper regexes: every call is scanned
-/// with balanced parentheses, then split on the first top-level comma. Unlike
-/// the JavaScript regexes, which rely on `.` not matching a newline, split
-/// calls across lines are handled too.
+/// (`ISFParser.js:144-176`) and its two helper regexes, plus a VmodV addition
+/// for the v3-only `isf_LoopedBuffer` (rewritten to `IMG_NORM_PIXEL`, which is
+/// expanded in a later pass). Every call is scanned with balanced parentheses,
+/// then split on the first top-level comma. Unlike the JavaScript regexes,
+/// which rely on `.` not matching a newline, split calls across lines are
+/// handled too.
 pub fn expand_img_macros(source: &str) -> String {
-    let mut out = expand_simple(source, "IMG_THIS_PIXEL", |arg| {
+    // ISF v3 feedback shaders read the previous frame of a persistent buffer
+    // with `isf_LoopedBuffer(buffer, size, coord)`. The looped buffer is just a
+    // persistent pass target, so rewrite the helper into the v2 sampling macro
+    // (the `coord` argument is the third one; `size` is only metadata).
+    let mut out = expand_simple(source, "isf_LoopedBuffer", |arg| {
+        let parts = split_args(arg);
+        let sampler = parts.first().copied().unwrap_or("").trim();
+        let coord = parts.get(2).copied().unwrap_or("").trim();
+        format!("IMG_NORM_PIXEL({sampler}, {coord})")
+    });
+    out = expand_simple(&out, "IMG_THIS_PIXEL", |arg| {
         format!("texture({}, isf_FragNormCoord)", arg.trim())
     });
     out = expand_simple(&out, "IMG_THIS_NORM_PIXEL", |arg| {
