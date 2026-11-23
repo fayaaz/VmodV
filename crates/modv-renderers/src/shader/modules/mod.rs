@@ -57,6 +57,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::borrow::Cow;
+
 use crate::shader::uniforms::ShaderProp;
 
 mod bands;
@@ -77,17 +79,17 @@ mod wobble;
 pub struct ShaderModule {
     /// Gallery registration name, as it appears in presets and the Gallery
     /// (e.g. `Bands`, `Point10 Gray`).
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     /// Final WGSL fragment source — shared prelude already expanded, the
     /// mainImage wrapper already applied for mainImage-flavour modules.
     pub fragment_wgsl: String,
     /// JS `meta.author`.
-    pub meta_author: &'static str,
+    pub meta_author: Cow<'static, str>,
     /// JS `meta.version`, stringified.
-    pub meta_version: &'static str,
+    pub meta_version: Cow<'static, str>,
     /// JS `meta.category`, or `None` to fall back to type-based Gallery
     /// placement (`shader` → Effects). Only Bands sets one.
-    pub category: Option<&'static str>,
+    pub category: Option<Cow<'static, str>>,
     /// `true` when the module requests meyda features. Port of
     /// `meta.audioFeatures` presence.
     pub audio: bool,
@@ -147,11 +149,11 @@ mod tests {
         let mut names = Vec::with_capacity(modules.len());
         for module in &modules {
             assert!(
-                !names.contains(&module.name),
+                !names.contains(&module.name.as_ref()),
                 "duplicate module registration name: {:?}",
                 module.name
             );
-            names.push(module.name);
+            names.push(module.name.as_ref());
         }
     }
 
@@ -186,7 +188,7 @@ mod tests {
         // from their own fs_main — no mainImage anywhere in the source.
         let direct = ["Bands", "Fisheye", "MattiasCRT", "Plasma", "Wobble"];
         for module in all_modules() {
-            if direct.contains(&module.name) {
+            if direct.contains(&module.name.as_ref()) {
                 assert!(
                     !module.fragment_wgsl.contains("mainImage"),
                     "module {:?} must not contain mainImage",
@@ -231,7 +233,7 @@ mod tests {
     fn preview_with_output_matches_js_meta() {
         let modules = all_modules();
         for module in &modules {
-            let expected = !matches!(module.name, "Bands" | "Plasma");
+            let expected = !matches!(module.name.as_ref(), "Bands" | "Plasma");
             assert_eq!(
                 module.preview_with_output, expected,
                 "preview_with_output mismatch for {:?}",
@@ -244,7 +246,7 @@ mod tests {
     fn audio_features_match_js_meta() {
         let modules = all_modules();
         for module in &modules {
-            let expected_features: &[&str] = match module.name {
+            let expected_features: &[&str] = match module.name.as_ref() {
                 "Bands"
                 | "Point10 Contrast"
                 | "Point10 Color Distort"

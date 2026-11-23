@@ -95,6 +95,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::borrow::Cow;
 use std::fmt;
 
 /// Monotonic seconds (`iGlobalTime` family) — `performance.now() / 1000`.
@@ -350,11 +351,11 @@ impl PropKind {
 pub struct ShaderProp {
     /// Prop name as it appears in the shader and the preset JSON
     /// (e.g. `u_ringWidth`).
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     /// Prop kind; drives the slot's WGSL member type and encoder.
     pub kind: PropKind,
     /// Gallery label (`props.x.label` in the JS module).
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     /// Inclusive minimum for `strict` float props (`props.x.min`).
     pub min: f64,
     /// Inclusive maximum for `strict` float props (`props.x.max`).
@@ -369,7 +370,7 @@ pub struct ShaderProp {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PropSlot {
     /// Prop name; matches the `ModuleProps` member name.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     /// Prop kind.
     pub kind: PropKind,
     /// Byte offset of the 16-byte slot inside the prop buffer.
@@ -397,7 +398,7 @@ impl PropLayout {
             .iter()
             .enumerate()
             .map(|(index, prop)| PropSlot {
-                name: prop.name,
+                name: prop.name.clone(),
                 kind: prop.kind,
                 offset: index * PROP_SLOT_BYTES,
             })
@@ -504,7 +505,7 @@ pub(crate) fn module_props_wgsl(props: &[ShaderProp]) -> Option<String> {
     let mut source = String::from("struct ModuleProps {\n");
     for prop in props {
         source.push_str("  ");
-        source.push_str(prop.name);
+        source.push_str(&prop.name);
         source.push_str(": ");
         source.push_str(prop.kind.wgsl_member_type());
         source.push_str(",\n");
@@ -554,18 +555,18 @@ mod tests {
     fn prop_layout_matches_wgsl_member_order() {
         let props = vec![
             ShaderProp {
-                name: "u_ringWidth",
+                name: "u_ringWidth".into(),
                 kind: PropKind::Float,
-                label: "Ring Width",
+                label: "Ring Width".into(),
                 min: 0.01,
                 max: 0.5,
                 step: 0.01,
                 default: 0.05,
             },
             ShaderProp {
-                name: "strength",
+                name: "strength".into(),
                 kind: PropKind::Float,
-                label: "Strength",
+                label: "Strength".into(),
                 min: 0.0,
                 max: 0.05,
                 step: 0.001,
@@ -598,9 +599,9 @@ mod tests {
     #[test]
     fn encode_rejects_wrong_lane_count() {
         let props = vec![ShaderProp {
-            name: "u_ringWidth",
+            name: "u_ringWidth".into(),
             kind: PropKind::Float,
-            label: "Ring Width",
+            label: "Ring Width".into(),
             min: 0.01,
             max: 0.5,
             step: 0.01,

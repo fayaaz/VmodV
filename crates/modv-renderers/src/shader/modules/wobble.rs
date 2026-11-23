@@ -34,18 +34,18 @@ const BODY: &str = r#"const SPEED: f32 = 1.0;
 pub(crate) fn module() -> ShaderModule {
     let props = vec![
         ShaderProp {
-            name: "strength",
+            name: "strength".into(),
             kind: PropKind::Float,
-            label: "Float",
+            label: "Float".into(),
             min: 0.0,
             max: 0.05,
             step: 0.001,
             default: 0.001,
         },
         ShaderProp {
-            name: "size",
+            name: "size".into(),
             kind: PropKind::Float,
-            label: "Size",
+            label: "Size".into(),
             min: 1.0,
             max: 50.0,
             step: 1.0,
@@ -53,10 +53,10 @@ pub(crate) fn module() -> ShaderModule {
         },
     ];
     ShaderModule {
-        name: "Wobble",
+        name: "Wobble".into(),
         fragment_wgsl: direct_fragment(&fragment_with_props(BODY, &props)),
-        meta_author: "2xAA",
-        meta_version: "1.0.0",
+        meta_author: "2xAA".into(),
+        meta_version: "1.0.0".into(),
         category: None,
         audio: false,
         audio_features: &[],

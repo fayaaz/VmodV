@@ -46,27 +46,27 @@ const BODY: &str = r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
 pub(crate) fn module() -> ShaderModule {
     let props = vec![
         ShaderProp {
-            name: "rOffset",
+            name: "rOffset".into(),
             kind: PropKind::Float,
-            label: "Red Offset",
+            label: "Red Offset".into(),
             min: 1.0,
             max: 2.0,
             step: 0.001,
             default: 1.0,
         },
         ShaderProp {
-            name: "gOffset",
+            name: "gOffset".into(),
             kind: PropKind::Float,
-            label: "Green Offset",
+            label: "Green Offset".into(),
             min: 1.0,
             max: 2.0,
             step: 0.001,
             default: 1.015,
         },
         ShaderProp {
-            name: "bOffset",
+            name: "bOffset".into(),
             kind: PropKind::Float,
-            label: "Blue Offset",
+            label: "Blue Offset".into(),
             min: 1.0,
             max: 2.0,
             step: 0.001,
@@ -74,10 +74,10 @@ pub(crate) fn module() -> ShaderModule {
         },
     ];
     ShaderModule {
-        name: "Chromatic Abberation",
+        name: "Chromatic Abberation".into(),
         fragment_wgsl: main_image_fragment_preserving_alpha(&fragment_with_props(BODY, &props)),
-        meta_author: "2xAA",
-        meta_version: "1.0.0",
+        meta_author: "2xAA".into(),
+        meta_version: "1.0.0".into(),
         category: None,
         audio: false,
         audio_features: &[],

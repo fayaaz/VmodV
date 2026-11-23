@@ -855,10 +855,10 @@ pub(crate) fn modules() -> Vec<ShaderModule> {
             }
             source.push_str(effect.body);
             ShaderModule {
-                name: effect.name,
+                name: effect.name.into(),
                 fragment_wgsl: main_image_fragment(&source),
-                meta_author: "Point10",
-                meta_version: "1.0.0",
+                meta_author: "Point10".into(),
+                meta_version: "1.0.0".into(),
                 category: None,
                 audio: effect.audio,
                 audio_features: if effect.audio {

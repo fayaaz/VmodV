@@ -4204,7 +4204,7 @@ pub(crate) fn read_back_texture(
 pub(crate) fn encode_props(definition: &ShaderModule, props: &Value) -> PropSlots {
     let mut floats = Vec::new();
     for prop in &definition.props {
-        let value = props.get(prop.name).unwrap_or(&Value::Null);
+        let value = props.get(prop.name.as_ref()).unwrap_or(&Value::Null);
         push_prop_lanes(&mut floats, prop, value);
     }
     PropSlots { floats }

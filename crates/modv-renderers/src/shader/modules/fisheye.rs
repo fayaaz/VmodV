@@ -61,19 +61,19 @@ const BODY: &str = r#"const PI: f32 = 3.1415926535;
 
 pub(crate) fn module() -> ShaderModule {
     let props = vec![ShaderProp {
-        name: "aperture",
+        name: "aperture".into(),
         kind: PropKind::Float,
-        label: "Aperture",
+        label: "Aperture".into(),
         min: 1.0,
         max: 360.0,
         step: 0.5,
         default: 180.0,
     }];
     ShaderModule {
-        name: "Fisheye",
+        name: "Fisheye".into(),
         fragment_wgsl: direct_fragment(&fragment_with_props(BODY, &props)),
-        meta_author: "???",
-        meta_version: "1.0.0",
+        meta_author: "???".into(),
+        meta_version: "1.0.0".into(),
         category: None,
         audio: false,
         audio_features: &[],

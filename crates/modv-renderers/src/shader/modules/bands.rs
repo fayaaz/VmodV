@@ -36,20 +36,20 @@ const BODY: &str = r#"fn ring(uv: vec2<f32>, radius: f32, width: f32) -> f32 {
 
 pub(crate) fn module() -> ShaderModule {
     let props = vec![ShaderProp {
-        name: "u_ringWidth",
+        name: "u_ringWidth".into(),
         kind: PropKind::Float,
-        label: "Ring Width",
+        label: "Ring Width".into(),
         min: 0.01,
         max: 0.5,
         step: 0.01,
         default: 0.05,
     }];
     ShaderModule {
-        name: "Bands",
+        name: "Bands".into(),
         fragment_wgsl: direct_fragment(&fragment_with_props(BODY, &props)),
-        meta_author: "modV",
-        meta_version: "0.1",
-        category: Some("2d-scenes"),
+        meta_author: "modV".into(),
+        meta_version: "0.1".into(),
+        category: Some("2d-scenes".into()),
         audio: true,
         audio_features: &["bass", "mid", "treble"],
         preview_with_output: false,

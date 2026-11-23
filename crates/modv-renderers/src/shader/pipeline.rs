@@ -300,14 +300,14 @@ impl ShaderRenderer {
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(module.name),
+                label: Some(module.name.as_ref()),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
             });
 
         let pipeline_layout = self
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(module.name),
+                label: Some(module.name.as_ref()),
                 bind_group_layouts: &[Some(&self.bind_group_layout)],
                 immediate_size: 0,
             });
@@ -315,7 +315,7 @@ impl ShaderRenderer {
         let pipeline = self
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(module.name),
+                label: Some(module.name.as_ref()),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,

@@ -81,13 +81,13 @@ const BODY: &str = r#"fn curve_uv(uv_in: vec2<f32>) -> vec2<f32> {
 
 pub(crate) fn module() -> ShaderModule {
     ShaderModule {
-        name: "MattiasCRT",
+        name: "MattiasCRT".into(),
         fragment_wgsl: direct_fragment(&fragment_with_props(
             &format!("{}\n{BODY}", crate::shader::uniforms::GLSL_MOD_F_WGSL),
             &[],
         )),
-        meta_author: "Mattias",
-        meta_version: "1.0.0",
+        meta_author: "Mattias".into(),
+        meta_version: "1.0.0".into(),
         category: None,
         audio: false,
         audio_features: &[],

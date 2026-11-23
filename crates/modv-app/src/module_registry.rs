@@ -823,6 +823,51 @@ impl ModuleRegistry {
         }
     }
 
+    /// Register user-authored WGSL + JSON modules discovered in `dirs` as
+    /// built-in-style shader modules (BUGS.md item 5).
+    ///
+    /// Each descriptor becomes a [`ShaderModule`] whose fragment source is the
+    /// referenced WGSL and whose meta/props feed the existing Gallery, prop
+    /// schema and default-props paths. Registration names are resolved against
+    /// the whole registry (all renderer buckets), so a user file can never
+    /// shadow a built-in module — the first registration wins.
+    pub fn with_user_modules(mut self, dirs: &[PathBuf]) -> Self {
+        for descriptor in modv_renderers::user_module::load_user_modules(dirs) {
+            if self.kind(&descriptor.name).is_some() {
+                eprintln!(
+                    "engine: WARN ignoring user module `{}`: name already registered",
+                    descriptor.name
+                );
+                continue;
+            }
+            let props = descriptor
+                .props
+                .into_iter()
+                .map(|prop| ShaderProp {
+                    name: prop.name.into(),
+                    label: prop.label.into(),
+                    kind: prop.kind,
+                    min: prop.min,
+                    max: prop.max,
+                    step: prop.step,
+                    default: prop.default,
+                })
+                .collect();
+            self.shader.push(ShaderModule {
+                name: descriptor.name.into(),
+                fragment_wgsl: descriptor.wgsl_source,
+                meta_author: descriptor.author.into(),
+                meta_version: descriptor.version.into(),
+                category: descriptor.category.map(Into::into),
+                audio: descriptor.audio,
+                audio_features: &[],
+                preview_with_output: descriptor.preview_with_output,
+                props,
+            });
+        }
+        self
+    }
+
     /// The shader modules, in Gallery registration order.
     pub fn shader_modules(&self) -> &[ShaderModule] {
         &self.shader
@@ -930,7 +975,7 @@ impl ModuleRegistry {
                 meta.insert("author".to_string(), json!(definition.meta_author));
                 meta.insert("version".to_string(), json!(definition.meta_version));
                 meta.insert("type".to_string(), json!("shader"));
-                if let Some(category) = definition.category {
+                if let Some(category) = &definition.category {
                     meta.insert("category".to_string(), json!(category));
                 }
                 if !definition.audio_features.is_empty() {
@@ -1107,7 +1152,7 @@ impl ModuleRegistry {
     pub fn registered_modules(&self) -> Value {
         let mut names: Vec<&str> = Vec::new();
         for module in &self.shader {
-            names.push(module.name);
+            names.push(module.name.as_ref());
         }
         for definition in &self.two_d {
             names.push(definition.meta.name);
@@ -3381,19 +3426,6 @@ void main() { gl_FragColor = vec4(1.0); }
 mod user_module_registry_tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
-
-    // ============================ RED-ONLY SHIM ============================
-    // `ModuleRegistry::with_user_modules` is the API under test. Its real
-    // implementation does NOT exist in RED, so this no-op keeps the test
-    // compiling and failing on the assertion (module not registered) rather
-    // than on a compile error. GREEN MUST delete this entire `impl` block and
-    // add the real builder method to the main `impl ModuleRegistry` above.
-    impl ModuleRegistry {
-        pub fn with_user_modules(self, _dirs: &[PathBuf]) -> Self {
-            self
-        }
-    }
-    // ========================== END RED-ONLY SHIM ==========================
 
     const USER_WGSL: &str = "@fragment fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> { return vec4<f32>(p.x / 100.0, p.y / 100.0, 0.0, 1.0); } // SINE_FIELD_SOURCE_SENTINEL";
     const COLLISION_WGSL: &str = "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); } // USER_COLLISION_SENTINEL";

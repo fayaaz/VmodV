@@ -35,27 +35,27 @@ const BODY: &str = r#"const PI: f32 = 3.1415926535897932384626433832795;
 pub(crate) fn module() -> ShaderModule {
     let props = vec![
         ShaderProp {
-            name: "u_scaleX",
+            name: "u_scaleX".into(),
             kind: PropKind::Float,
-            label: "Scale X",
+            label: "Scale X".into(),
             min: 1.0,
             max: 150.0,
             step: 1.0,
             default: 50.0,
         },
         ShaderProp {
-            name: "u_scaleY",
+            name: "u_scaleY".into(),
             kind: PropKind::Float,
-            label: "Scale Y",
+            label: "Scale Y".into(),
             min: 1.0,
             max: 150.0,
             step: 1.0,
             default: 50.0,
         },
         ShaderProp {
-            name: "u_timeScale",
+            name: "u_timeScale".into(),
             kind: PropKind::Float,
-            label: "Time Scale",
+            label: "Time Scale".into(),
             min: 1.0,
             max: 1000.0,
             step: 1.0,
@@ -63,10 +63,10 @@ pub(crate) fn module() -> ShaderModule {
         },
     ];
     ShaderModule {
-        name: "Plasma",
+        name: "Plasma".into(),
         fragment_wgsl: direct_fragment(&fragment_with_props(BODY, &props)),
-        meta_author: "2xAA",
-        meta_version: "0.1",
+        meta_author: "2xAA".into(),
+        meta_version: "0.1".into(),
         category: None,
         audio: false,
         audio_features: &[],
