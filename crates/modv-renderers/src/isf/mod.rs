@@ -16,8 +16,8 @@
 //!
 //! # Why a translator at all
 //!
-//! The corpus is 354 `.fs` files (36 with a `.vs` sidecar), 47 multi-pass
-//! shaders, 46 with a `PERSISTENT` buffer, 15 with a `FLOAT` buffer and 288
+//! The corpus is 395 `.fs` files (77 with a `.vs` sidecar), 55 multi-pass
+//! shaders, 53 with a `PERSISTENT` buffer, 17 with a `FLOAT` buffer and 288
 //! with an `image` input. Hand porting them is not an option;
 //! `docs/isf-translation-notes.md` records the verified path: preprocess ES →
 //! desktop GLSL 450, then use naga's GLSL front-end. The translation rate is

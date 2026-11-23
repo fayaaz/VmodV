@@ -1,0 +1,77 @@
+/*
+{
+  "DESCRIPTION": "Kaleidoscopic Bloom - A pulsating kaleidoscope effect",
+  "INPUTS": [
+    {
+      "NAME": "rotationSpeed",
+      "TYPE": "float",
+      "DEFAULT": 0.3,
+      "MIN": 0.1,
+      "MAX": 1.0
+    },
+    {
+      "NAME": "patternComplexity",
+      "TYPE": "float",
+      "DEFAULT": 1.5,
+      "MIN": 1.0,
+      "MAX": 3.0
+    },
+    {
+      "NAME": "colorShift",
+      "TYPE": "float",
+      "DEFAULT": 0.5,
+      "MIN": 0.1,
+      "MAX": 2.0
+    }
+  ],
+  "CREDIT": "Port of https://github.com/Ethereios/ISF-shaders by Ethereios (Sleepless Monk)"
+}
+*/
+
+// bloom — imported from https://github.com/Ethereios/ISF-shaders
+// Upstream archive: bloom.zip.
+// Upstream source: not stated in the upstream file.
+// Original author(s): not stated in the upstream file.
+// Adapter/publisher: Ethereios (Sleepless Monk).
+//
+// Licensing: the upstream repository LICENSE is CC0-1.0, but its README
+// says the shaders are released under a Creative Commons non-commercial
+// license and that they were customized from Shadertoy (whose default is
+// CC BY-NC-SA 3.0). The more restrictive reading applies: this port is
+// treated as CC BY-NC-SA 3.0 (Attribution-NonCommercial-ShareAlike).
+// Commercial use is not permitted and modifications stay under the same
+// license. See THIRD_PARTY_NOTICES.md.
+// Modification: an ISF CREDIT field and this attribution note were added.
+
+
+#define PI 3.1415926538
+#define TAU 6.2831855
+
+vec3 palette(float t) {
+    vec3 a = vec3(0.5);
+    vec3 b = vec3(0.5);
+    vec3 c = vec3(1.0);
+    vec3 d = vec3(abs(0.2 * sin(TIME * 0.1)), abs(sin(TIME * 0.1)), 0.5);
+    return a + b * cos(TAU * (c * t + d));
+}
+
+void main() {
+    vec2 uv = (gl_FragCoord.xy * 2.0 - RENDERSIZE.xy) / RENDERSIZE.y;
+    uv *= mat2(cos(TIME * rotationSpeed), sin(TIME * rotationSpeed), -sin(TIME * rotationSpeed), cos(TIME * rotationSpeed));
+    
+    vec3 color = vec3(0.0);
+    float globalDist = length(uv);
+    
+    for (float i = 0.0; i < 4.0; i++) {
+        uv = fract(uv * patternComplexity) - 0.5;
+        float dist = length(uv) * exp(-globalDist);
+        color = palette(globalDist + TIME * colorShift);
+        dist = sin(dist * 8.0 + TIME * 2.0);
+        dist = abs(dist);
+        dist = 0.01 / dist;
+        dist = pow(dist, 1.2);
+        color += color * dist;
+    }
+
+    gl_FragColor = vec4(color, 1.0);
+}

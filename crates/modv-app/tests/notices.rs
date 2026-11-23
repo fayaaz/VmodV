@@ -764,6 +764,83 @@ fn around_plus_derivative_attribution_is_pinned() {
     );
 }
 
+/// Every shader imported from Ethereios/ISF-shaders must carry the honest
+/// attribution: the upstream repository's LICENSE says CC0, but its README
+/// says non-commercial and the shaders are Shadertoy derivatives, so the
+/// conservative CC BY-NC-SA reading applies. Each imported file names its
+/// upstream source and the adapter, and each is listed in the notices.
+#[test]
+fn ethereios_isf_shaders_are_imported_with_attribution() {
+    const UPSTREAM: &str = "github.com/Ethereios/ISF-shaders";
+
+    let shaders = [
+        "Fork of 4th eye",
+        "Neon psy",
+        "Rotating circles",
+        "Tryptamine visions (sleeplessmonk original)",
+        "bloom",
+        "bulb volumetrics",
+        "color fractal nayk",
+        "day 15 jeyko",
+        "deepseek r1 audiovisual",
+        "diatribes -water cavern mod",
+        "drostled",
+        "evvvvil dna tracer",
+        "evvvvil frankenslug",
+        "fol mod",
+        "fork phantom star (nikolaerceg)",
+        "gamma xor",
+        "iq - line fractal tunnel",
+        "julia",
+        "kabbalistic fractal circles",
+        "kali electromagnetic politics",
+        "kali inversion machine",
+        "kali liberation of the true self",
+        "kali psychoid mod",
+        "kali the artist parody",
+        "mrange - colorful failure",
+        "nayk spherical remake",
+        "neon psychedelic lydianlights mod",
+        "nested octahedron modded",
+        "phreax blue lotus",
+        "phreax butterfly effect",
+        "phreax hexflower",
+        "phreax portal",
+        "phreax twisted carbon",
+        "polyhedral",
+        "posthelios sky is sinus",
+        "rhodium fractalscape virgil",
+        "spiral riders kali",
+        "tail of the dragon - diatribes",
+        "torus thingy 2",
+        "waves",
+        "xor ascend",
+    ];
+
+    let root = repo_root();
+    for stem in shaders {
+        let path = format!("resources/isf/{stem}.fs");
+        let source = fs::read_to_string(root.join(&path)).unwrap_or_else(|error| {
+            panic!("the imported Ethereios shader {path} must exist: {error}")
+        });
+        for required in [
+            "\"CREDIT\"",
+            UPSTREAM,
+            "CC BY-NC-SA 3.0",
+            "THIRD_PARTY_NOTICES.md",
+        ] {
+            assert!(
+                source.contains(required),
+                "{path} must carry the attribution token {required:?}"
+            );
+        }
+        assert!(
+            NOTICES.contains(&path),
+            "{path} is imported but missing from THIRD_PARTY_NOTICES.md"
+        );
+    }
+}
+
 #[test]
 fn notices_no_longer_reference_the_deleted_electron_tree() {
     assert!(

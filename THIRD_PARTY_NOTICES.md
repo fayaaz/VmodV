@@ -51,6 +51,57 @@ All of the above are bundled **as-is or as modified ports**; the ports remain
 under the licenses listed for them and are not relicensed under the MIT
 License.
 
+## Ethereios ISF shader import
+
+The 41 shaders below were imported from [Ethereios/ISF-shaders](https://github.com/Ethereios/ISF-shaders) and are **not** MIT-licensed.
+Upstream is contradictory: its `LICENSE` is CC0-1.0, while its README says the shaders are released under a Creative Commons non-commercial license and that they were "heavily customized from shadertoy". Because Shadertoy shaders with no explicit license default to CC BY-NC-SA 3.0 and a derivative cannot be less restrictive than its source, the conservative reading applies to the whole set: **CC BY-NC-SA 3.0**, with attribution to the adapter/publisher Ethereios (Sleepless Monk) and to the original authors where the upstream file names them. Commercial use is not permitted and modifications must stay under the same license. Each imported `.fs` repeats this note and its source in-file.
+
+| File | Upstream source | Original author(s) | License |
+| --- | --- | --- | --- |
+| `resources/isf/Fork of 4th eye.fs` (with `Fork of 4th eye.vs` sidecar) | [`Fork of 4th eye.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/Fork%20of%204th%20eye.zip); source shader https://www.shadertoy.com/view/lX3cDB | sleeplessmonk | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/Neon psy.fs` (with `Neon psy.vs` sidecar) | [`Neon psy.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/Neon%20psy.zip); source shader https://www.shadertoy.com/view/DlVSWD | LydianLights | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/Rotating circles.fs` (with `Rotating circles.vs` sidecar) | [`Rotating circles.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/Rotating%20circles.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/Tryptamine visions (sleeplessmonk original).fs` (with `Tryptamine visions (sleeplessmonk original).vs` sidecar) | [`Tryptamine visions (sleeplessmonk original).zip`](https://github.com/Ethereios/ISF-shaders/blob/main/Tryptamine%20visions%20%28sleeplessmonk%20original%29.zip); original source not stated upstream | sleeplessmonk | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/bloom.fs` (with `bloom.vs` sidecar) | [`bloom.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/bloom.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/bulb volumetrics.fs` (with `bulb volumetrics.vs` sidecar) | [`bulb volumetrics.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/bulb%20volumetrics.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/color fractal nayk.fs` (with `color fractal nayk.vs` sidecar) | [`color fractal nayk.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/color%20fractal%20nayk.zip); original source not stated upstream | nayk (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/day 15 jeyko.fs` (with `day 15 jeyko.vs` sidecar) | [`day 15 jeyko.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/day%2015%20jeyko.zip); original source not stated upstream | jeyko (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/deepseek r1 audiovisual.fs` (with `deepseek r1 audiovisual.vs` sidecar) | [`deepseek r1 audiovisual.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/deepseek%20r1%20audiovisual.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/diatribes -water cavern mod.fs` (with `diatribes -water cavern mod.vs` sidecar) | [`diatribes -water cavern mod.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/diatribes%20-water%20cavern%20mod.zip); original source not stated upstream | diatribes (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/drostled.fs` (with `drostled.vs` sidecar) | [`drostled.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/drostled.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/evvvvil dna tracer.fs` (with `evvvvil dna tracer.vs` sidecar) | [`evvvvil dna tracer.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/evvvvil%20dna%20tracer.zip); source shader https://www.shadertoy.com/view/WtfBzX | evvvvil | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/evvvvil frankenslug.fs` (with `evvvvil frankenslug.vs` sidecar) | [`evvvvil frankenslug (1).zip`](https://github.com/Ethereios/ISF-shaders/blob/main/evvvvil%20frankenslug%20%281%29.zip); source shader https://www.shadertoy.com/view/3dtcDB | evvvvil | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/fol mod.fs` (with `fol mod.vs` sidecar) | [`fol mod.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/fol%20mod.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/fork phantom star (nikolaerceg).fs` (with `fork phantom star (nikolaerceg).vs` sidecar) | [`fork phantom star (nikolaerceg).zip`](https://github.com/Ethereios/ISF-shaders/blob/main/fork%20phantom%20star%20%28nikolaerceg%29.zip); source shader https://www.shadertoy.com/view/7dBSR3 | NikolaErceg | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/gamma xor.fs` (with `gamma xor.vs` sidecar) | [`gamma xor.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/gamma%20xor.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/iq - line fractal tunnel.fs` (with `iq - line fractal tunnel.vs` sidecar) | [`iq - line fractal tunnel.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/iq%20-%20line%20fractal%20tunnel.zip); original source not stated upstream | Inigo Quilez (named in the upstream description) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/julia.fs` (with `julia.vs` sidecar) | [`julia.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/julia.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/kabbalistic fractal circles.fs` (with `kabbalistic fractal circles.vs` sidecar) | [`kabbalistic fractal circles.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/kabbalistic%20fractal%20circles.zip); source shader https://www.shadertoy.com/view/X33yRB | ekaunt | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/kali electromagnetic politics.fs` (with `kali electromagnetic politics.vs` sidecar) | [`kali electromagnetic politics.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/kali%20electromagnetic%20politics.zip); original source not stated upstream | Kali (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/kali inversion machine.fs` (with `kali inversion machine.vs` sidecar) | [`kali inversion machine.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/kali%20inversion%20machine.zip); original source not stated upstream | Kali (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/kali liberation of the true self.fs` (with `kali liberation of the true self.vs` sidecar) | [`kali liberation of the true self.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/kali%20liberation%20of%20the%20true%20self.zip); original source not stated upstream | Kali (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/kali psychoid mod.fs` (with `kali psychoid mod.vs` sidecar) | [`kali psychoid mod.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/kali%20psychoid%20mod.zip); original source not stated upstream | Kali (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/kali the artist parody.fs` (with `kali the artist parody.vs` sidecar) | [`kali the artist parody.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/kali%20the%20artist%20parody.zip); original source not stated upstream | Kali (named in the upstream description) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/mrange - colorful failure.fs` (with `mrange - colorful failure.vs` sidecar) | [`mrange - colorful failure (1).zip`](https://github.com/Ethereios/ISF-shaders/blob/main/mrange%20-%20colorful%20failure%20%281%29.zip); original source not stated upstream | mrange (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/nayk spherical remake.fs` (with `nayk spherical remake.vs` sidecar) | [`nayk spherical remake.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/nayk%20spherical%20remake.zip); original source not stated upstream | nayk (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/neon psychedelic lydianlights mod.fs` (with `neon psychedelic lydianlights mod.vs` sidecar) | [`neon psychedelic lydianlights mod.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/neon%20psychedelic%20lydianlights%20mod.zip); original source not stated upstream | LydianLights (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/nested octahedron modded.fs` (with `nested octahedron modded.vs` sidecar) | [`nested octahedron modded.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/nested%20octahedron%20modded.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/phreax blue lotus.fs` (with `phreax blue lotus.vs` sidecar) | [`phreax blue lotus.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/phreax%20blue%20lotus.zip); source shader https://www.shadertoy.com/view/Xds3zN | tdhooper ('Echeveria', named in the upstream description); phreax | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/phreax butterfly effect.fs` (with `phreax butterfly effect.vs` sidecar) | [`phreax butterfly effect.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/phreax%20butterfly%20effect.zip); original source not stated upstream | phreax (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/phreax hexflower.fs` (with `phreax hexflower.vs` sidecar) | [`phreax hexflower.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/phreax%20hexflower.zip); source shader https://www.shadertoy.com/view/tX23Dy | phreax (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/phreax portal.fs` (with `phreax portal.vs` sidecar) | [`phreax portal.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/phreax%20portal.zip); original source not stated upstream | phreax (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/phreax twisted carbon.fs` (with `phreax twisted carbon.vs` sidecar) | [`phreax twisted carbon (1).zip`](https://github.com/Ethereios/ISF-shaders/blob/main/phreax%20twisted%20carbon%20%281%29.zip); source shader https://www.shadertoy.com/view/Nsd3Wl | phreax (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/polyhedral.fs` (with `polyhedral.vs` sidecar) | [`polyhedral.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/polyhedral.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/posthelios sky is sinus.fs` (with `posthelios sky is sinus.vs` sidecar) | [`posthelios sky is sinus.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/posthelios%20sky%20is%20sinus.zip); source shader https://iquilezles.org/articles/palettes/ | posthelios (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/rhodium fractalscape virgil.fs` (with `rhodium fractalscape virgil.vs` sidecar) | [`rhodium fractalscape virgil.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/rhodium%20fractalscape%20virgil.zip); source shader http://www.pouet.net/prod.php?which=68239 | Virgill / Rhodium (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/spiral riders kali.fs` (with `spiral riders kali.vs` sidecar) | [`spiral riders kali.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/spiral%20riders%20kali.zip); original source not stated upstream | Kali (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/tail of the dragon - diatribes.fs` (with `tail of the dragon - diatribes.vs` sidecar) | [`tail of the dragon - diatribes.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/tail%20of%20the%20dragon%20-%20diatribes.zip); original source not stated upstream | diatribes (named in the upstream title) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/torus thingy 2.fs` (with `torus thingy 2.vs` sidecar) | [`torus thingy 2.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/torus%20thingy%202.zip); original source not stated upstream | bal-khan (stated in the upstream CREDIT field) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/waves.fs` (with `waves.vs` sidecar) | [`waves (1).zip`](https://github.com/Ethereios/ISF-shaders/blob/main/waves%20%281%29.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+| `resources/isf/xor ascend.fs` (with `xor ascend.vs` sidecar) | [`xor ascend.zip`](https://github.com/Ethereios/ISF-shaders/blob/main/xor%20ascend.zip); original source not stated upstream | not stated upstream; adapter Ethereios (Sleepless Monk) | CC BY-NC-SA 3.0 (conservative reading of the conflicting upstream LICENSE/README) |
+
+`phreax twisted carbon` had its unused `IMPORTED` cube-map block dropped: the upstream archive ships only one of six faces and the `textureCube` sampling is commented out in the upstream shader. The evvvvil shaders' declared JPEG is bundled under its hashed filename. Three shaders needed small WGSL-translation fixes, recorded in their in-file notes: `diatribes -water cavern mod` (matrix-first rotation instead of `*=`), `phreax blue lotus` (replaced the unsupported Shadertoy `MOUSE` uniform with its declared `iMouse` input) and `phreax twisted carbon` (removed unsupported GLSL precision qualifiers/statements; temporaries for `inout` calls with `p.xy`/`p.z`) and `phreax hexflower` (a float temporary instead of passing `p.z` to an `inout` parameter, which WGSL forbids). All other shader bodies are the upstream text with only the ISF `CREDIT` field and attribution comment added.
+
 ## Plane9-derived Point10 scenes
 
 The Point10 scene ports are adapted from **Plane9** presets by **Joakim Dahl**.
@@ -233,12 +284,12 @@ Licences with obligations beyond permissive attribution:
 | `colored` | MPL-2.0 | https://github.com/mackwic/colored |
 | `combine` | MIT | https://github.com/Marwes/combine |
 | `concurrent-queue` | Apache-2.0 OR MIT | https://github.com/smol-rs/concurrent-queue |
-| `convert_case` | MIT | https://github.com/rutrum/convert-case |
 | `cookie-factory` | MIT | https://github.com/rust-bakery/cookie-factory |
 | `core-foundation` | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
 | `core-foundation-sys` | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
 | `core-graphics` | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
 | `core-graphics-types` | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
+| `core_maths` | MIT | https://github.com/robertbastian/core_maths |
 | `coreaudio-rs` | MIT OR Apache-2.0 | https://github.com/RustAudio/coreaudio-rs |
 | `coremidi` | MIT | https://github.com/chris-zen/coremidi |
 | `coremidi-sys` | MIT | https://github.com/jonas-k/coremidi-sys |
@@ -413,7 +464,6 @@ Licences with obligations beyond permissive attribution:
 | `ndk-context` | MIT OR Apache-2.0 | https://github.com/rust-windowing/android-ndk-rs |
 | `ndk-sys` | MIT OR Apache-2.0 | https://github.com/rust-mobile/ndk |
 | `new_debug_unreachable` | MIT | https://github.com/mbrubeck/rust-debug-unreachable |
-| `nix` | MIT | https://github.com/nix-rust/nix |
 | `no_std_io2` | Apache-2.0 OR MIT | https://github.com/wcampbell0x2a/no-std-io2 |
 | `nohash-hasher` | Apache-2.0 OR MIT | https://github.com/paritytech/nohash-hasher |
 | `nom` | MIT | https://github.com/rust-bakery/nom |
@@ -535,7 +585,6 @@ Licences with obligations beyond permissive attribution:
 | `rustfft` | MIT OR Apache-2.0 | https://github.com/ejmahler/RustFFT |
 | `rustix` | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/rustix |
 | `rustversion` | MIT OR Apache-2.0 | https://github.com/dtolnay/rustversion |
-| `rustybuzz` | MIT | https://github.com/RazrFalcon/rustybuzz |
 | `ryu-js` | Apache-2.0 OR BSL-1.0 | https://github.com/boa-dev/ryu-js |
 | `same-file` | Unlicense OR MIT | https://github.com/BurntSushi/same-file |
 | `scoped-tls` | MIT OR Apache-2.0 | https://github.com/alexcrichton/scoped-tls |
@@ -609,8 +658,6 @@ Licences with obligations beyond permissive attribution:
 | `type-map` | MIT OR Apache-2.0 | https://github.com/kardeiz/type-map |
 | `uds_windows` | MIT | https://github.com/haraldh/rust_uds_windows |
 | `unicode-bidi` | MIT OR Apache-2.0 | https://github.com/servo/unicode-bidi |
-| `unicode-bidi-mirroring` | MIT OR Apache-2.0 | https://github.com/RazrFalcon/unicode-bidi-mirroring |
-| `unicode-ccc` | MIT OR Apache-2.0 | https://github.com/RazrFalcon/unicode-ccc |
 | `unicode-general-category` | Apache-2.0 | https://github.com/yeslogic/unicode-general-category |
 | `unicode-ident` | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident |
 | `unicode-linebreak` | Apache-2.0 | https://github.com/axelf4/unicode-linebreak |
@@ -699,6 +746,7 @@ Licences with obligations beyond permissive attribution:
 | `xkbcommon-dl` | MIT | https://github.com/rust-windowing/xkbcommon-dl |
 | `xkeysym` | MIT OR Apache-2.0 OR Zlib | https://github.com/notgull/xkeysym |
 | `xml-rs` | MIT | https://github.com/kornelski/xml-rs |
+| `xxhash-rust` | BSL-1.0 | https://github.com/DoumanAsh/xxhash-rust |
 | `y4m` | MIT | https://github.com/image-rs/y4m |
 | `yazi` | Apache-2.0 OR MIT | https://github.com/dfrg/yazi |
 | `yoke` | Unicode-3.0 | https://github.com/unicode-org/icu4x |

@@ -94,7 +94,7 @@ then `modv-app` lib **668 passed** serial), `make test-e2e-native` passes
 **28 tests** across the harness/process/scenes/defaults/manifest binaries,
 `make engine-lint` is clean, `make build` produces
 `VmodV-Native-2.0.0-x86_64.AppImage` and `VmodV-Native-2.0.0-amd64.deb`,
-`make native-deb-check` passes (354 ISF files, 25 textures) and
+`make native-deb-check` passes (395 ISF files, 25 textures) and
 `tools/native-smoke.sh` passes headless/windowed/state/crash-recovery checks
 with a temporary userData directory.
 
@@ -139,7 +139,7 @@ with a temporary userData directory.
 ## Verification
 
 - Native debug smoke (`make native-debug ARGS="--frames 120"`): window +
-  output window open, 432 registered modules, 62 seeded Scenes, ~41–44 fps in
+  output window open, 473 registered modules, 62 seeded Scenes, ~41–44 fps in
   a debug build at 960×540 on the reference AMD GPU.
 - **P0 release evidence** (`--apply-scene "Lone Chrome"`, host display):
   - Reference AMD RX 9070 XT: **138–143 fps** at 960×470–540 in the
@@ -149,7 +149,7 @@ with a temporary userData directory.
     (`audio source pipewire owns capture at 48000 Hz`) and MIDI was available.
   - lavapipe (Docker, `VK_ICD_FILENAMES=lvp_icd.json`): **128 fps** empty,
     **57.5 fps** with Lone Chrome at 960×540.
-  - RSS with the full 354-ISF registry + one applied Scene: **~157 MB**
+  - RSS with the full 395-ISF registry + one applied Scene: **~157 MB**
     (vs the Electron/hybrid app's multi-hundred-MB floor).
   - Written verdict: **GO** for the framework, with the lavapipe content
     number (57 fps) recorded as the one caveat; the reference GPU is well

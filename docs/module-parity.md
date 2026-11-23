@@ -25,23 +25,26 @@ names — all resolve). Commit references are on `rust-hybrid` unless noted.
 | Point10 scenes | 27 | 27 |
 | `three` renderer | 0 — removed 2026-11-16 | 0 — never existed |
 | Shader modules (incl. 30 `Point10Effects`) | 36 | 36 |
-| ISF corpus | 354 | 354 (same `.fs` files, scanned at startup) |
-| **Gallery total** | **432** | **432** |
+| ISF corpus | 395 | 395 (same `.fs` files, scanned at startup) |
+| **Gallery total** | **473** | **473** |
 
 Extraction sources — legacy: the `import.meta.glob` registrations in
 `src/renderer/src/application/worker/index.worker.js`
 (`renderers/2d/modules/*.js` → 15 + 27,
 `renderers/shader/modules/*.js` → 6 + 30,
-`isf/modules/isf/*.fs` → 354). Engine: `modv-renderers` registries
+`isf/modules/isf/*.fs` → 395). Engine: `modv-renderers` registries
 (`two_d::all_modules` → 15, `point10::all_scenes` → 27,
 `shader::modules::all_modules` → 36) plus the AppImage's `resources/isf`
 (the `electron-builder.yml` `isf` `extraResources` copies the same corpus;
-the count comes from `isf-corpus-report.md` and the `354/354` translate
+the count comes from `isf-corpus-report.md` and the `395/395` translate
 baseline the corpus gate asserts).
 
-ISF corpus growth vs the first audit (351 → 354 `.fs`, 36 `.vs`) came from
-the built-in NC-SA 3D Shadertoy scenes (`Helix Eye`, `Traced Tunnel`,
-`Singularity Rain`, `Hot Shower`, …) and the v16 default-Scene work.
+ISF corpus growth vs the first audit (351 → 354 → 395 `.fs`, 36 → 77 `.vs`)
+came from the built-in NC-SA 3D Shadertoy scenes (`Helix Eye`, `Traced Tunnel`,
+`Singularity Rain`, `Hot Shower`, …), the v16 default-Scene work and, on
+2026-11-23, the 41 NC-SA shaders imported from Ethereios/ISF-shaders (see
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) — the upstream LICENSE and
+README conflict, so the whole set is treated as CC BY-NC-SA 3.0).
 
 Shader count vs the first audit: the JS `Point10Effects.js` and the engine
 both dropped **`Point10 Old Movie`** (the engine test suite asserts it is
@@ -137,7 +140,7 @@ stale Scenes too). Point10 wrappers in the legacy Gallery went 28 → 27.
   CHROMATIC_LINE_PROPS), as do responsiveness levers, Gallery categories
   (2d-scenes for Chromatic Line/Wave/Mycelium/WaterRipple, 3d-scenes
   elsewhere), `type: "2d"` and `audioFeatures`.
-- ISF: **354/354 register** in both runtimes; **354/354 fragments and 36/36
+- ISF: **395/395 register** in both runtimes; **395/395 fragments and 77/77
   vertex sidecars translate with zero overrides** (see
   [isf-corpus-report.md](./isf-corpus-report.md)).
 - Gallery ordering is irrelevant (tiles sort by `meta.name`).
@@ -184,7 +187,7 @@ stale Scenes too). Point10 wrappers in the legacy Gallery went 28 → 27.
    through `texture_sources` would give them the same media-root/path
    semantics for free. Low priority.
 
-Net: the built-in Gallery is at **432/432** parity. The remaining delta —
+Net: the built-in Gallery is at **473/473** parity. The remaining delta —
 third-party ISF registration (5) and the regression guard (6) — is
 tracked, small, and does not block the M7 default-flip.
 
@@ -197,3 +200,4 @@ tracked, small, and does not block the M7 default-flip.
 | 2026-11-16 | — | `cbb24d8a` Earth/Sun ported; `f7d35db0` `Cube`/`three` removed; `34528ff6` Geometric Tunnel retired both sides, `DEFAULTS_VERSION` 16 — items 1, 2 closed, headcount 432/432 |
 | 2026-11-17 | `dd8914c2` | This update: verified current state (63/63 default-Scene module names resolve; two inert classes fixed; stale items listed) |
 | 2026-11-19 | — | Default-Scenes v21: first new-musical batch landed (`Open Sea`, `Corona`, `Backbeat Garden`, `Alternate Tides`, `Circuits`); the heavy raymarched drafts (`Back Office`, `Pool Rooms`, `Augur`) dropped post-1920x1080 bench; 56 Scenes reference the surviving module names (verified by `module_registry::tests::every_default_scene_module_resolves_in_the_registry`); the modules stay registered and resolve |
+| 2026-11-23 | — | 41 Ethereios/ISF-shaders imported as CC BY-NC-SA 3.0 with per-file attribution (`notices` + `e2e_manifest` guards green): corpus 354 → 395 `.fs` and 36 → 77 `.vs`, Gallery 432 → 473; the parity manifest (including VmodV-only `Video`) totals 474 |

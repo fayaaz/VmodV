@@ -75,7 +75,7 @@ The two JS guards that still described VmodV content moved into Rust:
 | `audio/systemAudio.spec.js` | engine `AudioFeed` tests; VmodV opens PipeWire monitor with input fallback (verified on host); host-PipeWire manual check | P |
 | `audio/tempoDetector.spec.js` | `modv-media` tempo tests | C |
 | `engine/engineSkeleton.spec.js` | Boundary deleted; VmodV shell tests replace it: single-process smoke, preview texture, output window, `--frames` traces. `tools/vmodv-smoke.sh` covers the packaged lifecycle | P (preview/output kittest pending) |
-| `engine/engineParity.spec.js` | Boundary deleted; registry/count tests, the 432-module guard and the VmodV Gallery read model | C |
+| `engine/engineParity.spec.js` | Boundary deleted; registry/count tests, the 473-module guard (474 in the manifest with VmodV-only `Video`) and the VmodV Gallery read model | C |
 | `main/windowState.spec.js` (packaged app) | window-state unit tests + manual packaged checklist | P |
 
 ## Coverage buckets
@@ -115,7 +115,7 @@ from the actual `dist/VmodV-2.0.0-x86_64.AppImage` (launched with
 | bounded soak | 60 s windowed: 3498 frames, 58.30 fps, peak process-group RSS 335 MB |
 | display backends | forced Wayland-only and X11-only `--frames 5` runs both exit 0 on RADV RX 9070 XT |
 | OSC | `modv-media` real-UDP loopback test + `store_ops::osc_datagrams_apply_to_state_and_mirror` pass; a live VmodV run bound `0.0.0.0:3333` |
-| module parity | committed manifest guard: 432 = 15 2D + 27 Point10 + 36 shader + 354 ISF; 56 default Scenes reference 62 distinct module names, all resolve on both sides |
+| module parity | committed manifest guard: 473 = 15 2D + 27 Point10 + 36 shader + 395 ISF (474 in the manifest with VmodV-only `Video`); 56 default Scenes reference 62 distinct module names, all resolve on both sides |
 
 The app snapshot deliberately excludes `osc` runtime data (it is not a preset
 key), so OSC is covered at the socket/store boundary rather than by asserting a
@@ -152,7 +152,7 @@ Closed since the first pass (2026-11-17):
 - Gallery drag-to-Group and marquee names (`3bd065d2`, `73feb02a`);
 - VmodV AppImage, `.deb`, `vmodv-deb-check` and `vmodv.yml` (`da724d45`,
   `a331368c`);
-- the exact 432-module registry guard (`10ac008d`, `dde600a4`);
+- the exact 473-module registry guard (474 in the manifest with `Video`) (`10ac008d`, `dde600a4`);
 - user-ISF watch/hot reload and preset load/save (`19a71602`, `0d83d639`).
 
 Still open:
