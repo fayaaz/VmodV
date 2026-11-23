@@ -759,7 +759,20 @@ fn draw_layer_gutter(
     actions: &mut Vec<UiAction>,
 ) {
     let offset = scroll.state.clamped_offset();
-    let viewport = scroll.inner_rect.intersect(ui.clip_rect());
+    let mut viewport = scroll.inner_rect.intersect(ui.clip_rect());
+    // The floating horizontal scroll bar is painted inside `inner_rect`'s
+    // bottom edge and senses interaction across its full (hover-expanded)
+    // width. The gutter is a sibling drawn on top, so if its row widgets reach
+    // into that strip they steal the press that should grab the scroll bar's
+    // thumb at rest (x offset zero, which sits under the gutter). Reserve the
+    // bar's strip from the gutter's clip rect so it neither paints over nor
+    // interacts with the scroll bar. The vertical bar is on the right, clear of
+    // the left-edge gutter.
+    if scroll.content_size.x > scroll.inner_rect.width() {
+        let style = ui.spacing().scroll;
+        let bar_strip = style.bar_inner_margin + style.bar_width + style.bar_outer_margin;
+        viewport.max.y -= bar_strip;
+    }
     if viewport.width() <= 0.0 || viewport.height() <= 0.0 {
         return;
     }
