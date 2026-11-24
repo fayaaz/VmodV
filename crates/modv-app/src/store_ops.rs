@@ -77,7 +77,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 
@@ -245,10 +245,21 @@ pub struct Store {
     /// Snapshots popped by undo, ready to be reapplied by redo. Cleared by a
     /// new recorded edit (the standard linear-history behaviour).
     redo_stack: Vec<Value>,
+    /// The control the most recent recorded edit touched, and when. A slider
+    /// drag emits an update every frame; consecutive edits to the same control
+    /// inside [`HISTORY_COALESCE_WINDOW`] share the pre-drag snapshot.
+    last_history_edit: Option<(String, Instant)>,
 }
 
 /// How many preset-graph snapshots the undo and redo stacks each keep.
 const HISTORY_LIMIT: usize = 100;
+
+/// Consecutive edits to the same control inside this window are one undo step.
+///
+/// One user gesture (a drag, typed text, a smoothing slider) emits many
+/// updates; without coalescing each frame's full-graph snapshot would both
+/// flood the 100-entry history and cost a serialisation per frame.
+const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(750);
 
 /// Action namespaces whose successful, state-changing edits enter the history.
 const HISTORY_NAMESPACES: [&str; 5] = ["groups/", "modules/", "inputs/", "expressions/", "tweens/"];
@@ -378,6 +389,7 @@ impl Store {
             warned: HashSet::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            last_history_edit: None,
         }
     }
 
@@ -625,19 +637,50 @@ impl Store {
             // expressions and tweens), which is what `snapshot`/`restore`
             // round-trip; Scenes have their own persistence and are not part of
             // the history.
-            "history/undo" | "history/redo" => self.apply_history_step(action == "history/undo"),
+            "history/undo" | "history/redo" => {
+                self.last_history_edit = None;
+                self.apply_history_step(action == "history/undo")
+            }
             _ => {
                 if !Self::records_history(action) {
                     return self.dispatch_unrecorded(action, payload);
                 }
+                // One gesture can dispatch many edits (a slider emits every
+                // frame). Coalesce consecutive changes to the same control so
+                // the history records the pre-gesture graph once instead of
+                // serialising the whole preset twice per frame.
+                let now = Instant::now();
+                let key = Self::history_edit_key(action, &payload);
+                let coalesce = key.as_ref().is_some_and(|key| {
+                    self.last_history_edit.as_ref().is_some_and(|(last, at)| {
+                        last == key && now.duration_since(*at) <= HISTORY_COALESCE_WINDOW
+                    })
+                });
                 // Record the prior graph, then keep the entry only when the
                 // dispatch succeeded *and* actually changed it (e.g.
                 // `groups/createGroup` on an existing id is a no-op).
-                let before = self.snapshot();
+                let before = (!coalesce).then(|| self.snapshot());
                 let result = self.dispatch_unrecorded(action, payload);
-                if result.is_ok() && self.snapshot() != before {
-                    push_history(&mut self.undo_stack, before);
-                    self.redo_stack.clear();
+                match &result {
+                    Ok(_) => {
+                        if let Some(before) = before {
+                            if self.snapshot() != before {
+                                push_history(&mut self.undo_stack, before);
+                                self.redo_stack.clear();
+                                self.last_history_edit = key.map(|key| (key, now));
+                            } else {
+                                // A no-op must not arm coalescing: the next
+                                // real edit still needs its own snapshot.
+                                self.last_history_edit = None;
+                            }
+                        } else {
+                            // Coalesced: the existing entry already holds the
+                            // pre-gesture state. Refresh the window so a long
+                            // drag stays one step.
+                            self.last_history_edit = key.map(|key| (key, now));
+                        }
+                    }
+                    Err(_) => self.last_history_edit = None,
                 }
                 result
             }
@@ -685,6 +728,50 @@ impl Store {
             .any(|prefix| action.starts_with(prefix))
     }
 
+    /// Identify the control a history edit targets.
+    ///
+    /// Only continuous controls need a key: they emit one update per frame
+    /// while the user drags or types, so the key lets [`Self::dispatch`]
+    /// coalesce them into one undo step. Structural actions (create, remove,
+    /// reorder) return `None` and always record their own snapshot.
+    fn history_edit_key(action: &str, payload: &Value) -> Option<String> {
+        let params = payload.as_object()?;
+        let text = |key: &str| params.get(key).and_then(Value::as_str);
+        match action {
+            "modules/updateProp" | "modules/UPDATE_ACTIVE_MODULE_PROP" => {
+                let module = text("moduleId").or_else(|| text("id"))?;
+                let prop = text("prop")?;
+                let path = params
+                    .get("data")
+                    .and_then(Value::as_object)
+                    .and_then(|data| data.get("path"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                Some(format!("module-prop:{module}:{prop}:{path}"))
+            }
+            "modules/updateMeta" | "modules/UPDATE_ACTIVE_MODULE_META" => {
+                let module = text("id").or_else(|| text("moduleId"))?;
+                let meta_key = text("metaKey")?;
+                Some(format!("module-meta:{module}:{meta_key}"))
+            }
+            "groups/UPDATE_GROUP_BY_KEY" => {
+                let group = text("groupId")?;
+                let key = text("key")?;
+                Some(format!("group:{group}:{key}"))
+            }
+            "groups/updateGroupName" => Some(format!("group-name:{}", text("groupId")?)),
+            "inputs/updateInputLink" | "inputs/UPDATE_INPUT_LINK" => {
+                let input = text("inputId").or_else(|| text("id"))?;
+                let key = text("key")?;
+                Some(format!("input-link:{input}:{key}"))
+            }
+            "expressions/update" | "expressions/updateEvaluation" => {
+                Some(format!("expression:{}", text("id")?))
+            }
+            _ => None,
+        }
+    }
+
     /// Forget the recorded undo/redo history.
     ///
     /// Startup seeding (the default Group and Scenes) must not be undoable, so
@@ -692,6 +779,7 @@ impl Store {
     pub fn clear_history(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.last_history_edit = None;
     }
 
     /// [`Store::dispatch`] without the undo/redo bookkeeping.

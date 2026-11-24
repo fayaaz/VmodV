@@ -4237,10 +4237,10 @@ fn expression_views(state: &modv_engine::engine_state::EngineState) -> Vec<Expre
 }
 
 fn registered_modules(registry: &crate::module_registry::ModuleRegistry) -> Vec<ModuleMetaView> {
-    let Value::Object(map) = registry.registered_modules() else {
+    let Value::Object(map) = registry.registered_modules_ref() else {
         return Vec::new();
     };
-    map.into_iter()
+    map.iter()
         .filter_map(|(name, entry)| {
             let meta = entry.get("meta").and_then(Value::as_object)?;
             let get = |key: &str| {
@@ -4250,11 +4250,11 @@ fn registered_modules(registry: &crate::module_registry::ModuleRegistry) -> Vec<
                     .to_string()
             };
             let kind = registry
-                .kind(&name)
+                .kind(name)
                 .map(|kind| kind.as_str().to_string())
                 .unwrap_or_default();
             Some(ModuleMetaView {
-                name,
+                name: name.clone(),
                 module_type: get("type"),
                 kind,
                 category: get("category"),

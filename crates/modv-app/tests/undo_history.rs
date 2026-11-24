@@ -146,6 +146,65 @@ fn an_edit_that_does_not_change_the_graph_is_not_recorded() {
 }
 
 #[test]
+fn a_continuous_prop_drag_is_one_undo_step() {
+    let mut store = Store::new();
+    let module = store
+        .dispatch(
+            "modules/makeActiveModule",
+            json!({ "moduleName": "Polygon" }),
+        )
+        .expect("makeActiveModule dispatches");
+    let module_id = module["$id"].as_str().expect("module id").to_string();
+
+    let set_prop = |store: &mut Store, value: f64| {
+        store
+            .dispatch(
+                "modules/updateProp",
+                json!({
+                    "moduleId": module_id,
+                    "prop": "strokeWeight",
+                    "data": { "value": value },
+                }),
+            )
+            .expect("modules/updateProp dispatches");
+    };
+    let prop = |store: &Store| {
+        store.state().modules[&module_id].props["strokeWeight"]
+            .as_f64()
+            .expect("numeric prop")
+    };
+
+    // Establish a known starting value, then make the history start there.
+    set_prop(&mut store, 1.0);
+    store.clear_history();
+
+    // A slider drag emits one update per frame. They are one user edit, so the
+    // history must keep a single pre-drag snapshot rather than one per frame.
+    for value in 2..=12 {
+        set_prop(&mut store, f64::from(value));
+    }
+    assert_eq!(prop(&store), 12.0);
+
+    store
+        .dispatch("history/undo", json!({}))
+        .expect("history/undo dispatches");
+    assert_eq!(
+        prop(&store),
+        1.0,
+        "one undo must return to the value before the whole drag"
+    );
+
+    store
+        .dispatch("history/redo", json!({}))
+        .expect("history/redo dispatches");
+    assert_eq!(
+        prop(&store),
+        12.0,
+        "redo must restore the value the drag ended on"
+    );
+}
+
+#[test]
 fn history_is_bounded_to_one_hundred_entries() {
     let mut store = Store::new();
     // 101 recorded creates; only the newest 100 prior-graph snapshots survive.

@@ -117,6 +117,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -750,6 +751,14 @@ pub struct ModuleRegistry {
     point10: Vec<Point10Definition>,
     isf: Vec<IsfDefinition>,
     milkdrop: Vec<MilkdropDefinition>,
+    /// The `registered_modules()` document, built once on first use.
+    ///
+    /// The UI snapshot reads every registered module every frame; rebuilding
+    /// this JSON (metadata, descriptions and every prop schema across the
+    /// ~400-entry corpus) cost milliseconds per frame. The registry is
+    /// immutable after construction, so the document is cached. A registry
+    /// rebuilt after a user-ISF rescan is a fresh value with a fresh cache.
+    registered_cache: OnceLock<Value>,
 }
 
 impl ModuleRegistry {
@@ -835,6 +844,7 @@ impl ModuleRegistry {
             point10,
             isf,
             milkdrop,
+            registered_cache: OnceLock::new(),
         }
     }
 
@@ -880,6 +890,10 @@ impl ModuleRegistry {
                 props,
             });
         }
+        // User modules modify the registry after construction, so a document
+        // built before this call (a test calling `registered_modules()` first)
+        // must not hide the new entries.
+        self.registered_cache = OnceLock::new();
         self
     }
 
@@ -1170,6 +1184,21 @@ impl ModuleRegistry {
     /// Only `meta` and the prop descriptors are included — the JS definition
     /// object also carries lifecycle functions, which the mirror never calls.
     pub fn registered_modules(&self) -> Value {
+        self.registered_modules_ref().clone()
+    }
+
+    /// The registry document without the deep clone.
+    ///
+    /// The UI snapshot rebuilds its `ModuleMetaView` list from this document
+    /// every frame; borrowing the cached value keeps that read to the string
+    /// copies the view owns instead of re-serialising every definition and
+    /// prop schema.
+    pub fn registered_modules_ref(&self) -> &Value {
+        self.registered_cache
+            .get_or_init(|| self.build_registered_modules())
+    }
+
+    fn build_registered_modules(&self) -> Value {
         let mut names: Vec<&str> = Vec::new();
         for module in &self.shader {
             names.push(module.name.as_ref());
@@ -2051,6 +2080,25 @@ fn collect_milkdrop_definitions(user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition
 mod tests {
     use super::*;
     use modv_renderers::milkdrop::MILKDROP_LOOK_PROP_NAMES;
+
+    /// The per-frame UI snapshot reads this document for every registered
+    /// module. Rebuilding it per read cost milliseconds within the frame
+    /// budget, so the registry must serve one cached document.
+    #[test]
+    fn registered_modules_document_is_built_once() {
+        let registry = ModuleRegistry::builtin();
+        let first = registry.registered_modules_ref();
+        let second = registry.registered_modules_ref();
+        assert!(
+            std::ptr::eq(first, second),
+            "registered_modules_ref rebuilt the registry document"
+        );
+        assert_eq!(
+            registry.registered_modules(),
+            *first,
+            "the owned copy must match the cached document"
+        );
+    }
 
     #[test]
     fn registry_knows_both_module_kinds() {
