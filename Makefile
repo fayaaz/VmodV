@@ -121,7 +121,12 @@ disk-clean:
 # Drop compiled artifacts from the cargo volume without losing the registry
 # cache. The next make target recompiles from scratch but keeps downloaded
 # crates; 'make docker-reset' clears the registry too.
-disk-clean-targets: docker-cargo-volume
+#
+# Deliberately does not depend on `docker-cargo-volume`/`docker-rust`: those
+# need `disk-guard`, and this is the escape hatch the guard tells you to run
+# when the disk is already full. The volume is created by the bind below if it
+# does not exist, and an existing toolchain image is enough to delete from it.
+disk-clean-targets:
 	@target="$(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),/cargo/target)"; \
 	case "$$target" in \
 		/cargo/?*) ;; \
