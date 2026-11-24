@@ -4847,6 +4847,7 @@ mod tests {
             "Point10 Spiral Particles",
             "Point10 Chromatic Line",
             "Point10 Chromatic Wave",
+            "Point10 The Cave",
             // Heavy control: already followed the global setting before the fix.
             "Point10 Smoke Room",
         ] {
