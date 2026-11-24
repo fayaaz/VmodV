@@ -29,6 +29,7 @@ pub mod media_watch;
 pub mod midi;
 pub mod module_preview;
 pub mod module_registry;
+pub mod ndi_readback;
 pub mod ndi_runtime;
 pub mod pacing;
 pub mod performance;

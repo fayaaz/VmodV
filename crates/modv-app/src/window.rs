@@ -61,7 +61,8 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::cli::Cli;
-use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
+use crate::compositor::{Compositor, FrameInfo, PendingReadback, RowFadeInfo};
+use crate::ndi_readback::NdiReadback;
 use crate::report::{AdapterSummary, report_json};
 use crate::scene_preview;
 use crate::scene_transition::SceneTransitionInfo;
@@ -122,6 +123,13 @@ struct WindowedApp {
     cli: Cli,
     engine: Option<Engine>,
     surface: Option<SurfaceTarget>,
+    /// The in-flight NDI output read-back, polled once per frame so the sender
+    /// never blocks the presented frame on a GPU map.
+    ///
+    /// Declared before `compositor` so it is dropped first: it holds GPU
+    /// handles (`PendingReadback`) that must be released while the compositor's
+    /// device is still alive.
+    ndi_readback: NdiReadback<PendingReadback>,
     compositor: Option<Compositor>,
     store: Store,
     stats: Option<FrameStats>,
@@ -368,6 +376,7 @@ impl WindowedApp {
             cli,
             engine: Some(engine),
             surface: None,
+            ndi_readback: NdiReadback::new(),
             compositor: None,
             store,
             stats: None,
@@ -949,9 +958,10 @@ impl WindowedApp {
         self.answer_previews();
 
         // 2c. NDI output (WS-11): when the output is enabled and this frame is
-        // due, read the just-presented frame back and queue it for the sender
-        // thread. The read-back is the only cost, and it is skipped entirely
-        // while NDI output is off or the sender has not reached its cadence.
+        // due, start a read-back of the just-presented frame and queue it for
+        // the sender thread. The read-back finishes on a later frame, so it is
+        // skipped entirely while NDI output is off, the sender has not reached
+        // its cadence, or a previous copy is still in flight.
         self.submit_ndi_frame();
 
         // 3. Publish a preview frame at the supervisor's cadence (≤ 30 fps).
@@ -1035,12 +1045,23 @@ impl WindowedApp {
     /// Submit the just-presented frame to the NDI sender when it is due.
     ///
     /// The legacy worker transferred the canvas to an `ImageBitmap` and sent it
-    /// to `ndi-worker.worker.js` on every frame; the engine reads the main
-    /// texture back instead. That read-back is synchronised and expensive, so
-    /// it only runs when [`crate::ndi_runtime::NdiRuntime::frame_due`] says the
-    /// sender can accept a frame (output enabled, sender running, rate
-    /// reached). No NDI code touches the normal path when output is off.
+    /// to `ndi-worker.worker.js` on every frame; the engine copies the main
+    /// texture back instead. That read-back is expensive, so it only starts
+    /// when [`crate::ndi_runtime::NdiRuntime::frame_due`] says the sender can
+    /// accept a frame (output enabled, sender running, rate reached), and it
+    /// finishes on a later frame rather than blocking the presented one on the
+    /// GPU map. No NDI code touches the normal path when output is off.
     fn submit_ndi_frame(&mut self) {
+        if let Some(frame) = self.ndi_readback.poll()
+            && !frame.pixels.is_empty()
+        {
+            self.store
+                .ndi_mut()
+                .submit_frame(frame.size.0, frame.size.1, &frame.pixels);
+        }
+        if self.ndi_readback.busy() {
+            return;
+        }
         if !self.store.ndi_mut().frame_due(Instant::now()) {
             return;
         }
@@ -1049,11 +1070,14 @@ impl WindowedApp {
             return;
         };
         let size = compositor.main_texture_size();
-        match compositor.read_main_rgba8() {
-            Ok(pixels) if !pixels.is_empty() => {
-                self.store.ndi_mut().submit_frame(size.0, size.1, &pixels);
+        if size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        match compositor.begin_read_main_rgba8() {
+            Ok(Some(pending)) => {
+                self.ndi_readback.start(pending, size);
             }
-            Ok(_) => {}
+            Ok(None) => {}
             Err(error) => {
                 if !self.ndi_error_logged {
                     self.ndi_error_logged = true;

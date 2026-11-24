@@ -45,7 +45,7 @@ use winit::keyboard::ModifiersState;
 use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::cli::{AudioSourceSelection, Cli};
-use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
+use crate::compositor::{Compositor, FrameInfo, PendingReadback, RowFadeInfo};
 use crate::control_socket::{Command, ControlServer, QueuedRequest};
 use crate::media::MediaHub;
 use crate::media_dialogs::{self, DocumentKind, FilePicker};
@@ -54,6 +54,7 @@ use crate::media_profiles::{self, DEFAULT_PROFILE, PROJECT_SETTINGS_FILENAME, Pr
 use crate::media_settings::{CameraMode, MediaSettings, plan_restore, resolve_mode};
 use crate::media_watch::{MediaFolder, MediaWatcher};
 use crate::midi::MidiClient;
+use crate::ndi_readback::NdiReadback;
 use crate::pacing::FramePacer;
 use crate::plugin_runtime::{self, PluginRuntime, VmodvStateReader};
 use crate::report::AdapterSummary;
@@ -494,6 +495,9 @@ pub struct VmodvApp {
     plugin_capture_error_logged: bool,
     /// Set after a failed NDI frame read-back so a broken GPU path logs once.
     ndi_error_logged: bool,
+    /// The in-flight NDI output read-back, polled once per frame so the sender
+    /// never blocks the presented frame on a GPU map.
+    ndi_readback: NdiReadback<PendingReadback>,
     /// NDI panel view, refreshed at 1 Hz while the tab is visible.
     ndi_view: NdiSnapshot,
     last_ndi_poll: Instant,
@@ -986,6 +990,7 @@ impl VmodvApp {
             plugins_seen: false,
             plugin_capture_error_logged: false,
             ndi_error_logged: false,
+            ndi_readback: NdiReadback::new(),
             ndi_view,
             last_ndi_poll: start,
             osc_servers,
@@ -1603,10 +1608,19 @@ impl VmodvApp {
 
     /// Submit the just-presented frame to the NDI sender when it is due.
     ///
-    /// Ported from `window.rs`: the read-back is synchronised and expensive,
-    /// so it only runs when the NDI runtime says the sender is enabled,
-    /// running and the configured frame rate has elapsed.
+    /// The read-back is started without waiting for the GPU and finished on a
+    /// later frame, so the sender never blocks the presented frame on the map.
     fn submit_ndi_frame(&mut self) {
+        if let Some(frame) = self.ndi_readback.poll()
+            && !frame.pixels.is_empty()
+        {
+            self.store
+                .ndi_mut()
+                .submit_frame(frame.size.0, frame.size.1, &frame.pixels);
+        }
+        if self.ndi_readback.busy() {
+            return;
+        }
         if !self.store.ndi_mut().frame_due(Instant::now()) {
             return;
         }
@@ -1614,11 +1628,14 @@ impl VmodvApp {
             return;
         };
         let size = compositor.main_texture_size();
-        match compositor.read_main_rgba8() {
-            Ok(pixels) if !pixels.is_empty() => {
-                self.store.ndi_mut().submit_frame(size.0, size.1, &pixels);
+        if size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        match compositor.begin_read_main_rgba8() {
+            Ok(Some(pending)) => {
+                self.ndi_readback.start(pending, size);
             }
-            Ok(_) => {}
+            Ok(None) => {}
             Err(error) => {
                 if !self.ndi_error_logged {
                     self.ndi_error_logged = true;
