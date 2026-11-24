@@ -6,7 +6,7 @@
 //! pause/loop/speed into the texture prop so presets and Scenes keep them.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use modv_ui::model::{GROUP_ENABLED, InheritTarget};
 use modv_ui::state::SidePanelTab;
 use modv_ui::{
@@ -16,6 +16,50 @@ use modv_ui::{
 
 const CLIP: &str = "live/video/clip.mp4";
 const SOURCE_ID: &str = "video:/media/live/video/clip.mp4";
+const DURATION_MS: u64 = 12_400;
+
+/// Set the Seek control's accesskit value to the midpoint of *its own* range,
+/// so a scrubber expressed in milliseconds or a normalised 0..=1 value both
+/// end up at 50% of the clip. The node borrow ends before the harness reruns.
+macro_rules! seek_to_halfway {
+    ($harness:expr, $panel:expr) => {{
+        let node = $harness
+            .query_all_by_label_contains("Seek")
+            .next()
+            .unwrap_or_else(|| panic!("{} exposes no accesskit control labelled 'Seek'", $panel));
+        let accesskit = node.accesskit_node();
+        let min = accesskit.min_numeric_value().unwrap_or(0.0);
+        let max = accesskit.max_numeric_value().unwrap_or(DURATION_MS as f64);
+        assert!(max > min, "the Seek control must have a usable range");
+        let target = min + (max - min) * 0.5;
+        node.set_value_accesskit(target);
+    }};
+}
+
+fn assert_only_seek(actions: &[MediaAction]) {
+    assert_eq!(
+        actions.len(),
+        1,
+        "one transient Seek command, no other transport commands: {actions:?}"
+    );
+    match &actions[0] {
+        MediaAction::VideoTransport {
+            source,
+            action: VideoTransportAction::Seek { position_ms: at },
+        } => {
+            assert_eq!(
+                source, SOURCE_ID,
+                "the seek targets the playing file source"
+            );
+            let expected = (DURATION_MS / 2) as f64;
+            assert!(
+                (*at as f64 - expected).abs() <= 1_000.0,
+                "a 50% scrub should seek near {expected:.0}ms, got {at}ms"
+            );
+        }
+        other => panic!("expected a Seek transport action, got {other:?}"),
+    }
+}
 
 fn transport() -> VideoTransportView {
     VideoTransportView {
@@ -369,4 +413,95 @@ fn a_paused_source_offers_play_and_replays_a_finished_clip() {
         }],
         "a parked clip replays from zero through Resume"
     );
+}
+
+#[test]
+fn seek_scrubbers_queue_a_transient_command_in_both_panels_and_respect_gating() {
+    // Inspector: scrubbing the seek bar is a command, not a persisted prop edit.
+    let mut harness = build(
+        snapshot(video_prop(), vec![file_source()]),
+        inspector_state(),
+    );
+    harness.run();
+    harness.get_by_label("0:04 / 0:12");
+    let _ = prop_actions(&mut harness);
+    let _ = harness.state_mut().take_media_actions();
+    seek_to_halfway!(harness, "the Inspector");
+    harness.run();
+    assert!(
+        prop_actions(&mut harness).is_empty(),
+        "seeking is transient: no modules/updateProp action may be queued"
+    );
+    assert_only_seek(&harness.state_mut().take_media_actions());
+    // The position/duration readout survives the scrub.
+    harness.get_by_label("0:04 / 0:12");
+
+    // Media tab: the per-source row exposes the same scrubber and targets the
+    // same source id, without persisting anything either.
+    let mut media_state = UiState::new();
+    media_state.side_panel_tab = SidePanelTab::Media;
+    let mut harness = build(snapshot(video_prop(), vec![file_source()]), media_state);
+    harness.run();
+    harness.get_by_label_contains(SOURCE_ID);
+    harness.get_by_label("0:04 / 0:12");
+    let _ = prop_actions(&mut harness);
+    let _ = harness.state_mut().take_media_actions();
+    seek_to_halfway!(harness, "the Media tab");
+    harness.run();
+    assert!(
+        prop_actions(&mut harness).is_empty(),
+        "the Media tab's scrub must not persist a prop edit either"
+    );
+    assert_only_seek(&harness.state_mut().take_media_actions());
+    harness.get_by_label("0:04 / 0:12");
+
+    // Gating: an unseekable source or an unknown/zero duration has no usable
+    // scrubber and cannot emit a Seek, even if a disabled Seek label is drawn.
+    for transport in [
+        VideoTransportView {
+            seekable: false,
+            ..transport()
+        },
+        VideoTransportView {
+            duration_ms: None,
+            ..transport()
+        },
+        VideoTransportView {
+            duration_ms: Some(0),
+            ..transport()
+        },
+    ] {
+        let source = MediaSourceView {
+            transport: Some(transport),
+            ..file_source()
+        };
+        let mut harness = build(snapshot(video_prop(), vec![source]), inspector_state());
+        harness.run();
+        let seek_slider = harness
+            .query_all_by_label_contains("Seek")
+            .find(|node| node.accesskit_node().role() == accesskit::Role::Slider);
+        if let Some(node) = seek_slider {
+            let accesskit = node.accesskit_node();
+            let min = accesskit.min_numeric_value().unwrap_or(0.0);
+            let max = accesskit.max_numeric_value().unwrap_or(DURATION_MS as f64);
+            let target = min + (max - min) * 0.5;
+            node.set_value_accesskit(target);
+            harness.run();
+        }
+        assert!(
+            prop_actions(&mut harness).is_empty(),
+            "a gated scrubber never writes the prop"
+        );
+        let actions = harness.state_mut().take_media_actions();
+        assert!(
+            !actions.iter().any(|action| matches!(
+                action,
+                MediaAction::VideoTransport {
+                    action: VideoTransportAction::Seek { .. },
+                    ..
+                }
+            )),
+            "an unseekable/zero-duration source must not emit Seek: {actions:?}"
+        );
+    }
 }

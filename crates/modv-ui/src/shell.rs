@@ -33,7 +33,7 @@ use crate::tab_drag::{TabDrag, TabDropTarget, floating_bounds_for_drop};
 use crate::theme;
 use crate::widgets::input_link::{link_control_inline, link_editor_window, link_row};
 use crate::widgets::range_control::chip;
-use crate::widgets::texture_control::TextureControlChange;
+use crate::widgets::texture_control::{TextureControlChange, seek_position};
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
 
 /// The Groups panel's minimum width, matching `ui_layout::MIN_GROUPS_WIDTH`.
@@ -3775,7 +3775,8 @@ fn media_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
 ///
 /// The shell persists pause/loop into every prop that references the source,
 /// so a change here survives a preset/Scene reload just like the Inspector's
-/// transport row.
+/// transport row. Seeking is transient: it drives the source but is never
+/// written back into a prop.
 fn media_transport_row(
     ui: &mut egui::Ui,
     source: &MediaSourceView,
@@ -3798,6 +3799,16 @@ fn media_transport_row(
             state.push_media_action(MediaAction::VideoTransport {
                 source: source.source_id.clone(),
                 action: VideoTransportAction::Restart,
+            });
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().slider_width = 120.0;
+        if let Some(position_ms) = seek_position(ui, &transport) {
+            state.push_media_action(MediaAction::VideoTransport {
+                source: source.source_id.clone(),
+                action: VideoTransportAction::Seek { position_ms },
             });
         }
     });

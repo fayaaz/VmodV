@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::library_drag::{MediaLibraryDrag, USE_FROM_LIBRARY_LABEL, texture_value_for_control};
 use crate::model::{
     LibraryKind, MediaLibraryView, MediaSnapshot, TextureSourceView, VideoTransportAction,
+    VideoTransportView,
 };
 use crate::theme;
 
@@ -261,8 +262,8 @@ impl TextureControl {
     }
 }
 
-/// Paint the video clip's transport row: Play/Pause, Restart, Speed and Loop,
-/// plus the position/duration readout and a missing-file message.
+/// Paint the video clip's transport row: Play/Pause, Restart, Speed, Seek and
+/// Loop, plus the position/duration readout and a missing-file message.
 ///
 /// The row only issues commands when a source is running; the shell persists
 /// the pause/loop/speed option into the prop so presets and Scenes keep it.
@@ -343,6 +344,11 @@ fn video_transport_row(
         }
     });
 
+    if let Some(position_ms) = seek_position(ui, &transport) {
+        // Seeking is transient: no option is persisted into the prop.
+        *change = Some((None, VideoTransportAction::Seek { position_ms }));
+    }
+
     let mut looping = transport.looping;
     if ui.checkbox(&mut looping, "Loop").changed() {
         *change = Some((
@@ -364,6 +370,23 @@ fn video_transport_row(
                 .color(theme::MUTED),
         );
     }
+}
+
+/// A `Seek` slider in milliseconds, offered only when the source is seekable
+/// and its duration is known and non-zero. Returns the requested position when
+/// the user scrubs it this frame.
+pub(crate) fn seek_position(ui: &mut egui::Ui, transport: &VideoTransportView) -> Option<u64> {
+    let duration = transport.duration_ms.filter(|duration| *duration > 0)?;
+    if !transport.seekable {
+        return None;
+    }
+    let mut position = transport.position_ms.min(duration) as f64;
+    let response = ui.add(
+        egui::Slider::new(&mut position, 0.0..=duration as f64)
+            .show_value(false)
+            .text("Seek"),
+    );
+    response.changed().then(|| position.round() as u64)
 }
 
 /// The Library folder a texture kind can pick from.
