@@ -2997,7 +2997,9 @@ impl VmodvApp {
     /// runs on [`crate::preview_worker::PreviewWorker`], the window loop only
     /// starts one job at the throttled cadence and uploads the result when it
     /// arrives. That keeps even a cell's first (cold) preview from stalling the
-    /// output frame. Performance mode never starts a preview.
+    /// output frame. Performance mode does not veto previews: the Gallery stays
+    /// hoverable during a show, and the worker and throttle keep them off the
+    /// output hot path.
     fn answer_preview_requests(&mut self) {
         let now = Instant::now();
         // Drain any finished worker job first. This is a channel try_recv; the
@@ -3035,11 +3037,8 @@ impl VmodvApp {
             self.pending_preview = None;
             return;
         }
-        if !preview_ready(
-            now,
-            self.last_preview_at,
-            self.store.performance_runtime().enabled,
-        ) || self.preview_job.is_some()
+        if !preview_ready(now, self.last_preview_at)
+            || self.preview_job.is_some()
             || self.preview_worker.is_none()
             || self.compositor.is_none()
         {
@@ -4697,17 +4696,18 @@ fn performance_view(config: &Value, enabled: bool, row_names: &[String]) -> Perf
     }
 }
 
-/// Acquire a surface texture, reconfiguring a stale surface and skipping an
-/// occluded one.
 /// Whether a queued hover preview may start now.
 ///
-/// Performance mode is the live output: no preview may run while it is on.
-/// Otherwise a new preview waits for the throttle interval; at most one is in
-/// flight, so a hover can never queue work faster than it completes.
-fn preview_ready(now: Instant, last_preview_at: Instant, performance: bool) -> bool {
-    !performance && now.saturating_duration_since(last_preview_at) >= PREVIEW_INTERVAL
+/// Previews run off-thread on the `PreviewWorker`, one job in flight, so the
+/// throttle interval is the only limit: a hover can never queue work faster
+/// than it completes. Performance mode does not veto them — the Gallery stays
+/// visible and hoverable during a show.
+fn preview_ready(now: Instant, last_preview_at: Instant) -> bool {
+    now.saturating_duration_since(last_preview_at) >= PREVIEW_INTERVAL
 }
 
+/// Acquire a surface texture, reconfiguring a stale surface and skipping an
+/// occluded one.
 fn acquire_surface(
     surface: &mut SurfaceTarget,
     device: &wgpu::Device,
@@ -5304,18 +5304,32 @@ mod tests {
     }
 
     #[test]
-    fn previews_wait_for_the_interval_and_never_run_in_performance_mode() {
+    fn previews_wait_for_the_interval() {
+        // Hover previews are rendered on the off-thread PreviewWorker with at
+        // most one job in flight; the throttle keeps a hover from queuing work
+        // faster than it completes. That guarantee applies in both modes.
         let now = Instant::now();
         let ready_last = now - PREVIEW_INTERVAL;
 
-        assert!(preview_ready(now, ready_last, false));
+        assert!(preview_ready(now, ready_last));
         assert!(
-            !preview_ready(now, ready_last, true),
-            "performance mode must never run a hover preview"
-        );
-        assert!(
-            !preview_ready(now, now, false),
+            !preview_ready(now, now),
             "a second preview must wait for the throttle interval"
+        );
+    }
+
+    #[test]
+    fn gallery_module_previews_start_in_performance_mode() {
+        // Regression: the Gallery stays visible and hoverable in performance
+        // mode and `request_gallery_preview` still queues `PreviewRequest::
+        // Module`, so being off-thread/throttled is the only limit on a
+        // preview. A blanket performance-mode veto kills Gallery previews.
+        let now = Instant::now();
+        let ready_last = now - PREVIEW_INTERVAL;
+
+        assert!(
+            preview_ready(now, ready_last),
+            "a due gallery/module preview must start even in performance mode"
         );
     }
 
