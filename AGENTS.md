@@ -102,7 +102,7 @@ Logging: the VmodV shell writes to **stderr**; the packaged AppImage/`.deb` laun
 
 ## Point10
 
-Point10 scenes are ported (not vendored) into `crates/modv-renderers` — WGSL/TSL shaders and scene logic, sharing the particle-sprite/audio-bridge helpers. Some scenes are deliberately background-free so they composite over the layer below. The ported set and its parity notes are tracked in `docs/module-parity.md`; `tests/fixtures/module-parity.json` is the registry manifest guarded by `e2e_manifest`.
+Point10 scenes are ported (not vendored) into `crates/modv-renderers` — WGSL/TSL shaders and scene logic, sharing the particle-sprite/audio-bridge helpers. Some scenes are deliberately background-free so they composite over the layer below; a full-frame raymarch such as The Cave is opaque instead. Plane9 XML presets imported from `../Point10` (Sun, Earth, The Cave) keep their own RTT/post chains and live in `scenes/*.rs`; their textures are copied into `resources/point10/textures/` and credited in `THIRD_PARTY_NOTICES.md`. `tests/fixtures/module-parity.json` is the registry manifest guarded by `e2e_manifest` (currently 27 Point10 scenes; Glass Lens was dropped because its upstream CodePen states no licence).
 
 ## Display & GPU notes
 

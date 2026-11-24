@@ -137,7 +137,6 @@ use modv_renderers::point10::scenes::boxy::Boxy;
 use modv_renderers::point10::scenes::color_cube::ColorCube;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
 use modv_renderers::point10::scenes::earth::Earth;
-use modv_renderers::point10::scenes::glass_lens::GlassLens;
 use modv_renderers::point10::scenes::hollow_cube::HollowCube;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
 use modv_renderers::point10::scenes::latent_backrooms::LatentBackrooms;
@@ -151,6 +150,7 @@ use modv_renderers::point10::scenes::sound_cube::SoundCube;
 use modv_renderers::point10::scenes::spiral_particles::SpiralParticles;
 use modv_renderers::point10::scenes::square_tunnel::SquareTunnel;
 use modv_renderers::point10::scenes::sun::Sun;
+use modv_renderers::point10::scenes::the_cave::TheCave;
 use modv_renderers::point10::scenes::ultra_hdr::UltraHdr;
 use modv_renderers::point10::scenes::water_ripple::WaterRipple;
 use modv_renderers::point10::scenes::waveform::Waveform;
@@ -317,8 +317,6 @@ pub enum Point10SceneKind {
     ItIsComingForYou(ItIsComingForYou),
     /// `Point10 Water Ripple` (`scenes/water_ripple.rs`).
     WaterRipple(WaterRipple),
-    /// `Point10 Glass Lens` (`scenes/glass_lens.rs`).
-    GlassLens(GlassLens),
     /// `Point10 Mycelium` (`scenes/mycelium.rs`).
     Mycelium(Mycelium),
     /// `Point10 Around Plus` (`scenes/around_plus.rs`).
@@ -351,6 +349,8 @@ pub enum Point10SceneKind {
     Sun(Sun),
     /// `Point10 Earth` (`scenes/earth.rs`).
     Earth(Earth),
+    /// `Point10 The Cave` (`scenes/the_cave.rs`).
+    TheCave(TheCave),
 }
 
 impl Point10SceneKind {
@@ -385,7 +385,6 @@ impl Point10SceneKind {
             "Point10 Wormhole" => Self::Wormhole(Wormhole::new()),
             "Point10 It Is Coming For You" => Self::ItIsComingForYou(ItIsComingForYou::new()),
             "Point10 Water Ripple" => Self::WaterRipple(WaterRipple::new()),
-            "Point10 Glass Lens" => Self::GlassLens(GlassLens::new()),
             "Point10 Mycelium" => Self::Mycelium(Mycelium::new()),
             "Point10 Around Plus" => Self::AroundPlus(AroundPlus::new()),
             "Point10 Ultra HDR" => Self::UltraHdr(UltraHdr::new()),
@@ -402,6 +401,7 @@ impl Point10SceneKind {
             "Point10 Latent Backrooms" => Self::LatentBackrooms(LatentBackrooms::new()),
             "Point10 Sun" => Self::Sun(Sun::new()),
             "Point10 Earth" => Self::Earth(Earth::new()),
+            "Point10 The Cave" => Self::TheCave(TheCave::new()),
             _ => return None,
         })
     }
@@ -421,6 +421,7 @@ impl Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.apply_props(|key| get(key)),
             Self::Sun(scene) => scene.apply_props(|key| get(key)),
             Self::Earth(scene) => scene.apply_props(|key| get(key)),
+            Self::TheCave(scene) => scene.apply_props(|key| get(key)),
             Self::HollowCube(scene) => scene.apply_props(|key| get(key)),
             Self::AttractorParticles(scene) => scene.apply_props(|key| get(key)),
             Self::DvdRoom(scene) => scene.apply_props(|key| get(key)),
@@ -430,7 +431,6 @@ impl Point10SceneKind {
             Self::Boxy(scene) => scene.apply_props(|key| get(key)),
             Self::SoundCube(scene) => scene.apply_props(|key| get(key)),
             Self::WaterRipple(scene) => scene.apply_props(|key| get(key)),
-            Self::GlassLens(scene) => scene.apply_props(|key| get(key)),
             Self::Mycelium(scene) => scene.apply_props(|key| get(key)),
             Self::AroundPlus(scene) => scene.apply_props(|key| get(key)),
             Self::SquareTunnel(scene) => scene.apply_props(|key| get(key)),
@@ -456,6 +456,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.name(),
             Self::Sun(scene) => scene.name(),
             Self::Earth(scene) => scene.name(),
+            Self::TheCave(scene) => scene.name(),
             Self::HollowCube(scene) => scene.name(),
             Self::AttractorParticles(scene) => scene.name(),
             Self::DvdRoom(scene) => scene.name(),
@@ -465,7 +466,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.name(),
             Self::SoundCube(scene) => scene.name(),
             Self::WaterRipple(scene) => scene.name(),
-            Self::GlassLens(scene) => scene.name(),
             Self::Mycelium(scene) => scene.name(),
             Self::AroundPlus(scene) => scene.name(),
             Self::SquareTunnel(scene) => scene.name(),
@@ -488,6 +488,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.init(ctx),
             Self::Sun(scene) => scene.init(ctx),
             Self::Earth(scene) => scene.init(ctx),
+            Self::TheCave(scene) => scene.init(ctx),
             Self::HollowCube(scene) => scene.init(ctx),
             Self::AttractorParticles(scene) => scene.init(ctx),
             Self::DvdRoom(scene) => scene.init(ctx),
@@ -497,7 +498,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.init(ctx),
             Self::SoundCube(scene) => scene.init(ctx),
             Self::WaterRipple(scene) => scene.init(ctx),
-            Self::GlassLens(scene) => scene.init(ctx),
             Self::Mycelium(scene) => scene.init(ctx),
             Self::AroundPlus(scene) => scene.init(ctx),
             Self::SquareTunnel(scene) => scene.init(ctx),
@@ -520,6 +520,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.resize(width, height),
             Self::Sun(scene) => scene.resize(width, height),
             Self::Earth(scene) => scene.resize(width, height),
+            Self::TheCave(scene) => scene.resize(width, height),
             Self::HollowCube(scene) => scene.resize(width, height),
             Self::AttractorParticles(scene) => scene.resize(width, height),
             Self::DvdRoom(scene) => scene.resize(width, height),
@@ -529,7 +530,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.resize(width, height),
             Self::SoundCube(scene) => scene.resize(width, height),
             Self::WaterRipple(scene) => scene.resize(width, height),
-            Self::GlassLens(scene) => scene.resize(width, height),
             Self::Mycelium(scene) => scene.resize(width, height),
             Self::AroundPlus(scene) => scene.resize(width, height),
             Self::SquareTunnel(scene) => scene.resize(width, height),
@@ -552,6 +552,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.update(dt, audio),
             Self::Sun(scene) => scene.update(dt, audio),
             Self::Earth(scene) => scene.update(dt, audio),
+            Self::TheCave(scene) => scene.update(dt, audio),
             Self::HollowCube(scene) => scene.update(dt, audio),
             Self::AttractorParticles(scene) => scene.update(dt, audio),
             Self::DvdRoom(scene) => scene.update(dt, audio),
@@ -561,7 +562,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.update(dt, audio),
             Self::SoundCube(scene) => scene.update(dt, audio),
             Self::WaterRipple(scene) => scene.update(dt, audio),
-            Self::GlassLens(scene) => scene.update(dt, audio),
             Self::Mycelium(scene) => scene.update(dt, audio),
             Self::AroundPlus(scene) => scene.update(dt, audio),
             Self::SquareTunnel(scene) => scene.update(dt, audio),
@@ -588,6 +588,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.render(encoder, target),
             Self::Sun(scene) => scene.render(encoder, target),
             Self::Earth(scene) => scene.render(encoder, target),
+            Self::TheCave(scene) => scene.render(encoder, target),
             Self::HollowCube(scene) => scene.render(encoder, target),
             Self::AttractorParticles(scene) => scene.render(encoder, target),
             Self::DvdRoom(scene) => scene.render(encoder, target),
@@ -597,7 +598,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.render(encoder, target),
             Self::SoundCube(scene) => scene.render(encoder, target),
             Self::WaterRipple(scene) => scene.render(encoder, target),
-            Self::GlassLens(scene) => scene.render(encoder, target),
             Self::Mycelium(scene) => scene.render(encoder, target),
             Self::AroundPlus(scene) => scene.render(encoder, target),
             Self::SquareTunnel(scene) => scene.render(encoder, target),
@@ -620,6 +620,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.dispose(),
             Self::Sun(scene) => scene.dispose(),
             Self::Earth(scene) => scene.dispose(),
+            Self::TheCave(scene) => scene.dispose(),
             Self::HollowCube(scene) => scene.dispose(),
             Self::AttractorParticles(scene) => scene.dispose(),
             Self::DvdRoom(scene) => scene.dispose(),
@@ -629,7 +630,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.dispose(),
             Self::SoundCube(scene) => scene.dispose(),
             Self::WaterRipple(scene) => scene.dispose(),
-            Self::GlassLens(scene) => scene.dispose(),
             Self::Mycelium(scene) => scene.dispose(),
             Self::AroundPlus(scene) => scene.dispose(),
             Self::SquareTunnel(scene) => scene.dispose(),
@@ -652,6 +652,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.props(),
             Self::Sun(scene) => scene.props(),
             Self::Earth(scene) => scene.props(),
+            Self::TheCave(scene) => scene.props(),
             Self::HollowCube(scene) => scene.props(),
             Self::AttractorParticles(scene) => scene.props(),
             Self::DvdRoom(scene) => scene.props(),
@@ -661,7 +662,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.props(),
             Self::SoundCube(scene) => scene.props(),
             Self::WaterRipple(scene) => scene.props(),
-            Self::GlassLens(scene) => scene.props(),
             Self::Mycelium(scene) => scene.props(),
             Self::AroundPlus(scene) => scene.props(),
             Self::SquareTunnel(scene) => scene.props(),
@@ -684,6 +684,7 @@ impl Point10Scene for Point10SceneKind {
             Self::LatentBackrooms(scene) => scene.meta(),
             Self::Sun(scene) => scene.meta(),
             Self::Earth(scene) => scene.meta(),
+            Self::TheCave(scene) => scene.meta(),
             Self::HollowCube(scene) => scene.meta(),
             Self::AttractorParticles(scene) => scene.meta(),
             Self::DvdRoom(scene) => scene.meta(),
@@ -693,7 +694,6 @@ impl Point10Scene for Point10SceneKind {
             Self::Boxy(scene) => scene.meta(),
             Self::SoundCube(scene) => scene.meta(),
             Self::WaterRipple(scene) => scene.meta(),
-            Self::GlassLens(scene) => scene.meta(),
             Self::Mycelium(scene) => scene.meta(),
             Self::AroundPlus(scene) => scene.meta(),
             Self::SquareTunnel(scene) => scene.meta(),
@@ -2260,7 +2260,6 @@ mod tests {
                 "Point10 Wormhole",
                 "Point10 It Is Coming For You",
                 "Point10 Water Ripple",
-                "Point10 Glass Lens",
                 "Point10 Mycelium",
                 "Point10 Around Plus",
                 "Point10 Ultra HDR",
@@ -2277,6 +2276,7 @@ mod tests {
                 "Point10 Latent Backrooms",
                 "Point10 Sun",
                 "Point10 Earth",
+                "Point10 The Cave",
             ]
         );
 
@@ -3279,8 +3279,7 @@ void main() { gl_FragColor = vec4(1.0); }
     }
 
     /// Exact bucket counts from the legacy manifest. Kept under the original
-    /// guard name because `docs/rust-hybrid-review.md` and the e2e parity spec
-    /// reference it; the name-set check lives in
+    /// guard name for compatibility with the e2e manifest; the name-set check lives in
     /// [`module_registry_matches_the_legacy_manifest`].
     #[test]
     fn registered_module_count_matches_the_parity_baseline() {

@@ -39,10 +39,12 @@ VmodV is a vjing app — with a timeline, **Scenes** and **Performance**.
   MilkDrop presets; audio-reactive inputs, MIDI, OSC, NDI and video capture.
 
 > **License note:** VmodV's own code is MIT-licensed. It also bundles
-> third-party modules and assets that are **not** MIT — several Shadertoy
-> modules and the Point10/Plane9 scene ports are CC BY-NC-SA (no commercial
-> use, share-alike). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for
-> the full per-file attribution before redistributing or selling a build.
+> third-party modules and assets under other terms: several Shadertoy modules
+> and the Point10 scenes adapted from Plane9 presets are CC BY-NC-SA (no
+> commercial use, share-alike), while other Point10 scenes come from MIT-
+> licensed three.js/CodePen demos or are first-party MIT. See
+> [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full per-file
+> attribution before redistributing or selling a build.
 > MilkDrop `.mlk` presets are **not** bundled; user-supplied presets are read in
 > place and never redistributed — see
 > [docs/milkdrop-presets.md](docs/milkdrop-presets.md).

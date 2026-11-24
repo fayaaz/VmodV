@@ -1,6 +1,12 @@
 //! Water Ripple — Rust/wgpu port of
 //! `src/renderer/src/application/point10/scenes/WaterRipple.js`.
 //!
+//! The upstream fragment shader is itself a near-verbatim adaptation of
+//! Filip Zrnzevic's CodePen "[threejs/shaders] Water Ripple Effect with Audio"
+//! (<https://codepen.io/filipz/pen/WbvmvBM>), whose license page grants MIT.
+//! The water height field comes from `shared/water_wave.rs` (jeantimex/
+//! threejs-water, MIT). See `THIRD_PARTY_NOTICES.md`.
+//!
 //! A fullscreen shader over the CPU water height field
 //! ([`crate::point10::shared::water_wave::WaveSim`]): the field distorts a
 //! swirling concentric-ring pattern, eight expanding impact rings are

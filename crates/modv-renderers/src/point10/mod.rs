@@ -1,5 +1,4 @@
 //! Point10 scenes — port of `src/renderer/src/application/point10/`.
-//! See docs/rust-hybrid.md, "WS-7 Point10 scenes".
 //!
 //! # Layout
 //!
@@ -21,17 +20,18 @@
 //!                          configure
 //!   scenes/                ParticleField, SpiralParticles, Waveform, SquareTunnel,
 //!                          LightTunnel, Wormhole, ItIsComingForYou, WaterRipple,
-//!                          GlassLens, Mycelium, AroundPlus, UltraHdr, MirrorCube,
+//!                          Mycelium, AroundPlus, UltraHdr, MirrorCube,
 //!                          ColorCube, Boxy, SoundCube, HollowCube,
-//!                          RollingFire, BallOfFire, SmokeRoom, LatentBackrooms
+//!                          RollingFire, BallOfFire, SmokeRoom, LatentBackrooms,
+//!                          TheCave
 //!                          (+ the cube_mesh, particle_quad and fire_common
 //!                          helpers)
 //! ```
 //!
 //! # Batch order
 //!
-//! The port follows the inventory order in docs/rust-hybrid.md (dependency
-//! order, not complexity):
+//! The port follows the legacy inventory order (dependency order, not
+//! complexity):
 //!
 //! | Batch | Scenes | Why here |
 //! |------:|--------|----------|
@@ -40,10 +40,11 @@
 //! | — | postfx chain | 20 of 26 scenes use `EffectComposer` (RenderPass → UnrealBloom → ShaderPass → OutputPass) |
 //! | 1 | **ChromaticWave**, ParticleField, SpiralParticles, Waveform | uses everything above, no `P9Glsl`/texture assets |
 //! | 2 | **SquareTunnel**, LightTunnel, Wormhole, ItIsComingForYou | needs `plane9/P9Glsl` + `shared/textures` + `shared/random` |
-//! | 3 | WaterRipple, GlassLens, Mycelium, AroundPlus | needs `shared/waterWave`, `shared/phraseColor`, `shared/assets` |
+//! | 3 | WaterRipple, Mycelium, AroundPlus | needs `shared/waterWave`, `shared/phraseColor`, `shared/assets` |
 //! | 4 | **UltraHDR**, MirrorCube, ColorCube, Boxy, SoundCube | `P9Glsl` lighting (`shared/p9_shading`), `BoxGeometry`, `preserveBloomAlpha` |
 //! | 5a | HollowCube, AttractorParticles, DvdRoom | first of the WebGPU/TSL group; DvdRoom runs the ported volume simulation |
 //! | 5b | RollingFire, BallOfFire, SmokeRoom, LatentBackrooms | adds the Afterimage pass; RollingFire, Ball of Fire and SmokeRoom run the ported volume simulation |
+//! | 6 | TheCave | Plane9 XML preset with its own raymarch/RTT/bloom/ACES chain |
 //!
 //! ChromaticLine was ported ahead of this batch (`chromatic_line.rs`, a
 //! fixture-driven port with its own `SyntheticSine`); it now shares its
@@ -579,13 +580,14 @@ impl UnitQuad {
 /// `ChromaticLine, ChromaticWave, ParticleField, SpiralParticles, Waveform`
 /// (ChromaticLine was ported ahead of batch 1; the rest are batch 1), then the
 /// batch-2 scenes `SquareTunnel, LightTunnel, Wormhole, ItIsComingForYou`, the
-/// batch-3 scenes `WaterRipple, GlassLens, Mycelium, AroundPlus` (inventory
+/// batch-3 scenes `WaterRipple, Mycelium, AroundPlus` (inventory
 /// order 10, 11, 17, 18), the batch-4 scenes `UltraHDR, MirrorCube,
 /// ColorCube, Boxy, SoundCube` (inventory order 12, 14, 15, 16, 19) and the
 /// batch-5a scenes `HollowCube, AttractorParticles, DvdRoom`, and the batch-5b
 /// scenes `RollingFire, SmokeRoom, LatentBackrooms`, plus
-/// `BallOfFire` (the frozen RollingFire variant), `Sun` and `Earth` (the
-/// Planet9 scene batch) — the complete 27-scene set.
+/// `BallOfFire` (the frozen RollingFire variant), `Sun`, `Earth` and `TheCave`
+/// (the Plane9 scene batch) — the complete 27-scene set. Glass Lens is not
+/// registered: its upstream CodePen does not state a licence.
 pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
     vec![
         Box::new(chromatic::line::ChromaticLine::new()),
@@ -598,7 +600,6 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::wormhole::Wormhole::new()),
         Box::new(scenes::it_is_coming_for_you::ItIsComingForYou::new()),
         Box::new(scenes::water_ripple::WaterRipple::new()),
-        Box::new(scenes::glass_lens::GlassLens::new()),
         Box::new(scenes::mycelium::Mycelium::new()),
         Box::new(scenes::around_plus::AroundPlus::new()),
         Box::new(scenes::ultra_hdr::UltraHdr::new()),
@@ -615,6 +616,7 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::latent_backrooms::LatentBackrooms::new()),
         Box::new(scenes::sun::Sun::new()),
         Box::new(scenes::earth::Earth::new()),
+        Box::new(scenes::the_cave::TheCave::new()),
     ]
 }
 
@@ -637,29 +639,36 @@ mod tests {
         assert_eq!(scenes[6].name(), "Point10 Light Tunnel");
         assert_eq!(scenes[7].name(), "Point10 Wormhole");
         assert_eq!(scenes[8].name(), "Point10 It Is Coming For You");
-        // Batch 3, in the WS-7 inventory order (10, 11, 17, 18).
+        // Batch 3. Glass Lens was removed: its upstream CodePen does not
+        // state a licence, so the scene is not redistributed.
         assert_eq!(scenes[9].name(), "Point10 Water Ripple");
-        assert_eq!(scenes[10].name(), "Point10 Glass Lens");
-        assert_eq!(scenes[11].name(), "Point10 Mycelium");
-        assert_eq!(scenes[12].name(), "Point10 Around Plus");
+        assert_eq!(scenes[10].name(), "Point10 Mycelium");
+        assert_eq!(scenes[11].name(), "Point10 Around Plus");
         // Batch 4, in the WS-7 inventory order (12, 14, 15, 16, 19).
-        assert_eq!(scenes[13].name(), "Point10 Ultra HDR");
-        assert_eq!(scenes[14].name(), "Point10 Mirror Cube");
-        assert_eq!(scenes[15].name(), "Point10 Color Cube");
-        assert_eq!(scenes[16].name(), "Point10 Boxy");
-        assert_eq!(scenes[17].name(), "Point10 Sound Cube");
+        assert_eq!(scenes[12].name(), "Point10 Ultra HDR");
+        assert_eq!(scenes[13].name(), "Point10 Mirror Cube");
+        assert_eq!(scenes[14].name(), "Point10 Color Cube");
+        assert_eq!(scenes[15].name(), "Point10 Boxy");
+        assert_eq!(scenes[16].name(), "Point10 Sound Cube");
         // Batch 5a.
-        assert_eq!(scenes[18].name(), "Point10 Hollow Cube");
-        assert_eq!(scenes[19].name(), "Point10 Attractor Particles");
-        assert_eq!(scenes[20].name(), "Point10 DVD Room");
+        assert_eq!(scenes[17].name(), "Point10 Hollow Cube");
+        assert_eq!(scenes[18].name(), "Point10 Attractor Particles");
+        assert_eq!(scenes[19].name(), "Point10 DVD Room");
         // Batch 5b — the last four of the 25 vendored scenes, plus the
         // Ball of Fire wrapper (the frozen RollingFire subclass).
-        assert_eq!(scenes[21].name(), "Point10 Rolling Fire");
-        assert_eq!(scenes[22].name(), "Point10 Ball Of Fire");
-        assert_eq!(scenes[23].name(), "Point10 Smoke Room");
-        assert_eq!(scenes[24].name(), "Point10 Latent Backrooms");
-        assert_eq!(scenes[25].name(), "Point10 Sun");
-        assert_eq!(scenes[26].name(), "Point10 Earth");
+        assert_eq!(scenes[20].name(), "Point10 Rolling Fire");
+        assert_eq!(scenes[21].name(), "Point10 Ball Of Fire");
+        assert_eq!(scenes[22].name(), "Point10 Smoke Room");
+        assert_eq!(scenes[23].name(), "Point10 Latent Backrooms");
+        assert_eq!(scenes[24].name(), "Point10 Sun");
+        assert_eq!(scenes[25].name(), "Point10 Earth");
+        assert_eq!(scenes[26].name(), "Point10 The Cave");
+        assert!(
+            scenes
+                .iter()
+                .all(|scene| scene.name() != "Point10 Glass Lens"),
+            "Glass Lens must not be registered: its upstream licence is unstated"
+        );
     }
 
     #[test]

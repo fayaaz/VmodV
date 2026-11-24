@@ -1,7 +1,6 @@
 //! Shared helpers for the Point10 scene port (`point10/shared/`).
 //!
-//! Ported so far (the batch-1/2 dependency sets, see docs/rust-hybrid.md
-//! "Port order rationale"):
+//! Ported in dependency order (batch 1/2 first):
 //!
 //! | JS source | Rust module | Used by |
 //! |-----------|-------------|---------|
@@ -11,7 +10,7 @@
 //! | `plane9/P9Glsl.js` (the lighting/colour half) | [`p9_shading`] | Boxy, ColorCube |
 //! | `shared/phraseColor.js` | [`phrase_color`] | WaterRipple, Mycelium, AroundPlus |
 //! | `shared/waterWave.js` | [`water_wave`] | WaterRipple, AroundPlus |
-//! | `shared/textures.js` (the loader half) | [`assets`] | GlassLens, AroundPlus, Boxy, UltraHDR |
+//! | `shared/textures.js` (the loader half) | [`assets`] | AroundPlus, Boxy, UltraHDR |
 //!
 //! `plane9/P9Audio.js` is deliberately **not** here: it is subsumed by
 //! [`crate::point10::audio_bridge::P10Audio`] (see the module docs there).

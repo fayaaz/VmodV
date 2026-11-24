@@ -659,14 +659,6 @@
           "notes": ""
         },
         {
-          "name": "Point10 Glass Lens draws through the Point10 adapter",
-          "status": "covered",
-          "rust": [
-            "crates/modv-renderers/src/point10/scene_tests.rs:glass_lens_renders"
-          ],
-          "notes": ""
-        },
-        {
           "name": "Point10 Ultra HDR draws through the Point10 adapter",
           "status": "covered",
           "rust": [

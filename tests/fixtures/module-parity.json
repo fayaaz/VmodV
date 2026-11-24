@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a VmodV-only 2D module added with start/finish playback trims (not present in the legacy registrations).",
+  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a VmodV-only 2D module added with start/finish playback trims (not present in the legacy registrations); Point10 The Cave is a VmodV-only port of the Plane9 preset from ../Point10.",
   "counts": {
     "twoD": 16,
     "point10": 27,
@@ -37,7 +37,6 @@
     "Point10 Color Cube",
     "Point10 DVD Room",
     "Point10 Earth",
-    "Point10 Glass Lens",
     "Point10 Hollow Cube",
     "Point10 It Is Coming For You",
     "Point10 Latent Backrooms",
@@ -51,6 +50,7 @@
     "Point10 Spiral Particles",
     "Point10 Square Tunnel",
     "Point10 Sun",
+    "Point10 The Cave",
     "Point10 Ultra HDR",
     "Point10 Water Ripple",
     "Point10 Waveform",

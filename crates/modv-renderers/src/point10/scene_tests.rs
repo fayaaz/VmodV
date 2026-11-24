@@ -540,26 +540,6 @@ fn water_ripple_keeps_the_corners_transparent() {
 }
 
 #[test]
-fn glass_lens_renders() {
-    let mut scene = crate::point10::scenes::glass_lens::GlassLens::new();
-    let Some(pixels) = render_owned_chain_two_frames(&mut scene, SIZE) else {
-        return;
-    };
-    assert!(
-        any_lit(&pixels),
-        "GlassLens produced an empty frame at {SIZE}x{SIZE}"
-    );
-    // Outside the glass block the frame is the Chromatic Wave backdrop, whose
-    // alpha fades away from the line, so the scene still composites.
-    let (transparent, opaque, _) = alpha_counts(&pixels);
-    assert!(
-        transparent > 0,
-        "the backdrop lost its transparent background"
-    );
-    assert!(opaque > 0, "the glass block must be opaque");
-}
-
-#[test]
 fn mycelium_renders() {
     let mut scene = crate::point10::scenes::mycelium::Mycelium::new();
     let Some(pixels) = render_owned_chain_two_frames(&mut scene, SIZE) else {

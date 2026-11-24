@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 const MANIFEST: &str = include_str!("../../../tests/e2e-rust/parity.json");
-const EXPECTED_TESTS: usize = 147;
-const EXPECTED_COVERED: usize = 137;
+const EXPECTED_TESTS: usize = 146;
+const EXPECTED_COVERED: usize = 136;
 const EXPECTED_WAIVED: usize = 10;
 
 fn repo_root() -> PathBuf {

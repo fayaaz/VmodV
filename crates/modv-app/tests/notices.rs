@@ -16,8 +16,8 @@
 //!
 //! It also pins the specific attribution corrections the JS guard used to
 //! cover (st_Ms2SD1, spherical-shader-tut, Perlin Transition, Helix Eye,
-//! Traced Tunnel, the PCB texture and Around Plus) and the README licence
-//! badge, so those do not regress when the notices are edited.
+//! Traced Tunnel and Around Plus), the Point10 scenes' provenance table, and
+//! the README licence badge, so those do not regress when the notices are edited.
 //!
 //! Run with:
 //!
@@ -28,6 +28,8 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use modv_renderers::point10::all_scenes;
 
 const NOTICES: &str = include_str!("../../../THIRD_PARTY_NOTICES.md");
 const CARGO_LOCK: &str = include_str!("../../Cargo.lock");
@@ -618,15 +620,14 @@ fn milkdrop_ncsa_fixture_is_detected_and_named_in_the_notices() {
 #[test]
 fn milkdrop_presets_guide_is_linked_and_has_required_sections() {
     const DOC: &str = "docs/milkdrop-presets.md";
-    const PARITY: &str = include_str!("../../../docs/vmodv-parity-map.md");
 
     assert!(
         README.contains(DOC),
         "the README licence note must link {DOC}"
     );
     assert!(
-        PARITY.contains(DOC),
-        "the third-party-loading item in docs/vmodv-parity-map.md must link {DOC}"
+        NOTICES.contains(DOC),
+        "THIRD_PARTY_NOTICES.md must link {DOC}"
     );
 
     let path = repo_root().join(DOC);
@@ -704,9 +705,6 @@ fn specific_attribution_corrections_are_pinned() {
         }
     }
 
-    assert!(NOTICES.contains("pcb.jpg"), "PCB texture is unnamed");
-    assert!(NOTICES.contains("Miguel Alba"), "PCB author is uncredited");
-
     assert!(
         NOTICES.contains("crates/modv-renderers/src/point10/scenes/around_plus.rs"),
         "Around Plus must stay credited after the JS tree is removed"
@@ -731,6 +729,71 @@ fn specific_attribution_corrections_are_pinned() {
         NOTICES.contains("Ada Lovelace"),
         "the MilkDrop notice-guard fixture's credited author must be pinned"
     );
+}
+
+#[test]
+fn point10_notices_classify_every_registered_scene_by_provenance() {
+    const SECTION: &str = "Point10 scenes";
+
+    let section = notices_section(SECTION);
+    let mut names: Vec<&str> = all_scenes()
+        .iter()
+        .map(|scene| {
+            scene
+                .name()
+                .strip_prefix("Point10 ")
+                .unwrap_or(scene.name())
+        })
+        .collect();
+    names.sort_unstable();
+
+    // Every registered scene needs a row in the Point10 notices, otherwise the
+    // UI's licence label and the notices can disagree about its provenance.
+    for name in names {
+        assert!(
+            section.contains(name),
+            "registered Point10 scene {name:?} has no row in the notices"
+        );
+    }
+
+    // Glass Lens was dropped: its upstream CodePen states no licence, and its
+    // only bundled asset (pcb.jpg, unverified licence) went with it. A note
+    // explaining the removal is fine; a provenance row is not.
+    assert!(
+        !section
+            .lines()
+            .any(|line| line.starts_with("| Glass Lens |")),
+        "removed Glass Lens must not keep a provenance row in the notices"
+    );
+    assert!(
+        !NOTICES.contains("pcb.jpg"),
+        "the removed pcb.jpg asset must not stay in the notices"
+    );
+
+    // The old blanket claim made every scene look like a Plane9/NC-SA port.
+    assert!(
+        !section.contains("The Point10 scene ports are adapted from"),
+        "the notices must not blanket all Point10 scenes as Plane9 ports"
+    );
+
+    for fact in [
+        "Joakim Dahl",
+        "Plane9",
+        "three.js",
+        "MIT",
+        "webgpu_tsl_compute_attractors_particles",
+        "Filip Zrnzevic",
+        "codepen.io/filipz/pen/WbvmvBM",
+        "E. T. Carter",
+        "GLSL Sample027",
+        "jeantimex/threejs-water",
+        "first-party",
+    ] {
+        assert!(
+            section.contains(fact),
+            "the Point10 notices must record provenance fact {fact:?}"
+        );
+    }
 }
 
 #[test]

@@ -2300,13 +2300,13 @@ pub struct ModuleMetaView {
 
 /// The licence shown for a module in its info window.
 ///
-/// Third-party terms are recorded in `THIRD_PARTY_NOTICES.md`: bundled ISF and
-/// Point10 modules are Shadertoy/Plane9 derivatives under the share-alike terms
-/// used there. The Point10 scene ports are registered under their full
-/// `Point10 `-prefixed names; their own headers state the licence version, and
-/// the per-scene table in the notices records which are 4.0 and which are 3.0.
-/// Modules whose provenance is not in that table direct the reader there
-/// instead of making up a licence.
+/// Third-party terms are recorded in `THIRD_PARTY_NOTICES.md`. Point10 scenes
+/// are registered under their full `Point10 `-prefixed names and are classified
+/// by provenance there: the Plane9 ports keep Plane9's share-alike terms, the
+/// three.js/CodePen-derived scenes are MIT, and the visuals written for Point10
+/// are first-party MIT. Only the Plane9 group has a version stated in its
+/// ported file, so an unlisted Point10 scene must not inherit the generic
+/// "Shadertoy default" fallback below.
 ///
 /// The labels are assembled with `concat!` so this first-party file does not
 /// trip the source scan in `crates/modv-app/tests/notices.rs`, which requires
@@ -2314,29 +2314,49 @@ pub struct ModuleMetaView {
 /// Splitting the literals renders the same text as a single literal would.
 pub fn module_license(meta: &ModuleMetaView) -> &'static str {
     // Point10 scenes are registered under their full `Point10 `-prefixed names.
-    // Match the suffix once; scenes not listed here fall through to the
-    // provenance-based labels below, exactly as any other module would.
+    // Match the suffix once and return directly: every registered scene has an
+    // explicit provenance, so none may fall through to the Shadertoy default.
     if let Some(name) = meta.name.strip_prefix("Point10 ") {
-        match name {
+        return match name {
             // Plane9 ports whose own headers state 4.0.
             "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube" | "Square Tunnel"
-            | "Wormhole" | "Around Plus" => {
-                return concat!(
-                    "CC BY-NC-",
-                    "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
-                );
+            | "Wormhole" => concat!(
+                "CC BY-NC-",
+                "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+            ),
+            // Plane9 ports whose own headers state 3.0 (The Cave included:
+            // Plane9 by Joakim Dahl, itself based on BoyC's Shadertoy scene).
+            "Color Cube" | "It Is Coming For You" | "Light Tunnel" | "Sun" | "The Cave" => concat!(
+                "CC BY-NC-",
+                "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+            ),
+            // "Around And Around"'s version is unverified upstream, but the
+            // preset's attribution and share-alike terms still bind the port.
+            "Around Plus" => concat!(
+                "CC BY-NC-",
+                "SA (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+            ),
+            // three.js examples: MIT, with the upstream example credited.
+            "Attractor Particles"
+            | "Ball Of Fire"
+            | "DVD Room"
+            | "Rolling Fire"
+            | "Smoke Room"
+            | "Ultra HDR" => "MIT (three.js example; see THIRD_PARTY_NOTICES.md)",
+            // Other permissive third-party shaders.
+            "Chromatic Line" | "Chromatic Wave" => {
+                "MIT (CodePen GLSL Sample027 / Web_yuki1027; see THIRD_PARTY_NOTICES.md)"
             }
-            // Plane9 ports whose own headers state 3.0. Kept distinct from the
-            // generic "Shadertoy default" fallback below: their version is
-            // stated in the ported file, not assumed from the site default.
-            "Color Cube" | "Sun" | "Light Tunnel" | "It Is Coming For You" => {
-                return concat!(
-                    "CC BY-NC-",
-                    "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
-                );
+            "Mycelium" => "MIT (E. T. Carter / shader.gallery; see THIRD_PARTY_NOTICES.md)",
+            "Water Ripple" => {
+                "MIT (CodePen Water Ripple Effect with Audio / Filip Zrnzevic; see THIRD_PARTY_NOTICES.md)"
             }
-            _ => {}
-        }
+            // Visuals written for Point10; VmodV's own code is MIT.
+            "Latent Backrooms" | "Particle Field" | "Spiral Particles" | "Waveform" => {
+                "MIT (first-party Point10 visual; see THIRD_PARTY_NOTICES.md)"
+            }
+            _ => "See THIRD_PARTY_NOTICES.md for third-party licence terms",
+        };
     }
 
     match meta.name.as_str() {
@@ -3819,21 +3839,22 @@ mod tests {
         assert!(!user.is_gallery());
     }
 
-    /// The licence lookup must key on the *registered* scene name, which
-    /// carries the `Point10 ` prefix (`SceneMeta::for_scene` in
-    /// modv-renderers). `THIRD_PARTY_NOTICES.md` records the per-scene version:
-    /// Boxy/Earth/Hollow Cube/Mirror Cube/Sound Cube/Square Tunnel/Wormhole are
-    /// 4.0 (stated in file) while Color Cube/Sun/Light Tunnel/It Is Coming For
-    /// You are 3.0 (stated in file). None of them is a shader whose version is
-    /// merely the site default, so none may show that generic fallback text.
+    /// The licence lookup must key on the *registered* `Point10 ` name and
+    /// follow that scene's actual provenance (`THIRD_PARTY_NOTICES.md`).
+    /// Only the Plane9 ports keep their share-alike terms; the three.js/
+    /// CodePen-derived scenes are MIT, and the visuals written for Point10
+    /// are first-party MIT.
+    /// Every registered scene must avoid the generic "Shadertoy default" label
+    /// that used to be handed to all of them via `module_type == "2d"`.
     ///
     /// The expected licence fragments are assembled with `concat!` so this
     /// first-party file does not carry a literal NC-SA marker that the
     /// `crates/modv-app/tests/notices.rs` source scan would flag.
     #[test]
-    fn module_license_uses_registered_point10_names_and_notice_versions() {
+    fn point10_module_licenses_follow_provenance() {
         let v4 = concat!("CC BY-NC-", "SA 4.0");
         let v3 = concat!("CC BY-NC-", "SA 3.0");
+        let ncsa = concat!("CC BY-NC-", "SA");
         let generic = concat!("Shadertoy", " default");
         let point10 = |name: &str| ModuleMetaView {
             name: name.to_string(),
@@ -3842,6 +3863,27 @@ mod tests {
             ..ModuleMetaView::default()
         };
 
+        let mut checked = Vec::new();
+        let mut check = |name: &str, expected: &str, forbidden: &[&str]| {
+            let licence = module_license(&point10(name));
+            assert!(
+                licence.contains(expected),
+                "{name}: expected {expected:?} in the licence, got {licence:?}"
+            );
+            for marker in forbidden {
+                assert!(
+                    !licence.contains(marker),
+                    "{name}: licence must not claim {marker:?}: {licence:?}"
+                );
+            }
+            assert!(
+                !licence.contains(generic),
+                "{name}: Point10 scenes must not show the generic {generic:?} licence: {licence:?}"
+            );
+            checked.push(name.to_string());
+        };
+
+        // Plane9 ports: the version is stated in the ported file.
         for name in [
             "Point10 Boxy",
             "Point10 Earth",
@@ -3851,32 +3893,51 @@ mod tests {
             "Point10 Square Tunnel",
             "Point10 Wormhole",
         ] {
-            let licence = module_license(&point10(name));
-            assert!(
-                licence.contains(v4),
-                "{name}: expected the 4.0 Plane9 licence, got {licence:?}"
-            );
-            assert!(
-                !licence.contains(generic),
-                "{name}: a Plane9 port must not show the generic {generic:?} licence: {licence:?}"
-            );
+            check(name, v4, &[v3]);
         }
-
         for name in [
             "Point10 Color Cube",
-            "Point10 Sun",
-            "Point10 Light Tunnel",
             "Point10 It Is Coming For You",
+            "Point10 Light Tunnel",
+            "Point10 Sun",
+            "Point10 The Cave",
         ] {
-            let licence = module_license(&point10(name));
-            assert!(
-                licence.contains(v3),
-                "{name}: expected the stated-in-file 3.0 licence, got {licence:?}"
-            );
-            assert!(
-                !licence.contains(generic),
-                "{name}: a Plane9 port must not show the generic {generic:?} licence: {licence:?}"
-            );
+            check(name, v3, &[v4]);
         }
+        // Around And Around's version is unverified upstream, but its
+        // Plane9/Joakim Dahl attribution and share-alike terms still bind.
+        check("Point10 Around Plus", ncsa, &[v3, v4]);
+
+        // MIT-licensed third-party sources.
+        for name in [
+            "Point10 Attractor Particles",
+            "Point10 Ball Of Fire",
+            "Point10 Chromatic Line",
+            "Point10 Chromatic Wave",
+            "Point10 DVD Room",
+            "Point10 Mycelium",
+            "Point10 Rolling Fire",
+            "Point10 Smoke Room",
+            "Point10 Ultra HDR",
+            "Point10 Water Ripple",
+        ] {
+            check(name, "MIT", &[ncsa]);
+        }
+
+        // Original visuals made for Point10 (VmodV's MIT licence).
+        for name in [
+            "Point10 Latent Backrooms",
+            "Point10 Particle Field",
+            "Point10 Spiral Particles",
+            "Point10 Waveform",
+        ] {
+            check(name, "MIT", &[ncsa]);
+        }
+
+        assert_eq!(
+            checked.len(),
+            27,
+            "every registered Point10 scene must have a provenance label"
+        );
     }
 }

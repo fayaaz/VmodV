@@ -505,12 +505,14 @@ mod tests {
     #[test]
     fn loads_the_repo_jpeg() {
         let loader = AssetLoader::new();
-        if loader.resolve("pcb.jpg").is_none() {
+        if loader.resolve("tinore_diffuse.jpg").is_none() {
             // Packaged/CI checkout without the renderer sources: the loader's
             // fallback path is covered below.
             return;
         }
-        let image = loader.load("pcb.jpg").expect("pcb.jpg must decode");
+        let image = loader
+            .load("tinore_diffuse.jpg")
+            .expect("tinore_diffuse.jpg must decode");
         assert!(image.width > 1 && image.height > 1);
         assert_eq!(image.rgba.len(), (image.width * image.height * 4) as usize);
     }

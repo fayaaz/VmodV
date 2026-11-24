@@ -11,7 +11,6 @@
 //! | [`wormhole`] | Wormhole | `scenes/Wormhole.js` |
 //! | [`it_is_coming_for_you`] | It Is Coming For You | `scenes/ItIsComingForYou.js` |
 //! | [`water_ripple`] | Water Ripple | `scenes/WaterRipple.js` |
-//! | [`glass_lens`] | Glass Lens | `scenes/GlassLens.js` |
 //! | [`mycelium`] | Mycelium | `scenes/Mycelium.js` |
 //! | [`around_plus`] | Around Plus | `scenes/AroundPlus.js` |
 //! | [`hollow_cube`] | Hollow Cube | `scenes/HollowCube.js` |
@@ -25,6 +24,7 @@
 //! | [`rolling_fire`] | Rolling Fire / Ball Of Fire | `scenes/RollingFire.js` |
 //! | [`smoke_room`] | Smoke Room | `scenes/SmokeRoom.js` |
 //! | [`latent_backrooms`] | Latent Backrooms | `scenes/LatentBackrooms.js` |
+//! | [`the_cave`] | The Cave | `../Point10/public/plane9/xml/Nature/The Cave.xml` |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -50,7 +50,6 @@ pub mod dvd_logo;
 pub mod dvd_room;
 pub mod earth;
 pub mod fire_common;
-pub mod glass_lens;
 pub mod hollow_cube;
 pub mod it_is_coming_for_you;
 pub mod latent_backrooms;
@@ -65,6 +64,7 @@ pub mod sound_cube;
 pub mod spiral_particles;
 pub mod square_tunnel;
 pub mod sun;
+pub mod the_cave;
 pub mod ultra_hdr;
 pub mod water_ripple;
 pub mod waveform;

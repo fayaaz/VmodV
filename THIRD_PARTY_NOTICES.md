@@ -102,14 +102,22 @@ Upstream is contradictory: its `LICENSE` is CC0-1.0, while its README says the s
 
 `phreax twisted carbon` had its unused `IMPORTED` cube-map block dropped: the upstream archive ships only one of six faces and the `textureCube` sampling is commented out in the upstream shader. The evvvvil shaders' declared JPEG is bundled under its hashed filename. Three shaders needed small WGSL-translation fixes, recorded in their in-file notes: `diatribes -water cavern mod` (matrix-first rotation instead of `*=`), `phreax blue lotus` (replaced the unsupported Shadertoy `MOUSE` uniform with its declared `iMouse` input) and `phreax twisted carbon` (removed unsupported GLSL precision qualifiers/statements; temporaries for `inout` calls with `p.xy`/`p.z`) and `phreax hexflower` (a float temporary instead of passing `p.z` to an `inout` parameter, which WGSL forbids). All other shader bodies are the upstream text with only the ISF `CREDIT` field and attribution comment added.
 
-## Plane9-derived Point10 scenes
+## Point10 scenes
 
-The Point10 scene ports are adapted from **Plane9** presets by **Joakim Dahl**.
-The vendored Rust headers state CC BY-NC-SA (some presets 3.0, others 4.0 —
-the variant is recorded per scene below). The shared Rust helpers (the
-`point10/shared` modules: `p9_glsl`, `p9_shading`, `particle_alpha`,
-`particle_sprite`, `random`, `water_wave`, `phrase_color` and `assets`) are
-part of the same Plane9/Point10 port and are covered by these terms.
+The 27 registered `Point10 ...` scenes do **not** share one provenance. Only
+the Plane9 ports are share-alike; the three.js/CodePen-derived scenes are MIT,
+and the visuals written for Point10 are first-party MIT. The licences below are
+keyed to the registered scene name and are what the module info panel shows.
+Glass Lens is not shipped: its upstream CodePen states no licence.
+
+### Plane9 ports (Joakim Dahl — CC BY-NC-SA)
+
+These adapt Plane9 presets by **Joakim Dahl**. The version is stated in each
+ported file; the "Around And Around" preset behind Around Plus does not state
+one, so only the share-alike terms (not a version) are asserted for it. The
+Plane9-specific helpers in `point10/shared` (`p9_glsl`, `p9_shading`) are
+covered by these terms when used by these scenes. The Cave additionally derives
+from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 
 | Scene | Module file | License |
 | --- | --- | --- |
@@ -123,15 +131,51 @@ part of the same Plane9/Point10 port and are covered by these terms.
 | Sound Cube | `crates/modv-renderers/src/point10/scenes/sound_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Square Tunnel | `crates/modv-renderers/src/point10/scenes/square_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Sun | `crates/modv-renderers/src/point10/scenes/sun.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| The Cave | `crates/modv-renderers/src/point10/scenes/the_cave.rs` | CC BY-NC-SA 3.0 (Plane9 preset by Joakim Dahl, itself based on BoyC's Shadertoy "The Cave") |
 | Wormhole | `crates/modv-renderers/src/point10/scenes/wormhole.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Around Plus | `crates/modv-renderers/src/point10/scenes/around_plus.rs` | Rust/wgpu port by this repository's author of the Plane9 "Around And Around" preset by Joakim Dahl; the original **CC BY-NC-SA** licence and attribution still bind the derivative |
+
+### three.js examples and other permissive sources (MIT)
+
+These scenes are adaptations of permissively licensed third-party demos, not
+Plane9 presets. Attribution to the upstream author/source is retained here and
+in the ported file headers. Attractor Particles in particular is a port of the
+three.js compute-attractors example, not a Plane9 preset.
+
+| Scene | Module file | Upstream source | License |
+| --- | --- | --- | --- |
+| Attractor Particles | `crates/modv-renderers/src/point10/scenes/attractor_particles.rs` | three.js `webgpu_tsl_compute_attractors_particles` example | MIT (three.js) |
+| Rolling Fire | `crates/modv-renderers/src/point10/scenes/rolling_fire.rs` | three.js `webgpu_volume_fire` example | MIT (three.js) |
+| Ball Of Fire | `crates/modv-renderers/src/point10/scenes/rolling_fire.rs` | frozen variant of the same three.js `webgpu_volume_fire` port | MIT (three.js) |
+| Smoke Room | `crates/modv-renderers/src/point10/scenes/smoke_room.rs` | minimal fork of RollingFire's three.js-derived volume simulation | MIT (three.js lineage) |
+| DVD Room | `crates/modv-renderers/src/point10/scenes/dvd_room.rs` | inherits Smoke Room's three.js-derived simulation; DVD logo is public domain | MIT (three.js lineage); logo public domain |
+| Ultra HDR | `crates/modv-renderers/src/point10/scenes/ultra_hdr.rs` | three.js "Ultra HDR" example | MIT (three.js) |
+| Mycelium | `crates/modv-renderers/src/point10/scenes/mycelium.rs` | E. T. Carter's `shader.gallery/mycelium` fragment shader | MIT (stated upstream) |
+| Chromatic Line | `crates/modv-renderers/src/point10/chromatic/line.rs` | CodePen "GLSL Sample027" (yLgYpWM) by Web_yuki1027 | MIT (stated in upstream header) |
+| Chromatic Wave | `crates/modv-renderers/src/point10/chromatic/wave.rs` | same CodePen "GLSL Sample027" look by Web_yuki1027 | MIT (stated in upstream header) |
+| Water Ripple | `crates/modv-renderers/src/point10/scenes/water_ripple.rs` | CodePen "[threejs/shaders] Water Ripple Effect with Audio" (https://codepen.io/filipz/pen/WbvmvBM) by Filip Zrnzevic; wave simulation from `jeantimex/threejs-water` | MIT (CodePen license page and threejs-water upstream) |
+| Shared postfx passes | `crates/modv-renderers/src/point10/postfx/afterimage.rs`, `output_pass.rs`, `unreal_bloom_pass.rs` | three.js `AfterimagePass`, `OutputPass`, `UnrealBloomPass` examples | MIT (three.js) |
+| Shared wave simulation | `crates/modv-renderers/src/point10/shared/water_wave.rs` | `jeantimex/threejs-water` (itself after Evan Wallace's WebGL Water) | MIT (stated upstream) |
+
+### First-party Point10 visuals (MIT)
+
+These visuals were written for Point10 by this repository's author or an agent
+acting on their behalf, with no third-party shader source, and are covered by
+VmodV's MIT License.
+
+| Scene | Module file | License |
+| --- | --- | --- |
+| Latent Backrooms | `crates/modv-renderers/src/point10/scenes/latent_backrooms.rs` | MIT (first-party) |
+| Particle Field | `crates/modv-renderers/src/point10/scenes/particle_field.rs` | MIT (first-party) |
+| Spiral Particles | `crates/modv-renderers/src/point10/scenes/spiral_particles.rs` | MIT (first-party) |
+| Waveform | `crates/modv-renderers/src/point10/scenes/waveform.rs` | MIT (first-party) |
 
 ## Bundled assets
 
 | File | Source | Author | License |
 | --- | --- | --- | --- |
-| `resources/point10/textures/pcb.jpg` | PCB photograph bundled with the Point10/Plane9 Glass Lens scene | Miguel Alba | license variant unverified — treated as **not MIT**; see the note below |
 | `resources/point10/textures/dvd_logo.svg` | Wikimedia Commons DVD text logo, extruded by the DvdRoom scene | Wikimedia Commons contributors | public domain (stated in the ported scene) |
+| `resources/point10/textures/steel_diffuse.jpg` | Steel diffuse texture shipped with the Plane9 "The Cave" preset in `../Point10/public/plane9/data/` | not recorded upstream | source licence unverified — treated as **not MIT**; bundled only with the CC BY-NC-SA scene port |
 
 Other Point10 textures use ambientCG assets (CC0; e.g. `tinore`, `rubber002`,
 `moon_04`, `concrete044c`), Poly Haven skies (`stormy`, `spruit_sunrise`), or
