@@ -5019,12 +5019,13 @@ impl ApplicationHandler for VmodvApp {
             return;
         }
 
+        let is_redraw_requested = matches!(event, WindowEvent::RedrawRequested);
         if is_ui
             && let Some(window) = self.ui_window.clone()
             && let Some(state) = &mut self.egui_state
         {
             let response = state.on_window_event(&window, &event);
-            if response.repaint {
+            if should_request_redraw(is_redraw_requested, response.repaint) {
                 window.request_redraw();
             }
         }
@@ -5144,9 +5145,32 @@ impl ApplicationHandler for VmodvApp {
     }
 }
 
+/// Whether an egui-winit `EventResponse::repaint` should request another
+/// winit redraw.
+///
+/// `egui_winit::State::on_window_event` marks `RedrawRequested` itself as a
+/// repaint event. Forwarding that flag unconditionally makes every redraw
+/// request another one, so the event loop never sleeps.
+fn should_request_redraw(is_redraw_requested: bool, repaint: bool) -> bool {
+    repaint && !is_redraw_requested
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_redraw_request_must_not_ask_for_another_redraw() {
+        // egui-winit reports repaint=true for RedrawRequested itself; doing
+        // what it says creates a self-sustaining redraw loop that pegs a core.
+        assert!(!should_request_redraw(true, true));
+    }
+
+    #[test]
+    fn ordinary_events_still_request_a_redraw() {
+        assert!(should_request_redraw(false, true));
+        assert!(!should_request_redraw(false, false));
+    }
 
     #[test]
     fn previews_wait_for_the_interval_and_never_run_in_performance_mode() {
