@@ -440,6 +440,15 @@ impl Store {
         Arc::clone(&self.registry)
     }
 
+    /// Replace the registry with one built off the frame thread.
+    ///
+    /// User-ISF/MilkDrop rescans parse the whole corpus; building that on the
+    /// window thread stalls the output. The background builder hands back an
+    /// `Arc` that is swapped in here.
+    pub fn set_registry(&mut self, registry: Arc<ModuleRegistry>) {
+        self.registry = registry;
+    }
+
     /// A shared handle to the registry, for the compositor to build against the
     /// same module definitions (including the scanned ISF corpus).
     pub fn registry_arc(&self) -> Arc<ModuleRegistry> {
@@ -6445,6 +6454,14 @@ mod tests {
         assert_eq!(write.payload["prop"], json!("fillColor"));
         assert_eq!(write.payload["data"]["path"], json!("[r]"));
         assert_eq!(write.payload["data"]["value"], json!(0.75));
+    }
+
+    #[test]
+    fn set_registry_swaps_the_shared_handle() {
+        let mut store = Store::new();
+        let replacement = Arc::new(ModuleRegistry::builtin());
+        store.set_registry(Arc::clone(&replacement));
+        assert!(Arc::ptr_eq(&store.registry_arc(), &replacement));
     }
 
     #[test]

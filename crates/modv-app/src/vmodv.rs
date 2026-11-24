@@ -162,15 +162,6 @@ struct RowMonitorEntry {
     height: u32,
 }
 
-/// A hover preview whose GPU frame has been submitted and whose pixels are
-/// arriving asynchronously.
-struct PreviewInFlight {
-    key: String,
-    width: u32,
-    height: u32,
-    pending: crate::module_preview::PendingPreview,
-}
-
 /// A tessellated egui frame waiting for the present pass.
 struct PendingUiFrame {
     clipped: Vec<egui::ClippedPrimitive>,
@@ -410,10 +401,13 @@ pub struct VmodvApp {
     preview_textures: HashMap<String, PreviewEntry>,
     preview_order: VecDeque<String>,
     preview_error_counts: HashMap<String, u32>,
-    /// The newest hover preview waiting for GPU idle time, with its arrival
-    /// time (older requests are stale).
+    /// The newest hover preview waiting for the throttle/worker, with its
+    /// arrival time (older requests are stale).
     pending_preview: Option<(PreviewRequest, Instant)>,
-    preview_in_flight: Option<PreviewInFlight>,
+    /// Off-thread renderer for the cold preview work.
+    preview_worker: Option<crate::preview_worker::PreviewWorker>,
+    /// Key of the preview currently rendering on the worker.
+    preview_job: Option<String>,
     last_preview_at: Instant,
     /// Layer monitors keyed by performance row (the Scenes grid's per-row
     /// thumbnails).
@@ -513,6 +507,9 @@ pub struct VmodvApp {
     /// registry on startup and every rescan via
     /// [`build_module_registry_with_user_modules`].
     user_module_dirs: Vec<PathBuf>,
+    /// Off-thread rebuild of the module registry after a user ISF/MilkDrop
+    /// change.
+    registry_rescan: crate::registry_worker::RegistryRescan,
     media_watcher: Option<MediaWatcher>,
     /// The active profile's recursive image/video/palette index.
     media_library: crate::media_library::MediaLibrary,
@@ -864,6 +861,21 @@ impl VmodvApp {
         // start the undo history clean once startup has finished mutating the
         // store.
         store.clear_history();
+        // Cold previews compile shaders/initialise modules. Keep all of that off
+        // the output thread; the worker shares the engine's device/queue.
+        let preview_worker = match crate::preview_worker::PreviewWorker::new(
+            engine.device.clone(),
+            engine.queue.clone(),
+        ) {
+            Ok(worker) => {
+                worker.set_media_root(media_root.clone());
+                Some(worker)
+            }
+            Err(error) => {
+                eprintln!("ui: WARN preview worker unavailable: {error}");
+                None
+            }
+        };
 
         let mut app = Self {
             bench_deadline: cli.bench_deadline(),
@@ -897,7 +909,8 @@ impl VmodvApp {
             preview_order: VecDeque::new(),
             preview_error_counts: HashMap::new(),
             pending_preview: None,
-            preview_in_flight: None,
+            preview_worker,
+            preview_job: None,
             last_preview_at: start,
             row_monitors: HashMap::new(),
             window_state: WindowState::read(&user_data.join(WINDOW_STATE_FILENAME)),
@@ -953,6 +966,7 @@ impl VmodvApp {
             user_isf_dirs,
             user_milkdrop_dirs,
             user_module_dirs,
+            registry_rescan: crate::registry_worker::RegistryRescan::new(),
             media_watcher,
             media_library,
             library_refresh: crate::media_library::LibraryRefresh::default(),
@@ -1405,6 +1419,7 @@ impl VmodvApp {
         if self.done {
             return;
         }
+        self.apply_finished_registry_rescan();
         let now = Instant::now();
         // Pace the whole shell to the engine's configured FPS. The worker
         // renders at `fps/SET_FPS` (60 by default) and advances tween frames,
@@ -2639,6 +2654,9 @@ impl VmodvApp {
         if let (Some(compositor), Some(root)) = (self.compositor.as_mut(), root.as_deref()) {
             compositor.set_media_root(root);
         }
+        if let (Some(worker), Some(root)) = (&self.preview_worker, root.as_deref()) {
+            worker.set_media_root(root);
+        }
         self.applied_media_root = root;
     }
 
@@ -2832,33 +2850,33 @@ impl VmodvApp {
 
     /// Answer at most one queued Gallery/Scene hover preview.
     ///
-    /// Previews are deliberately off the output hot path: at most one is in
-    /// flight, it starts only after the output frame is presented and at the
-    /// throttled cadence, and its GPU read-back is drained with a non-blocking
-    /// poll on a later frame. Performance mode never starts a preview. The
-    /// result becomes an egui texture owned by the shell (bounded LRU), so the
-    /// UI reads the texture id from the next snapshot without any readback
-    /// on a merely visible tile.
+    /// Previews are deliberately off the output hot path: the isolated render
+    /// runs on [`crate::preview_worker::PreviewWorker`], the window loop only
+    /// starts one job at the throttled cadence and uploads the result when it
+    /// arrives. That keeps even a cell's first (cold) preview from stalling the
+    /// output frame. Performance mode never starts a preview.
     fn answer_preview_requests(&mut self) {
         let now = Instant::now();
-        // Drain the previous preview's map callback. This is a single
-        // non-blocking poll; the output frame never waits for the preview.
-        if let Some(in_flight) = self.preview_in_flight.as_mut() {
-            match in_flight.pending.try_finish() {
-                Ok(Some(pixels)) => {
-                    let in_flight = self.preview_in_flight.take().expect("preview in flight");
-                    self.upload_preview(in_flight.key, pixels, in_flight.width, in_flight.height);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    let in_flight = self.preview_in_flight.take().expect("preview in flight");
-                    self.record_preview_error(&in_flight.key, error);
-                }
+        // Drain any finished worker job first. This is a channel try_recv; the
+        // output frame never waits for a preview.
+        let mut results = Vec::new();
+        if let Some(worker) = &self.preview_worker {
+            while let Some(result) = worker.try_result() {
+                results.push(result);
+            }
+        }
+        for result in results {
+            if self.preview_job.as_deref() == Some(result.key.as_str()) {
+                self.preview_job = None;
+            }
+            match result.result {
+                Ok(pixels) => self.upload_preview(result.key, pixels, result.width, result.height),
+                Err(error) => self.record_preview_error(&result.key, error),
             }
         }
 
         // Keep only the newest hover. New previews are throttled, and at most
-        // one is in flight, so a burst of scroll hovers cannot pile up.
+        // one is rendering, so a burst of scroll hovers cannot pile up.
         if let Some(request) = self
             .ui_state
             .take_preview_requests()
@@ -2878,7 +2896,8 @@ impl VmodvApp {
             now,
             self.last_preview_at,
             self.store.performance_runtime().enabled,
-        ) || self.preview_in_flight.is_some()
+        ) || self.preview_job.is_some()
+            || self.preview_worker.is_none()
             || self.compositor.is_none()
         {
             return;
@@ -2892,54 +2911,67 @@ impl VmodvApp {
                 row_index,
             } => scene_preview_key(scene_id, *row_index),
         };
-        let result = {
-            let compositor = self.compositor.as_mut().expect("compositor checked above");
-            match request {
-                PreviewRequest::Module {
-                    module_name,
-                    with_output,
-                } => {
-                    let registry = self.store.registry_arc();
-                    let (width, height) = MODULE_PREVIEW_SIZE;
-                    compositor
-                        .render_module_preview_pending(
-                            registry.as_ref(),
-                            &module_name,
-                            width,
-                            height,
-                            with_output,
-                        )
-                        .map(|pending| (width, height, pending))
+        let frame = self.frame_info(None);
+        let job = match request {
+            PreviewRequest::Module {
+                module_name,
+                with_output,
+            } => {
+                let (width, height) = MODULE_PREVIEW_SIZE;
+                let base = with_output
+                    .then(|| {
+                        self.compositor
+                            .as_ref()
+                            .and_then(|compositor| compositor.main_texture_view())
+                    })
+                    .flatten();
+                crate::preview_worker::PreviewJob {
+                    key: key.clone(),
+                    kind: crate::preview_worker::PreviewJobKind::Module {
+                        registry: self.store.registry_arc(),
+                        module_name,
+                        width,
+                        height,
+                        frame,
+                        base,
+                    },
                 }
-                PreviewRequest::Scene {
-                    scene_id,
-                    row_index,
-                } => {
-                    let (width, height) = SCENE_PREVIEW_SIZE;
-                    crate::scene_preview::render_scene_preview_pending(
-                        compositor,
-                        &self.store,
-                        &scene_id,
+            }
+            PreviewRequest::Scene {
+                scene_id,
+                row_index,
+            } => {
+                let Some((scene, row_names)) = self.store.scene_preview_document(&scene_id) else {
+                    self.record_preview_error(&key, "the Scene is no longer in the store");
+                    return;
+                };
+                let (width, height) = SCENE_PREVIEW_SIZE;
+                crate::preview_worker::PreviewJob {
+                    key: key.clone(),
+                    kind: crate::preview_worker::PreviewJobKind::Scene {
+                        registry: self.store.registry_arc(),
+                        scene,
+                        row_names,
+                        scene_id,
                         row_index,
                         width,
                         height,
-                    )
-                    .map(|pending| (width, height, pending))
+                        revision: self.store.scene_list_revision(),
+                        frame,
+                    },
                 }
             }
         };
 
-        match result {
-            Ok((width, height, pending)) => {
-                self.last_preview_at = now;
-                self.preview_in_flight = Some(PreviewInFlight {
-                    key,
-                    width,
-                    height,
-                    pending,
-                });
-            }
-            Err(error) => self.record_preview_error(&key, error),
+        let Some(worker) = self.preview_worker.as_ref() else {
+            return;
+        };
+        if worker.submit(job) {
+            self.preview_job = Some(key);
+            self.last_preview_at = now;
+        } else {
+            self.preview_worker = None;
+            self.record_preview_error(&key, "the preview worker stopped");
         }
     }
 
@@ -3143,23 +3175,38 @@ impl VmodvApp {
     }
 
     /// Rebuild the module registry after a user ISF or MilkDrop change.
+    ///
+    /// The scan parses the whole corpus, so it runs on
+    /// [`crate::registry_worker::RegistryRescan`]; the finished registry is
+    /// swapped in by [`Self::apply_finished_registry_rescan`].
     fn rescan_modules(&mut self) {
-        let registry = self.store.reload_modules_with_user_modules(
-            self.isf_dir.as_deref(),
-            &self.user_isf_dirs,
-            &self.user_milkdrop_dirs,
-            &self.user_module_dirs,
-        );
+        self.registry_rescan
+            .request(crate::registry_worker::RegistrySpec {
+                isf_dir: self.isf_dir.clone(),
+                extra_isf_dirs: self.user_isf_dirs.clone(),
+                milkdrop_dirs: self.user_milkdrop_dirs.clone(),
+                user_module_dirs: self.user_module_dirs.clone(),
+            });
+        eprintln!("ui: INFO module registry rescan started in the background");
+    }
+
+    /// Adopt a background registry rebuild when it finishes.
+    fn apply_finished_registry_rescan(&mut self) {
+        let Some(registry) = self.registry_rescan.try_result() else {
+            return;
+        };
+        self.store.set_registry(Arc::clone(&registry));
         if let Some(compositor) = &mut self.compositor {
-            compositor.set_registry(registry);
+            compositor.set_registry(Arc::clone(&registry));
         }
-        let count = self
-            .store
-            .registry_arc()
-            .registered_modules()
-            .as_object()
-            .map_or(0, serde_json::Map::len);
-        eprintln!("ui: INFO user ISF rescan registered {count} modules");
+        // Count the definitions directly: building the full registered JSON
+        // here would put the corpus-sized document back on the frame thread.
+        let count = registry.shader_modules().len()
+            + registry.two_d_definitions().len()
+            + registry.point10_definitions().len()
+            + registry.isf_definitions().len()
+            + registry.milkdrop_definitions().len();
+        eprintln!("ui: INFO user ISF rescan registered {count} module definitions");
     }
 
     /// Capture the outgoing frame for a starting whole-scene transition.

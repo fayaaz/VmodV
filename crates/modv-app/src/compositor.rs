@@ -3890,7 +3890,7 @@ impl Compositor {
     }
 
     /// [`Self::render_module_preview`] without waiting for the read-back map.
-    pub(crate) fn render_module_preview_pending(
+    pub fn render_module_preview_pending(
         &mut self,
         registry: &ModuleRegistry,
         module_name: &str,

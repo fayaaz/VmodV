@@ -57,12 +57,12 @@
 //! | ISF | GLSL → WGSL translate + pipeline | pass(es) + read-back |
 //!
 //! The read-back dominates a warm request: it is a `copy_texture_to_buffer`
-//! plus `Device::poll` for `width × height × 4` bytes. The shell starts the
-//! map after the output frame is presented, keeps at most one preview in
-//! flight, and polls the callback on later frames ([`PendingPreview`]), so a
-//! hover can never block presentation on the map. Hover previews render at
-//! 128 × 72; the Gallery tile is 108 × 76, so the lower resolution is invisible
-//! at display size.
+//! plus `Device::poll` for `width × height × 4` bytes. The shell hands the
+//! whole render to [`crate::preview_worker::PreviewWorker`], which keeps at
+//! most one job in flight and polls the map with [`PendingPreview`] off the
+//! window thread, so even a cold hover cannot block presentation. Hover
+//! previews render at 128 × 72; the Gallery tile is 108 × 76, so the lower
+//! resolution is invisible at display size.
 
 use std::collections::HashMap;
 

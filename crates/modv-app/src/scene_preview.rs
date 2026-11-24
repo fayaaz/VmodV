@@ -52,10 +52,10 @@
 //! initialisation (shader pipeline / 2D `init` / Point10 scene init / ISF
 //! compile) exactly like a Gallery thumbnail. A warm request renders one frame
 //! into the preview-sized targets and starts a `width × height × 4` read-back;
-//! there is no multi-frame history. The shell answers at most one hover preview
-//! at a time (`preview/module` and `preview/scene` share the slot), after the
-//! output frame is presented, and drains the map on a later frame, so a burst
-//! of hovers cannot stall presentation.
+//! there is no multi-frame history. The shell renders scene previews on
+//! [`crate::preview_worker::PreviewWorker`], one at a time (`preview/module` and
+//! `preview/scene` share the slot), and drains the map off the window thread,
+//! so neither a cold first hover nor a burst of hovers can stall presentation.
 
 use std::sync::Arc;
 
