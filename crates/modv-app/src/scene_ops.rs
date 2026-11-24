@@ -1393,10 +1393,12 @@ impl Store {
 
     /// `scenes/copySceneCellToScene` (`scenes.js:3568-3735`).
     ///
-    /// Ctrl+drag a grid cell onto another Scene: copies the Group and Module
-    /// snapshots verbatim (ids included) plus the saved inputs, input links,
-    /// expression assignments and tweens that belong to them. Rows the target
-    /// does not define become `null` holes so row indexes stay aligned.
+    /// Ctrl+drag a grid cell onto another Scene — or onto a different row of
+    /// the same Scene — copies the Group and Module snapshots verbatim (ids
+    /// included) plus the saved inputs, input links, expression assignments
+    /// and tweens that belong to them. Dropping a cell onto itself (the same
+    /// Scene and row) is a no-op. Rows the target does not define become `null`
+    /// holes so row indexes stay aligned.
     pub fn copy_scene_cell_to_scene(
         &mut self,
         params: &Map<String, Value>,
@@ -1425,7 +1427,8 @@ impl Store {
         ) else {
             return Ok(Value::Null);
         };
-        if from_scene_id == to_scene_id {
+        // Same-cell fast path; `copy_scene_cell` repeats this guard for other callers.
+        if from_scene_id == to_scene_id && from_row == to_row {
             return Ok(Value::Null);
         }
 
@@ -7169,6 +7172,70 @@ mod tests {
             )
             .expect("empty copy dispatches");
         assert_eq!(empty, Value::Null);
+    }
+
+    #[test]
+    fn copy_scene_cell_copies_a_row_within_the_same_scene() {
+        let mut store = Store::new();
+        let mut scene = two_row_scene("scene-a");
+        scene["name"] = json!("Alpha");
+        seed_scene(&mut store, scene);
+
+        let original = find_default_scene(&store, "Alpha");
+        let source_group = original["groups"][0].clone();
+        let original_modules = original["modules"].clone();
+        assert_ne!(
+            original["groups"][0], original["groups"][1],
+            "the fixture has distinct rows"
+        );
+
+        let copied = store
+            .dispatch(
+                "scenes/copySceneCellToScene",
+                json!({
+                    "fromSceneId": "scene-a",
+                    "toSceneId": "scene-a",
+                    "fromRowIndex": 0,
+                    "toRowIndex": 1,
+                }),
+            )
+            .expect("copySceneCellToScene dispatches");
+        assert_ne!(
+            copied,
+            Value::Null,
+            "copying to a different row of the same Scene should succeed"
+        );
+
+        let alpha = find_default_scene(&store, "Alpha");
+        assert_eq!(
+            alpha["groups"][1], source_group,
+            "row 1 receives row 0's Group"
+        );
+        assert_eq!(alpha["groups"][0], source_group, "row 0 is untouched");
+        assert_eq!(
+            alpha["modules"], original_modules,
+            "the copied snapshot and the target's existing snapshot are retained"
+        );
+
+        let same_row = store
+            .dispatch(
+                "scenes/copySceneCellToScene",
+                json!({
+                    "fromSceneId": "scene-a",
+                    "toSceneId": "scene-a",
+                    "fromRowIndex": 0,
+                    "toRowIndex": 0,
+                }),
+            )
+            .expect("same-row copy dispatches");
+        assert_eq!(
+            same_row,
+            Value::Null,
+            "copying a row onto itself remains a no-op"
+        );
+        let alpha = find_default_scene(&store, "Alpha");
+        assert_eq!(alpha["groups"][0], source_group);
+        assert_eq!(alpha["groups"][1], source_group);
     }
 
     #[test]

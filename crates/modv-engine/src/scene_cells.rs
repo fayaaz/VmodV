@@ -14,12 +14,12 @@
 //!   with the rest of the Scene. Named rows look their Group up by name, so an
 //!   appended Group can live anywhere; unnamed rows are positional and pad
 //!   missing rows with `null` holes.
-//! - [`copy_scene_cell`] copies another Scene's cell into this one: the Group
-//!   verbatim, the Module snapshots it references, and only the inputs, input
-//!   links, expression assignments and tweens reachable from them. Row names
-//!   only pick the **source** Group; the write is positional
-//!   (`groups[toRowIndex]`, like the JS), pads a shorter target with `null`
-//!   holes and trims trailing holes.
+//! - [`copy_scene_cell`] copies a cell into another row of the same Scene or a
+//!   row of another Scene: the Group verbatim, the Module snapshots it
+//!   references, and only the inputs, input links, expression assignments and
+//!   tweens reachable from them. Row names only pick the **source** Group; the
+//!   write is positional (`groups[toRowIndex]`, like the JS), pads a shorter
+//!   target with `null` holes and trims trailing holes.
 //!
 
 use serde_json::{Map, Value, json};
@@ -472,7 +472,7 @@ enum TweenContainer {
 }
 
 /// `copySceneCellToScene` (`scenes.js:3568-3735`): copy one Scene's cell into
-/// another Scene's row.
+/// a row of the same Scene or of another Scene.
 ///
 /// `row_names` selects the **source** Group exactly like `getRowGroup` (named
 /// rows match by name, unnamed rows are positional). The write is positional —
@@ -483,9 +483,10 @@ enum TweenContainer {
 ///
 /// Returns the Scene fields to write back (`groups`, `modules`, `inputs`,
 /// `expressions`, and `tweens` when the target has a tween container), or
-/// `None` for the JS `return null` cases: the same Scene on both sides, a
-/// Scene that cannot be normalised, or a missing/empty source cell. Same Scene
-/// ids are compared as JS `===` on the id.
+/// `None` for the JS `return null` cases: the same Scene and the same row on
+/// both sides, a Scene that cannot be normalised, or a missing/empty source
+/// cell. Same Scene ids are compared as JS `===` on the id. Copying between
+/// different rows of one Scene is allowed and behaves like a cross-Scene copy.
 pub fn copy_scene_cell(
     from_scene: &Value,
     to_scene: &Value,
@@ -496,7 +497,7 @@ pub fn copy_scene_cell(
     let from_id = from_scene.get("id").and_then(truthy_key)?;
     let to_id = to_scene.get("id").and_then(truthy_key)?;
 
-    if from_id == to_id {
+    if from_id == to_id && from_row_index == to_row_index {
         return None;
     }
 
@@ -979,6 +980,123 @@ mod tests {
 
     fn copy(source: &Value, target: &Value, from_row: usize, to_row: usize) -> Option<Value> {
         copy_scene_cell(source, target, from_row, to_row, &[])
+    }
+
+    #[test]
+    fn copy_allows_a_different_row_of_the_same_scene() {
+        let scene = json!({
+            "id": "scene-a",
+            "groups": [
+                {
+                    "id": "g-source",
+                    "name": "Background",
+                    "enabledInputId": "i-enabled",
+                    "modules": ["m-source"],
+                },
+                {
+                    "id": "g-target",
+                    "name": "Effects",
+                    "modules": ["m-target"],
+                },
+            ],
+            "modules": {
+                "m-source": {
+                    "id": "m-source",
+                    "meta": {"enabledInputId": "i-enabled"},
+                    "$props": {"amount": {"id": "i-amount", "type": "float"}},
+                },
+                "m-target": {
+                    "id": "m-target",
+                    "$props": {"colour": {"id": "i-colour", "type": "color"}},
+                },
+            },
+            "inputs": {
+                "focusedInput": {"id": "target-focus"},
+                "inputs": {
+                    "i-enabled": {"value": true},
+                    "i-amount": {"value": 0.25},
+                    "i-colour": {"value": "red"},
+                },
+                "inputLinks": {
+                    "i-amount": {"source": "tween", "id": "tw-amount"},
+                    "i-colour": {"source": "bass"},
+                },
+            },
+            "expressions": {
+                "assignments": {
+                    "a-source": {"id": "a-source", "inputId": "i-amount"},
+                    "a-target": {"id": "a-target", "inputId": "i-colour"},
+                },
+            },
+            "tweens": [
+                {"id": "tw-amount", "duration": 2},
+                {"id": "tw-target", "duration": 4},
+            ],
+        });
+        let source_group = scene["groups"][0].clone();
+        let target_group = scene["groups"][1].clone();
+        assert_ne!(source_group, target_group, "the fixture has distinct rows");
+
+        let result = copy_scene_cell(&scene, &scene, 0, 1, &[]);
+
+        assert!(
+            result.is_some(),
+            "copying to a different row of the same Scene should succeed"
+        );
+        let data = result.unwrap();
+        assert_eq!(
+            data["groups"][1], source_group,
+            "the source Group is copied verbatim"
+        );
+        assert_eq!(
+            data["groups"][0], source_group,
+            "the source row is untouched"
+        );
+        assert_eq!(
+            data["modules"],
+            json!({
+                "m-source": scene["modules"]["m-source"],
+                "m-target": scene["modules"]["m-target"],
+            }),
+            "the source snapshot is copied alongside the target's existing snapshot"
+        );
+        assert_eq!(
+            data["inputs"]["inputs"]["i-enabled"],
+            json!({"value": true})
+        );
+        assert_eq!(data["inputs"]["inputs"]["i-amount"], json!({"value": 0.25}));
+        assert_eq!(
+            data["inputs"]["inputs"]["i-colour"],
+            json!({"value": "red"})
+        );
+        assert_eq!(
+            data["inputs"]["inputLinks"]["i-amount"],
+            json!({"source": "tween", "id": "tw-amount"})
+        );
+        assert_eq!(
+            data["inputs"]["inputLinks"]["i-colour"],
+            json!({"source": "bass"})
+        );
+        assert_eq!(data["inputs"]["focusedInput"]["id"], json!("target-focus"));
+        assert_eq!(
+            data["expressions"]["assignments"],
+            json!({
+                "a-source": {"id": "a-source", "inputId": "i-amount"},
+                "a-target": {"id": "a-target", "inputId": "i-colour"},
+            })
+        );
+        assert_eq!(
+            data["tweens"],
+            json!([
+                {"id": "tw-amount", "duration": 2},
+                {"id": "tw-target", "duration": 4},
+            ])
+        );
+
+        assert!(
+            copy_scene_cell(&scene, &scene, 0, 0, &[]).is_none(),
+            "copying a row onto itself remains a no-op"
+        );
     }
 
     #[test]
