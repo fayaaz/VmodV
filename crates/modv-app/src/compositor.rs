@@ -3752,12 +3752,27 @@ impl Compositor {
     /// (≤ 30 fps). The no-readback hot path promised by WS-2 applies to
     /// presentation; shared-memory / DMA-BUF preview transport lands later.
     pub fn read_main_rgba8(&mut self) -> Result<Vec<u8>, CompositorError> {
+        match self.begin_read_main_rgba8()? {
+            Some(pending) => pending.wait().map_err(CompositorError::ReadBack),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Start a main-texture read-back without waiting for the map.
+    pub(crate) fn begin_read_main_rgba8(
+        &mut self,
+    ) -> Result<Option<PendingReadback>, CompositorError> {
         let (width, height) = self.size;
         let Some(main) = &self.main else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
-        read_back_texture(&self.device, &self.queue, &main.texture, width, height)
-            .map_err(CompositorError::ReadBack)
+        Ok(Some(begin_read_back_texture(
+            &self.device,
+            &self.queue,
+            &main.texture,
+            width,
+            height,
+        )))
     }
 
     /// Copy the main texture into the preview ring, nearest-neighbour
@@ -3874,6 +3889,27 @@ impl Compositor {
         previews.render(registry, module_name, width, height, &frame, base.as_ref())
     }
 
+    /// [`Self::render_module_preview`] without waiting for the read-back map.
+    pub(crate) fn render_module_preview_pending(
+        &mut self,
+        registry: &ModuleRegistry,
+        module_name: &str,
+        width: u32,
+        height: u32,
+        with_output: bool,
+    ) -> Result<crate::module_preview::PendingPreview, PreviewError> {
+        let frame = self.preview_frame.clone();
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        let base = with_output
+            .then(|| self.main.as_ref().map(|main| main.view.clone()))
+            .flatten();
+        let previews = self
+            .previews
+            .get_or_insert_with(|| ModulePreviews::new(&device, &queue));
+        previews.render_pending(registry, module_name, width, height, &frame, base.as_ref())
+    }
+
     /// Render one Scene hover preview from an **isolated** copy of the Scene
     /// cell.
     ///
@@ -3910,6 +3946,30 @@ impl Compositor {
             .scene_previews
             .get_or_insert_with(|| ScenePreviews::new(&device, &queue, registry));
         previews.render(
+            scene, row_names, scene_id, row_index, width, height, revision, &frame,
+        )
+    }
+
+    /// [`Self::render_scene_preview`] without waiting for the read-back map.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_scene_preview_pending(
+        &mut self,
+        scene: &Value,
+        row_names: &[String],
+        scene_id: &str,
+        row_index: usize,
+        width: u32,
+        height: u32,
+        revision: u64,
+    ) -> Result<crate::module_preview::PendingPreview, PreviewError> {
+        let frame = self.preview_frame.clone();
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        let registry = Arc::clone(&self.registry);
+        let previews = self
+            .scene_previews
+            .get_or_insert_with(|| ScenePreviews::new(&device, &queue, registry));
+        previews.render_pending(
             scene, row_names, scene_id, row_index, width, height, revision, &frame,
         )
     }
@@ -4152,24 +4212,87 @@ pub(crate) fn clear_texture(
     queue.submit(Some(encoder.finish()));
 }
 
-/// Read a texture back as tightly packed RGBA8, padding rows to
-/// `COPY_BYTES_PER_ROW_ALIGNMENT` on the GPU and de-padding here.
+/// One texture→buffer read-back that is already submitted to the GPU.
+///
+/// Polling [`Self::try_finish`] never blocks: it drives the map callback and
+/// returns `None` until the GPU has finished. Preview surfaces use this so a
+/// hover thumbnail cannot stall the output frame on a blocking map.
+pub(crate) struct PendingReadback {
+    device: wgpu::Device,
+    buffer: wgpu::Buffer,
+    unpadded_bytes_per_row: u32,
+    padded_bytes_per_row: u32,
+    height: u32,
+    receiver: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+}
+
+impl PendingReadback {
+    /// Try to finish without blocking. `Ok(None)` means the GPU still owes us
+    /// the copy; call again on a later frame (each call polls the device).
+    pub(crate) fn try_finish(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if let Err(error) = self.device.poll(wgpu::PollType::Poll) {
+            return Err(error.to_string());
+        }
+        match self.receiver.try_recv() {
+            Ok(result) => {
+                result.map_err(|error| error.to_string())?;
+                self.read_mapped().map(Some)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("map callback channel closed".to_string())
+            }
+        }
+    }
+
+    /// Block until the copy and map complete (tests, screenshots).
+    pub(crate) fn wait(self) -> Result<Vec<u8>, String> {
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| error.to_string())?;
+        self.receiver
+            .recv()
+            .map_err(|error| format!("map callback channel closed: {error}"))?
+            .map_err(|error| error.to_string())?;
+        self.read_mapped()
+    }
+
+    fn read_mapped(&self) -> Result<Vec<u8>, String> {
+        let slice = self.buffer.slice(..);
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|error| error.to_string())?;
+        let mut out = Vec::with_capacity(
+            (u64::from(self.unpadded_bytes_per_row) * u64::from(self.height)) as usize,
+        );
+        for row in 0..u64::from(self.height) {
+            let start = (row * u64::from(self.padded_bytes_per_row)) as usize;
+            let end = start + self.unpadded_bytes_per_row as usize;
+            out.extend_from_slice(&mapped[start..end]);
+        }
+        drop(mapped);
+        self.buffer.unmap();
+        Ok(out)
+    }
+}
+
+/// Start a texture→buffer read-back as tightly packed RGBA8.
 ///
 /// Ported locally rather than reusing
 /// [`modv_render::headless::read_back_rgba8`]: that helper takes `&Engine`
 /// (instance + adapter + device + queue), while the compositor deliberately
 /// owns only cloned device/queue handles. The copy/map/poll dance is identical.
-pub(crate) fn read_back_texture(
+pub(crate) fn begin_read_back_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
     width: u32,
     height: u32,
-) -> Result<Vec<u8>, String> {
-    let unpadded_bytes_per_row = u64::from(width) * 4;
-    let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+) -> PendingReadback {
+    let unpadded_bytes_per_row = width * 4;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
-    let buffer_size = padded_bytes_per_row * u64::from(height);
+    let buffer_size = u64::from(padded_bytes_per_row) * u64::from(height);
 
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("modv-preview-read-back"),
@@ -4187,7 +4310,7 @@ pub(crate) fn read_back_texture(
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row as u32),
+                bytes_per_row: Some(padded_bytes_per_row),
                 rows_per_image: Some(height),
             },
         },
@@ -4204,26 +4327,25 @@ pub(crate) fn read_back_texture(
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .map_err(|error| error.to_string())?;
-    receiver
-        .recv()
-        .map_err(|error| format!("map callback channel closed: {error}"))?
-        .map_err(|error| error.to_string())?;
-
-    let mapped = slice
-        .get_mapped_range()
-        .map_err(|error| error.to_string())?;
-    let mut out = Vec::with_capacity((unpadded_bytes_per_row * u64::from(height)) as usize);
-    for row in 0..u64::from(height) {
-        let start = (row * padded_bytes_per_row) as usize;
-        let end = start + unpadded_bytes_per_row as usize;
-        out.extend_from_slice(&mapped[start..end]);
+    PendingReadback {
+        device: device.clone(),
+        buffer,
+        unpadded_bytes_per_row,
+        padded_bytes_per_row,
+        height,
+        receiver,
     }
-    drop(mapped);
-    buffer.unmap();
-    Ok(out)
+}
+
+/// Read a texture back synchronously (tests, screenshots and one-shot paths).
+pub(crate) fn read_back_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    begin_read_back_texture(device, queue, texture, width, height).wait()
 }
 
 /// Encode the module's prop values as the float lanes its prop buffer expects,

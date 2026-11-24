@@ -57,9 +57,12 @@
 //! | ISF | GLSL → WGSL translate + pipeline | pass(es) + read-back |
 //!
 //! The read-back dominates a warm request: it is a `copy_texture_to_buffer`
-//! plus `Device::poll` for `width × height × 4` bytes (≤ 1 MiB at 512²). The
-//! window loop caps how many previews it answers per frame so a burst of hover
-//! requests cannot stall presentation.
+//! plus `Device::poll` for `width × height × 4` bytes. The shell starts the
+//! map after the output frame is presented, keeps at most one preview in
+//! flight, and polls the callback on later frames ([`PendingPreview`]), so a
+//! hover can never block presentation on the map. Hover previews render at
+//! 128 × 72; the Gallery tile is 108 × 76, so the lower resolution is invisible
+//! at display size.
 
 use std::collections::HashMap;
 
@@ -74,8 +77,9 @@ use modv_renderers::shader::pipeline::ShaderRenderer;
 use modv_renderers::two_d::{Canvas, DrawContext, ModuleContext, TwoDModule};
 
 use crate::compositor::{
-    FrameInfo, MAX_POINT10_FRAME_SECONDS, OutputTexture, clear_texture, create_output_texture,
-    encode_props, interim_band_payload, isf_values, isf_wall_clock_date, read_back_texture,
+    FrameInfo, MAX_POINT10_FRAME_SECONDS, OutputTexture, PendingReadback, begin_read_back_texture,
+    clear_texture, create_output_texture, encode_props, interim_band_payload, isf_values,
+    isf_wall_clock_date, read_back_texture,
 };
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
 use crate::texture_sources::{ImageTextures, TextureRequest};
@@ -424,6 +428,78 @@ impl PreviewSlot {
 }
 
 /// The isolated thumbnail renderer, owned by the compositor.
+/// A preview whose pixels are on their way back from the GPU.
+///
+/// The read-back is started when the preview renders and drained with
+/// [`Self::try_finish`] on later frames, so a hover never blocks the output
+/// frame on a `map`/`poll`.
+pub struct PendingPreview {
+    readback: Option<PendingReadback>,
+    ready: Option<Vec<u8>>,
+    /// Composite over the live output (opaque alpha) instead of a thumbnail.
+    flatten: bool,
+}
+
+impl PendingPreview {
+    pub(crate) fn reading(readback: PendingReadback, flatten: bool) -> Self {
+        Self {
+            readback: Some(readback),
+            ready: None,
+            flatten,
+        }
+    }
+
+    pub(crate) fn ready(pixels: Vec<u8>, flatten: bool) -> Self {
+        Self {
+            readback: None,
+            ready: Some(pixels),
+            flatten,
+        }
+    }
+
+    /// Drive the map callback once. `Ok(None)` means the pixels are not ready
+    /// yet; call again later.
+    pub fn try_finish(&mut self) -> Result<Option<Vec<u8>>, PreviewError> {
+        if let Some(pixels) = self.ready.take() {
+            return Ok(Some(self.finish(pixels)));
+        }
+        let Some(readback) = self.readback.as_mut() else {
+            return Ok(None);
+        };
+        let Some(pixels) = readback.try_finish().map_err(PreviewError::Render)? else {
+            return Ok(None);
+        };
+        self.readback = None;
+        Ok(Some(self.finish(pixels)))
+    }
+
+    /// Block until the preview is complete (tests and synchronous callers).
+    pub fn wait(mut self) -> Result<Vec<u8>, PreviewError> {
+        if let Some(pixels) = self.ready.take() {
+            return Ok(self.finish(pixels));
+        }
+        let pixels = self
+            .readback
+            .take()
+            .ok_or_else(|| PreviewError::Render("preview has no read-back".to_string()))?
+            .wait()
+            .map_err(PreviewError::Render)?;
+        Ok(self.finish(pixels))
+    }
+
+    fn finish(&self, mut pixels: Vec<u8>) -> Vec<u8> {
+        if self.flatten {
+            // The main frame is premultiplied and presented over opaque black;
+            // a hover preview is flattened the same way so a translucent tile
+            // does not darken every coloured pixel.
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel[3] = 255;
+            }
+        }
+        pixels
+    }
+}
+
 pub struct ModulePreviews {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -532,8 +608,23 @@ impl ModulePreviews {
         frame: &FrameInfo,
         base: Option<&wgpu::TextureView>,
     ) -> Result<Vec<u8>, PreviewError> {
+        self.render_pending(registry, module_name, width, height, frame, base)?
+            .wait()
+    }
+
+    /// Render one frame and start its read-back without waiting for the map.
+    pub fn render_pending(
+        &mut self,
+        registry: &ModuleRegistry,
+        module_name: &str,
+        width: u32,
+        height: u32,
+        frame: &FrameInfo,
+        base: Option<&wgpu::TextureView>,
+    ) -> Result<PendingPreview, PreviewError> {
         let width = clamp_preview_dimension(width);
         let height = clamp_preview_dimension(height);
+        let flatten = base.is_some();
 
         if registry.kind(module_name).is_none() {
             return Err(PreviewError::ModuleNotFound(module_name.to_string()));
@@ -542,7 +633,11 @@ impl ModulePreviews {
         let volumetric = matches!(registry.kind(module_name), Some(ModuleKind::Point10))
             && Point10SceneKind::is_volumetric_name(module_name);
         if volumetric {
-            return self.render_volumetric_frame(registry, module_name, width, height, frame);
+            // A cached volumetric thumbnail is a static poster frame; the
+            // first one is expensive but later polls are a map lookup.
+            let pixels =
+                self.render_volumetric_frame(registry, module_name, width, height, frame)?;
+            return Ok(PendingPreview::ready(pixels, false));
         }
 
         let index = match self
@@ -563,27 +658,14 @@ impl ModulePreviews {
         self.draw_slot(registry, index, frame, base)?;
 
         let slot = &self.slots[index];
-        let mut pixels = read_back_texture(
+        let readback = begin_read_back_texture(
             &self.device,
             &self.queue,
             &slot.target.texture,
             width,
             height,
-        )
-        .map_err(PreviewError::Render)?;
-
-        // The main frame is premultiplied and presented over opaque black; the
-        // renderer paints previews with `putImageData`, which expects straight
-        // alpha. Flattening over black (opaque alpha, premultiplied RGB) makes
-        // a translucent hover tile look like the live output instead of
-        // alpha-darkening every coloured pixel.
-        if base.is_some() {
-            for pixel in pixels.as_chunks_mut::<4>().0 {
-                pixel[3] = 255;
-            }
-        }
-
-        Ok(pixels)
+        );
+        Ok(PendingPreview::reading(readback, flatten))
     }
 
     /// Render (once) and cache a volumetric Point10 thumbnail.
@@ -1462,6 +1544,26 @@ fn run_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ready_preview_finishes_once_and_flattens_hover_alpha() {
+        let mut preview = PendingPreview::ready(vec![10, 20, 30, 7], true);
+        assert_eq!(
+            preview.try_finish().expect("ready preview"),
+            Some(vec![10, 20, 30, 255])
+        );
+        assert!(
+            preview.try_finish().expect("finished preview").is_none(),
+            "a finished preview does not yield pixels twice"
+        );
+
+        let mut thumbnail = PendingPreview::ready(vec![10, 20, 30, 7], false);
+        assert_eq!(
+            thumbnail.try_finish().expect("ready thumbnail"),
+            Some(vec![10, 20, 30, 7]),
+            "an isolated thumbnail keeps its alpha"
+        );
+    }
 
     /// RFC 4648 §10 test vectors plus a binary case with high bytes.
     #[test]

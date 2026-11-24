@@ -51,10 +51,11 @@
 //! A cold request pays the isolated state build plus the module-kind
 //! initialisation (shader pipeline / 2D `init` / Point10 scene init / ISF
 //! compile) exactly like a Gallery thumbnail. A warm request renders one frame
-//! into the preview-sized targets and reads `width × height × 4` bytes back
-//! (≤ 675 KiB at 480 × 270); there is no multi-frame history. The window loop
-//! answers at most four preview requests per frame, shared with
-//! `preview/module`, so a burst of hovers cannot stall presentation.
+//! into the preview-sized targets and starts a `width × height × 4` read-back;
+//! there is no multi-frame history. The shell answers at most one hover preview
+//! at a time (`preview/module` and `preview/scene` share the slot), after the
+//! output frame is presented, and drains the map on a later frame, so a burst
+//! of hovers cannot stall presentation.
 
 use std::sync::Arc;
 
@@ -66,7 +67,7 @@ use modv_engine::scene_preview_data::get_scene_row_preview;
 use modv_render::wgpu;
 
 use crate::compositor::{Compositor, FrameInfo, RetainedInstances};
-use crate::module_preview::PreviewError;
+use crate::module_preview::{PendingPreview, PreviewError};
 use crate::module_registry::ModuleRegistry;
 use crate::store_ops::Store;
 
@@ -224,6 +225,26 @@ impl ScenePreviews {
         revision: u64,
         frame: &FrameInfo,
     ) -> Result<Vec<u8>, PreviewError> {
+        self.render_pending(
+            scene, row_names, scene_id, row_index, width, height, revision, frame,
+        )?
+        .wait()
+    }
+
+    /// Render one Scene preview and start its read-back without waiting for the
+    /// map callback.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_pending(
+        &mut self,
+        scene: &Value,
+        row_names: &[String],
+        scene_id: &str,
+        row_index: usize,
+        width: u32,
+        height: u32,
+        revision: u64,
+        frame: &FrameInfo,
+    ) -> Result<PendingPreview, PreviewError> {
         let width = clamp_scene_preview_dimension(width);
         let height = clamp_scene_preview_dimension(height);
 
@@ -259,9 +280,11 @@ impl ScenePreviews {
         compositor
             .render_frame_retaining(&self.slots[index].state, frame, &retained)
             .map_err(|error| PreviewError::Render(error.to_string()))?;
-        compositor
-            .read_main_rgba8()
-            .map_err(|error| PreviewError::Render(error.to_string()))
+        let readback = compositor
+            .begin_read_main_rgba8()
+            .map_err(|error| PreviewError::Render(error.to_string()))?
+            .ok_or_else(|| PreviewError::Render("scene preview has no main texture".to_string()))?;
+        Ok(PendingPreview::reading(readback, false))
     }
 
     /// Materialise (and front-insert) the isolated state for one Scene cell,
@@ -349,6 +372,30 @@ pub fn render_scene_preview(
     };
 
     compositor.render_scene_preview(
+        &scene,
+        &row_names,
+        scene_id,
+        row_index,
+        width,
+        height,
+        store.scene_list_revision(),
+    )
+}
+
+/// Resolve a Scene and start its hover preview without blocking on read-back.
+pub fn render_scene_preview_pending(
+    compositor: &mut Compositor,
+    store: &Store,
+    scene_id: &str,
+    row_index: usize,
+    width: u32,
+    height: u32,
+) -> Result<PendingPreview, PreviewError> {
+    let Some((scene, row_names)) = store.scene_preview_document(scene_id) else {
+        return Err(PreviewError::SceneNotFound(scene_id.to_string()));
+    };
+
+    compositor.render_scene_preview_pending(
         &scene,
         &row_names,
         scene_id,

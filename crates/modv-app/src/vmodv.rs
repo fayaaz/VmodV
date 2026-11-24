@@ -110,6 +110,25 @@ const OUTPUT_HEIGHT: u32 = 540;
 /// poll at all.
 const PANEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Minimum interval between hover-preview renders.
+///
+/// A preview is a read-back, so it must never compete with the live output
+/// frame. Requests are held (and a newer hover replaces them) until the main
+/// GPU queue is idle and this interval has elapsed; a thumbnail arriving a
+/// fraction of a second late is preferable to dropping output frames.
+const PREVIEW_INTERVAL: Duration = Duration::from_millis(250);
+
+/// A request older than this is stale (the pointer left the tile before the
+/// preview could be rendered).
+const PREVIEW_REQUEST_TTL: Duration = Duration::from_secs(2);
+
+/// Gallery thumbnails are 108×76; 128×72 is enough detail for the tile and a
+/// quarter of the pixels of the old 256×144 preview.
+const MODULE_PREVIEW_SIZE: (u32, u32) = (128, 72);
+
+/// Scene-grid hover cells; half the old 320×180 preview.
+const SCENE_PREVIEW_SIZE: (u32, u32) = (160, 90);
+
 /// Portal answers kept around after their request was cancelled, so a late
 /// answer is recognised as stale instead of starting a source. The one pending
 /// request is always the newest; older channels are abandoned dialogs the user
@@ -141,6 +160,15 @@ struct RowMonitorEntry {
     texture: Option<egui::TextureId>,
     width: u32,
     height: u32,
+}
+
+/// A hover preview whose GPU frame has been submitted and whose pixels are
+/// arriving asynchronously.
+struct PreviewInFlight {
+    key: String,
+    width: u32,
+    height: u32,
+    pending: crate::module_preview::PendingPreview,
 }
 
 /// A tessellated egui frame waiting for the present pass.
@@ -382,6 +410,11 @@ pub struct VmodvApp {
     preview_textures: HashMap<String, PreviewEntry>,
     preview_order: VecDeque<String>,
     preview_error_counts: HashMap<String, u32>,
+    /// The newest hover preview waiting for GPU idle time, with its arrival
+    /// time (older requests are stale).
+    pending_preview: Option<(PreviewRequest, Instant)>,
+    preview_in_flight: Option<PreviewInFlight>,
+    last_preview_at: Instant,
     /// Layer monitors keyed by performance row (the Scenes grid's per-row
     /// thumbnails).
     row_monitors: HashMap<usize, RowMonitorEntry>,
@@ -863,6 +896,9 @@ impl VmodvApp {
             preview_textures: HashMap::new(),
             preview_order: VecDeque::new(),
             preview_error_counts: HashMap::new(),
+            pending_preview: None,
+            preview_in_flight: None,
+            last_preview_at: start,
             row_monitors: HashMap::new(),
             window_state: WindowState::read(&user_data.join(WINDOW_STATE_FILENAME)),
             window_state_path: user_data.join(WINDOW_STATE_FILENAME),
@@ -1469,6 +1505,8 @@ impl VmodvApp {
         // The NDI sender reads the presented framebuffer back only when the
         // configured rate is due and the output is enabled.
         self.submit_ndi_frame();
+        // Previews are submitted after the output frame has been presented;
+        // their read-back completes on a later frame without blocking this one.
         self.answer_preview_requests();
         self.refresh_row_monitors();
 
@@ -2794,17 +2832,59 @@ impl VmodvApp {
 
     /// Answer at most one queued Gallery/Scene hover preview.
     ///
-    /// The engine's isolated preview renderers already exist; this method
-    /// uploads their RGBA result into an egui texture owned by the shell and
-    /// keeps a bounded LRU. The UI reads the texture id from the next
-    /// snapshot, so there is no IPC and no per-frame readback for a tile that
-    /// is merely visible (only the hovered tile polls).
+    /// Previews are deliberately off the output hot path: at most one is in
+    /// flight, it starts only after the output frame is presented and at the
+    /// throttled cadence, and its GPU read-back is drained with a non-blocking
+    /// poll on a later frame. Performance mode never starts a preview. The
+    /// result becomes an egui texture owned by the shell (bounded LRU), so the
+    /// UI reads the texture id from the next snapshot without any readback
+    /// on a merely visible tile.
     fn answer_preview_requests(&mut self) {
-        let requests = self.ui_state.take_preview_requests();
-        let Some(request) = requests.into_iter().next_back() else {
+        let now = Instant::now();
+        // Drain the previous preview's map callback. This is a single
+        // non-blocking poll; the output frame never waits for the preview.
+        if let Some(in_flight) = self.preview_in_flight.as_mut() {
+            match in_flight.pending.try_finish() {
+                Ok(Some(pixels)) => {
+                    let in_flight = self.preview_in_flight.take().expect("preview in flight");
+                    self.upload_preview(in_flight.key, pixels, in_flight.width, in_flight.height);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let in_flight = self.preview_in_flight.take().expect("preview in flight");
+                    self.record_preview_error(&in_flight.key, error);
+                }
+            }
+        }
+
+        // Keep only the newest hover. New previews are throttled, and at most
+        // one is in flight, so a burst of scroll hovers cannot pile up.
+        if let Some(request) = self
+            .ui_state
+            .take_preview_requests()
+            .into_iter()
+            .next_back()
+        {
+            self.pending_preview = Some((request, now));
+        }
+        let Some((_, requested_at)) = self.pending_preview.as_ref() else {
             return;
         };
+        if now.duration_since(*requested_at) > PREVIEW_REQUEST_TTL {
+            self.pending_preview = None;
+            return;
+        }
+        if !preview_ready(
+            now,
+            self.last_preview_at,
+            self.store.performance_runtime().enabled,
+        ) || self.preview_in_flight.is_some()
+            || self.compositor.is_none()
+        {
+            return;
+        }
 
+        let (request, _) = self.pending_preview.take().expect("pending preview");
         let key = match &request {
             PreviewRequest::Module { module_name, .. } => gallery_preview_key(module_name),
             PreviewRequest::Scene {
@@ -2812,51 +2892,65 @@ impl VmodvApp {
                 row_index,
             } => scene_preview_key(scene_id, *row_index),
         };
-
         let result = {
-            let Some(compositor) = &mut self.compositor else {
-                return;
-            };
+            let compositor = self.compositor.as_mut().expect("compositor checked above");
             match request {
                 PreviewRequest::Module {
                     module_name,
                     with_output,
                 } => {
                     let registry = self.store.registry_arc();
+                    let (width, height) = MODULE_PREVIEW_SIZE;
                     compositor
-                        .render_module_preview(
+                        .render_module_preview_pending(
                             registry.as_ref(),
                             &module_name,
-                            256,
-                            144,
+                            width,
+                            height,
                             with_output,
                         )
-                        .map(|pixels| (pixels, 256u32, 144u32))
+                        .map(|pending| (width, height, pending))
                 }
                 PreviewRequest::Scene {
                     scene_id,
                     row_index,
-                } => crate::scene_preview::render_scene_preview(
-                    compositor,
-                    &self.store,
-                    &scene_id,
-                    row_index,
-                    320,
-                    180,
-                )
-                .map(|pixels| (pixels, 320u32, 180u32)),
+                } => {
+                    let (width, height) = SCENE_PREVIEW_SIZE;
+                    crate::scene_preview::render_scene_preview_pending(
+                        compositor,
+                        &self.store,
+                        &scene_id,
+                        row_index,
+                        width,
+                        height,
+                    )
+                    .map(|pending| (width, height, pending))
+                }
             }
         };
 
         match result {
-            Ok((pixels, width, height)) => self.upload_preview(key, pixels, width, height),
-            Err(error) => {
-                let count = self.preview_error_counts.entry(key.clone()).or_insert(0);
-                *count += 1;
-                if *count == 1 || count.is_multiple_of(10) {
-                    eprintln!("ui: WARN preview {key} failed (attempt {count}): {error}");
-                }
+            Ok((width, height, pending)) => {
+                self.last_preview_at = now;
+                self.preview_in_flight = Some(PreviewInFlight {
+                    key,
+                    width,
+                    height,
+                    pending,
+                });
             }
+            Err(error) => self.record_preview_error(&key, error),
+        }
+    }
+
+    fn record_preview_error(&mut self, key: &str, error: impl std::fmt::Display) {
+        let count = self
+            .preview_error_counts
+            .entry(key.to_string())
+            .or_insert(0);
+        *count += 1;
+        if *count == 1 || count.is_multiple_of(10) {
+            eprintln!("ui: WARN preview {key} failed (attempt {count}): {error}");
         }
     }
 
@@ -4408,6 +4502,15 @@ fn performance_view(config: &Value, enabled: bool, row_names: &[String]) -> Perf
 
 /// Acquire a surface texture, reconfiguring a stale surface and skipping an
 /// occluded one.
+/// Whether a queued hover preview may start now.
+///
+/// Performance mode is the live output: no preview may run while it is on.
+/// Otherwise a new preview waits for the throttle interval; at most one is in
+/// flight, so a hover can never queue work faster than it completes.
+fn preview_ready(now: Instant, last_preview_at: Instant, performance: bool) -> bool {
+    !performance && now.saturating_duration_since(last_preview_at) >= PREVIEW_INTERVAL
+}
+
 fn acquire_surface(
     surface: &mut SurfaceTarget,
     device: &wgpu::Device,
@@ -4978,6 +5081,28 @@ impl ApplicationHandler for VmodvApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn previews_wait_for_the_interval_and_never_run_in_performance_mode() {
+        let now = Instant::now();
+        let ready_last = now - PREVIEW_INTERVAL;
+
+        assert!(preview_ready(now, ready_last, false));
+        assert!(
+            !preview_ready(now, ready_last, true),
+            "performance mode must never run a hover preview"
+        );
+        assert!(
+            !preview_ready(now, now, false),
+            "a second preview must wait for the throttle interval"
+        );
+    }
+
+    #[test]
+    fn hover_previews_render_at_thumbnail_resolution() {
+        assert!(MODULE_PREVIEW_SIZE.0 <= 128 && MODULE_PREVIEW_SIZE.1 <= 72);
+        assert!(SCENE_PREVIEW_SIZE.0 <= 160 && SCENE_PREVIEW_SIZE.1 <= 90);
+    }
 
     fn plugin_temp_dir(prefix: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
