@@ -23,7 +23,8 @@ feature parity with Linux. The archived Electron tree is a further
 
 | Build | Artifact |
 | --- | --- |
-| VmodV AppImage | `VmodV-2.0.0-x86_64.AppImage` |
+| VmodV AppImage (x86_64) | `VmodV-2.0.0-x86_64.AppImage` |
+| VmodV AppImage (arm64) | `VmodV-2.0.0-aarch64.AppImage` |
 | VmodV Debian package | `VmodV-2.0.0-amd64.deb` |
 | Portable Windows ZIP (best effort) | `VmodV-Windows-x86_64-portable-2.0.0.zip` |
 | Portable macOS x86_64 ZIP (Intel, best effort) | `VmodV-macOS-x86_64-portable-2.0.0.zip` |
@@ -32,7 +33,8 @@ feature parity with Linux. The archived Electron tree is a further
 The `.deb` is package `vmodv`. It installs `modv` (plus the
 `vmodv` compatibility symlink), `vmodv.desktop`, the icon, and
 the ISF/texture assets under `/usr/share/vmodv`. The AppImage bundles the same
-binary and assets.
+binary and assets, built natively for its architecture (`x86_64` or `aarch64`);
+the `.deb` remains amd64-only.
 
 Versions:
 
@@ -126,7 +128,9 @@ and logging).
 
 - `.github/workflows/vmodv.yml` runs clippy/fmt, the workspace tests
   (`modv-app` serial), the VmodV e2e harness and both package builds on
-  changes, uploading workflow artifacts.
+  changes, uploading workflow artifacts. The `package` job is a two-leg native
+  matrix: x86_64 on `ubuntu-latest` builds the AppImage and amd64 `.deb`, and
+  aarch64 on `ubuntu-24.04-arm` builds the arm64 AppImage only.
 - `.github/workflows/macos.yml` builds and ad-hoc signs portable macOS `.app`
   bundles for both x86_64 (Intel) and arm64 (Apple Silicon) via a matrix on
   every push, uploading both architecture ZIPs as CI artifacts so feature
@@ -134,10 +138,11 @@ and logging).
 - `.github/workflows/release.yml` runs on every push to `main` that contains
   qualifying conventional commits, tags the released commit `vX.Y.Z` (no
   version-bump commit; the version comes from the tags) and publishes the
-  versioned AppImage/deb, attaching the portable Windows ZIP and both portable
-  macOS architecture ZIPs to the `vX.Y.Z` GitHub release (see
-  `docs/releasing.md`). If only one macOS architecture builds, its ZIP is
-  still attached. There is no Electron job and no rolling nightly.
+  versioned AppImage (x86_64 and aarch64) and Ubuntu `.deb`, attaching the
+  portable Windows ZIP and both portable macOS architecture ZIPs to the
+  `vX.Y.Z` GitHub release (see `docs/releasing.md`). If only one AppImage
+  architecture builds, the surviving image is still attached; likewise for the
+  macOS ZIPs. There is no Electron job and no rolling nightly.
 - Stable 2.0.0 artifacts are built with `make build` (or `VMODV_VERSION`
   overridden) from a green commit.
 

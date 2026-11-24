@@ -167,13 +167,21 @@ jobs:
         run: make test-e2e-vmodv
 
   package:
-    name: VmodV AppImage and .deb
+    name: VmodV installers (${{ matrix.arch }})
     # release.yml builds and publishes these installers on every main push.
     # Skip the duplicate build on that ref; PRs and other branches still
     # package so packaging regressions are caught before they reach main.
     if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -187,9 +195,9 @@ jobs:
           path: |
             .cargo-cache
             crates/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-
 
       - name: Prepare cargo cache mounts
         run: |
@@ -211,27 +219,48 @@ jobs:
           target: rust
           tags: modv-rust:local
           load: true
-          cache-from: type=gha,scope=rust-toolchain
+          cache-from: type=gha,scope=rust-toolchain-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=rust-toolchain-${{ matrix.arch }}
 
+      # The .deb packaging is host-dependent and stays amd64-only, so the
+      # x86_64 leg keeps running the canonical `make build` (AppImage + .deb).
       - name: Build VmodV AppImage and .deb
+        if: matrix.arch == 'x86_64'
         run: make build
+
+      # arm64 builds only the native AppImage; there is no arm64 .deb.
+      - name: Build VmodV AppImage
+        if: matrix.arch == 'aarch64'
+        run: make appimage-vmodv
 
       - name: Verify the fat AppImage bundle
         run: make vmodv-appimage-check
 
       - name: Inspect installers
+        if: matrix.arch == 'x86_64'
         run: |
           ls -lh dist
           dpkg-deb -I dist/VmodV-*.deb
           dpkg-deb -c dist/VmodV-*.deb | tail -n 5
 
-      - name: Upload VmodV installers
+      - name: Upload VmodV installers (x86_64)
+        if: matrix.arch == 'x86_64'
         uses: actions/upload-artifact@v4
         with:
           name: vmodv-linux-x64
           path: |
             dist/VmodV-*.AppImage
             dist/VmodV-*.deb
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload VmodV AppImage (arm64)
+        if: matrix.arch == 'aarch64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmodv-linux-arm64
+          path: dist/VmodV-*.AppImage
           if-no-files-found: error
           retention-days: 7
           compression-level: 0

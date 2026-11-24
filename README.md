@@ -108,8 +108,8 @@ The host only needs Docker (with Buildx) and make — Rust, cargo and all build
 dependencies live in the Docker toolchain image.
 
 ```bash
-make build            # VmodV AppImage + .deb in dist/
-make appimage-vmodv  # AppImage only
+make build            # VmodV AppImage (native arch) + amd64 .deb in dist/
+make appimage-vmodv  # AppImage only (native x86_64 or aarch64)
 make vmodv-deb       # .deb only (runs vmodv-deb-check.sh)
 make vmodv-deb-check # re-check an existing .deb
 ```
@@ -126,7 +126,12 @@ VMODV_VERSION=2.0.0 make build
 Artifacts:
 
 - `dist/VmodV-<version>-x86_64.AppImage`
+- `dist/VmodV-<version>-aarch64.AppImage`
 - `dist/VmodV-<version>-amd64.deb`
+
+The AppImage is built natively for the build host's architecture (`x86_64` or
+`aarch64`); CI and releases build both, with the arm64 AppImage produced on
+GitHub's `ubuntu-24.04-arm` runner. The `.deb` remains amd64-only.
 
 ## Development
 

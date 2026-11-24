@@ -134,6 +134,17 @@ fail() {
     exit 1
 }
 
+# appimagetool ships one AppImage per CPU. Resolve the host's token so the same
+# script builds a native x86_64 or aarch64 image instead of assuming x86_64.
+HOST_ARCH="$(uname -m)"
+case "$HOST_ARCH" in
+    x86_64|amd64) APPIMAGE_ARCH="x86_64" ;;
+    aarch64|arm64) APPIMAGE_ARCH="aarch64" ;;
+    *)
+        fail "unsupported host architecture $HOST_ARCH: AppImages are built for x86_64/amd64 and aarch64/arm64 only"
+        ;;
+esac
+
 # Resolve the repository root from this script's location when not supplied.
 if [ -z "$ROOT" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -144,7 +155,7 @@ OUT="$ROOT/dist"
 [ -n "$APPDIR" ] || APPDIR="$OUT/VmodV.AppDir"
 [ -n "$DOC_ROOT" ] || DOC_ROOT=/usr/share/doc
 VERSION="${APP_VERSION:-${VMODV_VERSION:-$(bash "$ROOT/tools/version.sh")}}"
-IMAGE="$OUT/VmodV-$VERSION-x86_64.AppImage"
+IMAGE="$OUT/VmodV-$VERSION-$APPIMAGE_ARCH.AppImage"
 
 [ -d "$ROOT/resources/isf" ] || fail "missing ISF corpus at $ROOT/resources/isf"
 [ -d "$ROOT/resources/point10/textures" ] || \
@@ -483,13 +494,13 @@ patch_bundle_rpaths() {
 # ---------------------------------------------------------------------------
 
 build_appimage() {
-    local tool=/tmp/appimagetool
+    local tool="/tmp/appimagetool-$APPIMAGE_ARCH"
     if [ ! -x "$tool" ]; then
         curl -L --fail --retry 3 -o "$tool" \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$APPIMAGE_ARCH.AppImage"
         chmod +x "$tool"
     fi
-    ARCH=x86_64 "$tool" --appimage-extract-and-run --no-appstream "$APPDIR" "$IMAGE"
+    ARCH="$APPIMAGE_ARCH" "$tool" --appimage-extract-and-run --no-appstream "$APPDIR" "$IMAGE"
     rm -rf "$APPDIR"
     echo "VmodV AppImage: $IMAGE"
 }

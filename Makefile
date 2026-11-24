@@ -42,6 +42,10 @@ DIST_DIR ?= dist
 # local builds keep Debian trixie and the unsuffixed artifact.
 BASE_IMAGE ?= debian:trixie-slim
 DEB_SUFFIX ?=
+# appimagetool ships one AppImage per CPU, so derive its token from the host:
+# amd64/x86_64 -> x86_64 and arm64/aarch64 -> aarch64. The bundle checker looks
+# for the matching native artifact instead of assuming x86_64.
+APPIMAGE_ARCH ?= $(shell uname -m | sed -e 's/^amd64$$/x86_64/' -e 's/^arm64$$/aarch64/')
 
 DOCKER ?= docker
 RUST_IMAGE ?= modv-rust:local
@@ -181,7 +185,7 @@ vmodv-appimage-check: docker-rust
 		-w /app \
 		$(DOCKER_RUN_ARGS) \
 		"$(RUST_IMAGE)" \
-		bash /app/tools/vmodv-appimage-check.sh /app/$(DIST_DIR)/VmodV-$(VMODV_VERSION)-x86_64.AppImage
+		bash /app/tools/vmodv-appimage-check.sh /app/$(DIST_DIR)/VmodV-$(VMODV_VERSION)-$(APPIMAGE_ARCH).AppImage
 
 # VmodV Debian package. Reuses the cargo cache; the script builds the release
 # `modv` binary, assembles the package tree and verifies the result with

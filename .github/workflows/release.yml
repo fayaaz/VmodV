@@ -65,12 +65,24 @@ jobs:
           echo "should_release=true" >> "$GITHUB_OUTPUT"
           echo "Next release: v$VERSION (previous tag: ${PREV:-none})"
 
-  # Builds the AppImage separately from the `release` job so a Docker/toolchain
-  # failure cannot stop the release from being tagged and published. The
-  # artifact is attached by `attach-appimage` once the release exists.
+  # Builds the AppImages separately from the `release` job so a Docker/toolchain
+  # failure cannot stop the release from being tagged and published. Each
+  # architecture builds natively on its own runner (`ubuntu-24.04-arm` for
+  # arm64) and uploads a distinct artifact; `attach-appimage` attaches whichever
+  # images arrived.
   build-appimage:
-    name: Build Linux AppImage
-    runs-on: ubuntu-latest
+    name: Build Linux AppImage (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            artifact: vmodv-appimage-x86_64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            artifact: vmodv-appimage-aarch64
+    runs-on: ${{ matrix.runner }}
     needs: version
     if: ${{ needs.version.outputs.should_release == 'true' }}
     timeout-minutes: 90
@@ -88,9 +100,9 @@ jobs:
           path: |
             .cargo-cache
             crates/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-
 
       - name: Prepare cargo cache mounts
         run: |
@@ -112,7 +124,7 @@ jobs:
           target: rust
           tags: modv-rust:local
           load: true
-          cache-from: type=gha,scope=rust-toolchain
+          cache-from: type=gha,scope=rust-toolchain-${{ matrix.arch }}
 
       - name: Build VmodV AppImage
         run: make appimage-vmodv
@@ -130,7 +142,7 @@ jobs:
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: vmodv-appimage
+          name: ${{ matrix.artifact }}
           path: dist/VmodV-*.AppImage
           if-no-files-found: error
           retention-days: 7
@@ -519,13 +531,19 @@ jobs:
   # Each attach job waits for the release and for one build job with the
   # default `success()` status check: a failed build skips only its own attach
   # step, never the release and never the other platforms' artifacts. The
-  # macOS attach is the exception: its two architectures share one matrix job,
-  # so it must still run when one leg fails and attach whichever ZIPs exist.
+  # matrix attach jobs are the exception: `build-appimage` and `macos-portable`
+  # share one job between architectures, so they must still run when one leg
+  # fails and attach whichever artifacts exist.
   attach-appimage:
-    name: Attach Linux AppImage to release
+    name: Attach Linux AppImages to release
     runs-on: ubuntu-latest
     needs: [version, release, build-appimage]
-    if: ${{ needs.version.outputs.should_release == 'true' }}
+    # A two-leg matrix job reports failure when either architecture fails, so
+    # the default `success()` check would skip this job and drop the image of
+    # the architecture that did build. Run whenever the release exists (unless
+    # the run was cancelled); each download is best-effort and the upload
+    # attaches whatever arrived.
+    if: ${{ !cancelled() && needs.version.outputs.should_release == 'true' && needs.release.result == 'success' }}
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -536,14 +554,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download AppImage
+      # A missing architecture must not abort attachment of the surviving one,
+      # so a failed wildcard download only fails this step, not the job.
+      - name: Download AppImages
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: vmodv-appimage
+          pattern: vmodv-appimage-*
+          merge-multiple: true
           path: dist
 
-      - name: Upload AppImage to the release
-        run: gh release upload "v${VERSION}" dist/VmodV-*.AppImage --clobber
+      - name: Upload AppImages to the release
+        run: |
+          shopt -s nullglob
+          images=(dist/*.AppImage)
+          if [ ${#images[@]} -eq 0 ]; then
+            echo "::warning::No AppImages were produced; nothing to attach."
+            exit 0
+          fi
+          printf 'Attaching %s\n' "${images[@]}"
+          gh release upload "v${VERSION}" "${images[@]}" --clobber
 
   attach-windows:
     name: Attach portable Windows ZIP to release

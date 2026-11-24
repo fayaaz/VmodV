@@ -34,20 +34,22 @@ Merge commits are ignored.
    - publishes a GitHub release titled `vX.Y.Z` with the changelog since the
      previous tag. `gh release create` attaches no files, so the release goes
      out even when no artifact was built.
-3. Each artifact is produced **once** by its own job — `build-appimage`,
-   `windows-portable`, `macos-portable` (both architectures) and
-   `linux-debs` (four Ubuntu bases) — and uploaded as a workflow artifact.
+3. Each artifact is produced **once** by its own job — `build-appimage`
+   (native x86_64 and aarch64 legs), `windows-portable`, `macos-portable`
+   (both architectures) and `linux-debs` (four Ubuntu bases, amd64-only) — and
+   uploaded as a workflow artifact.
    A separate `attach-*` job waits for the release and for that one build:
    when the build succeeds it downloads the artifact and runs
-   `gh release upload --clobber`. On macOS both architectures are legs of one
-   matrix job, so the attach job also runs when only one leg succeeds and
-   uploads the surviving architecture's ZIP. A failed, slow or
-   capacity-starved build (a macOS runner that never acquires capacity, for
-   example) costs only its own assets; the release and every other platform's
-   artifacts still go out.
+   `gh release upload --clobber`. `build-appimage` and `macos-portable` are
+   two-architecture matrix jobs, so their attach jobs also run when only one
+   leg succeeds and upload the surviving architecture's AppImage or ZIP. A
+   failed, slow or capacity-starved build (a macOS or arm64 runner that never
+   acquires capacity, for example) costs only its own assets; the release and
+   every other platform's artifacts still go out.
    On pushes to `main` the packaging jobs in `vmodv.yml` and `macos.yml` are
-   skipped so the same AppImage, Windows ZIP and macOS bundles are not built
-   twice for one commit. PRs and other branches still package in CI.
+   skipped so the same AppImages (x86_64 and aarch64), Windows ZIP and macOS
+   bundles are not built twice for one commit. PRs and other branches still
+   package in CI.
 4. The tag and create steps are idempotent: re-running a failed workflow
    leaves an existing `vX.Y.Z` tag in place and re-pushes it, and leaves an
    existing release in place, so re-runs after a build failure do not die on
