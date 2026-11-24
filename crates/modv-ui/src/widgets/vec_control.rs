@@ -1,9 +1,9 @@
 //! Vector control (`vec2`/`vec3`/`vec4`), ported from the legacy
 //! `Vec2DControl`/`Vec3Control`/`Vec4Control` main rows.
 //!
-//! The legacy controls expose X/Y/Z/W rows plus a 2D pad/Sketch body. P3 keeps
-//! the numeric rows (the load-bearing path for presets and links) and uses an
-//! inline colour picker for `vec4`, which is how ISF declares colours.
+//! The control keeps the numeric X/Y/Z/W rows (the load-bearing path for
+//! presets and links) and adds the legacy 2D pad for the first two lanes.
+//! `vec4` also gets an inline colour picker, which is how ISF declares colours.
 
 use egui::Sense;
 use serde_json::Value;
@@ -55,8 +55,14 @@ impl VecControl {
         )
     }
 
-    /// Draw the numeric rows. Returns `true` when a lane changed.
+    /// Draw the numeric rows and the 2D pad. Returns `true` when a lane changed.
     pub fn draw(&mut self, ui: &mut egui::Ui) -> bool {
+        let rows_changed = self.draw_numeric_rows(ui);
+        let pad_changed = self.draw_pad(ui);
+        rows_changed || pad_changed
+    }
+
+    fn draw_numeric_rows(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
             ui.add_sized(
@@ -91,6 +97,88 @@ impl VecControl {
                 }
             }
         });
+        changed
+    }
+
+    /// The legacy 2D pad: lane 0 follows the pointer's x and lane 1 its y,
+    /// both clamped to the prop's range. Returns `true` when a lane changed.
+    fn draw_pad(&mut self, ui: &mut egui::Ui) -> bool {
+        if self.values.len() < 2 {
+            return false;
+        }
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(64.0, 64.0), Sense::click_and_drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, "Vector pad"));
+
+        let low = self.min.min(self.max);
+        let high = self.max.max(self.min);
+        let span = high - low;
+        let span = if span.abs() <= f64::EPSILON {
+            1.0
+        } else {
+            span
+        };
+        let to_screen = |x: f64, y: f64| {
+            egui::pos2(
+                rect.left() + (((x - low) / span) as f32) * rect.width(),
+                rect.top() + (((high - y) / span) as f32) * rect.height(),
+            )
+        };
+
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, egui::CornerRadius::same(0), theme::INPUT);
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(0),
+            egui::Stroke::new(1.0, theme::BORDER),
+            egui::StrokeKind::Inside,
+        );
+        let centre = rect.center();
+        for (start, end) in [
+            (
+                egui::pos2(centre.x, rect.top()),
+                egui::pos2(centre.x, rect.bottom()),
+            ),
+            (
+                egui::pos2(rect.left(), centre.y),
+                egui::pos2(rect.right(), centre.y),
+            ),
+        ] {
+            painter.line_segment([start, end], egui::Stroke::new(0.5, theme::BORDER));
+        }
+        let marker = to_screen(self.values[0], self.values[1]);
+        painter.circle_filled(
+            egui::pos2(
+                marker.x.clamp(rect.left(), rect.right()),
+                marker.y.clamp(rect.top(), rect.bottom()),
+            ),
+            3.0,
+            theme::ACCENT,
+        );
+
+        let primary_down = ui.input(|input| input.pointer.primary_down());
+        let interacting = response.dragged()
+            || response.clicked()
+            || (primary_down && response.contains_pointer());
+        if !interacting {
+            return false;
+        }
+        let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) else {
+            return false;
+        };
+        // Invert `to_screen`, clamping the normalised coordinate first so a
+        // drag that leaves the pad still pins each lane to its bound (and
+        // degenerate ranges stay put).
+        let to_value = |unit: f32| (low + f64::from(unit.clamp(0.0, 1.0)) * span).clamp(low, high);
+        let x = to_value((pointer.x - rect.left()) / rect.width());
+        let y = to_value(1.0 - (pointer.y - rect.top()) / rect.height());
+        let mut changed = false;
+        for (lane, value) in [(0, x), (1, y)] {
+            if (self.values[lane] - value).abs() > f64::EPSILON {
+                self.values[lane] = value;
+                changed = true;
+            }
+        }
         changed
     }
 }
