@@ -532,6 +532,10 @@ impl VmodvApp {
 
         let isf_dir = resolve_isf_dir(&cli);
         let user_data = user_data_dir();
+        // Install the structured daily log before anything else in the shell
+        // does work, so the startup line exists by the time the harness sees
+        // the control socket answer.
+        crate::logging::init(&user_data);
         let media_root = user_data.join("media");
         let project_settings_path = user_data.join(PROJECT_SETTINGS_FILENAME);
         let mut project_settings = match ProjectSettings::read_from(&project_settings_path) {
@@ -2415,7 +2419,7 @@ impl VmodvApp {
                 }
                 UiCommand::SaveSnapshot => self.save_snapshot(),
                 UiCommand::SavePreset => self.save_preset(),
-                UiCommand::FlushLogs => {}
+                UiCommand::FlushLogs => crate::logging::flush(),
                 UiCommand::SetRenderScale(scale) => {
                     let scale = crate::render_settings::RenderSettings::clamp_scale(scale);
                     if let Err(error) = (crate::render_settings::RenderSettings { scale })

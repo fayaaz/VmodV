@@ -19,8 +19,9 @@ mod e2e;
 
 use std::fs;
 use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -903,6 +904,91 @@ fn scene_cell_module_and_group_drops_apply_and_survive_a_restart() {
 
     second.quit();
     second.assert_exit(0);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Find the structured daily log file the shell writes under `<userData>/logs`.
+///
+/// The date is intentionally not asserted here: the caller only needs the
+/// `vmodv-*.log` naming convention so the test is not tied to a calendar day.
+fn find_daily_log(logs_dir: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(logs_dir).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .find(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("vmodv-") && name.ends_with(".log")
+        })
+        .map(|entry| entry.path())
+}
+
+/// The app itself must create/append a daily structured log file under
+/// `<userData>/logs/vmodv-YYYY-MM-DD.log`, with at least a date-like timestamp,
+/// `level=INFO`, a target and a startup message on one line.
+#[test]
+fn daily_log_file_is_written_at_startup() {
+    let root = e2e::temp_root("vmodv-process-daily-log");
+    let user_data = root.join("userData");
+    fs::create_dir_all(&user_data).expect("create userData");
+
+    let mut app = VmodvHarness::builder()
+        .width(320)
+        .height(180)
+        .user_data(&user_data)
+        .spawn();
+    let pong = app.wait_ready();
+    assert_eq!(
+        pong["pid"],
+        json!(app.pid()),
+        "the shell reported its own pid on ping: {pong}"
+    );
+
+    let logs_dir = app.user_data().join("logs");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut daily_log = None;
+    while Instant::now() < deadline {
+        if let Some(path) = find_daily_log(&logs_dir) {
+            daily_log = Some(path);
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let daily_log = daily_log.unwrap_or_else(|| {
+        panic!(
+            "no vmodv-*.log daily log file appeared under {} within 10s\n\
+             --- harness log_path ---\n{}\n--- harness logs ---\n{}",
+            logs_dir.display(),
+            app.log_path().display(),
+            app.logs()
+        )
+    });
+
+    let text = fs::read_to_string(&daily_log).unwrap_or_else(|error| {
+        panic!(
+            "could not read the daily log {}: {error}\n--- harness logs ---\n{}",
+            daily_log.display(),
+            app.logs()
+        )
+    });
+    let startup_line = text
+        .lines()
+        .find(|line| line.contains("level=INFO") && line.to_ascii_lowercase().contains("startup"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the daily log {} has no INFO startup line:\n{text}\n--- harness logs ---\n{}",
+                daily_log.display(),
+                app.logs()
+            )
+        });
+    assert!(
+        startup_line.starts_with("20"),
+        "the startup line must begin with a date-like timestamp: {startup_line}"
+    );
+
+    app.quit();
+    app.assert_exit(0);
 
     let _ = fs::remove_dir_all(root);
 }

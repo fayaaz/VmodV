@@ -391,8 +391,8 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                         state.show_about = true;
                         ui.close();
                     }
-                    if ui.button("Open logs (P1)").clicked() {
-                        state.queue(UiCommand::FlushLogs);
+                    if ui.button("Open logs folder").clicked() {
+                        state.queue(UiCommand::OpenLogsFolder);
                         ui.close();
                     }
                 });
