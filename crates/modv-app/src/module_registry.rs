@@ -115,6 +115,7 @@
 //! Presets are parsed header-only so startup stays fast (see
 //! [`collect_milkdrop_definitions`]).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -759,6 +760,9 @@ pub struct ModuleRegistry {
     /// immutable after construction, so the document is cached. A registry
     /// rebuilt after a user-ISF rescan is a fresh value with a fresh cache.
     registered_cache: OnceLock<Value>,
+    /// Name -> renderer kind, built once. `kind()` used to linear-scan every
+    /// definition bucket for each of the ~500 Gallery entries every frame.
+    kind_index: OnceLock<HashMap<String, ModuleKind>>,
 }
 
 impl ModuleRegistry {
@@ -845,6 +849,7 @@ impl ModuleRegistry {
             isf,
             milkdrop,
             registered_cache: OnceLock::new(),
+            kind_index: OnceLock::new(),
         }
     }
 
@@ -894,6 +899,7 @@ impl ModuleRegistry {
         // built before this call (a test calling `registered_modules()` first)
         // must not hide the new entries.
         self.registered_cache = OnceLock::new();
+        self.kind_index = OnceLock::new();
         self
     }
 
@@ -950,41 +956,42 @@ impl ModuleRegistry {
             .find(|definition| definition.name == name)
     }
 
+    /// Name -> renderer kind, built once and shared by every snapshot frame.
+    pub fn kind_index(&self) -> &HashMap<String, ModuleKind> {
+        self.kind_index.get_or_init(|| {
+            let mut index = HashMap::new();
+            for module in self.shader_modules() {
+                index
+                    .entry(module.name.to_string())
+                    .or_insert(ModuleKind::Shader);
+            }
+            for module in self.two_d_definitions() {
+                index
+                    .entry(module.meta.name.to_string())
+                    .or_insert(ModuleKind::TwoD);
+            }
+            for scene in self.point10_definitions() {
+                index
+                    .entry(scene.meta.name.to_string())
+                    .or_insert(ModuleKind::Point10);
+            }
+            for definition in self.isf_definitions() {
+                index
+                    .entry(definition.name.to_string())
+                    .or_insert(ModuleKind::Isf);
+            }
+            for definition in self.milkdrop_definitions() {
+                index
+                    .entry(definition.name.to_string())
+                    .or_insert(ModuleKind::Milkdrop);
+            }
+            index
+        })
+    }
+
     /// Which renderer owns `name`, or `None` when it is not registered.
     pub fn kind(&self, name: &str) -> Option<ModuleKind> {
-        if self
-            .shader_modules()
-            .iter()
-            .any(|module| module.name == name)
-        {
-            Some(ModuleKind::Shader)
-        } else if self
-            .two_d_definitions()
-            .iter()
-            .any(|module| module.meta.name == name)
-        {
-            Some(ModuleKind::TwoD)
-        } else if self
-            .point10_definitions()
-            .iter()
-            .any(|scene| scene.meta.name == name)
-        {
-            Some(ModuleKind::Point10)
-        } else if self
-            .isf_definitions()
-            .iter()
-            .any(|definition| definition.name == name)
-        {
-            Some(ModuleKind::Isf)
-        } else if self
-            .milkdrop_definitions()
-            .iter()
-            .any(|definition| definition.name == name)
-        {
-            Some(ModuleKind::Milkdrop)
-        } else {
-            None
-        }
+        self.kind_index().get(name).copied()
     }
 
     /// The registry-authored `meta` fields of a known module, or `None` when
@@ -2080,6 +2087,24 @@ fn collect_milkdrop_definitions(user_dirs: &[PathBuf]) -> Vec<MilkdropDefinition
 mod tests {
     use super::*;
     use modv_renderers::milkdrop::MILKDROP_LOOK_PROP_NAMES;
+
+    #[test]
+    fn kind_index_covers_every_registered_module_and_is_built_once() {
+        let registry = ModuleRegistry::builtin();
+        let index = registry.kind_index();
+        if let Value::Object(map) = registry.registered_modules_ref() {
+            for name in map.keys() {
+                assert!(
+                    index.contains_key(name),
+                    "registry kind index is missing {name}"
+                );
+            }
+        }
+        assert!(
+            std::ptr::eq(index, registry.kind_index()),
+            "kind index must be built once, not per frame"
+        );
+    }
 
     /// The per-frame UI snapshot reads this document for every registered
     /// module. Rebuilding it per read cost milliseconds within the frame
