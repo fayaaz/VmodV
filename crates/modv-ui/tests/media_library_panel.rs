@@ -6,6 +6,8 @@
 //! a Library tile dropped onto a texture prop. The prop payload asserted here
 //! is the same one the manual path editor writes.
 
+use std::sync::Arc;
+
 use accesskit::Role;
 use egui::{Modifiers, PointerButton};
 use egui_kittest::Harness;
@@ -48,8 +50,8 @@ fn asset(
     }
 }
 
-fn library() -> MediaLibraryView {
-    MediaLibraryView {
+fn library() -> Arc<MediaLibraryView> {
+    Arc::new(MediaLibraryView {
         profile: "live".to_string(),
         assets: vec![
             asset(
@@ -88,7 +90,7 @@ fn library() -> MediaLibraryView {
         ],
         truncated: false,
         error: None,
-    }
+    })
 }
 
 fn module_snapshot(prop_type: &str) -> EngineSnapshot {
@@ -241,14 +243,14 @@ fn folder_switching_filters_the_recursive_grid_and_up_walks_back() {
 fn the_empty_and_error_states_are_explained() {
     let mut harness = build(
         EngineSnapshot {
-            library: MediaLibraryView {
+            library: Arc::new(MediaLibraryView {
                 profile: "live".to_string(),
                 assets: Vec::new(),
                 truncated: false,
                 error: Some(
                     "image: could not read /media/live/image: permission denied".to_string(),
                 ),
-            },
+            }),
             ..Default::default()
         },
         library_state(),

@@ -6,6 +6,7 @@
 //! conflict with a dispatch.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -85,7 +86,11 @@ pub struct EngineSnapshot {
     /// Live capture state for the Media panel.
     pub media: MediaSnapshot,
     /// The active profile's image/video/palette library (the Library tab).
-    pub library: MediaLibraryView,
+    ///
+    /// Shared behind an [`Arc`] so cloning the per-frame snapshot is O(1)
+    /// rather than deep-copying every asset; the shell rebuilds it only when
+    /// the library index revision changes.
+    pub library: Arc<MediaLibraryView>,
     /// VmodV MIDI input state.
     pub midi: MidiSnapshot,
     /// The opt-in JavaScript plugin runtime (the Plugins panel).
@@ -3938,6 +3943,69 @@ mod tests {
             checked.len(),
             27,
             "every registered Point10 scene must have a provenance label"
+        );
+    }
+
+    #[test]
+    fn snapshot_library_clone_is_shared_not_deep_copied() {
+        use std::time::{Duration, Instant};
+
+        // A realistic, large Library index. Building it is deliberately
+        // outside the timed region: only the per-frame snapshot clone counts.
+        const ASSET_COUNT: usize = 50_000;
+        let assets: Vec<MediaAssetView> = (0..ASSET_COUNT)
+            .map(|index| MediaAssetView {
+                path: format!(
+                    "live/image/artist-{index}/some-realistic-file-name-{index:06}.png"
+                ),
+                absolute: Some(format!(
+                    "/home/vj/.config/VmodV/media/default/image/artist-{index}/some-realistic-file-name-{index:06}.png"
+                )),
+                kind: LibraryKind::Image,
+                name: format!("some-realistic-file-name-{index:06}.png"),
+                folder: format!("artist-{index}/nested/pack"),
+                size_bytes: 3_700_000 + index as u64,
+                dimensions: Some([1920, 1080]),
+                duration_ms: None,
+                palette: Some(vec![[10, 20, 30, 255], [40, 50, 60, 255], [70, 80, 90, 255]]),
+                thumbnail: None,
+            })
+            .collect();
+        let last_path = assets.last().expect("fixture is non-empty").path.clone();
+        let snapshot = EngineSnapshot {
+            library: Arc::new(MediaLibraryView {
+                profile: "default".to_string(),
+                assets,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // Warm up allocator/page-fault costs, then take the best of several
+        // clones so one scheduler hiccup cannot make this flaky. An O(1)
+        // shared-handle clone is far below 2 ms; a deep copy of 50k assets
+        // with several owned strings each is far above it.
+        drop(snapshot.library.clone());
+        let mut fastest = Duration::MAX;
+        let mut cloned = None;
+        for _ in 0..5 {
+            let started = Instant::now();
+            let library = snapshot.library.clone();
+            let elapsed = started.elapsed();
+            fastest = fastest.min(elapsed);
+            cloned = Some(library);
+        }
+        let cloned = cloned.expect("at least one clone was measured");
+
+        assert!(
+            fastest < Duration::from_millis(2),
+            "cloning EngineSnapshot.library must share the {ASSET_COUNT}-asset library in O(1), \
+             but the fastest clone took {fastest:?} (it deep-copies every media asset)"
+        );
+        assert_eq!(
+            cloned.assets.last().expect("assets must be exposed").path,
+            last_path,
+            "the cloned library must still expose the same asset data via deref"
         );
     }
 }

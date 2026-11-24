@@ -516,7 +516,10 @@ pub struct VmodvApp {
     /// Coalesced rescan requests from the watcher and the Rescan button.
     library_refresh: crate::media_library::LibraryRefresh,
     /// The Library tab's read model (rebuilt after a scan/thumbnail decode).
-    library_view: MediaLibraryView,
+    ///
+    /// Shared with [`EngineSnapshot`] behind an [`Arc`] so the per-frame
+    /// snapshot clone is O(1) instead of copying every media asset.
+    library_view: Arc<MediaLibraryView>,
     /// Uploaded Library thumbnails keyed by media-root-relative path.
     library_textures: HashMap<String, PreviewEntry>,
     library_view_dirty: bool,
@@ -821,7 +824,7 @@ impl VmodvApp {
             "ui: INFO media library indexed {} asset(s) in the {active_profile:?} profile",
             media_library.total_count()
         );
-        let library_view = media_library.view(&HashMap::new());
+        let library_view = Arc::new(media_library.view(&HashMap::new()));
         let library_revision = media_library.revision();
         if midi_client.available() {
             eprintln!("ui: INFO MIDI input available (hot-plug polled at 1 Hz)");
@@ -2417,7 +2420,7 @@ impl VmodvApp {
                     )
                 })
                 .collect();
-            self.library_view = self.media_library.view(&textures);
+            self.library_view = Arc::new(self.media_library.view(&textures));
             self.library_view_dirty = false;
         }
     }
@@ -3624,7 +3627,7 @@ impl VmodvApp {
             tweens: tween_by_id,
             expressions: expression_views(state),
             media,
-            library: self.library_view.clone(),
+            library: Arc::clone(&self.library_view),
             midi,
             plugins: self.plugin_view.clone(),
             ndi: self.ndi_view.clone(),
