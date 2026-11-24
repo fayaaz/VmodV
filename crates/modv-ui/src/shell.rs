@@ -5163,11 +5163,16 @@ fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {
     }
 }
 
+/// About dialog, which also doubles as the one-shot startup splash.
+///
+/// The splash reuses `show_about` (rather than a new persisted field) so that a
+/// fresh `UiState` shows nothing by default.
 fn about_window(ctx: &egui::Context, state: &mut UiState) {
+    let mut open = state.show_about;
     let window = restore_window(
         egui::Window::new("About VmodV")
             .id(egui::Id::unique("modv-window:about"))
-            .open(&mut state.show_about)
+            .open(&mut open)
             .collapsible(false)
             .resizable(true)
             .min_width(320.0)
@@ -5176,9 +5181,12 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
         WINDOW_ABOUT,
         &state.layout,
     );
+    // `egui::Window::open` borrows `open` for the whole `show` call, so the
+    // Continue button records its intent here instead of writing `state`.
+    let mut dismiss = false;
     let response = window.show(ctx, |ui| {
         ui.label(
-            egui::RichText::new("VmodV")
+            egui::RichText::new("VmodV splash")
                 .strong()
                 .size(20.0)
                 .color(theme::ACCENT),
@@ -5188,7 +5196,14 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
         ui.label(format!("Adapter: {}", state.status.adapter));
         ui.label(format!("Backend: {}", state.status.backend));
         ui.label("Data formats, media layout and userData stay unchanged.");
+        ui.separator();
+        if ui.button("Continue").clicked() {
+            dismiss = true;
+        }
     });
+    if dismiss || !open {
+        state.show_about = false;
+    }
     if let Some(response) = response {
         state
             .layout

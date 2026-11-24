@@ -824,7 +824,7 @@ impl VmodvApp {
         let target_fps = store.target_fps();
         let state_path = crate::cli::vmodv_state_path(cli.state.as_deref(), &user_data);
 
-        Self {
+        let mut app = Self {
             bench_deadline: cli.bench_deadline(),
             preset_path,
             cli,
@@ -928,7 +928,11 @@ impl VmodvApp {
             done: false,
             failed: false,
             last_error: None,
-        }
+        };
+        // Open the one-shot startup splash through the existing About slot;
+        // this keeps `UiState::new()` unchanged for the test harnesses.
+        app.ui_state.show_about = true;
+        app
     }
 
     fn init(&mut self, event_loop: &ActiveEventLoop) {
