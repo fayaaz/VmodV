@@ -360,6 +360,16 @@ pub fn load_preset_into_state(
 /// `name` and timing on top of this document (M5), as the JS scenes store
 /// does.
 pub fn create_preset_from_state(state: &EngineState) -> Value {
+    create_preset_from_state_with_tweens(state, state.tweens.clone())
+}
+
+/// [`create_preset_from_state`] with the caller-supplied `tweens` slot.
+///
+/// Persistence uses this so a large `tweens` array can be copied (and handed to
+/// a background writer) without the builder making a second copy of it. The
+/// document is identical to [`create_preset_from_state`]'s; the remaining
+/// slots, including `midi`, are bounded and cloned here.
+pub fn create_preset_from_state_with_tweens(state: &EngineState, tweens: Value) -> Value {
     let groups: Vec<Value> = state
         .groups
         .iter()
@@ -397,7 +407,7 @@ pub fn create_preset_from_state(state: &EngineState) -> Value {
     preset.insert("modules".to_string(), Value::Object(modules));
     preset.insert("inputs".to_string(), Value::Object(inputs));
     preset.insert("expressions".to_string(), Value::Object(expressions));
-    preset.insert("tweens".to_string(), state.tweens.clone());
+    preset.insert("tweens".to_string(), tweens);
     preset.insert("midi".to_string(), state.midi.clone());
 
     Value::Object(preset)
@@ -839,6 +849,16 @@ mod tests {
         load_preset_into_state(&mut state, &fixture_preset()).unwrap();
         let saved = create_preset_from_state(&state);
         assert_eq!(saved, expected_round_tripped());
+    }
+
+    #[test]
+    fn create_preset_from_state_with_tweens_matches_the_default_slot() {
+        let mut state = EngineState::new();
+        load_preset_into_state(&mut state, &fixture_preset()).unwrap();
+        state.tweens = json!([{ "id": "tween-1", "duration": 500 }]);
+        let expected = create_preset_from_state(&state);
+        let supplied = create_preset_from_state_with_tweens(&state, state.tweens.clone());
+        assert_eq!(supplied, expected);
     }
 
     #[test]

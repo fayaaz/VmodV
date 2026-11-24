@@ -87,7 +87,7 @@ use modv_engine::engine_state::{
 };
 use modv_engine::inputs::{Input, InputLink, source_uses_tween_descriptor};
 use modv_engine::preset::{
-    ExpressionAssignment, PresetError, create_preset_from_state, load_preset_into_state,
+    ExpressionAssignment, PresetError, create_preset_from_state_with_tweens, load_preset_into_state,
 };
 use modv_engine::props::{PropSchema, coerce_prop_value};
 use modv_media::audio::analyser::AudioSnapshot;
@@ -249,6 +249,11 @@ pub struct Store {
     /// drag emits an update every frame; consecutive edits to the same control
     /// inside [`HISTORY_COALESCE_WINDOW`] share the pre-drag snapshot.
     last_history_edit: Option<(String, Instant)>,
+    /// Background writer for the periodic crash-resilience snapshot save.
+    ///
+    /// Lazily created on the first [`Store::save_snapshot`] so the hundreds of
+    /// short-lived [`Store`]s in tests spawn no threads until they save.
+    snapshot_writer: std::sync::Mutex<Option<SnapshotWriter>>,
 }
 
 /// How many preset-graph snapshots the undo and redo stacks each keep.
@@ -390,6 +395,7 @@ impl Store {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             last_history_edit: None,
+            snapshot_writer: std::sync::Mutex::new(None),
         }
     }
 
@@ -4491,13 +4497,31 @@ impl Store {
     /// moved last. It is metadata for the UI/debugging, not part of the preset
     /// format; [`Store::restore`] ignores it.
     pub fn snapshot(&self) -> Value {
-        let mut preset = create_preset_from_state(&self.state);
+        self.preset_document(self.state.tweens.clone(), None)
+    }
+
+    /// Assemble the snapshot document from a caller-supplied `tweens` slot.
+    ///
+    /// The periodic save passes a copy prepared by
+    /// [`clone_snapshot_slot`] so a large tween array does not force a second
+    /// serial copy on the output frame thread.
+    fn preset_document(&self, tweens: Value, frames_presented: Option<u64>) -> Value {
+        let mut preset = create_preset_from_state_with_tweens(&self.state, tweens);
         if let Value::Object(map) = &mut preset {
             map.insert("version".to_string(), json!(SNAPSHOT_VERSION));
             map.insert(
                 "renderOrder".to_string(),
                 json!(self.state.group_index_render_order()),
             );
+            if let Some(frames) = frames_presented {
+                // `framesPresented` lives in `_engine` rather than in the
+                // preset so a Scene saved from this document never carries
+                // engine bookkeeping.
+                map.insert(
+                    ENGINE_SIDECAR_KEY.to_string(),
+                    json!({ "framesPresented": frames }),
+                );
+            }
         }
         preset
     }
@@ -4540,23 +4564,40 @@ impl Store {
     /// `framesPresented` lives in `_engine` rather than in the preset so a
     /// Scene saved from this document never carries engine bookkeeping.
     pub fn snapshot_with_engine(&self, frames_presented: u64) -> Value {
-        let mut snapshot = self.snapshot();
-        if let Value::Object(map) = &mut snapshot {
-            map.insert(
-                ENGINE_SIDECAR_KEY.to_string(),
-                json!({ "framesPresented": frames_presented }),
-            );
-        }
-        snapshot
+        self.preset_document(self.state.tweens.clone(), Some(frames_presented))
     }
 
-    /// Write the snapshot atomically (tmp file + rename), the M1 behaviour.
+    /// Queue the snapshot for a background serialise + atomic write.
+    ///
+    /// The output frame thread's periodic crash-resilience save must not spend
+    /// a large-state `serde_json` serialisation and the file write in its
+    /// frame, so only the snapshot clone and the channel send happen here.
+    /// Returns an error only when the request cannot be queued (the writer
+    /// thread could not start or has stopped); the worker logs the first
+    /// write failure it hits. Use [`Self::save_snapshot_blocking`] when the
+    /// caller needs the file on return (explicit Save, quit, headless/tests).
     pub fn save_snapshot(&self, path: &Path, frames_presented: u64) -> io::Result<()> {
-        let payload = serde_json::to_vec_pretty(&self.snapshot_with_engine(frames_presented))
-            .map_err(io::Error::other)?;
-        let tmp = Path::new(&format!("{}.tmp", path.display())).to_path_buf();
-        fs::write(&tmp, payload)?;
-        fs::rename(&tmp, path)
+        let snapshot = self.preset_document(
+            clone_snapshot_slot(&self.state.tweens),
+            Some(frames_presented),
+        );
+        let mut writer = self
+            .snapshot_writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if writer.is_none() {
+            *writer = Some(SnapshotWriter::new()?);
+        }
+        writer
+            .as_ref()
+            .expect("snapshot writer is initialized")
+            .submit(path.to_path_buf(), snapshot)
+    }
+
+    /// Write the snapshot atomically (tmp file + rename) before returning,
+    /// the M1 behaviour.
+    pub fn save_snapshot_blocking(&self, path: &Path, frames_presented: u64) -> io::Result<()> {
+        write_snapshot_atomically(path, &self.snapshot_with_engine(frames_presented))
     }
 
     /// Replace the state from a preset/snapshot document
@@ -4744,6 +4785,119 @@ impl Store {
             eprintln!("{message}");
         }
     }
+}
+
+/// One queued snapshot write for the background snapshot worker.
+enum SnapshotJob {
+    Write { path: PathBuf, snapshot: Value },
+    Shutdown,
+}
+
+/// The output frame thread's handle to the snapshot writer thread.
+///
+/// The periodic crash-resilience save must not pretty-serialise a large state
+/// and write it on the frame thread; the caller clones the snapshot document
+/// and queues it here instead.
+struct SnapshotWriter {
+    jobs: std::sync::mpsc::Sender<SnapshotJob>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SnapshotWriter {
+    fn new() -> io::Result<Self> {
+        let (jobs, rx) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("modv-snapshot".to_string())
+            .spawn(move || run_snapshot_writer(&rx))?;
+        Ok(Self {
+            jobs,
+            thread: Some(thread),
+        })
+    }
+
+    fn submit(&self, path: PathBuf, snapshot: Value) -> io::Result<()> {
+        self.jobs
+            .send(SnapshotJob::Write { path, snapshot })
+            .map_err(io::Error::other)
+    }
+}
+
+impl Drop for SnapshotWriter {
+    /// Shut the worker down and join it. The channel is FIFO, so every write
+    /// queued before the shutdown marker is still written before the join
+    /// returns and the store is dropped.
+    fn drop(&mut self) {
+        let _ = self.jobs.send(SnapshotJob::Shutdown);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Serialise and atomically write queued snapshots until told to stop.
+fn run_snapshot_writer(jobs: &std::sync::mpsc::Receiver<SnapshotJob>) {
+    let mut warned = false;
+    for job in jobs {
+        let SnapshotJob::Write { path, snapshot } = job else {
+            break;
+        };
+        if let Err(error) = write_snapshot_atomically(&path, &snapshot)
+            && !warned
+        {
+            // The frame thread already moved on; report the first failure once
+            // so a read-only userData directory is still diagnosable.
+            warned = true;
+            eprintln!(
+                "engine: WARN could not save snapshot {}: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Serialise `snapshot` and write it atomically (tmp file + rename), the M1
+/// behaviour shared by the blocking path and the background worker.
+fn write_snapshot_atomically(path: &Path, snapshot: &Value) -> io::Result<()> {
+    let payload = serde_json::to_vec_pretty(snapshot).map_err(io::Error::other)?;
+    let tmp = Path::new(&format!("{}.tmp", path.display())).to_path_buf();
+    fs::write(&tmp, payload)?;
+    fs::rename(&tmp, path)
+}
+
+/// Copy a snapshot slot for hand-off to the background writer.
+///
+/// A large `tweens` array is a deep `serde_json::Value` tree; cloning it
+/// serially on the output frame thread costs longer than a frame. Splitting the
+/// array's entries across scoped clone threads keeps the periodic save's
+/// hand-off short while producing exactly the same document. Small values (and
+/// non-array slots, which are bounded in practice) take the plain clone.
+/// Measured on the RED fixture's 40 000 entries: a plain clone costs ~60 ms in
+/// a debug build (over the 50 ms budget), the scoped split ~25 ms.
+fn clone_snapshot_slot(value: &Value) -> Value {
+    const MIN_PARALLEL_ENTRIES: usize = 1024;
+    const MAX_CLONE_THREADS: usize = 16;
+
+    let Some(entries) = value.as_array() else {
+        return value.clone();
+    };
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(MAX_CLONE_THREADS);
+    if workers < 2 || entries.len() < MIN_PARALLEL_ENTRIES {
+        return value.clone();
+    }
+
+    let mut parts: Vec<Vec<Value>> = Vec::with_capacity(workers);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = entries
+            .chunks(entries.len().div_ceil(workers))
+            .map(|chunk| scope.spawn(move || chunk.to_vec()))
+            .collect();
+        for handle in handles {
+            parts.push(handle.join().expect("snapshot clone thread panicked"));
+        }
+    });
+    Value::Array(parts.into_iter().flatten().collect())
 }
 
 /// Push `entry` onto a bounded history stack, dropping its oldest entry.
@@ -5228,6 +5382,7 @@ fn set_segments(root: &mut Value, segments: &[PathSegment], value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use modv_engine::preset::create_preset_from_state;
 
     fn store_with_group(name: &str) -> (Store, String) {
         let mut store = Store::new();
@@ -9973,5 +10128,80 @@ mod tests {
                 .expect("unknown type dispatches"),
             Value::Null
         );
+    }
+
+    #[test]
+    fn save_snapshot_defers_serialisation_and_write_off_the_caller_thread() {
+        // A deliberately large verbatim state slot: pretty-serialising and
+        // writing this on the output frame thread is what the periodic save
+        // must stop doing.
+        let bulk: Vec<Value> = (0..40_000)
+            .map(|i| {
+                json!({
+                    "id": format!("tween-{i}"),
+                    "duration": 1000 + i,
+                    "easing": "easeInOutSine",
+                    "data": [[i, i + 1, i + 2], [i * 2, i * 3, i * 4]],
+                    "label": "x".repeat(64),
+                })
+            })
+            .collect();
+        let expected_tweens = Value::Array(bulk);
+        let mut store = Store::new();
+        store.state.tweens = expected_tweens.clone();
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is after the epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "vmodv-deferred-snapshot-{}-{nanos}.json",
+            std::process::id()
+        ));
+        let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+
+        struct Cleanup(PathBuf, PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+                let _ = fs::remove_file(&self.1);
+            }
+        }
+        let _cleanup = Cleanup(path.clone(), tmp);
+
+        let started = Instant::now();
+        store
+            .save_snapshot(&path, 0)
+            .expect("save request is accepted");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "save_snapshot blocked the caller for {elapsed:?}; serialisation and the file write must run on a background worker",
+        );
+        assert!(
+            !path.exists(),
+            "save_snapshot wrote {} synchronously; the write must be queued and observed later",
+            path.display(),
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "queued snapshot was not written within 10s"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let written: Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("queued snapshot file is readable"),
+        )
+        .expect("queued snapshot file is valid JSON");
+        assert_eq!(
+            written["tweens"], expected_tweens,
+            "the deferred write must round-trip the whole snapshot"
+        );
+        assert_eq!(written[ENGINE_SIDECAR_KEY]["framesPresented"], json!(0));
     }
 }

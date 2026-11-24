@@ -3806,7 +3806,7 @@ impl VmodvApp {
             }
             Command::Save => {
                 let path = self.state_path.clone();
-                let result = match self.store.save_snapshot(&path, self.frames) {
+                let result = match self.store.save_snapshot_blocking(&path, self.frames) {
                     Ok(()) => {
                         self.last_state_save = Instant::now();
                         Ok(serde_json::json!({
@@ -3974,15 +3974,22 @@ impl VmodvApp {
 
     /// Write the engine snapshot to the resolved state path.
     ///
-    /// `announce` logs the successful write (manual save/quit); the periodic
-    /// safety save stays quiet. Failures are reported once per shell.
-    fn save_state_snapshot(&mut self, announce: bool) {
+    /// `explicit` saves (manual Save, quit) announce the successful write and
+    /// block until the file is on disk; the periodic 30 s crash-resilience
+    /// save stays quiet and queues the work so the output frame never
+    /// serialises the state. Failures are reported once per shell.
+    fn save_state_snapshot(&mut self, explicit: bool) {
         let path = self.state_path.clone();
-        match self.store.save_snapshot(&path, self.frames) {
+        let result = if explicit {
+            self.store.save_snapshot_blocking(&path, self.frames)
+        } else {
+            self.store.save_snapshot(&path, self.frames)
+        };
+        match result {
             Ok(()) => {
                 self.last_state_save = Instant::now();
                 self.state_save_error_logged = false;
-                if announce {
+                if explicit {
                     eprintln!("ui: INFO state snapshot saved to {}", path.display());
                 }
             }
@@ -6543,7 +6550,9 @@ module.exports = {
                 serde_json::json!({ "name": "Persisted", "id": "persisted-group" }),
             )
             .expect("create group");
-        store.save_snapshot(&path, 0).expect("save snapshot");
+        store
+            .save_snapshot_blocking(&path, 0)
+            .expect("save snapshot");
 
         let mut reloaded = Store::with_state_path(Some(&path));
         assert!(reloaded.restore_from_file(&path).expect("restore"));

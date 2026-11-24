@@ -242,13 +242,18 @@ impl EngineSupervisor {
         }
     }
 
-    /// Persist the snapshot atomically (tmp file + rename).
+    /// Persist the snapshot atomically (tmp file + rename) before returning.
+    ///
+    /// The supervisor's checkpoint and shutdown saves must leave the file in
+    /// place when they return (a supervisor restart reads it immediately), so
+    /// this keeps the synchronous store path; only the VmodV shell's periodic
+    /// save queues the write.
     pub fn save_snapshot(&mut self, store: &Store) -> io::Result<()> {
         self.frames_since_save = 0;
         let Some(path) = &self.state_path else {
             return Ok(());
         };
-        store.save_snapshot(path, self.frames_presented)
+        store.save_snapshot_blocking(path, self.frames_presented)
     }
 
     /// Poll the socket and publish scheduled heartbeat events.
