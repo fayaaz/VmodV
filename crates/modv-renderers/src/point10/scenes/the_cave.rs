@@ -43,7 +43,12 @@
 //!   resolution, and `RenderToTexture2` is 50% W x 100% H
 //!   (`P9Overrides.js:356-358`, `P9Scene.js:899-908`);
 //! * the Narkowicz ACES fit `_tonemapACES` (`P9Glsl.js:459-467`) in Shader2,
-//!   which adds the bloom result to the sharp upsample before tonemapping.
+//!   which adds the bloom result to the sharp upsample before tonemapping;
+//! * the GLSL camera transform `normalize(...) * mat3(CamRight, CamUp, CamDir)`.
+//!   GLSL treats a vector on the left as a row vector, so this is `Mᵀ d`, not
+//!   `M d`. Using the forward transform keeps the view on `CamDir`, which
+//!   drifts away from the travelling light whenever the path bends in y — a
+//!   unit test pins the centre-ray alignment across the whole path.
 //!
 //! # Replaced Plane9 machinery
 //!
@@ -174,6 +179,65 @@ pub fn tunnel_position(z: f32, a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2
         out[i] = (z * a[i]).sin() * b[i] + (z * c[i]).cos() * d[i];
     }
     out
+}
+
+/// Camera path constants (`cama/camb/camc/camd` in Shader1). The CPU twins
+/// below mirror the WGSL so the camera/light alignment can be tested without
+/// a device.
+#[cfg(test)]
+const CAMA: [f32; 2] = [-2.6943, 3.0483];
+#[cfg(test)]
+const CAMB: [f32; 2] = [0.2516, 0.1749];
+#[cfg(test)]
+const CAMC: [f32; 2] = [-3.7902, 2.4478];
+#[cfg(test)]
+const CAMD: [f32; 2] = [0.0865, -0.1664];
+
+#[cfg(test)]
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+#[cfg(test)]
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[cfg(test)]
+fn normalise3(v: [f32; 3]) -> [f32; 3] {
+    let length = dot3(v, v).sqrt();
+    if length > 0.0 {
+        [v[0] / length, v[1] / length, v[2] / length]
+    } else {
+        [0.0, 0.0, 1.0]
+    }
+}
+
+/// The camera basis at tunnel position `t` (`CamDir`, `CamRight`, `CamUp`).
+#[cfg(test)]
+fn cave_camera_basis(t: f32) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let pos = tunnel_position(t, CAMA, CAMB, CAMC, CAMD);
+    let ahead = tunnel_position(t + 0.05, CAMA, CAMB, CAMC, CAMD);
+    let forward = normalise3([ahead[0] - pos[0], -ahead[1] + pos[1], 0.1]);
+    let right = normalise3(cross3(forward, [0.0, 1.0, 0.0]));
+    let up = normalise3(cross3(right, forward));
+    (forward, right, up)
+}
+
+/// The ray at the centre pixel, matching the shader's `d * mat3(R, U, F)`.
+///
+/// GLSL treats a vector on the left of a matrix as a row vector, so
+/// `d * mat3(CamRight, CamUp, CamDir)` is `Mᵀ d`, *not* `M d`. Using `M d`
+/// keeps the view pointed along `CamDir`, which drifts away from the light
+/// whenever the tunnel path bends in y.
+#[cfg(test)]
+fn cave_centre_ray(t: f32) -> [f32; 3] {
+    let (forward, right, up) = cave_camera_basis(t);
+    [right[2], up[2], forward[2]]
 }
 
 /// `gIn1`-shaped uniform block shared by the raymarch shader (32 bytes).
@@ -735,7 +799,10 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let uv = vec2<f32>(uv01.x * 2.0 - 1.0, 1.0 - uv01.y * 2.0);
   let aspect = u.resolution.x / u.resolution.y;
   let dir = normalize(vec3<f32>(uv * vec2<f32>(aspect, 1.0), 1.0));
-  let ray = cam_right * dir.x + cam_up * dir.y + cam_dir * dir.z;
+  // GLSL `normalize(...) * mat3(CamRight, CamUp, CamDir)` is Mᵀ * d (a vector
+  // on the left is a row vector). Using M * d here makes the view drift away
+  // from the travelling light whenever the tunnel bends in y.
+  let ray = vec3<f32>(dot(dir, cam_right), dot(dir, cam_up), dot(dir, cam_dir));
 
   // First hit: 75 steps, then six bisection steps.
   var fade = 0.0;
@@ -1057,6 +1124,38 @@ mod tests {
         let c = [5.0, 6.0];
         let d = [7.0, 8.0];
         assert_eq!(tunnel_position(0.0, a, b, c, d), d);
+    }
+
+    #[test]
+    fn centre_ray_tracks_the_travelling_light() {
+        // The light sits half a tunnel-unit ahead of the camera. When the path
+        // bends in y the two must stay aligned — this is the
+        // `pow(..., 100000.0)` wisp the preset uses to draw the light source.
+        for t in [291.0, 300.0, 350.0, 400.0, 500.0, 800.0] {
+            let pos = tunnel_position(t, CAMA, CAMB, CAMC, CAMD);
+            let light_pos = tunnel_position(t + 0.5, CAMA, CAMB, CAMC, CAMD);
+            let light = normalise3([light_pos[0] - pos[0], light_pos[1] - pos[1], 0.5]);
+            let alignment = dot3(cave_centre_ray(t), light);
+            assert!(
+                alignment > 0.9,
+                "t={t}: centre ray lost the light (alignment {alignment:.3})"
+            );
+        }
+    }
+
+    #[test]
+    fn shader_uses_the_glsl_transpose_camera_transform() {
+        let cave = cave_wgsl();
+        assert!(
+            cave.contains(
+                "let ray = vec3<f32>(dot(dir, cam_right), dot(dir, cam_up), dot(dir, cam_dir));"
+            ),
+            "the raymarch must use GLSL's v*M (transpose) camera transform"
+        );
+        assert!(
+            !cave.contains("cam_right * dir.x"),
+            "the forward M*v transform drifts away from the travelling light"
+        );
     }
 
     #[test]
