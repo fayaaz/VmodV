@@ -32,6 +32,7 @@ use crate::state::{
 use crate::tab_drag::{TabDrag, TabDropTarget, floating_bounds_for_drop};
 use crate::theme;
 use crate::widgets::input_link::{link_control_inline, link_editor_window, link_row};
+use crate::widgets::palette_prop;
 use crate::widgets::range_control::chip;
 use crate::widgets::texture_control::{TextureControlChange, seek_position};
 use crate::widgets::{ColorControl, RangeControl, TextureControl, TweenControl, VecControl};
@@ -4319,25 +4320,41 @@ fn draw_prop(
                         .color(theme::MUTED),
                 );
                 chip(ui, "palette", theme::TWEEN);
-                if let serde_json::Value::Array(colors) = &prop.value {
-                    for color in colors.iter().take(8) {
-                        let control = ColorControl::new("", color);
+            });
+            if let serde_json::Value::Array(colors) = &prop.value {
+                for (index, color) in colors.iter().take(8).enumerate() {
+                    ui.horizontal(|ui| {
+                        let [r, g, b, a] = palette_prop::entry_rgba(color);
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                        let [r, g, b, a] = control.rgba;
                         ui.painter().rect_filled(
                             rect,
                             egui::CornerRadius::same(0),
-                            egui::Color32::from_rgba_unmultiplied(
-                                (r.clamp(0.0, 1.0) * 255.0) as u8,
-                                (g.clamp(0.0, 1.0) * 255.0) as u8,
-                                (b.clamp(0.0, 1.0) * 255.0) as u8,
-                                (a.clamp(0.0, 1.0) * 255.0) as u8,
-                            ),
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, a),
                         );
-                    }
+                        let mut text = palette_prop::entry_hex(color);
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut text)
+                                .id_salt(("palette-prop-hex", module_id, &prop.name, index))
+                                .desired_width(90.0)
+                                .hint_text("#RRGGBB"),
+                        );
+                        if response.changed() {
+                            let mut value = prop.value.clone();
+                            if palette_prop::set_entry_hex(&mut value, index, &text) {
+                                state.push_action(
+                                    "modules/updateProp",
+                                    serde_json::json!({
+                                        "moduleId": module_id,
+                                        "prop": prop.name,
+                                        "data": { "value": value },
+                                    }),
+                                );
+                            }
+                        }
+                    });
                 }
-            });
+            }
         }
         "texture" => {
             let mut control = TextureControl::new(&prop.name, &prop.value);
@@ -4383,12 +4400,24 @@ fn draw_prop(
                         .color(theme::MUTED),
                 );
                 chip(ui, "font", theme::MUTED);
-                ui.label(
-                    egui::RichText::new(prop.value.as_str().unwrap_or("default"))
-                        .monospace()
-                        .size(11.0)
-                        .color(theme::MUTED),
+                let mut text = prop.value.as_str().unwrap_or("default").to_string();
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .id_salt(("font-prop", module_id, &prop.name))
+                        .desired_width(120.0)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text("default"),
                 );
+                if response.changed() {
+                    state.push_action(
+                        "modules/updateProp",
+                        serde_json::json!({
+                            "moduleId": module_id,
+                            "prop": prop.name,
+                            "data": { "value": text },
+                        }),
+                    );
+                }
             });
         }
         _ => {

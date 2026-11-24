@@ -8,6 +8,7 @@ pub mod draw_control;
 pub mod draw_curve;
 pub mod input_link;
 pub mod palette_editor;
+pub mod palette_prop;
 pub mod range_control;
 pub mod texture_control;
 pub mod tween_control;
