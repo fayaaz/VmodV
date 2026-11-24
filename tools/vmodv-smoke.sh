@@ -210,7 +210,7 @@ elif [ -z "$BIN_OVERRIDE" ] && compgen -G "$ROOT/dist/VmodV-*.AppImage" >/dev/nu
     MODE="AppImage ($APPIMAGE)"
     APP_CMD=("$APPIMAGE" --appimage-extract-and-run)
 else
-    BIN=${BIN_OVERRIDE:-"$ROOT/crates/target/release/modv"}
+    BIN=${BIN_OVERRIDE:-"${CARGO_TARGET_DIR:-$ROOT/crates/target}/release/modv"}
     [ -x "$BIN" ] || fail "VmodV binary not found at $BIN; run 'make vmodv' or pass --appimage"
     APPDIR="$TMP/VmodV.AppDir"
     mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/vmodv"

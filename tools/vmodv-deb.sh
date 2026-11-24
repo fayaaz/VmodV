@@ -21,7 +21,7 @@
 # Flags (real-mode default in brackets):
 #   --dry-run          stage only; run no cargo build, dpkg-deb or checker
 #   --project-root DIR repository root [ROOT, default /app]
-#   --binary FILE      modv binary [<project-root>/crates/target/release/modv]
+#   --binary FILE      modv binary [$CARGO_TARGET_DIR/release/modv or <project-root>/crates/target/release/modv]
 #   --dist DIR         output directory [<project-root>/dist]
 #   --version VER      package version [APP_VERSION / VMODV_VERSION / tools/version.sh]
 #   --suffix SUFFIX    appended verbatim to the artifact name [DEB_SUFFIX, empty]
@@ -39,7 +39,7 @@ usage() {
 Usage: tools/vmodv-deb.sh [options]
   --dry-run              stage the package tree from explicit fake inputs (no cargo/dpkg-deb/checker)
   --project-root DIR     repository root (default: ROOT or /app)
-  --binary FILE          modv binary (default: <project-root>/crates/target/release/modv)
+  --binary FILE          modv binary (default: $CARGO_TARGET_DIR/release/modv or <project-root>/crates/target/release/modv)
   --dist DIR             output directory (default: <project-root>/dist)
   --version VER          package version (default: APP_VERSION / VMODV_VERSION / tools/version.sh)
   --suffix SUFFIX        artifact-name suffix (default: DEB_SUFFIX or empty)
@@ -65,7 +65,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$ROOT" ] || ROOT="/app"
-BINARY="${BINARY:-$ROOT/crates/target/release/modv}"
+BINARY="${BINARY:-${CARGO_TARGET_DIR:-$ROOT/crates/target}/release/modv}"
 DIST="${DIST_ARG:-${DIST_DIR:-$ROOT/dist}}"
 case "$DIST" in
     /*) ;;

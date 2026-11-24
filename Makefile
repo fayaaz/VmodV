@@ -17,6 +17,15 @@
 #   make test-e2e-vmodv  the real-binary e2e harness and parity tests
 #   make shell            interactive shell in the Rust toolchain
 #   make docker-package   build both installers via Dockerfile `artifacts`
+#   make disk-clean-targets  drop compiled artifacts from the cargo volume
+
+# Local builds keep Cargo's target dir in the modv-cargo Docker volume instead
+# of the bind-mounted crates/ tree, which otherwise grows by gigabytes with
+# stale build-script outputs. Opt in by setting CARGO_TARGET_DIR in the
+# gitignored .env (e.g. /cargo/target); CI leaves it unset so its crates/target
+# cache keeps working.
+-include .env
+CARGO_TARGET_ENV := $(if $(CARGO_TARGET_DIR),-e CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)")
 
 # The version baked into the installers is not kept in the tree. It comes
 # from $VMODV_VERSION when set, otherwise from the git tags via
@@ -87,14 +96,14 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean version
+.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
 	if [ "$$free" -lt "$(MIN_FREE_GB)" ]; then \
 		echo "error: only $${free} GB free on the build filesystem (need $(MIN_FREE_GB) GB)."; \
-		echo "       free host space first — e.g. crates/target/incremental or crates/target/*/incremental,"; \
-		echo "       then 'make docker-reset' (clears the cargo cache volume)."; \
+		echo "       free host space first — e.g. 'make disk-clean-targets' (drops compiled artifacts,"; \
+		echo "       keeps the registry) or 'make docker-reset' (clears the whole cargo cache volume)."; \
 		echo "       'make disk-clean' only drops cache unused for a week; avoid 'docker builder prune -af'."; \
 		exit 1; \
 	fi
@@ -108,6 +117,17 @@ disk-clean:
 	-$(DOCKER) builder prune -f --filter until=168h
 	-$(DOCKER) image prune -f
 	-$(DOCKER) container prune -f
+
+# Drop compiled artifacts from the cargo volume without losing the registry
+# cache. The next make target recompiles from scratch but keeps downloaded
+# crates; 'make docker-reset' clears the registry too.
+disk-clean-targets: docker-cargo-volume
+	@target="$(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),/cargo/target)"; \
+	case "$$target" in \
+		/cargo/?*) ;; \
+		*) echo "error: refusing to clean unsafe CARGO_TARGET_DIR: $$target" >&2; exit 1 ;; \
+	esac; \
+	$(DOCKER) run --rm -v "$(CARGO_VOLUME)":/cargo "$(RUST_IMAGE)" rm -rf "$$target"
 
 clean:
 	rm -rf "$(DIST_DIR)"
@@ -131,6 +151,7 @@ appimage-vmodv: disk-guard docker-cargo-volume
 		--user "$(HOST_UID):$(HOST_GID)" \
 		-e HOME=/tmp \
 		-e CARGO_HOME=/cargo \
+		$(CARGO_TARGET_ENV) \
 		-e APP_VERSION=$(VMODV_VERSION) \
 		-v "$(CURDIR)":/app \
 		-v "$(CARGO_VOLUME)":/cargo \
@@ -167,6 +188,7 @@ vmodv-deb: disk-guard docker-cargo-volume
 		--user "$(HOST_UID):$(HOST_GID)" \
 		-e HOME=/tmp \
 		-e CARGO_HOME=/cargo \
+		$(CARGO_TARGET_ENV) \
 		-e APP_VERSION=$(VMODV_VERSION) \
 		-e DIST_DIR=$(DIST_DIR) \
 		-e DEB_SUFFIX=$(DEB_SUFFIX) \
@@ -218,6 +240,7 @@ define run-cargo
 		--user "$(HOST_UID):$(HOST_GID)" \
 		-e HOME=/tmp \
 		-e CARGO_HOME=/cargo \
+		$(CARGO_TARGET_ENV) \
 		-v "$(CURDIR)":/app \
 		-v "$(CARGO_VOLUME)":/cargo \
 		-w /app/crates \
@@ -283,5 +306,6 @@ test-e2e: test-e2e-vmodv
 shell: docker-cargo-volume
 	$(DOCKER) run --rm -it --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \
 		-e CARGO_HOME=/cargo \
+		$(CARGO_TARGET_ENV) \
 		-v "$(CURDIR)":/app -v "$(CARGO_VOLUME)":/cargo -w /app/crates \
 		$(DOCKER_RUN_ARGS) "$(RUST_IMAGE)" bash
