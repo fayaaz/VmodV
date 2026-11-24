@@ -503,6 +503,114 @@ fn copying_a_scene_cell_over_the_socket_updates_the_target_and_persists() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// BUGS.md "copy and paste between different rows" + aef584fd: a same-Scene
+/// copy must work when the source and destination rows differ, and persist.
+#[test]
+fn copying_a_scene_cell_between_rows_of_the_same_scene_persists() {
+    let root = e2e::temp_root("vmodv-e2e-same-scene-cell-copy");
+    let user_data = root.join("userData");
+    fs::create_dir_all(&user_data).expect("create userData");
+    seed_scenes(
+        &user_data,
+        vec![scene(
+            "scene-a",
+            "Same Scene",
+            vec![
+                group("bg-group", "Background", &["bg-ball"]),
+                group("fx-group", "Effects", &["fx-bands"]),
+            ],
+            json!({
+                "bg-ball": module("bg-ball", "Ball"),
+                "fx-bands": module("fx-bands", "Bands"),
+            }),
+        )],
+        json!({ "enabled": false, "rowNames": ["Background", "Effects"] }),
+    );
+
+    let mut app = VmodvHarness::builder()
+        .width(640)
+        .height(360)
+        .user_data(&user_data)
+        .spawn();
+    app.wait_ready();
+    let state = app.wait_for_state(Duration::from_secs(30), |state| {
+        scene_with_id(state, "scene-a").is_some()
+    });
+    assert_eq!(
+        cell_module_names(&scene_with_id_owned(&state, "scene-a"), 1),
+        ["Bands"],
+        "the target row starts with its own Module: {state}"
+    );
+
+    let copied = app.dispatch(
+        "scenes/copySceneCellToScene",
+        json!({
+            "fromSceneId": "scene-a",
+            "toSceneId": "scene-a",
+            "fromRowIndex": 0,
+            "toRowIndex": 1,
+        }),
+    );
+    assert_eq!(copied["id"], json!("scene-a"), "{copied}");
+    assert_eq!(
+        cell_module_names(&copied, 1),
+        ["Ball"],
+        "row 1 receives row 0's cell: {copied}"
+    );
+    assert_eq!(
+        cell_module_names(&copied, 0),
+        ["Ball"],
+        "the source row is untouched: {copied}"
+    );
+    assert_eq!(
+        copied["modules"]["bg-ball"]["$moduleName"],
+        json!("Ball"),
+        "the copied Module snapshot is retained: {copied}"
+    );
+    assert_eq!(
+        copied["modules"]["fx-bands"]["$moduleName"],
+        json!("Bands"),
+        "the target row's own Module snapshot is retained: {copied}"
+    );
+
+    let unchanged = app.dispatch(
+        "scenes/copySceneCellToScene",
+        json!({
+            "fromSceneId": "scene-a",
+            "toSceneId": "scene-a",
+            "fromRowIndex": 0,
+            "toRowIndex": 0,
+        }),
+    );
+    assert_eq!(
+        unchanged,
+        Value::Null,
+        "copying a cell onto itself is a no-op: {unchanged}"
+    );
+
+    app.quit();
+    app.assert_exit(0);
+
+    let saved = read_scenes_file(&user_data);
+    let saved_scene = saved["scenes"]
+        .as_array()
+        .expect("saved scenes")
+        .iter()
+        .find(|scene| scene["id"] == json!("scene-a"))
+        .expect("the same Scene is saved");
+    assert_eq!(
+        cell_module_names(saved_scene, 0),
+        ["Ball"],
+        "the source row is durable: {saved_scene}"
+    );
+    assert_eq!(
+        cell_module_names(saved_scene, 1),
+        ["Ball"],
+        "the same-Scene row copy is durable: {saved_scene}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// d37e006d: the authoritative live-row stamps must be per row when
 /// performance mode is off — applying two rows from different Scenes must not
 /// report either Scene as owning the other's row.
