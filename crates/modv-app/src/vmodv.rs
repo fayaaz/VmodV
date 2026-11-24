@@ -520,6 +520,8 @@ pub struct VmodvApp {
     /// Uploaded Library thumbnails keyed by media-root-relative path.
     library_textures: HashMap<String, PreviewEntry>,
     library_view_dirty: bool,
+    /// The Library index revision `library_view` was last built from.
+    library_revision: u64,
     modifiers: HashMap<WindowId, ModifiersState>,
     double_click: HashMap<WindowId, DoubleClickTracker>,
     frames: u64,
@@ -813,12 +815,14 @@ impl VmodvApp {
         }
         let mut media_library =
             crate::media_library::MediaLibrary::new(media_root.clone(), active_profile.clone());
-        media_library.rescan();
+        // Startup may block: the window does not exist yet.
+        media_library.rescan_blocking();
         eprintln!(
             "ui: INFO media library indexed {} asset(s) in the {active_profile:?} profile",
             media_library.total_count()
         );
         let library_view = media_library.view(&HashMap::new());
+        let library_revision = media_library.revision();
         if midi_client.available() {
             eprintln!("ui: INFO MIDI input available (hot-plug polled at 1 Hz)");
         } else if let Some(error) = midi_client.error() {
@@ -973,6 +977,7 @@ impl VmodvApp {
             library_view,
             library_textures: HashMap::new(),
             library_view_dirty: false,
+            library_revision,
             modifiers: HashMap::new(),
             double_click: HashMap::new(),
             frames: 0,
@@ -2346,6 +2351,13 @@ impl VmodvApp {
     /// folder does not touch the disk again.
     fn refresh_media_library(&mut self) {
         let mut dirty = self.library_view_dirty;
+        // The scan runs on its worker; rebuild the read model when its index
+        // revision changes rather than polling the folder count every frame.
+        let revision = self.media_library.revision();
+        if revision != self.library_revision {
+            self.library_revision = revision;
+            dirty = true;
+        }
         if self.library_refresh.take().is_some() {
             self.drop_library_textures();
             self.media_library.rescan();

@@ -20,11 +20,20 @@
 //! Thumbnails/decodes are cached per absolute path and dropped on a rescan or
 //! profile switch. [`LibraryRefresh`] coalesces watcher bursts so at most one
 //! scan runs per quiet burst, never per frame.
+//!
+//! The recursive scan (palette parsing, video headers) and the thumbnail
+//! decodes run on two background workers. The window thread only submits a
+//! request and reads the shared index/cache, so a large folder or a large
+//! image can never stall a frame. Startup uses [`MediaLibrary::rescan_blocking`]
+//! because the window does not exist yet.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread::JoinHandle;
 
 use modv_ui::model::{LibraryKind, MediaAssetView, MediaLibraryView, PreviewTexture};
 
@@ -110,25 +119,239 @@ pub struct KindScan {
     pub error: Option<String>,
 }
 
-/// The scanned media index of one profile.
-pub struct MediaLibrary {
-    media_root: PathBuf,
-    profile: String,
+/// The scanned index, decode cache and counters shared with the workers.
+#[derive(Default)]
+struct LibraryState {
     scans: BTreeMap<LibraryKind, KindScan>,
     /// Decoded thumbnails keyed by absolute path; `None` records a decode
     /// failure so the panel does not retry it every frame.
     thumbnails: HashMap<PathBuf, Option<Thumbnail>>,
+    /// Absolute paths with an outstanding worker decode.
+    pending: HashSet<PathBuf>,
+    /// Worker decodes that finished since the last read.
+    completed: Vec<CompletedThumbnail>,
+    /// The last requested scan. A worker result only applies when it matches.
     generation: u64,
+    /// Invalidates in-flight decodes (rescan, clear, profile switch).
+    decode_epoch: u64,
+    /// Bumped whenever the scanned index changes, so the shell can rebuild its
+    /// read model only when the worker actually produced something new.
+    revision: u64,
+}
+
+impl LibraryState {
+    /// Drop every cached, finished and in-flight thumbnail and invalidate the
+    /// outstanding decodes. Callers that also change the index bump
+    /// `generation` (and `revision`) separately.
+    fn invalidate_decodes(&mut self) {
+        self.thumbnails.clear();
+        self.pending.clear();
+        self.completed.clear();
+        self.decode_epoch = self.decode_epoch.wrapping_add(1);
+    }
+}
+
+/// One worker decode that has not been handed to the shell yet.
+struct CompletedThumbnail {
+    kind: LibraryKind,
+    folder: String,
+    path: String,
+    thumbnail: Thumbnail,
+}
+
+enum ScanMessage {
+    Run {
+        generation: u64,
+        media_root: PathBuf,
+        profile: String,
+    },
+    Shutdown,
+}
+
+enum DecodeMessage {
+    Run { epoch: u64, asset: ScannedAsset },
+    Shutdown,
+}
+
+/// The window thread's handle to the two media-library workers.
+struct LibraryWorker {
+    scan_jobs: Option<Sender<ScanMessage>>,
+    decode_jobs: Option<Sender<DecodeMessage>>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+/// Start one named worker, or report why it could not be started. The shell
+/// keeps working with the remaining worker(s) if a spawn fails.
+fn spawn_worker<T, F>(name: &str, error_label: &str, run: F) -> Option<(Sender<T>, JoinHandle<()>)>
+where
+    T: Send + 'static,
+    F: FnOnce(Receiver<T>) + Send + 'static,
+{
+    let (jobs, rx) = channel();
+    match std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || run(rx))
+    {
+        Ok(thread) => Some((jobs, thread)),
+        Err(error) => {
+            eprintln!("ui: WARN could not start the {error_label}: {error}");
+            None
+        }
+    }
+}
+
+impl LibraryWorker {
+    fn new(state: Arc<Mutex<LibraryState>>) -> Self {
+        let mut worker = Self {
+            scan_jobs: None,
+            decode_jobs: None,
+            threads: Vec::new(),
+        };
+
+        let scan_state = Arc::clone(&state);
+        if let Some((jobs, thread)) = spawn_worker(
+            "modv-library-scan",
+            "media-library scan worker",
+            move |rx| run_scan_worker(scan_state, rx),
+        ) {
+            worker.scan_jobs = Some(jobs);
+            worker.threads.push(thread);
+        }
+
+        if let Some((jobs, thread)) = spawn_worker(
+            "modv-library-thumbnails",
+            "media-library thumbnail worker",
+            move |rx| run_decode_worker(state, rx),
+        ) {
+            worker.decode_jobs = Some(jobs);
+            worker.threads.push(thread);
+        }
+
+        worker
+    }
+
+    fn request_scan(&self, generation: u64, media_root: PathBuf, profile: String) {
+        if let Some(jobs) = &self.scan_jobs {
+            let _ = jobs.send(ScanMessage::Run {
+                generation,
+                media_root,
+                profile,
+            });
+        }
+    }
+
+    fn request_decode(&self, epoch: u64, asset: ScannedAsset) {
+        if let Some(jobs) = &self.decode_jobs {
+            let _ = jobs.send(DecodeMessage::Run { epoch, asset });
+        }
+    }
+}
+
+impl Drop for LibraryWorker {
+    fn drop(&mut self) {
+        if let Some(jobs) = &self.scan_jobs {
+            let _ = jobs.send(ScanMessage::Shutdown);
+        }
+        if let Some(jobs) = &self.decode_jobs {
+            let _ = jobs.send(DecodeMessage::Shutdown);
+        }
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn lock_library(state: &Mutex<LibraryState>) -> MutexGuard<'_, LibraryState> {
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Scan all three profile folders into one index.
+fn scan_all(media_root: &Path, profile: &str) -> BTreeMap<LibraryKind, KindScan> {
+    LibraryKind::ALL
+        .into_iter()
+        .map(|kind| (kind, scan_kind(media_root, profile, kind)))
+        .collect()
+}
+
+/// Publish a finished scan only if no newer scan was requested meanwhile.
+fn apply_scan(state: &mut LibraryState, generation: u64, scans: BTreeMap<LibraryKind, KindScan>) {
+    if state.generation == generation {
+        state.scans = scans;
+        state.revision = state.revision.wrapping_add(1);
+    }
+}
+
+/// Scan all three folders for the newest requested generation.
+///
+/// Older/duplicate requests that are still queued when this runs are skipped:
+/// their generation no longer matches the index the shell is waiting for.
+fn run_scan_worker(state: Arc<Mutex<LibraryState>>, jobs: Receiver<ScanMessage>) {
+    while let Ok(message) = jobs.recv() {
+        let ScanMessage::Run {
+            generation,
+            media_root,
+            profile,
+        } = message
+        else {
+            break;
+        };
+        if lock_library(&state).generation != generation {
+            continue;
+        }
+        let scans = scan_all(&media_root, &profile);
+        apply_scan(&mut lock_library(&state), generation, scans);
+    }
+}
+
+/// Decode one requested thumbnail and publish it to the shared cache.
+fn run_decode_worker(state: Arc<Mutex<LibraryState>>, jobs: Receiver<DecodeMessage>) {
+    while let Ok(message) = jobs.recv() {
+        let DecodeMessage::Run { epoch, asset } = message else {
+            break;
+        };
+        if lock_library(&state).decode_epoch != epoch {
+            continue;
+        }
+        // Decoding reads the file/image and is the part that must stay off the
+        // frame thread; a failure is cached as `None`, not panicked.
+        let thumbnail = decode_asset_thumbnail(&asset);
+        let mut state = lock_library(&state);
+        if state.decode_epoch != epoch {
+            continue;
+        }
+        state.pending.remove(&asset.absolute);
+        state
+            .thumbnails
+            .insert(asset.absolute.clone(), thumbnail.clone());
+        if let Some(thumbnail) = thumbnail {
+            state.completed.push(CompletedThumbnail {
+                kind: asset.kind,
+                folder: asset.folder,
+                path: asset.path,
+                thumbnail,
+            });
+        }
+    }
+}
+
+/// The scanned media index of one profile.
+pub struct MediaLibrary {
+    media_root: PathBuf,
+    profile: String,
+    state: Arc<Mutex<LibraryState>>,
+    worker: LibraryWorker,
 }
 
 impl MediaLibrary {
     pub fn new(media_root: impl Into<PathBuf>, profile: impl Into<String>) -> Self {
+        let state = Arc::new(Mutex::new(LibraryState::default()));
         Self {
             media_root: media_root.into(),
             profile: profile.into(),
-            scans: BTreeMap::new(),
-            thumbnails: HashMap::new(),
-            generation: 0,
+            worker: LibraryWorker::new(Arc::clone(&state)),
+            state,
         }
     }
 
@@ -143,48 +366,92 @@ impl MediaLibrary {
             return;
         }
         self.profile = profile;
-        self.scans.clear();
-        self.thumbnails.clear();
+        let mut state = lock_library(&self.state);
+        state.scans.clear();
+        state.invalidate_decodes();
+        state.generation = state.generation.wrapping_add(1);
+        state.revision = state.revision.wrapping_add(1);
     }
 
     pub fn generation(&self) -> u64 {
-        self.generation
+        lock_library(&self.state).generation
     }
 
-    /// Re-scan all three folders and drop the decoded thumbnails.
+    /// The Library index revision; it changes when a worker scan is applied.
+    pub fn revision(&self) -> u64 {
+        lock_library(&self.state).revision
+    }
+
+    /// Ask the worker to re-scan all three folders and drop the decoded
+    /// thumbnails. Returns immediately with the new generation.
     pub fn rescan(&mut self) -> u64 {
-        self.thumbnails.clear();
-        for kind in LibraryKind::ALL {
-            self.scans
-                .insert(kind, scan_kind(&self.media_root, &self.profile, kind));
-        }
-        self.generation += 1;
-        self.generation
+        let (generation, media_root, profile) = {
+            let mut state = lock_library(&self.state);
+            state.generation = state.generation.wrapping_add(1);
+            state.invalidate_decodes();
+            (
+                state.generation,
+                self.media_root.clone(),
+                self.profile.clone(),
+            )
+        };
+        self.worker.request_scan(generation, media_root, profile);
+        generation
+    }
+
+    /// Re-scan synchronously. Used at startup (before the window exists) and
+    /// by callers/tests that need the index immediately.
+    pub fn rescan_blocking(&mut self) -> u64 {
+        let generation = {
+            let mut state = lock_library(&self.state);
+            state.generation = state.generation.wrapping_add(1);
+            state.invalidate_decodes();
+            state.generation
+        };
+        let scans = scan_all(&self.media_root, &self.profile);
+        let mut state = lock_library(&self.state);
+        // A newer request/blocking scan must not be overwritten by this one.
+        apply_scan(&mut state, generation, scans);
+        generation
     }
 
     pub fn clear_thumbnails(&mut self) {
-        self.thumbnails.clear();
+        lock_library(&self.state).invalidate_decodes();
     }
 
     /// Every scanned asset, in kind then path order.
-    pub fn assets(&self) -> impl Iterator<Item = &ScannedAsset> {
-        self.scans.values().flat_map(|scan| scan.assets.iter())
+    pub fn assets(&self) -> impl Iterator<Item = ScannedAsset> {
+        let state = lock_library(&self.state);
+        state
+            .scans
+            .values()
+            .flat_map(|scan| scan.assets.iter().cloned())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     pub fn total_count(&self) -> usize {
-        self.assets().count()
+        lock_library(&self.state)
+            .scans
+            .values()
+            .map(|scan| scan.assets.len())
+            .sum()
     }
 
     /// The total number of scanned assets in one folder.
     pub fn count_for(&self, kind: LibraryKind) -> usize {
-        self.scans.get(&kind).map_or(0, |scan| scan.assets.len())
+        lock_library(&self.state)
+            .scans
+            .get(&kind)
+            .map_or(0, |scan| scan.assets.len())
     }
 
     /// Decode up to `limit` missing thumbnails for the visible kind/scope.
     ///
-    /// Returns `(media-root-relative path, thumbnail)` pairs for the shell to
-    /// upload. Decoded entries (including failures) stay cached; the cache is
-    /// capped at [`MAX_THUMBNAILS`].
+    /// Returns only thumbnails that are already decoded; newly requested
+    /// decodes run on the worker and surface to a later call. Decoded entries
+    /// (including failures) stay cached; the cache is capped at
+    /// [`MAX_THUMBNAILS`].
     pub fn decode_thumbnails(
         &mut self,
         kind: LibraryKind,
@@ -194,29 +461,104 @@ impl MediaLibrary {
         if limit == 0 {
             return Vec::new();
         }
-        let Some(scan) = self.scans.get(&kind) else {
+        let scope = modv_ui::model::normalise_library_folder(folder);
+        let mut guard = lock_library(&self.state);
+        let mut submissions = Vec::new();
+        let decoded = {
+            let state = &mut *guard;
+
+            let mut deferred = Vec::new();
+            let mut decoded = Vec::new();
+            for completed in std::mem::take(&mut state.completed) {
+                if completed.kind == kind
+                    && modv_ui::model::folder_in_scope(&completed.folder, &scope)
+                    && decoded.len() < limit
+                {
+                    decoded.push((completed.path, completed.thumbnail));
+                } else {
+                    deferred.push(completed);
+                }
+            }
+            state.completed = deferred;
+
+            let remaining = limit.saturating_sub(decoded.len());
+            if remaining > 0 {
+                let epoch = state.decode_epoch;
+                if let Some(scan) = state.scans.get(&kind) {
+                    // Only clone the few assets we actually submit, not the
+                    // whole visible folder, on every frame the panel is open.
+                    for asset in &scan.assets {
+                        if submissions.len() >= remaining {
+                            break;
+                        }
+                        if !modv_ui::model::folder_in_scope(&asset.folder, &scope) {
+                            continue;
+                        }
+                        if state.thumbnails.contains_key(&asset.absolute)
+                            || state.pending.contains(&asset.absolute)
+                        {
+                            continue;
+                        }
+                        if state.thumbnails.len() + state.pending.len() >= MAX_THUMBNAILS {
+                            break;
+                        }
+                        state.pending.insert(asset.absolute.clone());
+                        submissions.push((epoch, asset.clone()));
+                    }
+                }
+            }
+            decoded
+        };
+        drop(guard);
+
+        for (epoch, asset) in submissions {
+            self.worker.request_decode(epoch, asset);
+        }
+        decoded
+    }
+
+    /// Decode up to `limit` missing thumbnails synchronously.
+    ///
+    /// Existing tests and startup-adjacent callers use this when they need the
+    /// pixels in the same call; the runtime panel uses [`Self::decode_thumbnails`].
+    pub fn decode_thumbnails_blocking(
+        &mut self,
+        kind: LibraryKind,
+        folder: &str,
+        limit: usize,
+    ) -> Vec<(String, Thumbnail)> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let scope = modv_ui::model::normalise_library_folder(folder);
+        let mut guard = lock_library(&self.state);
+        let state = &mut *guard;
+        // This call owns the decode cache while it runs; discard anything the
+        // worker still had in flight for the previous epoch, but keep the
+        // already decoded thumbnails cached.
+        state.pending.clear();
+        state.completed.clear();
+        state.decode_epoch = state.decode_epoch.wrapping_add(1);
+        let Some(scan) = state.scans.get(&kind) else {
             return Vec::new();
         };
-        let scope = modv_ui::model::normalise_library_folder(folder);
-        let candidates: Vec<ScannedAsset> = scan
-            .assets
-            .iter()
-            .filter(|asset| modv_ui::model::folder_in_scope(&asset.folder, &scope))
-            .cloned()
-            .collect();
         let mut decoded = Vec::new();
-        for asset in candidates {
-            if self.thumbnails.contains_key(&asset.absolute) {
+        for asset in &scan.assets {
+            if !modv_ui::model::folder_in_scope(&asset.folder, &scope) {
                 continue;
             }
-            if self.thumbnails.len() >= MAX_THUMBNAILS {
+            if state.thumbnails.contains_key(&asset.absolute) {
+                continue;
+            }
+            if state.thumbnails.len() >= MAX_THUMBNAILS {
                 break;
             }
-            let thumbnail = decode_asset_thumbnail(&asset);
-            self.thumbnails
+            let thumbnail = decode_asset_thumbnail(asset);
+            state
+                .thumbnails
                 .insert(asset.absolute.clone(), thumbnail.clone());
             if let Some(thumbnail) = thumbnail {
-                decoded.push((asset.path, thumbnail));
+                decoded.push((asset.path.clone(), thumbnail));
             }
             if decoded.len() >= limit {
                 break;
@@ -227,10 +569,11 @@ impl MediaLibrary {
 
     /// Build the UI read model, attaching uploaded thumbnail textures.
     pub fn view(&self, textures: &HashMap<String, PreviewTexture>) -> MediaLibraryView {
+        let state = lock_library(&self.state);
         let mut assets = Vec::new();
         let mut truncated = false;
         let mut errors = Vec::new();
-        for (kind, scan) in &self.scans {
+        for (kind, scan) in &state.scans {
             truncated |= scan.truncated;
             if let Some(error) = &scan.error {
                 errors.push(format!("{}: {error}", kind.folder()));
@@ -1170,19 +1513,19 @@ mod tests {
         .expect("palette");
 
         let mut library = MediaLibrary::new(&root, "live");
-        library.rescan();
+        library.rescan_blocking();
 
-        let decoded = library.decode_thumbnails(LibraryKind::Image, "", 8);
+        let decoded = library.decode_thumbnails_blocking(LibraryKind::Image, "", 8);
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].0, "live/image/still.png");
         assert_eq!((decoded[0].1.width, decoded[0].1.height), (40, 20));
         assert_eq!(
-            library.decode_thumbnails(LibraryKind::Image, "", 8),
+            library.decode_thumbnails_blocking(LibraryKind::Image, "", 8),
             Vec::new(),
             "the decode is cached, not repeated every frame"
         );
 
-        let palettes = library.decode_thumbnails(LibraryKind::Palette, "", 8);
+        let palettes = library.decode_thumbnails_blocking(LibraryKind::Palette, "", 8);
         assert_eq!(palettes.len(), 1);
         assert_eq!(palettes[0].0, "live/palette/neon.json");
         assert_eq!(palettes[0].1.width, THUMBNAIL_MAX_SIZE.0);
@@ -1206,7 +1549,9 @@ mod tests {
 
         library.clear_thumbnails();
         assert_eq!(
-            library.decode_thumbnails(LibraryKind::Image, "", 8).len(),
+            library
+                .decode_thumbnails_blocking(LibraryKind::Image, "", 8)
+                .len(),
             1,
             "a rescan/clear drops the decode cache"
         );
@@ -1225,10 +1570,10 @@ mod tests {
             .expect("palette");
         }
         let mut library = MediaLibrary::new(&root, "live");
-        library.rescan();
+        library.rescan_blocking();
         let mut decoded = 0;
         loop {
-            let batch = library.decode_thumbnails(LibraryKind::Palette, "", 7);
+            let batch = library.decode_thumbnails_blocking(LibraryKind::Palette, "", 7);
             if batch.is_empty() {
                 break;
             }
@@ -1368,7 +1713,7 @@ mod tests {
     fn the_watcher_burst_rescans_the_new_asset_into_the_index() {
         let root = temp_dir("modv-library-burst");
         let mut library = MediaLibrary::new(&root, "live");
-        library.rescan();
+        library.rescan_blocking();
         assert_eq!(library.total_count(), 0);
 
         write_png(&root.join("live/image/new.png"), 2, 2, [1, 1, 1, 255]);
@@ -1378,7 +1723,7 @@ mod tests {
             events: 1,
         });
         assert!(refresh.take().is_some());
-        library.rescan();
+        library.rescan_blocking();
         assert_eq!(library.count_for(LibraryKind::Image), 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1390,16 +1735,129 @@ mod tests {
         write_png(&root.join("two/image/two.png"), 2, 2, [2, 2, 2, 255]);
 
         let mut library = MediaLibrary::new(&root, "one");
-        library.rescan();
+        library.rescan_blocking();
         assert_eq!(library.total_count(), 1);
         library.set_profile("two");
         assert_eq!(library.total_count(), 0, "the old profile is not shown");
-        library.rescan();
+        library.rescan_blocking();
         assert_eq!(library.total_count(), 1);
         assert_eq!(
             library.view(&HashMap::new()).assets[0].path,
             "two/image/two.png"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Runtime Library work must not run on the frame thread: `rescan` only
+    /// submits a scan, and `decode_thumbnails` returns the decodes that are
+    /// already available while newly requested ones are produced off-thread
+    /// and surface to a later call. The finished work must reach the Library
+    /// view. Both operations are deliberately made expensive here so the old
+    /// synchronous behaviour visibly blows a generous latency budget.
+    #[test]
+    fn runtime_library_work_does_not_block_the_frame_thread() {
+        use std::time::{Duration, Instant};
+
+        let root = temp_dir("modv-library-offthread");
+
+        // A large 16:9 image: decoding it inline is far slower than the
+        // budget, and its aspect ratio matches the expected 256x144 thumbnail.
+        write_png(
+            &root.join("live/image/hero.png"),
+            4000,
+            2250,
+            [30, 80, 130, 255],
+        );
+        // Chunky, valid palettes: parsing them inline makes the scan slow.
+        let palette_entry = r#"{"r":1,"g":0,"b":0}"#;
+        let palette_json = format!(
+            "[{}]",
+            (0..10_000)
+                .map(|_| palette_entry)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        std::fs::create_dir_all(root.join("live/palette")).expect("palette dir");
+        for index in 0..MAX_ASSETS_PER_KIND {
+            std::fs::write(
+                root.join(format!("live/palette/p{index:03}.json")),
+                &palette_json,
+            )
+            .expect("palette file");
+        }
+
+        let mut library = MediaLibrary::new(&root, "live");
+
+        let scan_started = Instant::now();
+        library.rescan();
+        let scan_elapsed = scan_started.elapsed();
+
+        let decode_started = Instant::now();
+        let first = library.decode_thumbnails(LibraryKind::Image, "", 1);
+        let decode_elapsed = decode_started.elapsed();
+
+        assert!(
+            decode_elapsed < Duration::from_millis(100),
+            "decode_thumbnails blocked the caller for {decode_elapsed:?}; the \
+             image decode must run on a background worker"
+        );
+        assert!(
+            first.is_empty(),
+            "a newly requested decode is not available until the worker finishes"
+        );
+        assert!(
+            scan_elapsed < Duration::from_millis(250),
+            "rescan blocked the caller for {scan_elapsed:?}; the directory walk \
+             and palette parsing must run on a background worker"
+        );
+
+        // The finished scan reaches the index the view reads.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while library.total_count() == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            library.total_count(),
+            MAX_ASSETS_PER_KIND + 1,
+            "the worker's scan populates the index the view reads"
+        );
+        assert!(
+            library
+                .assets()
+                .any(|asset| asset.path == "live/image/hero.png"),
+            "the large image is part of the worker's index"
+        );
+
+        // The finished decode becomes available to a later call/poll.
+        let mut decoded = first;
+        let decode_deadline = Instant::now() + Duration::from_secs(30);
+        while decoded.is_empty() && Instant::now() < decode_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+            decoded = library.decode_thumbnails(LibraryKind::Image, "", 1);
+        }
+        assert_eq!(
+            decoded.len(),
+            1,
+            "the worker's decoded thumbnail is available to a later call"
+        );
+        assert_eq!((decoded[0].1.width, decoded[0].1.height), (256, 144));
+
+        let textures = HashMap::from([(
+            decoded[0].0.clone(),
+            PreviewTexture {
+                id: egui::TextureId::User(7),
+                width: 256,
+                height: 144,
+            },
+        )]);
+        let view = library.view(&textures);
+        assert!(
+            view.assets
+                .iter()
+                .any(|asset| { asset.path == "live/image/hero.png" && asset.thumbnail.is_some() }),
+            "the Library view eventually shows the worker's asset and thumbnail"
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 }
