@@ -239,7 +239,19 @@ pub struct Store {
     /// drains.
     pub(crate) windows: WindowRegistry,
     pub(crate) warned: HashSet<String>,
+    /// Preset-graph snapshots recorded before each successful, state-changing
+    /// edit (undo/redo). Oldest first; bounded to [`HISTORY_LIMIT`] entries.
+    undo_stack: Vec<Value>,
+    /// Snapshots popped by undo, ready to be reapplied by redo. Cleared by a
+    /// new recorded edit (the standard linear-history behaviour).
+    redo_stack: Vec<Value>,
 }
+
+/// How many preset-graph snapshots the undo and redo stacks each keep.
+const HISTORY_LIMIT: usize = 100;
+
+/// Action namespaces whose successful, state-changing edits enter the history.
+const HISTORY_NAMESPACES: [&str; 5] = ["groups/", "modules/", "inputs/", "expressions/", "tweens/"];
 
 /// The newest value an Input Link wrote and when its delta was last sent.
 #[derive(Clone, Debug)]
@@ -364,6 +376,8 @@ impl Store {
             expression_cache: ExpressionCache::new(),
             windows: WindowRegistry::default(),
             warned: HashSet::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -604,6 +618,84 @@ impl Store {
     /// Unknown actions log once and return `Ok(null)` — the renderer
     /// legitimately fires boot actions the engine does not implement yet.
     pub fn dispatch(&mut self, action: &str, payload: Value) -> Result<Value, StoreError> {
+        match action {
+            // ————————————————— Undo / redo —————————————————
+            //
+            // Snapshots cover the preset graph only (Groups, Modules, Inputs,
+            // expressions and tweens), which is what `snapshot`/`restore`
+            // round-trip; Scenes have their own persistence and are not part of
+            // the history.
+            "history/undo" | "history/redo" => self.apply_history_step(action == "history/undo"),
+            _ => {
+                if !Self::records_history(action) {
+                    return self.dispatch_unrecorded(action, payload);
+                }
+                // Record the prior graph, then keep the entry only when the
+                // dispatch succeeded *and* actually changed it (e.g.
+                // `groups/createGroup` on an existing id is a no-op).
+                let before = self.snapshot();
+                let result = self.dispatch_unrecorded(action, payload);
+                if result.is_ok() && self.snapshot() != before {
+                    push_history(&mut self.undo_stack, before);
+                    self.redo_stack.clear();
+                }
+                result
+            }
+        }
+    }
+
+    /// Apply one step of undo (`undo == true`) or redo: restore the snapshot
+    /// popped from the source stack and push the displaced graph onto the
+    /// opposite one. An empty stack is a harmless no-op; a failed restore
+    /// returns the popped snapshot to its stack rather than dropping it.
+    fn apply_history_step(&mut self, undo: bool) -> Result<Value, StoreError> {
+        let previous = if undo {
+            self.undo_stack.pop()
+        } else {
+            self.redo_stack.pop()
+        };
+        let Some(previous) = previous else {
+            return Ok(Value::Null);
+        };
+        let current = self.snapshot();
+        match self.restore(&previous) {
+            Ok(()) => {
+                if undo {
+                    push_history(&mut self.redo_stack, current);
+                } else {
+                    push_history(&mut self.undo_stack, current);
+                }
+                Ok(Value::Null)
+            }
+            Err(error) => {
+                if undo {
+                    self.undo_stack.push(previous);
+                } else {
+                    self.redo_stack.push(previous);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Whether `action` is a user edit the preset-graph history covers.
+    fn records_history(action: &str) -> bool {
+        HISTORY_NAMESPACES
+            .iter()
+            .any(|prefix| action.starts_with(prefix))
+    }
+
+    /// Forget the recorded undo/redo history.
+    ///
+    /// Startup seeding (the default Group and Scenes) must not be undoable, so
+    /// the shell clears the stacks once that boot flow has finished.
+    pub fn clear_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
+    /// [`Store::dispatch`] without the undo/redo bookkeeping.
+    fn dispatch_unrecorded(&mut self, action: &str, payload: Value) -> Result<Value, StoreError> {
         // `meyda/removeSmoothingId` is dispatched with the id itself (the JS
         // action takes a string), so it cannot go through the object-only
         // `params` view.
@@ -4555,6 +4647,14 @@ impl Store {
             eprintln!("{message}");
         }
     }
+}
+
+/// Push `entry` onto a bounded history stack, dropping its oldest entry.
+fn push_history(stack: &mut Vec<Value>, entry: Value) {
+    if stack.len() >= HISTORY_LIMIT {
+        stack.remove(0);
+    }
+    stack.push(entry);
 }
 
 /// Append or replace a tween descriptor in the opaque `tweens` slot.

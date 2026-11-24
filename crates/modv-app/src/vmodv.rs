@@ -827,6 +827,10 @@ impl VmodvApp {
         modv_ui::theme::apply(&egui_ctx);
         let target_fps = store.target_fps();
         let state_path = crate::cli::vmodv_state_path(cli.state.as_deref(), &user_data);
+        // Boot seeding (the default Group, restored Scenes) is not a user edit:
+        // start the undo history clean once startup has finished mutating the
+        // store.
+        store.clear_history();
 
         let mut app = Self {
             bench_deadline: cli.bench_deadline(),

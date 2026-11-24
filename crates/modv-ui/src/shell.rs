@@ -82,20 +82,23 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
 /// Keyboard shortcuts that work globally (outside text fields).
 fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     let typing = ui.ctx().memory(|memory| memory.focused().is_some());
-    let (save, save_snapshot, open, open_scene, apply, search, escape, help) = ui.input(|input| {
-        let command = input.modifiers.command || input.modifiers.ctrl;
-        let shift = input.modifiers.shift;
-        (
-            command && !shift && input.key_pressed(egui::Key::S),
-            command && shift && input.key_pressed(egui::Key::S),
-            command && !shift && input.key_pressed(egui::Key::O),
-            command && shift && input.key_pressed(egui::Key::O),
-            command && input.key_pressed(egui::Key::Enter),
-            command && input.key_pressed(egui::Key::K),
-            input.key_pressed(egui::Key::Escape),
-            input.key_pressed(egui::Key::F1),
-        )
-    });
+    let (save, save_snapshot, open, open_scene, apply, search, escape, help, undo, redo) = ui
+        .input(|input| {
+            let command = input.modifiers.command || input.modifiers.ctrl;
+            let shift = input.modifiers.shift;
+            (
+                command && !shift && input.key_pressed(egui::Key::S),
+                command && shift && input.key_pressed(egui::Key::S),
+                command && !shift && input.key_pressed(egui::Key::O),
+                command && shift && input.key_pressed(egui::Key::O),
+                command && input.key_pressed(egui::Key::Enter),
+                command && input.key_pressed(egui::Key::K),
+                input.key_pressed(egui::Key::Escape),
+                input.key_pressed(egui::Key::F1),
+                command && !shift && input.key_pressed(egui::Key::Z),
+                command && shift && input.key_pressed(egui::Key::Z),
+            )
+        });
     // A modal picker owns the keyboard: Ctrl+S while naming a file must not
     // save a preset, and Ctrl+O must not stack a second picker.
     let modal =
@@ -126,6 +129,15 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         );
         state.selected_group = None;
         state.selected_module = None;
+    }
+    // Undo/redo reach the shell's Store history; text fields keep their own
+    // Ctrl+Z, and a modal picker owns the keyboard like the Ctrl+S/O cases.
+    if !typing && !modal {
+        if undo {
+            state.push_action("history/undo", serde_json::json!({}));
+        } else if redo {
+            state.push_action("history/redo", serde_json::json!({}));
+        }
     }
     if save && !modal {
         state.queue(UiCommand::SavePreset);
@@ -319,8 +331,14 @@ fn menu_bar(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
                 });
 
                 ui.menu_button("Edit", |ui| {
-                    ui.add_enabled(false, egui::Button::new("Undo"));
-                    ui.add_enabled(false, egui::Button::new("Redo"));
+                    if ui.button("Undo").clicked() {
+                        state.push_action("history/undo", serde_json::json!({}));
+                        ui.close();
+                    }
+                    if ui.button("Redo").clicked() {
+                        state.push_action("history/redo", serde_json::json!({}));
+                        ui.close();
+                    }
                 });
 
                 ui.menu_button("Scene", |ui| {
@@ -5168,6 +5186,8 @@ fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {
             ("Ctrl/Cmd+Shift+S", "Save preset as…"),
             ("Ctrl/Cmd+K", "Focus Gallery search"),
             ("Ctrl/Cmd+Enter", "Apply the selected Scene"),
+            ("Ctrl/Cmd+Z", "Undo the last edit"),
+            ("Ctrl/Cmd+Shift+Z", "Redo the last undone edit"),
             ("1..9", "Apply Scene column 1..9"),
             ("F1", "Show this list"),
             ("F", "Toggle Output Window fullscreen"),
