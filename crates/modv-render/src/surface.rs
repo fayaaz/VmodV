@@ -25,12 +25,32 @@ pub fn create_surface(engine: &Engine, window: Arc<Window>) -> Result<SurfaceTar
     create_surface_with_present_mode(engine, window, wgpu::PresentMode::Fifo)
 }
 
+/// Pick the present mode to configure a surface with.
+///
+/// [`wgpu::PresentMode::AutoVsync`] and [`wgpu::PresentMode::AutoNoVsync`] are
+/// meta-modes: wgpu resolves them to a supported concrete mode itself, and they
+/// never appear in [`wgpu::SurfaceCapabilities::present_modes`]. They must be
+/// passed through unchanged — demoting a secondary Output Window to Fifo can
+/// stall the shared frame loop when that window is occluded (GNOME/Wayland
+/// withholds frame callbacks), dragging down the visible UI's FPS. Concrete
+/// modes are kept when supported; otherwise Fifo is used.
+fn resolve_present_mode(
+    requested: wgpu::PresentMode,
+    supported: &[wgpu::PresentMode],
+) -> wgpu::PresentMode {
+    match requested {
+        wgpu::PresentMode::AutoVsync | wgpu::PresentMode::AutoNoVsync => requested,
+        mode if supported.contains(&mode) => mode,
+        _ => wgpu::PresentMode::Fifo,
+    }
+}
+
 /// [`create_surface`] with an explicit present mode.
 ///
-/// Secondary Output Windows pass [`wgpu::PresentMode::AutoNoVsync`]: the
-/// primary window's Fifo acquire paces the frame loop, and a secondary surface
-/// must never throttle it to its own (possibly slower) display. An
-/// unsupported mode falls back to Fifo, which every surface supports.
+/// Secondary Output Windows pass [`wgpu::PresentMode::AutoNoVsync`] so they
+/// cannot throttle the primary window's Fifo-paced frame loop. The requested
+/// mode is checked against the surface's capabilities by
+/// `resolve_present_mode`.
 pub fn create_surface_with_present_mode(
     engine: &Engine,
     window: Arc<Window>,
@@ -53,11 +73,7 @@ pub fn create_surface_with_present_mode(
         .copied()
         .find(wgpu::TextureFormat::is_srgb)
         .unwrap_or(caps.formats[0]);
-    let present_mode = if caps.present_modes.contains(&present_mode) {
-        present_mode
-    } else {
-        wgpu::PresentMode::Fifo
-    };
+    let present_mode = resolve_present_mode(present_mode, &caps.present_modes);
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
@@ -107,5 +123,49 @@ impl SurfaceTarget {
     /// `Outdated`/`Lost`/`Suboptimal` frame acquisition.
     pub fn reconfigure(&mut self, device: &wgpu::Device) {
         self.surface.configure(device, &self.config);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_present_mode;
+    use wgpu::PresentMode;
+
+    #[test]
+    fn auto_no_vsync_present_mode_is_passed_through_to_wgpu() {
+        let resolved = resolve_present_mode(
+            PresentMode::AutoNoVsync,
+            &[
+                PresentMode::Fifo,
+                PresentMode::Mailbox,
+                PresentMode::Immediate,
+            ],
+        );
+
+        assert_eq!(resolved, PresentMode::AutoNoVsync);
+    }
+
+    #[test]
+    fn auto_vsync_present_mode_is_passed_through_to_wgpu() {
+        let resolved = resolve_present_mode(PresentMode::AutoVsync, &[PresentMode::Fifo]);
+
+        assert_eq!(resolved, PresentMode::AutoVsync);
+    }
+
+    #[test]
+    fn a_supported_concrete_present_mode_is_kept() {
+        let resolved = resolve_present_mode(
+            PresentMode::Mailbox,
+            &[PresentMode::Fifo, PresentMode::Mailbox],
+        );
+
+        assert_eq!(resolved, PresentMode::Mailbox);
+    }
+
+    #[test]
+    fn an_unsupported_concrete_present_mode_falls_back_to_fifo() {
+        let resolved = resolve_present_mode(PresentMode::Immediate, &[PresentMode::Fifo]);
+
+        assert_eq!(resolved, PresentMode::Fifo);
     }
 }
