@@ -276,6 +276,123 @@ impl Globals {
     }
 }
 
+/// Optional host-supplied data backing the classic NSEIL builtins.
+///
+/// Empty by default: every host-backed builtin then returns its documented
+/// deterministic default (`0.0`, or the identity for `fadetonext`). A runtime
+/// can inject a luma field, a motion field and a text table so presets using
+/// these helpers see real, reproducible values without any wall-clock or GPU
+/// dependency. Fields are treated as square grids sampled at normalized
+/// `(x, y)` in `[0, 1]`.
+#[derive(Clone, Debug, Default)]
+pub struct EelExtras {
+    /// Luma field sampled by `sample`/`blend*` and differentiated by
+    /// `samplex`/`sampley`.
+    pub luma: Vec<f32>,
+    /// Motion field sampled by `movement` and the `spat*`/`movementxy` helpers.
+    pub motion: Vec<f32>,
+    /// Integer-indexed table read by `read_text`.
+    pub text: Vec<f32>,
+    /// Fade factor applied by `fadetonext`; `None` means identity (`1.0`).
+    pub fade: Option<f32>,
+}
+
+/// Step used for the finite-difference derivatives and blend neighbourhoods.
+const FIELD_EPS: f32 = 1e-2;
+
+impl EelExtras {
+    /// Nearest-neighbour sample of a square field at normalized `(x, y)`.
+    fn field_at(field: &[f32], x: f32, y: f32) -> f32 {
+        if field.is_empty() || !x.is_finite() || !y.is_finite() {
+            return 0.0;
+        }
+        let side = (field.len() as f32).sqrt() as usize;
+        if side == 0 {
+            return 0.0;
+        }
+        let last = (side - 1) as f32;
+        let ix = (x.clamp(0.0, 1.0) * last).round() as usize;
+        let iy = (y.clamp(0.0, 1.0) * last).round() as usize;
+        field.get(iy * side + ix).copied().unwrap_or(0.0)
+    }
+
+    /// Central finite difference of `field` along x at normalized `(x, y)`.
+    fn field_dx(field: &[f32], x: f32, y: f32) -> f32 {
+        Self::field_at(field, x + FIELD_EPS, y) - Self::field_at(field, x - FIELD_EPS, y)
+    }
+
+    /// Central finite difference of `field` along y at normalized `(x, y)`.
+    fn field_dy(field: &[f32], x: f32, y: f32) -> f32 {
+        Self::field_at(field, x, y + FIELD_EPS) - Self::field_at(field, x, y - FIELD_EPS)
+    }
+
+    fn luma_at(&self, x: f32, y: f32) -> f32 {
+        Self::field_at(&self.luma, x, y)
+    }
+
+    fn luma_dx(&self, x: f32, y: f32) -> f32 {
+        Self::field_dx(&self.luma, x, y)
+    }
+
+    fn luma_dy(&self, x: f32, y: f32) -> f32 {
+        Self::field_dy(&self.luma, x, y)
+    }
+
+    fn motion_at(&self, x: f32, y: f32) -> f32 {
+        Self::field_at(&self.motion, x, y)
+    }
+
+    fn motion_dx(&self, x: f32, y: f32) -> f32 {
+        Self::field_dx(&self.motion, x, y)
+    }
+
+    fn motion_dy(&self, x: f32, y: f32) -> f32 {
+        Self::field_dy(&self.motion, x, y)
+    }
+
+    fn motion_xy(&self, x: f32, y: f32) -> f32 {
+        let dx = self.motion_dx(x, y);
+        let dy = self.motion_dy(x, y);
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// Reduce the 3x3 luma neighbourhood around `(x, y)` starting at `init`.
+    fn luma_neighborhood(&self, x: f32, y: f32, init: f32, f: impl Fn(f32, f32) -> f32) -> f32 {
+        let mut acc = init;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let v = self.luma_at(x + dx as f32 * FIELD_EPS, y + dy as f32 * FIELD_EPS);
+                acc = f(acc, v);
+            }
+        }
+        acc
+    }
+
+    fn luma_avg(&self, x: f32, y: f32) -> f32 {
+        self.luma_neighborhood(x, y, 0.0, |a, v| a + v) / 9.0
+    }
+
+    fn luma_max(&self, x: f32, y: f32) -> f32 {
+        self.luma_neighborhood(x, y, f32::NEG_INFINITY, f32::max)
+    }
+
+    fn luma_min(&self, x: f32, y: f32) -> f32 {
+        self.luma_neighborhood(x, y, f32::INFINITY, f32::min)
+    }
+
+    fn text_at(&self, index: f32) -> f32 {
+        let i = index as i64;
+        if i < 0 {
+            return 0.0;
+        }
+        self.text.get(i as usize).copied().unwrap_or(0.0)
+    }
+
+    fn fade(&self, x: f32) -> f32 {
+        x * self.fade.unwrap_or(1.0)
+    }
+}
+
 /// Mutable variable pool with a stable key→slot map.
 ///
 /// Use [`VarPool::set`] / [`VarPool::get`] to seed and inspect named variables
@@ -291,6 +408,8 @@ impl Globals {
 /// megabufs *by value* without an eager memcpy. This matters for the wave/shape
 /// overlay path, which forks a frame pool once per section to evaluate point
 /// equations on a scratch copy; the fork no longer copies 4 MiB per point pass.
+/// Attached [`EelExtras`] host data is shared the same way, so injecting a
+/// luma/motion field does not make pool forks copy it either.
 #[derive(Clone, Debug)]
 pub struct VarPool {
     vars: HashMap<String, f32>,
@@ -298,6 +417,7 @@ pub struct VarPool {
     megabuf: Arc<Vec<f32>>,
     global: Option<GlobalState>,
     rng: Rng,
+    extras: Arc<EelExtras>,
 }
 
 impl VarPool {
@@ -319,12 +439,24 @@ impl VarPool {
             megabuf: Arc::new(vec![0.0; MEGABUF_SIZE]),
             global: None,
             rng,
+            extras: Arc::new(EelExtras::default()),
         }
     }
 
     /// Attach a (possibly shared) global buffer.
     pub fn set_global_state(&mut self, global: GlobalState) {
         self.global = Some(global);
+    }
+
+    /// Attach host-supplied data for the classic NSEIL host-backed builtins.
+    /// The field vectors are shared with clones of this pool.
+    pub fn set_extras(&mut self, extras: EelExtras) {
+        self.extras = Arc::new(extras);
+    }
+
+    /// Borrow the currently attached host data.
+    pub fn extras(&self) -> &EelExtras {
+        &self.extras
     }
 
     /// Set a named variable.
@@ -727,6 +859,22 @@ enum Func {
     If,
     Exec2,
     Exec3,
+    GetTime,
+    Sample,
+    SampleX,
+    SampleY,
+    Blend,
+    BlendAvg,
+    BlendMax,
+    BlendMin,
+    InvSqrt,
+    Movement,
+    MovementXY,
+    SpatX,
+    SpatY,
+    FadeToNext,
+    RandEv,
+    ReadText,
 }
 
 impl Func {
@@ -763,6 +911,22 @@ impl Func {
             "if" => Func::If,
             "exec2" => Func::Exec2,
             "exec3" => Func::Exec3,
+            "getTime" => Func::GetTime,
+            "sample" => Func::Sample,
+            "samplex" => Func::SampleX,
+            "sampley" => Func::SampleY,
+            "blend" => Func::Blend,
+            "blendavg" => Func::BlendAvg,
+            "blendmax" => Func::BlendMax,
+            "blendmin" => Func::BlendMin,
+            "invsqrt" => Func::InvSqrt,
+            "movement" => Func::Movement,
+            "movementxy" => Func::MovementXY,
+            "spatx" => Func::SpatX,
+            "spaty" => Func::SpatY,
+            "fadetonext" => Func::FadeToNext,
+            "randev" => Func::RandEv,
+            "read_text" => Func::ReadText,
             _ => return None,
         })
     }
@@ -787,7 +951,11 @@ impl Func {
             | Func::Sign
             | Func::Rand
             | Func::Bnot
-            | Func::Sigmoid => 1,
+            | Func::Sigmoid
+            | Func::InvSqrt
+            | Func::FadeToNext
+            | Func::RandEv
+            | Func::ReadText => 1,
             Func::Atan2
             | Func::Pow
             | Func::Bor
@@ -797,8 +965,20 @@ impl Func {
             | Func::Below
             | Func::Min
             | Func::Max
-            | Func::Exec2 => 2,
+            | Func::Exec2
+            | Func::Sample
+            | Func::SampleX
+            | Func::SampleY
+            | Func::Blend
+            | Func::BlendAvg
+            | Func::BlendMax
+            | Func::BlendMin
+            | Func::Movement
+            | Func::MovementXY
+            | Func::SpatX
+            | Func::SpatY => 2,
             Func::If | Func::Exec3 => 3,
+            Func::GetTime => 0,
         }
     }
 }
@@ -1361,6 +1541,31 @@ fn eval_call(func: Func, args: &[Expr], ctx: &mut EvalCtx<'_>) -> Result<f32, Ee
         Func::If => unreachable!("ternary if is handled before argument evaluation"),
         Func::Exec2 => v[1],
         Func::Exec3 => v[2],
+        Func::GetTime => ctx.pool.get("time"),
+        Func::InvSqrt => {
+            if a > 0.0 && a.is_finite() {
+                1.0 / a.sqrt()
+            } else {
+                0.0
+            }
+        }
+        Func::RandEv => {
+            let draw = ctx.pool.rng.next_f32();
+            bool_f32(draw < a.clamp(0.0, 1.0))
+        }
+        Func::FadeToNext => ctx.pool.extras.fade(a),
+        Func::Sample => ctx.pool.extras.luma_at(a, b),
+        Func::SampleX => ctx.pool.extras.luma_dx(a, b),
+        Func::SampleY => ctx.pool.extras.luma_dy(a, b),
+        Func::Blend => ctx.pool.extras.luma_at(a, b),
+        Func::BlendAvg => ctx.pool.extras.luma_avg(a, b),
+        Func::BlendMax => ctx.pool.extras.luma_max(a, b),
+        Func::BlendMin => ctx.pool.extras.luma_min(a, b),
+        Func::Movement => ctx.pool.extras.motion_at(a, b),
+        Func::MovementXY => ctx.pool.extras.motion_xy(a, b),
+        Func::SpatX => ctx.pool.extras.motion_dx(a, b),
+        Func::SpatY => ctx.pool.extras.motion_dy(a, b),
+        Func::ReadText => ctx.pool.extras.text_at(a),
     })
 }
 
@@ -1963,5 +2168,210 @@ out = q1 + q2 + q3 + q4 + q5 + megabuf[5];
             res.expect("no panic"),
             Err(EelError::ParseError(_))
         ));
+    }
+
+    // ------------------------------------------------------------------
+    // Missing EEL2/NSEIL builtins (RED)
+    // ------------------------------------------------------------------
+
+    /// Every classic NSEIL helper real presets use must be in the compile-time
+    /// builtin table. Today these fail with `EelError::UnknownIdentifier`, so
+    /// the caller logs the section failure and skips the preset for the session
+    /// (see docs/compatibility-matrix.md, MilkDrop "Known gaps").
+    #[test]
+    fn classic_nseil_builtins_compile_in_both_versions() {
+        let expressions = [
+            "out = getTime();",
+            "out = sample(0.5, 0.5);",
+            "out = samplex(0.5, 0.5);",
+            "out = sampley(0.5, 0.5);",
+            "out = blend(0.5, 0.5);",
+            "out = blendavg(0.5, 0.5);",
+            "out = blendmax(0.5, 0.5);",
+            "out = blendmin(0.5, 0.5);",
+            "out = invsqrt(4.0);",
+            "out = movement(0.5, 0.5);",
+            "out = movementxy(0.5, 0.5);",
+            "out = spatx(0.5, 0.5);",
+            "out = spaty(0.5, 0.5);",
+            "out = fadetonext(0.5);",
+            "out = randev(0.5);",
+            "out = read_text(0.0);",
+        ];
+        for version in [1u8, 2] {
+            for src in expressions {
+                let result = compile(src, version);
+                assert!(
+                    result.is_ok(),
+                    "{src} (v{version}) must compile: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invsqrt_is_the_reciprocal_square_root_and_is_finite_for_nonpositive_input() {
+        approx!(eval("invsqrt(16.0)"), 0.25, "invsqrt(16) == 0.25");
+        approx!(eval("invsqrt(4.0)"), 0.5);
+        approx!(eval("invsqrt(1.0)"), 1.0);
+        assert!(
+            eval("invsqrt(0.0)").is_finite(),
+            "invsqrt(0) must be finite"
+        );
+        approx!(eval("invsqrt(0.0)"), 0.0);
+        assert!(
+            eval("invsqrt(-4.0)").is_finite(),
+            "invsqrt(-4) must be finite"
+        );
+        approx!(eval("invsqrt(-4.0)"), 0.0);
+    }
+
+    #[test]
+    fn get_time_returns_the_injected_time_global() {
+        let globals = Globals {
+            time: 12.5,
+            ..Globals::default()
+        };
+        let p = run_src_with_globals("out = getTime();", globals);
+        approx!(p.get("out"), 12.5, "getTime() returns injected time");
+    }
+
+    #[test]
+    fn randev_is_a_deterministic_bernoulli_draw_from_the_seeded_rng() {
+        let eq = compile("out = randev(1.0);", 2).expect("compiles");
+        let run = |seed: u64| {
+            let mut pool = VarPool::with_seed(seed);
+            run_frame(&eq, &mut pool, &Globals::default()).expect("runs");
+            pool.get("out")
+        };
+        let a = run(0x1234_5678);
+        let b = run(0x1234_5678);
+        approx!(a, b, "same seed gives the same randev draw");
+        assert!(
+            a == 0.0 || a == 1.0,
+            "randev must return 0.0 or 1.0, got {a}"
+        );
+
+        // A zero-probability event can never fire, whatever the seed.
+        let eq_zero = compile("out = randev(0.0);", 2).expect("compiles");
+        for seed in [0u64, 1, 7, 42, 0xDEAD_BEEF] {
+            let mut pool = VarPool::with_seed(seed);
+            run_frame(&eq_zero, &mut pool, &Globals::default()).expect("runs");
+            approx!(pool.get("out"), 0.0, "randev(0.0) is always 0");
+        }
+    }
+
+    #[test]
+    fn host_field_builtins_default_to_zero_and_fadetonext_to_identity() {
+        let zero_defaults = [
+            "sample(0.5, 0.5)",
+            "samplex(0.5, 0.5)",
+            "sampley(0.5, 0.5)",
+            "blend(0.5, 0.5)",
+            "blendavg(0.5, 0.5)",
+            "blendmax(0.5, 0.5)",
+            "blendmin(0.5, 0.5)",
+            "movement(0.5, 0.5)",
+            "movementxy(0.5, 0.5)",
+            "spatx(0.5, 0.5)",
+            "spaty(0.5, 0.5)",
+            "read_text(3.0)",
+        ];
+        let run = |expr: &str, seed: u64| {
+            let eq = compile(&format!("out = {expr};"), 2).expect("compiles");
+            let mut pool = VarPool::with_seed(seed);
+            run_frame(&eq, &mut pool, &Globals::default()).expect("runs");
+            pool.get("out")
+        };
+        for expr in zero_defaults {
+            let got = run(expr, 0xC0FFEE);
+            assert!(got.is_finite(), "{expr} must be finite, got {got}");
+            approx!(got, 0.0, "{expr} has no host field, defaults to 0.0");
+            approx!(
+                run(expr, 1),
+                run(expr, 0xDEAD_BEEF),
+                "{expr} is deterministic"
+            );
+        }
+        approx!(
+            run("fadetonext(0.75)", 0xC0FFEE),
+            0.75,
+            "no host fade state => identity"
+        );
+        approx!(
+            run("fadetonext(1.0)", 0xC0FFEE),
+            1.0,
+            "no host fade state => identity"
+        );
+    }
+
+    #[test]
+    fn injected_host_data_drives_the_host_backed_builtins() {
+        let run = |expr: &str, extras: EelExtras| {
+            let eq = compile(&format!("out = {expr};"), 2).expect("compiles");
+            let mut pool = VarPool::with_seed(1);
+            pool.set_extras(extras);
+            run_frame(&eq, &mut pool, &Globals::default()).expect("runs");
+            pool.get("out")
+        };
+
+        // 2x2 luma field: nearest-neighbour corner samples are exact.
+        let luma = EelExtras {
+            luma: vec![1.0, 2.0, 3.0, 4.0],
+            ..EelExtras::default()
+        };
+        approx!(run("sample(0.0, 0.0)", luma.clone()), 1.0);
+        approx!(run("sample(1.0, 1.0)", luma.clone()), 4.0);
+
+        let fade = EelExtras {
+            fade: Some(0.5),
+            ..EelExtras::default()
+        };
+        approx!(
+            run("fadetonext(2.0)", fade),
+            1.0,
+            "injected fade scales the input"
+        );
+
+        let text = EelExtras {
+            text: vec![0.0, 7.5],
+            ..EelExtras::default()
+        };
+        approx!(run("read_text(1.0)", text.clone()), 7.5);
+        approx!(
+            run("read_text(9.0)", text),
+            0.0,
+            "out-of-range text index => 0"
+        );
+
+        let motion = EelExtras {
+            motion: vec![1.0, 2.0, 3.0, 4.0],
+            ..EelExtras::default()
+        };
+        approx!(run("movement(0.0, 0.0)", motion.clone()), 1.0);
+        approx!(
+            run("spatx(0.5, 0.0)", motion.clone()),
+            1.0,
+            "motion x-derivative"
+        );
+        approx!(run("spaty(0.0, 0.5)", motion), 2.0, "motion y-derivative");
+    }
+
+    #[test]
+    fn injected_luma_field_drives_the_blend_variants() {
+        let luma = EelExtras {
+            luma: vec![1.0, 2.0, 3.0, 4.0],
+            ..EelExtras::default()
+        };
+        let run = |expr: &str| {
+            let eq = compile(&format!("out = {expr};"), 2).expect("compiles");
+            let mut pool = VarPool::with_seed(1);
+            pool.set_extras(luma.clone());
+            run_frame(&eq, &mut pool, &Globals::default()).expect("runs");
+            pool.get("out")
+        };
+        approx!(run("blend(0.0, 0.0)"), 1.0);
+        approx!(run("blendmax(0.5, 0.5)"), 4.0);
+        approx!(run("blendmin(0.5, 0.5)"), 1.0);
     }
 }

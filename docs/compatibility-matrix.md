@@ -160,10 +160,22 @@ builtin set:
 `int`, `floor`, `abs`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`,
 `sqr`, `sqrt`, `log`, `log10`, `sign`, `rand` (deterministic per-instance
 RNG), `bnot`, `atan2`, `pow`, `min`, `max`, `sigmoid`, `bor`, `band`, `equal`,
-`above`, `below`, `if`, `exec2`, `exec3`; `megabuf`/`gmegabuf`
+`above`, `below`, `if`, `exec2`, `exec3`; the classic NSEIL helpers
+`getTime` (returns the injected frame `time` global, never wall clock),
+`invsqrt`, `randev`, `fadetonext`, `sample`/`samplex`/`sampley`,
+`blend`/`blendavg`/`blendmax`/`blendmin`, `movement`/`movementxy`/
+`spatx`/`spaty`, and `read_text`; `megabuf`/`gmegabuf`
 (1,048,576 floats each, per-preset/global); user variables persist
 frame-to-frame; `if/else/if`, `while`, `loop` with hard iteration caps;
 assignments, comments, `q` variables.
+
+The NSEIL host-field helpers are backed by an optional `EelExtras` attached to
+the evaluation pool (`VarPool::set_extras`). With no host data they are fully
+deterministic: `sample*`/`blend*`/`movement*`/`spat*`/`read_text` return `0.0`,
+`fadetonext` is the identity, `invsqrt` is `1/sqrt(x)` (finite `0.0` for
+non-positive input) and `randev` is a seeded Bernoulli draw. When a runtime
+injects a luma field, motion field, text table and/or fade factor, the same
+builtins return real, reproducible values sampled from that data.
 
 **Runtime pipeline** (`milkdrop/runtime.rs`) — per frame: init equations →
 per-frame equations → `evaluate_mesh` per-pixel equations → warp pass (CPU
@@ -178,12 +190,6 @@ reload retries it.
 
 ### Known gaps
 
-- **EEL builtins not implemented** (the fixed set above is the whole table):
-  classic NSEIL helpers real presets use — `getTime()`, `sample`/`samplex`/
-  `sampley`, `blend`/`blendavg`/`blendmax`/`blendmin`, `invsqrt`,
-  `movement`/`movementxy`/`spatx`/`spaty`, `fadetonext`, `randev`,
-  `read_text` — are absent, so presets using them fail to compile and are
-  skipped for the session (the caller logs and retries on reload).
 - v1 presets are parsed with the same engine; base-val-only v1 presets work,
   but anything the EEL layer can't compile is skipped.
 
