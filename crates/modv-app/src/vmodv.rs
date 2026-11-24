@@ -49,6 +49,7 @@ use crate::compositor::{Compositor, FrameInfo, RowFadeInfo};
 use crate::control_socket::{Command, ControlServer, QueuedRequest};
 use crate::media::MediaHub;
 use crate::media_dialogs::{self, DocumentKind, FilePicker};
+use crate::media_probe::{MediaProbeResult, MediaProbeWorker};
 use crate::media_profiles::{self, DEFAULT_PROFILE, PROJECT_SETTINGS_FILENAME, ProjectSettings};
 use crate::media_settings::{CameraMode, MediaSettings, plan_restore, resolve_mode};
 use crate::media_watch::{MediaFolder, MediaWatcher};
@@ -427,6 +428,15 @@ pub struct VmodvApp {
     state_path: PathBuf,
     last_state_save: Instant,
     state_save_error_logged: bool,
+    /// Off-thread camera/screen/profile probing. Declared before `media_hub` so
+    /// its thread joins before the GStreamer-owned hub is dropped.
+    media_probe: Option<MediaProbeWorker>,
+    /// Set while the worker owns a camera probe, so the 1 s cadence never
+    /// queues duplicates.
+    camera_probe_pending: bool,
+    /// Set while the worker owns a profile listing, so the 2 s cadence never
+    /// queues duplicates.
+    profile_probe_pending: bool,
     media_hub: MediaHub,
     last_media_health: Instant,
     /// Video-file sources started from `video` texture props (one per unique
@@ -883,6 +893,15 @@ impl VmodvApp {
                 None
             }
         };
+        // Camera enumeration, the PipeWire screen check and the profile listing
+        // are host queries that must not stall a frame.
+        let media_probe = match MediaProbeWorker::new() {
+            Ok(worker) => Some(worker),
+            Err(error) => {
+                eprintln!("ui: WARN media probe worker unavailable: {error}");
+                None
+            }
+        };
 
         let mut app = Self {
             bench_deadline: cli.bench_deadline(),
@@ -934,6 +953,9 @@ impl VmodvApp {
             state_path,
             last_state_save: start,
             state_save_error_logged: false,
+            media_probe,
+            camera_probe_pending: false,
+            profile_probe_pending: false,
             media_hub,
             last_media_health: start,
             video_sources: VideoSources::new(),
@@ -1428,6 +1450,10 @@ impl VmodvApp {
             return;
         }
         self.apply_finished_registry_rescan();
+        // Apply any host probe the worker finished since the last frame, then
+        // let the snapshot/UI see the fresh cameras, screen support and
+        // profiles.
+        self.drain_media_probe();
         let now = Instant::now();
         // Pace the whole shell to the engine's configured FPS. The worker
         // renders at `fps/SET_FPS` (60 by default) and advances tween frames,
@@ -1459,11 +1485,7 @@ impl VmodvApp {
             self.last_profile_scan = now;
         }
         if now.saturating_duration_since(self.last_camera_scan) >= Duration::from_secs(1) {
-            self.media_cameras = self.media_hub.list_cameras();
-            // PipeWire/`pipewiresrc` can appear (or disappear) while the shell
-            // runs, so the screen buttons follow the host's current support.
-            self.screen_support = self.media_hub.screen_support();
-            self.restore_pending_cameras();
+            self.request_camera_probe();
             self.last_camera_scan = now;
         }
         if let Some(burst) = self.media_watcher.as_mut().and_then(MediaWatcher::pump) {
@@ -2608,9 +2630,90 @@ impl VmodvApp {
         }
     }
 
-    /// Re-read the profile folders shown by the File menu.
-    fn refresh_profiles(&mut self) {
-        self.profiles = media_profiles::list_profiles(&self.media_root);
+    /// Queue a camera/screen probe unless one is already in flight.
+    ///
+    /// When the worker could not start (or its thread panicked) the probe runs
+    /// synchronously so the Media panel still gets an answer.
+    fn request_camera_probe(&mut self) {
+        if self.camera_probe_pending {
+            return;
+        }
+        match &self.media_probe {
+            Some(worker) if worker.request_cameras() => {
+                self.camera_probe_pending = true;
+            }
+            _ => {
+                let cameras = modv_media::video::list_cameras();
+                let screen = modv_media::video::screen_support();
+                self.apply_camera_probe(cameras, screen);
+            }
+        }
+    }
+
+    /// Queue a profile listing unless one is already in flight.
+    fn request_profile_probe(&mut self) {
+        if self.profile_probe_pending {
+            return;
+        }
+        match &self.media_probe {
+            Some(worker) if worker.request_profiles(self.media_root.clone()) => {
+                self.profile_probe_pending = true;
+            }
+            _ => {
+                let profiles = media_profiles::list_profiles(&self.media_root);
+                self.apply_profiles(profiles);
+            }
+        }
+    }
+
+    /// Apply every finished probe result, in completion order.
+    fn drain_media_probe(&mut self) {
+        let Some(worker) = self.media_probe.as_ref() else {
+            return;
+        };
+        let mut results = Vec::new();
+        while let Some(result) = worker.try_result() {
+            results.push(result);
+        }
+        // A worker that stopped after accepting a request (e.g. a host query
+        // panicked) can never answer it. Clear the in-flight flags so the next
+        // cadence takes the synchronous fallback instead of waiting forever.
+        let worker_stopped = worker.is_finished();
+        for result in results {
+            match result {
+                MediaProbeResult::Cameras { cameras, screen } => {
+                    self.camera_probe_pending = false;
+                    self.apply_camera_probe(cameras, screen);
+                }
+                MediaProbeResult::Profiles(profiles) => {
+                    self.profile_probe_pending = false;
+                    self.apply_profiles(profiles);
+                }
+            }
+        }
+        if worker_stopped {
+            self.camera_probe_pending = false;
+            self.profile_probe_pending = false;
+        }
+    }
+
+    /// Cache new camera/screen answers and start saved cameras that appeared.
+    fn apply_camera_probe(
+        &mut self,
+        cameras: Vec<modv_media::video::CameraInfo>,
+        screen: ScreenSupport,
+    ) {
+        self.media_cameras = cameras;
+        // PipeWire/`pipewiresrc` can appear (or disappear) while the shell
+        // runs, so the screen buttons follow the host's current support.
+        self.screen_support = screen;
+        self.restore_pending_cameras();
+    }
+
+    /// Replace the profile list, keeping the active profile visible until the
+    /// next listing sees its folder.
+    fn apply_profiles(&mut self, profiles: Vec<String>) {
+        self.profiles = profiles;
         if !self
             .profiles
             .iter()
@@ -2619,6 +2722,14 @@ impl VmodvApp {
             self.profiles.push(self.active_profile.clone());
             self.profiles.sort_by_key(|name| name.to_lowercase());
         }
+    }
+
+    /// Re-read the profile folders shown by the File menu.
+    ///
+    /// The walk runs on the probe worker; [`Self::drain_media_probe`] applies
+    /// the result on a later frame.
+    fn refresh_profiles(&mut self) {
+        self.request_profile_probe();
     }
 
     /// Persist the active profile and extra ISF folders.

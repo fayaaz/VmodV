@@ -22,6 +22,7 @@ pub mod media;
 pub mod media_dialogs;
 pub mod media_import;
 pub mod media_library;
+pub mod media_probe;
 pub mod media_profiles;
 pub mod media_settings;
 pub mod media_watch;
