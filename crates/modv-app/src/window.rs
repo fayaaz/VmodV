@@ -1198,7 +1198,9 @@ impl WindowedApp {
 /// DPI, so a 300 × 300 window keeps the legacy popup's apparent size on any
 /// display. An explicit position is applied only when both axes are present;
 /// otherwise the window manager places the window (`window.open` without
-/// `top`).
+/// `top`). Output Windows are undecorated (borderless) in both windowed and
+/// fullscreen mode; fullscreen additionally makes them borderless-fullscreen,
+/// so the two modes stay visually consistent.
 fn output_window_attributes(spec: &WindowSpec, event_loop: &ActiveEventLoop) -> WindowAttributes {
     let monitor = spec
         .fullscreen
@@ -1222,7 +1224,8 @@ fn output_window_attributes_for(
             f64::from(spec.width),
             f64::from(spec.height),
         ))
-        .with_resizable(true);
+        .with_resizable(true)
+        .with_decorations(false);
 
     if let (Some(x), Some(y)) = (spec.x, spec.y) {
         attributes = attributes.with_position(LogicalPosition::new(f64::from(x), f64::from(y)));
@@ -1534,6 +1537,33 @@ mod tests {
             output_window_attributes_for(&half_placed, None).position,
             None
         );
+    }
+
+    #[test]
+    fn output_window_windowed_is_borderless() {
+        let windowed = WindowSpec::from_request("w".into(), crate::windows::NewWindow::default());
+        assert!(!windowed.fullscreen);
+        let attributes = output_window_attributes_for(&windowed, None);
+        assert!(
+            !attributes.decorations,
+            "windowed Output Windows must be borderless (decorations={})",
+            attributes.decorations
+        );
+        assert_eq!(attributes.fullscreen, None);
+
+        let fullscreen = WindowSpec::from_request(
+            "w".into(),
+            crate::windows::NewWindow {
+                fullscreen: true,
+                ..crate::windows::NewWindow::default()
+            },
+        );
+        let attributes = output_window_attributes_for(&fullscreen, None);
+        assert!(
+            !attributes.decorations,
+            "fullscreen Output Windows must remain borderless"
+        );
+        assert_eq!(attributes.fullscreen, Some(Fullscreen::Borderless(None)));
     }
 
     /// Frames the multi-window smoke test presents before exiting.

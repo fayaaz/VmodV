@@ -1147,29 +1147,13 @@ impl VmodvApp {
             return Err("engine is not ready".to_string());
         };
 
-        let mut attributes = WindowAttributes::default()
-            .with_title("VmodV Output  (F = fullscreen)")
-            .with_inner_size(LogicalSize::new(
-                f64::from(OUTPUT_WIDTH),
-                f64::from(OUTPUT_HEIGHT),
-            ))
-            .with_position(LogicalPosition::new(120.0, 120.0))
-            .with_resizable(true);
-        if let Some(saved) = self
+        let saved = self
             .window_state
             .output()
             .cloned()
-            .map(|saved| clamp_saved_to_monitor(saved, event_loop))
-        {
-            attributes = attributes
-                .with_inner_size(LogicalSize::new(saved.width, saved.height))
-                .with_position(LogicalPosition::new(saved.x, saved.y));
-            if saved.fullscreen {
-                attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
-            }
-        }
+            .map(|saved| clamp_saved_to_monitor(saved, event_loop));
         let window = event_loop
-            .create_window(attributes)
+            .create_window(output_window_attributes(saved.as_ref()))
             .map_err(|error| error.to_string())?;
         let window = Arc::new(window);
         let surface = create_surface_with_present_mode(
@@ -4986,6 +4970,36 @@ fn resolve_library_folder(kind_root: &Path, relative: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+/// Build the attributes for the VmodV shell's single output window.
+///
+/// The output window is undecorated/borderless while windowed so the visual
+/// runs edge to edge without a title bar, and it stays borderless in
+/// fullscreen (borderless fullscreen is the only mode the shell uses).
+///
+/// Kept separate from [`VmodvApp::open_output`] so the window plan is unit-testable
+/// without a display; the saved placement is clamped to the monitor by the
+/// caller before it reaches here.
+fn output_window_attributes(saved: Option<&SavedWindow>) -> WindowAttributes {
+    let mut attributes = WindowAttributes::default()
+        .with_title("VmodV Output  (F = fullscreen)")
+        .with_inner_size(LogicalSize::new(
+            f64::from(OUTPUT_WIDTH),
+            f64::from(OUTPUT_HEIGHT),
+        ))
+        .with_position(LogicalPosition::new(120.0, 120.0))
+        .with_resizable(true)
+        .with_decorations(false);
+    if let Some(saved) = saved {
+        attributes = attributes
+            .with_inner_size(LogicalSize::new(saved.width, saved.height))
+            .with_position(LogicalPosition::new(saved.x, saved.y));
+        if saved.fullscreen {
+            attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+    }
+    attributes
+}
+
 /// Clamp a saved placement onto the primary monitor.
 ///
 /// The legacy `resolveWindowBounds` does this at show time; without it a window
@@ -5289,6 +5303,64 @@ fn should_request_redraw(is_redraw_requested: bool, repaint: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_window_is_borderless_when_windowed() {
+        let default_attributes = output_window_attributes(None);
+        assert!(
+            !default_attributes.decorations,
+            "the default output window must be borderless (decorations={})",
+            default_attributes.decorations
+        );
+        assert_eq!(
+            default_attributes.fullscreen, None,
+            "the default output window must not start fullscreen"
+        );
+
+        let saved_fullscreen = SavedWindow {
+            x: 10.0,
+            y: 20.0,
+            width: 640.0,
+            height: 360.0,
+            fullscreen: true,
+            ..Default::default()
+        };
+        let fullscreen_attributes = output_window_attributes(Some(&saved_fullscreen));
+        assert!(
+            !fullscreen_attributes.decorations,
+            "the fullscreen output window must be borderless (decorations={})",
+            fullscreen_attributes.decorations
+        );
+        assert_eq!(
+            fullscreen_attributes.fullscreen,
+            Some(Fullscreen::Borderless(None)),
+            "a saved fullscreen output window must use borderless fullscreen"
+        );
+
+        let saved_windowed = SavedWindow {
+            x: 10.0,
+            y: 20.0,
+            width: 640.0,
+            height: 360.0,
+            fullscreen: false,
+            ..Default::default()
+        };
+        let windowed_attributes = output_window_attributes(Some(&saved_windowed));
+        assert!(
+            !windowed_attributes.decorations,
+            "a saved windowed output window must be borderless (decorations={})",
+            windowed_attributes.decorations
+        );
+        assert_eq!(
+            windowed_attributes.fullscreen, None,
+            "a saved windowed output window must not start fullscreen"
+        );
+        assert_eq!(
+            windowed_attributes.inner_size,
+            Some(winit::dpi::Size::Logical(LogicalSize::new(640.0, 360.0))),
+            "a saved windowed output window must preserve its size"
+        );
+    }
 
     #[test]
     fn a_redraw_request_must_not_ask_for_another_redraw() {
