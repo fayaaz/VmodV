@@ -14,7 +14,7 @@ summary a reader can trust without opening them.
 | Status | Detail |
 | --- | --- |
 | ISF v1 and v2 | Fully supported. |
-| ISF v3 | **Partially supported** for feedback: the v3-only `isf_LoopedBuffer(buffer, size, coord)` helper now translates to WGSL (rewritten to the v2 `IMG_NORM_PIXEL` sampling macro; the looped buffer is a `PERSISTENT` pass target). `MultiPass`, v3 audio/event inputs and any other v3-specific feature are still not supported. |
+| `isf_LoopedBuffer` | VmodV-local macro extension, not part of any published ISF version; translated to WGSL (rewritten to `IMG_NORM_PIXEL(buffer, coord)`; the looped buffer is a `PERSISTENT` pass target). ISF v1 and v2 are the published spec versions VmodV supports; no published ISF v3 spec exists. |
 | Detection | Explicit `ISFVSN` < 2 wins; otherwise the version is **inferred**: `1.0` when v1 markers exist (`PERSISTENT_BUFFERS` or `vv_` identifiers in the body), else `2.0`. |
 | Upgrades | v1 → v2: `PERSISTENT_BUFFERS` folds into pass-level `PERSISTENT`, `vv_` identifiers are renamed. |
 
@@ -55,8 +55,9 @@ Inputs are plain scalars/vectors except `image`/`audio`/`audioFFT`
 (texture + sampler pairs).
 
 Macros: `IMG_THIS_PIXEL`, `IMG_THIS_NORM_PIXEL`, `IMG_PIXEL`,
-`IMG_NORM_PIXEL`, `IMG_SIZE`, plus the ISF v3 feedback helper
-`isf_LoopedBuffer(buffer, size, coord)` (rewritten to `IMG_NORM_PIXEL(buffer, coord)`).
+`IMG_NORM_PIXEL`, `IMG_SIZE` (the ISF v2 macro set), plus the VmodV-local
+extension `isf_LoopedBuffer(buffer, size, coord)` (not part of any published
+ISF version), rewritten to `IMG_NORM_PIXEL(buffer, coord)`.
 
 ### GLSL dialect
 
@@ -70,7 +71,6 @@ Macros: `IMG_THIS_PIXEL`, `IMG_THIS_NORM_PIXEL`, `IMG_PIXEL`,
 
 ### Known gaps
 
-- The ISF v3 feedback helper (`isf_LoopedBuffer`) is supported; the remaining v3 gaps are `MultiPass` shader layouts and v3 audio/event inputs (not yet implemented).
 - Ambiguous third-party shaders can be routed through the override mechanism
   (`crates/modv-renderers/src/isf/overrides/`), but the vendored corpus needs none.
 
