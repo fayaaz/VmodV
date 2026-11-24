@@ -27,7 +27,6 @@
 //!   save.
 //! - `JSON.parse(JSON.stringify(...))` clones become `Value::clone` (deep).
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

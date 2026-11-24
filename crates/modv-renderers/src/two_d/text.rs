@@ -9,7 +9,7 @@
 //!
 //! # Why cosmic-text
 //!
-//! `docs/rust-hybrid.md` WS-5 recommends `cosmic-text` + `fontdb`: shape on
+//! The port uses `cosmic-text` + `fontdb`: shape on
 //! the CPU, upload glyph coverage as an `R8` texture, and draw it with the
 //! same textured-quad pipeline as `drawImage`.
 //!

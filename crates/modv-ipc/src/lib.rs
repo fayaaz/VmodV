@@ -1,4 +1,4 @@
-//! Protocol, framing and shared-memory preview transport. See docs/rust-hybrid.md.
+//! Protocol, framing and shared-memory preview transport for the headless engine.
 //!
 //! This crate implements the M1 control-channel milestone:
 //!
@@ -7,8 +7,6 @@
 //! - [`preview`] — the `VMP1` shared-memory ring used for preview frames.
 //! - [`socket`] — non-blocking Unix domain socket plumbing for the engine main loop.
 //!
-//! Spec references are given as `spec:` comments pointing at
-//! “docs/rust-hybrid.md — Protocol specification”.
 #![forbid(unsafe_code)]
 
 pub mod frame;

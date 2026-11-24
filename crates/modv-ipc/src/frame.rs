@@ -1,27 +1,27 @@
 //! Control-channel framing.
 //!
-//! spec: docs/rust-hybrid.md — “Protocol specification — control channel”:
+//! Control-channel wire format:
 //!
 //! ```text
 //! [ u32 LE payload length ][ u8 kind ][ payload bytes ]
 //! ```
 //!
 //! The `kind` byte is opaque to this module; see [`crate::message`] for how the
-//! JSON kinds (0/1/2) are interpreted. Kind 3 is reserved by the spec and is
+//! JSON kinds (0/1/2) are interpreted. Kind 3 is reserved and is
 //! passed through here like any other kind.
 
 use std::fmt;
 
-/// JSON request frame. spec: kind table — 0 = JSON request.
+/// JSON request frame; kind 0 = JSON request.
 pub const KIND_REQUEST: u8 = 0;
-/// JSON response frame. spec: kind table — 1 = JSON response.
+/// JSON response frame; kind 1 = JSON response.
 pub const KIND_RESPONSE: u8 = 1;
-/// JSON event frame. spec: kind table — 2 = JSON event.
+/// JSON event frame; kind 2 = JSON event.
 pub const KIND_EVENT: u8 = 2;
-/// Binary frame (reserved by the spec). spec: kind table — 3 = binary (reserved).
+/// Binary frame (reserved); kind 3 = binary (reserved).
 pub const KIND_BINARY: u8 = 3;
 
-/// Largest payload (in bytes) a frame may carry. spec: 64 MiB hard cap.
+/// Largest payload (in bytes) a frame may carry: 64 MiB hard cap.
 pub const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
 /// Length of the frame header: `u32` payload length + `u8` kind.
@@ -111,7 +111,7 @@ impl FrameReader {
                 break;
             }
             let len = u32::from_le_bytes(self.buf[..4].try_into().expect("4-byte slice"));
-            // spec: length + header must not overflow usize (checked before the
+            // The length + header must not overflow usize (checked before the
             // MAX_FRAME_BYTES clamp so the check is meaningful on 32-bit).
             let total = match (len as usize).checked_add(HEADER_BYTES) {
                 Some(total) => total,
@@ -153,7 +153,7 @@ mod tests {
     fn encode_push_roundtrip_single_frame() {
         let payload = br#"{"id":42,"method":"engine/shutdown"}"#;
         let frame = encode_frame(KIND_REQUEST, payload).expect("encode");
-        // spec: header layout
+        // Header layout
         assert_eq!(&frame[..4], &(payload.len() as u32).to_le_bytes());
         assert_eq!(frame[4], KIND_REQUEST);
 

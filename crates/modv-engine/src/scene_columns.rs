@@ -12,7 +12,6 @@
 //! - [`create_empty_scene`] builds a Scene document with no Groups or Modules,
 //!   ready to be filled by Ctrl+dragging cells from other Scenes.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use serde_json::{Map, Value, json};
 

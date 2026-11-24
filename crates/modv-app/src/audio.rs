@@ -1,7 +1,7 @@
 //! Engine-owned audio capture and the analysis → render payload mapping (WS-9).
 //!
-//! `docs/rust-hybrid.md` ends WS-9 with the engine owning capture and analysis
-//! end to end. This module is the engine half of that transport:
+//! The engine owns capture and analysis end to end. This module is the engine
+//! half of that transport:
 //!
 //! * [`open_feed`] builds a [`modv_media::audio::engine::AudioFeed`] for the
 //!   `--audio-source` selection — the default sink's PipeWire monitor

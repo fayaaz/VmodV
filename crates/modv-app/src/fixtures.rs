@@ -1,4 +1,4 @@
-//! Deterministic store fixtures for the M2 parity gate (WS-1, `docs/rust-hybrid.md`).
+//! Deterministic store fixtures for the store-parity gate.
 //!
 //! `modv-engine --emit-fixtures <DIR>` runs a fixed session against a fresh
 //! [`Store`] — no GPU, no window, no control socket — and writes two committed

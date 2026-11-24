@@ -6,7 +6,6 @@
 //!   offers (15 blend modes incl. the 4 non-separable ones, 13 Porter-Duff
 //!   composite modes); the JS classifies the non-separable quartet
 //!   (`hue`/`saturation`/`color`/`luminosity`) under "Blend Modes".
-//! - `docs/rust-hybrid.md` WS-1 "Blend modes" and WS-2 "Blend modes".
 //!
 //! ## One code path, by design
 //!

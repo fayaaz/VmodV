@@ -1,5 +1,4 @@
 //! ISF renderer — port of `src/renderer/src/application/renderers/isf/`.
-//! See docs/rust-hybrid.md, "WS-4 ISF renderer".
 //!
 //! The vendored JavaScript implementation is the npm package
 //! `interactive-shader-format` (a fork of `vcync/interactive-shader-format-js`)

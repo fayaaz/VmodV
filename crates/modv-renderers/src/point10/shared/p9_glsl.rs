@@ -3,8 +3,8 @@
 //!
 //! # Why a shared snippet and not a preprocessor
 //!
-//! `P9Glsl.js` is a 25 KB GLSL preprocessor library; `docs/rust-hybrid.md`
-//! replaces it with per-scene WGSL. Three scenes in this batch (`LightTunnel`,
+//! `P9Glsl.js` is a 25 KB GLSL preprocessor library; the port replaces it
+//! with per-scene WGSL. Three scenes in this batch (`LightTunnel`,
 //! `Wormhole`, `ItIsComingForYou`) still call into it, so the handful of
 //! helpers they actually use are ported once here and concatenated in front of
 //! a scene's own WGSL. The `p9_` prefix keeps them from colliding with a

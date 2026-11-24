@@ -1,8 +1,8 @@
 //! JSON messages carried by the control channel.
 //!
-//! spec: docs/rust-hybrid.md — “Protocol specification — control channel”.
+//! See [`crate::frame`] for the framing these messages are carried in.
 //!
-//! The wire JSON shapes are exactly the ones shown in the spec:
+//! The wire JSON shapes are:
 //!
 //! ```json
 //! { "id": 42, "method": "scenes/applyScene", "params": { "sceneId": "..." } }
@@ -12,7 +12,7 @@
 //!   "data": { "type": "groups/UPDATE_GROUP", "payload": { "...": "..." } } }
 //! ```
 //!
-//! Ambiguity resolved: the spec's `{ "id": 42, "ok": true, "result": null }`
+//! Ambiguity resolved: the `{ "id": 42, "ok": true, "result": null }`
 //! sample is accepted on the wire, but serde normalises an explicit JSON `null`
 //! into `None` for `Option<serde_json::Value>`, so a re-serialised `Response`
 //! with `result: None` omits the key entirely (see `skip_serializing_if`).
@@ -24,7 +24,7 @@ use std::fmt;
 
 use crate::frame::{self, KIND_EVENT, KIND_REQUEST, KIND_RESPONSE};
 
-/// A JSON request. spec: `{ "id", "method", "params" }`; `params` defaults to
+/// A JSON request: `{ "id", "method", "params" }`; `params` defaults to
 /// `null` when omitted by the caller.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
@@ -60,7 +60,7 @@ pub struct ResponseError {
     pub message: String,
 }
 
-/// A JSON response. spec: `{ "id", "ok", "result"? , "error"? }`; `result` and
+/// A JSON response: `{ "id", "ok", "result"? , "error"? }`; `result` and
 /// `error` are omitted when absent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Response {
@@ -78,7 +78,7 @@ pub struct Response {
 
 impl Response {
     /// Build a success response carrying `result` (use `serde_json::Value::Null`
-    /// for the spec's `"result": null` shape).
+    /// for the `"result": null` shape).
     pub fn ok(id: u64, result: serde_json::Value) -> Self {
         Self {
             id,
@@ -115,7 +115,7 @@ impl Response {
     }
 }
 
-/// A JSON event (server-initiated). spec: `{ "event", "data" }`; `data`
+/// A JSON event (server-initiated): `{ "event", "data" }`; `data`
 /// defaults to `null` when omitted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
@@ -150,8 +150,8 @@ impl Event {
 
 /// A decoded control-channel message.
 ///
-/// spec: kinds 0/1/2 decode as `Request`/`Response`/`Event`. Kind 3
-/// (`KIND_BINARY`) is reserved by the spec and decodes as
+/// Kinds 0/1/2 decode as `Request`/`Response`/`Event`. Kind 3
+/// (`KIND_BINARY`) is reserved and decodes as
 /// [`MessageError::InvalidKind`] for now — it is left as an explicit error so
 /// call sites can be audited when the binary channel is defined.
 #[derive(Debug, Clone, PartialEq)]
@@ -214,8 +214,8 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn request_parses_spec_sample() {
-        // spec: { "id": 42, "method": "scenes/applyScene", "params": { "sceneId": "..." } }
+    fn request_parses_protocol_sample() {
+        // { "id": 42, "method": "scenes/applyScene", "params": { "sceneId": "..." } }
         let payload = br#"{"id":42,"method":"scenes/applyScene","params":{"sceneId":"..."}}"#;
         let incoming = from_frame(KIND_REQUEST, payload).expect("decode");
         match incoming {
@@ -243,14 +243,14 @@ mod tests {
 
     #[test]
     fn response_ok_roundtrip() {
-        // spec: { "id": 42, "ok": true, "result": null }
+        // { "id": 42, "ok": true, "result": null }
         let response = Response::ok(42, serde_json::Value::Null);
         let frame = response.clone().into_frame();
         let incoming = from_frame(KIND_RESPONSE, &frame[5..]).expect("decode");
         match incoming {
             Incoming::Response(decoded) => {
                 // serde maps JSON null to Option::None, so the wire round
-                // trip collapses Some(Null) — the spec's "result": null is
+                // trip collapses Some(Null) — the "result": null is
                 // preserved on the wire, not in the struct.
                 assert_eq!(decoded.id, 42);
                 assert!(decoded.ok);
@@ -260,7 +260,7 @@ mod tests {
             other => panic!("expected response, got {other:?}"),
         }
         assert_eq!(&frame[5..], br#"{"id":42,"ok":true,"result":null}"#);
-        // The exact spec bytes round-trip too.
+        // The exact wire bytes round-trip too.
         let wire = br#"{"id":42,"ok":true,"result":null}"#;
         let decoded: Response = serde_json::from_slice(wire).expect("decode wire");
         assert!(decoded.ok);
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn response_err_roundtrip() {
-        // spec: { "id": 42, "ok": false, "error": { "code": "unknown_scene", "message": "..." } }
+        // { "id": 42, "ok": false, "error": { "code": "unknown_scene", "message": "..." } }
         let response = Response::err(42, "unknown_scene", "no such scene");
         let value = serde_json::to_value(&response).expect("serialize");
         assert_eq!(value["ok"], false);
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn event_state_delta_roundtrip() {
-        // spec: { "event": "state/delta",
+        // { "event": "state/delta",
         //         "data": { "type": "groups/UPDATE_GROUP", "payload": { "...": "..." } } }
         let event = Event::new(
             "state/delta",
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn kind_3_binary_is_reserved() {
-        // spec: kind 3 = binary (reserved); rejected until the binary channel is defined.
+        // Kind 3 = binary (reserved); rejected until the binary channel is defined.
         match from_frame(crate::frame::KIND_BINARY, b"anything") {
             Err(MessageError::InvalidKind(3)) => {}
             other => panic!("expected InvalidKind(3), got {other:?}"),

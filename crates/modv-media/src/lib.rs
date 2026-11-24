@@ -1,4 +1,4 @@
-//! Camera/screen/file capture, codecs, NDI, audio analysis. See docs/rust-hybrid.md.
+//! Camera/screen/file capture, codecs, NDI, audio analysis. See AGENTS.md.
 
 pub mod audio;
 pub mod midi;

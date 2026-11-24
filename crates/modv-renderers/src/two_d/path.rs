@@ -23,8 +23,8 @@
 //!   `Polygon.js` makes and concave ones equally well.
 //!
 //! Non-zero winding *across* subpaths (holes) is not implemented: the ported
-//! corpus never draws a path with a hole (`docs/rust-hybrid.md` WS-5 lists the
-//! exact operations used — no `evenodd`, no compound fills).
+//! corpus never draws a path with a hole (only simple fills are used — no
+//! `evenodd`, no compound fills).
 //!
 //! # Stroke expansion
 //!

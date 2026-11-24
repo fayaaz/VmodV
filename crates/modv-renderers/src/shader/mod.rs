@@ -1,5 +1,4 @@
 //! Shader renderer — port of `src/renderer/src/application/renderers/shader/`.
-//! See docs/rust-hybrid.md, "WS-3 Shader renderer".
 //!
 //! # What this module owns
 //!

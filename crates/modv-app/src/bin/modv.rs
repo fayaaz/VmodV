@@ -1,5 +1,5 @@
 //! The `modv` binary: the VmodV single-process shell. See
-//! [`modv_app::vmodv_main`] and `docs/rust-full-rewrite.md`.
+//! [`modv_app::vmodv_main`].
 
 use std::process::ExitCode;
 

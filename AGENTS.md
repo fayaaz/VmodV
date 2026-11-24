@@ -21,8 +21,9 @@ Everything runs in Docker. The host only needs Docker (with Buildx) and make —
 - `make rave-reencode` — the one remaining Node usage: a throwaway `node:24-slim` container re-encodes `resources/isf/rave.exe.fs` from `tools/rave-words.txt`. Nothing else in the tree needs Node.
 - `make shell` — interactive shell in the Rust toolchain container with the repo bind-mounted at `/app` and a cargo cache volume.
 - `make docker-reset` — delete the `modv-cargo` cargo volume; the next cargo target reseeds it.
+- `make disk-clean-targets` — drop compiled artifacts from the cargo volume but keep the registry cache; `make disk-clean` prunes stale Docker BuildKit cache.
 
-Commands run against the repo bind-mounted at `/app`. Cargo's registry/target cache lives in the `modv-cargo` named volume, seeded from the `modv-rust:local` toolchain image.
+Commands run against the repo bind-mounted at `/app`. Cargo's registry cache lives in the `modv-cargo` named volume, seeded from the `modv-rust:local` toolchain image. Locally, the gitignored `.env` sets `CARGO_TARGET_DIR=/cargo/target`, which the Makefile forwards into every cargo container so build artifacts (including hundreds of stale build-script output dirs) accumulate in that volume instead of the bind-mounted `crates/target`. CI leaves it unset and caches `crates/target` as before.
 
 CI is `.github/workflows/vmodv.yml` (Rust lint/tests + both installers on pushes/PRs to `main`/`rust-hybrid`) and `.github/workflows/release.yml` (automatic semantic-versioning releases from `main`, see `docs/releasing.md`). There is no Node/browser CI workflow and no rolling nightly — the semantic releases are the installers' distribution channel.
 
@@ -108,21 +109,57 @@ Point10 scenes are ported (not vendored) into `crates/modv-renderers` — WGSL/T
 
 - `winit` is built with both `wayland` and `x11` features; Wayland is preferred on Wayland sessions, X11 is the supported fallback (`libxkbcommon-x11` is declared by the `.deb`). `make` prefers the host Wayland socket (`DISPLAY_BACKEND=auto`); the e2e harness likewise prefers Wayland and falls back to X11/Xvfb.
 - Rendering is Vulkan via `wgpu`. Docker/CI run with Mesa's `mesa-vulkan-drivers` (lavapipe); **(`--device /dev/dri` alone is not enough — the Vulkan ICD is required)**. The container runs as the host UID/GID, so the Makefile adds the `/dev/dri` device GIDs via `--group-add`; without them the GPU nodes are unreadable and wgpu falls back to lavapipe (or fails).
-- The reference AMD host reaches ~140 fps at 960×540 with a default Scene; lavapipe measures ~57 fps (see `docs/rust-full-rewrite-progress.md` for the P0 evidence and caveats).
+- The reference AMD host reaches ~140 fps at 960×540 with a default Scene; lavapipe measures ~57 fps. The lavapipe number is compositor-sensitive (window resize/occlusion changes it).
 
 ## Packaging & release
 
 `make build` (Dockerfile `appimage`/`deb` stages) empties `dist/` and emits the AppImage and `.deb` (`vmodv` package: `modv` binary + `vmodv` compat symlink, desktop file, icon, ISF corpus and textures under `/usr/share/vmodv`). Runtime dependencies (Vulkan/lavapipe, PipeWire, ALSA, GStreamer, `libxkbcommon-x11`) are host packages; the `.deb` declares them. `VMODV_VERSION` names the artifacts; `release.yml` passes the computed release version when building stable artifacts, and locally it defaults to the git-tag version (`tools/version.sh`; no version literal in the tree). The Cargo workspace stays at `0.1.0` internally. Installer checks: `make vmodv-deb-check`, `tools/vmodv-smoke.sh`. **Stable releases are automatic:** `.github/workflows/release.yml` computes the next version from conventional commits on `main` (`feat:` → minor, `fix:` → patch, `<type>!:` / `BREAKING CHANGE:` → major, anything else → no release), tags the released commit `vX.Y.Z` (no version-bump commit), builds and publishes a GitHub release. The `v2.0.0` tag seeds the base line. See `docs/releasing.md`. **Default-Scenes overhauls are `feat(scenes):`, never `feat!:` / `BREAKING CHANGE:`** — removing modules from the seeded Scenes or retiring seeded Scenes (e.g. the v20 heavy-Point10/Chromatic Line/Smoke Room removals, which dropped ten seeded Scenes on upgrade) is routine overhaul work, shipped exactly like the Strobe Riot (v18) and v19 bumps. Reserve `!` / `BREAKING CHANGE:` for breaks that warrant a major bump; the seeded defaults changing for all installs is not one. **The Electron build is not maintained here** — do not "fix" the archived tree; retrieve it read-only from `legacy-electron`/`v1.x-final`.
 
-## Known residuals (see `docs/rust-full-rewrite-progress.md`)
+## Known residuals
 
-- Not ported yet: undo/redo (disabled), Preferences (stub), a structured daily logger + splash, native file/screen pickers and the media-manager dialogs/project profiles, the full media-tree watch, palette editor + font registry (read-only previews today), video transport controls, the 2D vector pad, Flatpak, multi-output windows (`output-0` only), NDI/OSC hardware verification.
-- The engine-only headless binary keeps the `modv-ipc` control socket; the VmodV shell serves a JSON-lines control protocol on `--socket` instead (`docs/vmodv-e2e.md`).
-- The committed tree is Rust-only; anything referencing `src/`, `package.json` or the worker store is describing the archive — update the docs, not the references.
+This is the single list of work left from the Rust rewrite. The migration
+trackers that used to live in `docs/` were removed once 2.0 shipped; their
+history is in git, and the pre-cleanup Electron tree is on `legacy-electron`.
+
+- **UI (P1/P3):** undo/redo is disabled and Preferences is a stub. No structured
+  daily logger (`Open logs` is a stub) or splash. Palette and font values are
+  read-only previews, video textures are typed paths with no transport
+  controls, and there is no 2D vector pad.
+- **Media (P6):** native file/screen pickers, media-manager file dialogs,
+  project profiles and the full media-tree watch are missing. User ISF hot
+  reload, the camera panel and preset load/save already work.
+- **Plugins (P7):** the opt-in Boa plugin host is not implemented, so the
+  Plugins panel stays disabled. `modV.ws` posts are rejected and plugin
+  discovery has no filesystem watcher (explicit re-scan only).
+- **Testing/parity (P8):** beyond `tools/vmodv-smoke.sh` there is no
+  e2e/perf/soak harness. Remaining kittest gaps: Groups keyboard delete,
+  tri-state `enabled` and explicit `inheritFrom`, Gallery hover preview,
+  Scene-grid automation, packaged window-state/quit checks and host PipeWire
+  audio. No NDI, camera or multi-GPU hardware verification is recorded.
+- **Packaging (P9):** Flatpak and the clean-VM installer pass (AppImage/`.deb`
+  on a fresh VM, desktop integration) remain.
+- **Windows:** only `output-0` is wired; the engine `windows/*` registry and
+  window-state map already have room for more.
+- **Hygiene:** `TWO_D_PROP_FLAGS` / `TWO_D_PREVIEW_WITH_OUTPUT` are still
+  companion tables in `module_registry.rs` rather than fields on `TwoDProp` /
+  `TwoDModuleMeta`, and a few inert 2D prop-metadata differences (Line `color`
+  type, Buffer `bufferId` default, Grid Stretch's dead `meyda:` key) are
+  unreconciled. Earth/Sun textures could also be routed through
+  `texture_sources`.
+- The engine-only headless binary keeps the `modv-ipc` control socket; the
+  VmodV shell serves a JSON-lines control protocol on `--socket` instead
+  (`docs/vmodv-e2e.md`).
+- The committed tree is Rust-only; anything referencing `src/`, `package.json`
+  or the worker store is describing the archive — update the docs, not the
+  references.
 
 ## Key documents
 
-- `docs/rust-full-rewrite.md` / `docs/rust-full-rewrite-progress.md` — the VmodV plan and the live progress/parity tracker (milestone status, verification evidence, known issues).
-- `docs/rust-full-rewrite-progress.md` is the source of truth for what works; `docs/vmodv-parity-map.md` maps legacy specs to their VmodV coverage; `docs/vmodv-2.0-release.md` describes the 2.0 release artifacts; `docs/releasing.md` documents automated releases; `docs/vmodv-e2e.md` specifies the control socket and harness; `docs/legacy-electron.md` explains the archive.
-- `docs/rust-hybrid*.md` — the earlier opt-in engine port (historical; the hybrid path is gone).
-- `docs/audio-capture-rate.md`, `docs/isf-translation-notes.md`, `docs/isf-corpus-report.md`, `docs/module-parity.md` — subsystem notes worth reading before touching audio capture or the ISF translator.
+- This file (`AGENTS.md`) is the source of truth for what works and what is left.
+- `docs/vmodv-e2e.md` — control socket and real-binary harness.
+- `docs/vmodv-2.0-release.md` — release artifacts and userData layout.
+- `docs/releasing.md` — automated semantic-version releases.
+- `docs/legacy-electron.md` — how to retrieve the archived 1.x tree.
+- Subsystem notes: `docs/audio-capture-rate.md`, `docs/isf-translation-notes.md`,
+  `docs/isf-corpus-report.md`, `docs/compatibility-matrix.md`,
+  `docs/milkdrop-presets.md`.

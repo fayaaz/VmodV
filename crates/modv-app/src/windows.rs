@@ -1,6 +1,5 @@
 //! Engine-owned Output Windows — the VmodV replacement for Electron's
-//! `window.open("./output-window.html")` popups (docs/rust-hybrid.md, "Output
-//! windows").
+//! `window.open("./output-window.html")` popups.
 //!
 //! [`WindowRegistry`] is the store-side truth the UI mirror sees (`windows`
 //! Vuex module: `ADD_WINDOW` / `REMOVE_WINDOW`). The winit loop owns the actual

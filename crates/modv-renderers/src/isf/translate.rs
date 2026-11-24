@@ -1187,8 +1187,7 @@ pub fn write_corpus_report(directory: &Path) -> CorpusReport {
 /// The checked-in corpus baseline (`data/isf-corpus-baseline.json`).
 pub const CORPUS_BASELINE: &str = include_str!("../../data/isf-corpus-baseline.json");
 
-/// The acceptance bar for translations that need no override (WS-4 in
-/// `docs/rust-hybrid.md`).
+/// The acceptance bar for translations that need no override.
 pub const CORPUS_PASS_RATE: f64 = 95.0;
 
 /// A checked-in snapshot of the corpus translation results.

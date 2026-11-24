@@ -116,7 +116,6 @@
 //!
 //! The rules ported here correspond to no specific JS function: they are the
 //! version-keyed complement of `default-scenes.js`'s unversioned tables.
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use std::collections::HashSet;
 

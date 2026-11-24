@@ -29,7 +29,6 @@
 //!   `modv-media` into the engine crate. `modv_media::audio::phrase` is the
 //!   canonical port.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use std::collections::{BTreeMap, HashSet};
 

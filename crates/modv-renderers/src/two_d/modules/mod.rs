@@ -38,7 +38,7 @@
 //!
 //! # Audio
 //!
-//! `docs/rust-hybrid.md` WS-5: `features` is the Meyda feature bag and the
+//! `features` is the Meyda feature bag and the
 //! corpus reads `zcr`, `rms` and `buffer`. [`AudioFrame`] carries those plus
 //! the AGC bands; the engine adapter (M2e) fills it.
 
@@ -373,8 +373,7 @@ pub trait TwoDModule: Send {
     fn dispose(&mut self) {}
 }
 
-/// Every built-in 2D module, in the plan's table order
-/// (`docs/rust-hybrid.md` WS-5).
+/// Every built-in 2D module, in the legacy table order.
 pub fn all_modules() -> Vec<Box<dyn TwoDModule>> {
     vec![
         Box::new(Ball::default()),

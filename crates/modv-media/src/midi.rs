@@ -5,8 +5,8 @@
 //! The device model stays in Electron: Web MIDI owns enumeration, hot-plug and
 //! the identity `${id}-${name}-${manufacturer}` (`setup-midi.js:141-146`,
 //! `store/modules/midi.js:31-42`). The renderer forwards every message over the
-//! control socket as the `midi/raw` payload (`docs/rust-hybrid.md`, "The IPC
-//! path"), and the engine applies the legacy `midi/WRITE_DATA` semantics:
+//! control socket as the `midi/raw` payload, and the engine applies the legacy
+//! `midi/WRITE_DATA` semantics:
 //!
 //! ```js
 //! // setup-midi.js:89-114
@@ -26,8 +26,8 @@
 //! The clock half (type 248) is *not* a `channelData` value: it feeds the
 //! shared [`MidiClockTracker`] (WS-9, `audio/midi_clock.rs`) and an emitted BPM
 //! is reported as [`MidiEventKind::Clock`] with `bpm` set (see
-//! `setup-midi.js:38-80`; `docs/rust-hybrid.md` moves the clock into the
-//! engine because the engine owns the timebase).
+//! `setup-midi.js:38-80`; the port moves the clock into the engine because
+//! the engine owns the timebase).
 //!
 //! Deviations from the JS, each deliberate:
 //!
@@ -76,7 +76,7 @@ pub const TYPE_CLOCK: u8 = 248;
 /// `setup-midi.js:112-114`).
 pub const CC_VALUE_MAX: f64 = 127.0;
 
-/// The `midi/raw` IPC payload (`docs/rust-hybrid.md`, "The IPC path"):
+/// The `midi/raw` IPC payload:
 ///
 /// ```json
 /// { "device": "<id>-<name>-<manufacturer>", "type": 248, "channel": 0, "data": 0 }
@@ -736,7 +736,7 @@ mod tests {
         );
     }
 
-    // docs/rust-hybrid.md, "The IPC path" — the wire payload.
+    // The wire payload.
     #[test]
     fn raw_message_serialises_with_a_type_field() {
         let message = MidiRawMessage::new(KEY, TYPE_CLOCK, 0, 0);

@@ -27,7 +27,6 @@
 //! - The JS `clone` is a `JSON.parse(JSON.stringify(...))` deep copy;
 //!   `serde_json::to_value` produces the same deep copy.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use std::collections::BTreeMap;
 

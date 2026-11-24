@@ -21,7 +21,6 @@
 //!   (`groups[toRowIndex]`, like the JS), pads a shorter target with `null`
 //!   holes and trims trailing holes.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use serde_json::{Map, Value, json};
 

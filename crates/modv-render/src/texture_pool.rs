@@ -1,9 +1,8 @@
 //! GPU texture pool keyed by `(width, height, format, usage class)`.
 //!
-//! Implements the "Texture pool" section of `docs/rust-hybrid.md` (WS-2):
-//! textures are pooled **only** for short-lived scratch classes; group
-//! targets are allocated once per layout change in the M3 wiring (the doc:
-//! "pool class" per usage, LRU eviction, ≤16 row-fade scratch).
+//! Textures are pooled **only** for short-lived scratch classes; group
+//! targets are allocated once per layout change. Pools are keyed by usage
+//! class with LRU eviction (≤16 row-fade scratch).
 //!
 //! ## Lifetime model (why cloned handles are safe)
 //!

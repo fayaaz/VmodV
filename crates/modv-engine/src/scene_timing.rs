@@ -45,7 +45,6 @@
 //! themselves keep their historical names, so no document migration is
 //! needed; an older file simply has no `timingUnit` and reads as seconds.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use serde_json::Value;
 

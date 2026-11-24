@@ -12,7 +12,6 @@
 //! ([`AUTO_BASS_EXCLUDED_PROPS`] / [`AUTO_BPM_EXCLUDED_PROPS`], WS-8
 //! "Automatic Scene links").
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use serde_json::{Value, json};
 

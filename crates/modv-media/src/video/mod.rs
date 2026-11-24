@@ -70,8 +70,7 @@
 //! `width * height * 4` bytes and [`VideoFrame::width`]/[`VideoFrame::height`]
 //! describe it — exactly what a `wgpu::TextureFormat::Rgba8Unorm` upload wants.
 //! The legacy renderer drew the `ImageBitmap` into a per-device auxiliary
-//! canvas; the engine instead uploads this buffer into a texture (see
-//! `docs/rust-hybrid.md` WS-10).
+//! canvas; the engine instead uploads this buffer into a texture.
 
 pub mod camera;
 pub mod frame;

@@ -5,7 +5,6 @@
 //! `store/modules/modules.js` (ModuleInstance shape, `createPresetData`),
 //! `worker/group-inherit.js` and the inherit handling in `worker/loop.js`.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

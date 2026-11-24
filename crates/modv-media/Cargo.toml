@@ -3,7 +3,7 @@ name = "modv-media"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "modV engine — see docs/rust-hybrid.md"
+description = "modV engine"
 
 [dependencies]
 # OSC wire protocol (WS-11). `rosc` replaces the Node-only `node-osc`.

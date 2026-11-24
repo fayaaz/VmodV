@@ -3,7 +3,7 @@ name = "modv-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "modV engine — see docs/rust-hybrid.md"
+description = "modV engine"
 
 [dependencies]
 boa_engine = { version = "0.22.0", default-features = false }

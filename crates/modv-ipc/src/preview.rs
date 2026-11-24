@@ -1,6 +1,6 @@
 //! Shared-memory preview transport ("VMP1" ring).
 //!
-//! spec: docs/rust-hybrid.md — “Protocol specification — Preview channel”:
+//! VMP1 ring layout:
 //!
 //! The engine creates a ring of `slots` (default 3) slots in a shared-memory
 //! file (`/dev/shm` on Linux; a `memfd` is a later, equivalent optimisation).
@@ -24,7 +24,7 @@
 //! slot was never written or was overwritten mid-read and the frame is dropped
 //! — previews are never queued.
 //!
-//! Ambiguity resolved: the spec does not pin down where the file lives when no
+//! Ambiguity resolved: nothing pins down where the file lives when no
 //! hint is given, nor the exact on-disk name. We use `/dev/shm/modv-preview-<pid>-<nanos>`
 //! via plain `std::fs` (no `memfd`, `memmap2` or `libc` needed for a file in
 //! `tmpfs`), and tests cover the fallback. The file is unlinked on drop.
@@ -134,7 +134,7 @@ impl PreviewHeader {
 
 /// A frame written into the ring; returned by [`PreviewRing::write_frame`].
 ///
-/// spec: the engine publishes `preview/frame` events whose `data` payload is
+/// The engine publishes `preview/frame` events whose `data` payload is
 /// exactly [`PreviewFrame::to_event`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreviewFrame {
@@ -157,7 +157,7 @@ pub struct PreviewFrame {
 impl PreviewFrame {
     /// Event payload published as `preview/frame`.
     ///
-    /// Keys match the spec's `preview/ready` handshake naming style:
+    /// Keys match the `preview/ready` handshake naming style:
     /// `{ slot, width, height, stride, format, sequence, frameId }`.
     pub fn to_event(&self) -> Value {
         json!({

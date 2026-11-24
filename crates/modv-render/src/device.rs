@@ -1,8 +1,7 @@
 //! wgpu instance/device/queue creation.
 //!
 //! [`Engine`] owns the instance's only device and queue. A single device is
-//! shared by every surface/output window of the process (see the multi-monitor
-//! plan in docs/rust-hybrid.md, "Wayland plan").
+//! shared by every surface/output window of the process.
 
 use std::fmt;
 

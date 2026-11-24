@@ -7,7 +7,7 @@
 //!
 //! P0 is the framework spike: a shell with a Scenes-grid cell, a RangeControl
 //! and a live GPU texture registered from the engine compositor. The module
-//! layout follows `docs/rust-full-rewrite.md` (`modv-ui`):
+//! layout is:
 //!
 //! - [`model`] — engine read models shared with `modv-app`
 //! - [`state`] — UI-local state and the action/command queues

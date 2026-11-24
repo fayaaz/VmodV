@@ -1,4 +1,4 @@
-//! Engine state model, scenes, presets, inputs, timing. See docs/rust-hybrid.md.
+//! Engine state model, scenes, presets, inputs, timing. See AGENTS.md.
 //!
 //! M2a — the pure-logic core of the state model ported from the worker store
 //! modules under `src/renderer/src/application/worker/store/modules/`:

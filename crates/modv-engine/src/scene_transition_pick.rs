@@ -13,7 +13,6 @@
 //! ([`NATIVE_TRANSITION_NAMES`]). The ISF shader bodies are WS-4 scope and are
 //! not duplicated here.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 /// The crossfade every Scene change falls back to (`scene-transition-defs.js:1`).
 pub const FADE_TRANSITION: &str = "Fade";

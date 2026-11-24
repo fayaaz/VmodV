@@ -24,7 +24,7 @@
 //!    supplied — an empty `byteFrequencyData` when the input was missing.
 //!    The Rust payload is a fixed-size *snapshot* (`[f32; 1024]`,
 //!    `[u8; 1024]`, copied by value) because the wire shape is fixed at 1024
-//!    (docs/rust-hybrid.md, "Band analyser", payload JSON). Values beyond
+//!    (the legacy band-analyser payload JSON). Values beyond
 //!    1024 are truncated and short buffers zero-padded. The "missing byte
 //!    frequency data" case is therefore represented as a zero-filled array,
 //!    not an empty one.

@@ -109,7 +109,6 @@
 //! bit-exact for wall-clock tweens (a BPM cycle can move by one ulp because the
 //! `(60 * 60 / bpm) * division` base is re-expressed for the extra row).
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

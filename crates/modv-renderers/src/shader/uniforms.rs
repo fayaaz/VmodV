@@ -40,9 +40,9 @@
 //!   and the port multiplies by 1000 (`super::pipeline`).
 //! * `u_fftResolution` is a scalar `f32` (the FFT texture **width**, e.g.
 //!   `512.0`), matching `default-shader.js`'s `uniform float u_fftResolution`
-//!   and `index.js:112` (`fftTexture ? fftTexture.width : 1`). The doc table
-//!   in docs/rust-hybrid.md says `vec2`; that table is wrong here and the JS
-//!   is the source of truth. A 512×1 texture still has width 512.
+//!   and `index.js:112` (`fftTexture ? fftTexture.width : 1`). The old plan
+//!   called this `vec2`; that was wrong, and the JS is the source of truth.
+//!   A 512×1 texture still has width 512.
 //! * `u_kick` is declared as a GLSL `bool`, but WGSL uniform buffers carry no
 //!   boolean type, so it travels as `u32` 0/1. In WGSL the member reads as
 //!   `u.u_kick != 0u`; in GLSL the cast `float(u_kick)` becomes

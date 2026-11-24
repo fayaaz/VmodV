@@ -18,8 +18,8 @@ pub struct SurfaceTarget {
 ///
 /// The adapter must be able to present to the surface; the first supported
 /// sRGB format (otherwise the first supported format) is selected. Fifo
-/// (vsync) presentation is the default, per the Wayland plan in
-/// docs/rust-hybrid.md. The initial configuration size is taken from
+/// (vsync) presentation is the default. The initial configuration size is
+/// taken from
 /// [`Window::inner_size`], clamped to a non-zero size.
 pub fn create_surface(engine: &Engine, window: Arc<Window>) -> Result<SurfaceTarget, EngineError> {
     create_surface_with_present_mode(engine, window, wgpu::PresentMode::Fifo)

@@ -3,7 +3,7 @@ name = "modv-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "modV VmodV UI (egui) — see docs/rust-full-rewrite.md"
+description = "VmodV UI (egui)"
 
 [dependencies]
 egui = { version = "0.37.0", features = ["default_fonts"] }

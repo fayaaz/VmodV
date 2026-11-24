@@ -1,5 +1,4 @@
-//! Frame graph and compositor passes (WS-2, "Render graph" and
-//! "Compositor" in `docs/rust-hybrid.md`).
+//! Frame graph and compositor passes.
 //!
 //! This milestone (M2b) implements the graph *executor* and the two
 //! compositor passes that were previously done on canvas (`RowFade`, the

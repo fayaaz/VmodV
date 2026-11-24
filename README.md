@@ -153,9 +153,8 @@ make format                                         # cargo fmt --all
 
 The e2e harness drives the real `modv` binary over a JSON-lines control
 socket; it prefers the host Wayland session, falls back to X11, and starts
-Xvfb when there's no display at all. See
-[docs/vmodv-e2e.md](docs/vmodv-e2e.md) and
-[docs/vmodv-parity-map.md](docs/vmodv-parity-map.md).
+Xvfb when there's no display at all. See [docs/vmodv-e2e.md](docs/vmodv-e2e.md).
+Known gaps are listed in [AGENTS.md](AGENTS.md#known-residuals).
 
 ## Under the hood
 

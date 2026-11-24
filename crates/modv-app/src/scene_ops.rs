@@ -93,7 +93,6 @@
 //!   `restoreSceneInputs` run only for a whole-Scene apply; a row/scoped apply
 //!   leaves both alone (`scenes.js` `scoped` early-return).
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;

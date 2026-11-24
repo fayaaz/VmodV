@@ -1,4 +1,4 @@
-//! Renderer implementations for the Rust engine. See docs/rust-hybrid.md.
+//! Renderer implementations for the Rust engine. See AGENTS.md.
 #![forbid(unsafe_code)]
 
 pub mod isf;

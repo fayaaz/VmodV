@@ -1,4 +1,4 @@
-//! Audio analysis and transport. See docs/rust-hybrid.md (WS-9).
+//! Audio analysis and transport. See AGENTS.md.
 
 pub mod analyser;
 pub mod bands;

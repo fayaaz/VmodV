@@ -11,8 +11,7 @@
 //! the equivalent isolation is _separate pipelines and prop buffers per
 //! slot_, with the module id recorded twice (live and gallery) in
 //! [`ShaderRenderer::setup_module`]. Callers pass separate `target_view`s
-//! (the engine's live group texture vs. its preview texture) — see
-//! docs/rust-hybrid.md WS-3 "Context split".
+//! (the engine's live group texture vs. its preview texture).
 //!
 //! # Upload elision
 //!

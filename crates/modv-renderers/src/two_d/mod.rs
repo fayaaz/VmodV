@@ -1,8 +1,7 @@
 //! 2D renderer and canvas facade (M3 / WS-5).
 //!
 //! Port of `src/renderer/src/application/renderers/2d/` — the renderer
-//! (`index.js`, 210 LOC) and the 15 hand-written 2D modules. See
-//! `docs/rust-hybrid.md`, "WS-5 2D renderer and canvas facade".
+//! (`index.js`, 210 LOC) and the 15 hand-written 2D modules.
 //!
 //! # Why a hand-written canvas facade
 //!
@@ -92,9 +91,8 @@
 //! The engine (M2e) owns Meyda/audio analysis. This crate does not depend on
 //! `modv-media`, so [`AudioFrame`] is a decoupled mirror of the analyser
 //! payload: the AGC bands, the Meyda feature bag (`features.zcr`,
-//! `features.rms`, `features.buffer` — `docs/rust-hybrid.md` WS-5 "Module
-//! contract"), the Point10 damping lanes/cells, wave, FFT magnitudes and
-//! sample rate (WS-9).
+//! `features.rms`, `features.buffer`), the Point10 damping lanes/cells, wave,
+//! FFT magnitudes and sample rate.
 
 #![forbid(unsafe_code)]
 

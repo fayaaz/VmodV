@@ -1,7 +1,6 @@
 //! Non-blocking Unix domain socket plumbing for the control channel.
 //!
-//! spec: docs/rust-hybrid.md — “IPC and frame transport” + “Protocol
-//! specification — control channel”.
+//! See [`crate::frame`] and [`crate::message`] for the wire format.
 //!
 //! Engine integration pattern: the engine main loop calls [`SocketServer::poll`]
 //! once per frame (or per iteration of its event loop), dispatches the returned
@@ -12,16 +11,16 @@
 //! ([`crate::preview`]); this socket carries the `preview/ready` handshake and
 //! the `preview/frame` notifications as ordinary [`crate::message::Event`]s.
 //!
-//! Ambiguity resolved: the spec fixes the API shape but not exact semantics
-//! for partial writes. `send` appends to a per-client output buffer and then
+//! Ambiguity resolved: the API shape is fixed but partial-write semantics are
+//! not. `send` appends to a per-client output buffer and then
 //! tries to flush immediately; on `WouldBlock` the remainder stays buffered and
 //! is flushed by the next [`SocketServer::poll`]. A client whose buffer would
 //! exceed [`MAX_PENDING_OUT_BYTES`] (16 MiB) — i.e. a peer that never reads —
-//! is marked dead instead of growing memory without bound (spec: “never queue
+//! is marked dead instead of growing memory without bound (“never queue
 //! unbounded frames”). A dead client is skipped by sends and dropped, with its
 //! id reported in [`PollResult::disconnected`], at the next `poll`.
 //!
-//! spec note: kind 3 (`KIND_BINARY`) frames pass through this layer untouched;
+//! Note: kind 3 (`KIND_BINARY`) frames pass through this layer untouched;
 //! interpreting kinds happens in [`crate::message::from_frame`].
 
 use std::cell::{Cell, RefCell};
@@ -34,11 +33,11 @@ use std::path::{Path, PathBuf};
 use crate::frame::{self, FrameReader, KIND_EVENT, KIND_RESPONSE};
 use crate::message::{Event, Response};
 
-/// Default maximum number of simultaneous clients. spec: default 8.
+/// Default maximum number of simultaneous clients: 8.
 pub const DEFAULT_MAX_CLIENTS: usize = 8;
 
 /// Maximum bytes buffered per client for writes that would block. A client
-/// that exceeds this is disconnected on the spot. spec: bounded queues only.
+/// that exceeds this is disconnected on the spot: bounded queues only.
 pub const MAX_PENDING_OUT_BYTES: usize = 16 * 1024 * 1024;
 
 const READ_SCRATCH_BYTES: usize = 64 * 1024;
@@ -152,7 +151,7 @@ fn is_stale_socket(path: &Path) -> bool {
 }
 
 impl SocketServer {
-    /// Bind `path`, replacing a stale socket file first (spec: "removes a stale
+    /// Bind `path`, replacing a stale socket file first ("removes a stale
     /// socket file"). The listener is set non-blocking and the node is
     /// restricted to its owner (`0600`).
     ///
@@ -217,7 +216,7 @@ impl SocketServer {
                     stream.set_nonblocking(true)?;
                     let alive = self.clients.iter().filter(|c| !c.dead.get()).count();
                     if alive >= self.max_clients {
-                        // spec: bounded clients; excess peers are dropped immediately.
+                        // Bounded clients; excess peers are dropped immediately.
                         continue;
                     }
                     let id = self.next_client_id;

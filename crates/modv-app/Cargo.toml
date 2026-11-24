@@ -3,7 +3,7 @@ name = "modv-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "modV engine binary and VmodV shell — see docs/rust-hybrid.md"
+description = "modV engine binary and VmodV shell"
 default-run = "modv-engine"
 
 [lib]

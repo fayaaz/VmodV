@@ -33,7 +33,7 @@
 //! 1. **Frequency units.** Meyda's `spectralCentroid` is `mu(1, ampSpectrum)`
 //!    (`extractors/spectralCentroid.ts`), i.e. a *bin index*, not a frequency —
 //!    the same `mu` helper is used by spread/skewness/kurtosis. The plan
-//!    (docs/rust-hybrid.md, WS-9 table) asks for the magnitude-weighted mean
+//!    (the legacy Meyda spec) asks for the magnitude-weighted mean
 //!    *frequency*, so [`MeydaFeatures::spectral_centroid`] and
 //!    [`MeydaFeatures::spectral_spread`] are in Hz (`bin_index * sample_rate / fft_size`).
 //!    The bin-domain values are exposed alongside as

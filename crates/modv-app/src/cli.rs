@@ -274,7 +274,7 @@ pub fn vmodv_state_path(explicit: Option<&Path>, user_data: &Path) -> PathBuf {
 pub fn parse() -> Cli {
     let matches = Command::new("modv-engine")
         .version(env!("CARGO_PKG_VERSION"))
-        .about("modV engine — Rust hybrid spike (docs/rust-hybrid.md, M0)")
+        .about("modV engine — headless engine binary")
         .arg(
             Arg::new("width")
                 .long("width")

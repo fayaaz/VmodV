@@ -11,7 +11,6 @@
 //! Gallery contexts instead of resizing the live composition's shared
 //! ISF/shader canvases.
 //!
-//! Line numbers refer to the tree at commit `8a512b6e` (branch `rust-hybrid`).
 
 use serde_json::{Map, Value, json};
 

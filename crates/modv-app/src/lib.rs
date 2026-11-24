@@ -1,4 +1,4 @@
-//! modv-engine binary — the engine process. See docs/rust-hybrid.md.
+//! modv-engine binary — the engine process. See AGENTS.md.
 //!
 //! M0 spike harness plus the M1 supervision channel and the M2 store +
 //! compositor: windowed rendering of the engine state, control socket,
