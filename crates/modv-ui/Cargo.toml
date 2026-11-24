@@ -7,6 +7,7 @@ description = "modV VmodV UI (egui) — see docs/rust-full-rewrite.md"
 
 [dependencies]
 egui = { version = "0.37.0", features = ["default_fonts"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 
 [dev-dependencies]

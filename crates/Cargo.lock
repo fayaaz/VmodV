@@ -2914,6 +2914,7 @@ dependencies = [
  "accesskit",
  "egui",
  "egui_kittest",
+ "image",
  "serde_json",
 ]
 

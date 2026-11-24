@@ -937,9 +937,9 @@ impl VmodvApp {
             failed: false,
             last_error: None,
         };
-        // Open the one-shot startup splash through the existing About slot;
-        // this keeps `UiState::new()` unchanged for the test harnesses.
-        app.ui_state.show_about = true;
+        // Open the one-shot startup splash: just the logo, fading out on its
+        // own. `UiState::new()` still starts with no splash for the harnesses.
+        app.ui_state.show_splash();
         app
     }
 

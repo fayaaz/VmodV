@@ -77,6 +77,7 @@ pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
     link_editor_window(ui, snapshot, state);
     bpm_window(ui.ctx(), snapshot, state);
     command_palette(ui.ctx(), snapshot, state);
+    crate::splash::draw(ui.ctx(), state);
 }
 
 /// Keyboard shortcuts that work globally (outside text fields).
@@ -171,6 +172,7 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         state.show_search = false;
         state.show_shortcuts = false;
         state.show_about = false;
+        state.splash = None;
         state.module_info = None;
         state.file_dialog = None;
         state.show_profile_dialog = false;
@@ -5212,16 +5214,13 @@ fn shortcuts_window(ctx: &egui::Context, state: &mut UiState) {
     }
 }
 
-/// About dialog, which also doubles as the one-shot startup splash.
-///
-/// The splash reuses `show_about` (rather than a new persisted field) so that a
-/// fresh `UiState` shows nothing by default.
+/// The ordinary About dialog. The startup splash is a separate, logo-only
+/// surface (see [`crate::splash`]); About keeps its build/profile information.
 fn about_window(ctx: &egui::Context, state: &mut UiState) {
-    let mut open = state.show_about;
     let window = restore_window(
         egui::Window::new("About VmodV")
             .id(egui::Id::unique("modv-window:about"))
-            .open(&mut open)
+            .open(&mut state.show_about)
             .collapsible(false)
             .resizable(true)
             .min_width(320.0)
@@ -5230,12 +5229,9 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
         WINDOW_ABOUT,
         &state.layout,
     );
-    // `egui::Window::open` borrows `open` for the whole `show` call, so the
-    // Continue button records its intent here instead of writing `state`.
-    let mut dismiss = false;
     let response = window.show(ctx, |ui| {
         ui.label(
-            egui::RichText::new("VmodV splash")
+            egui::RichText::new("VmodV")
                 .strong()
                 .size(20.0)
                 .color(theme::ACCENT),
@@ -5245,14 +5241,7 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
         ui.label(format!("Adapter: {}", state.status.adapter));
         ui.label(format!("Backend: {}", state.status.backend));
         ui.label("Data formats, media layout and userData stay unchanged.");
-        ui.separator();
-        if ui.button("Continue").clicked() {
-            dismiss = true;
-        }
     });
-    if dismiss || !open {
-        state.show_about = false;
-    }
     if let Some(response) = response {
         state
             .layout

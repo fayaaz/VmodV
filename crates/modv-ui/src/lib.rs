@@ -29,6 +29,7 @@ pub mod model;
 pub mod module_drag;
 pub mod panels;
 pub mod shell;
+pub mod splash;
 pub mod state;
 pub mod tab_drag;
 pub mod theme;
@@ -55,6 +56,7 @@ pub use model::{
     performance_order_label, plugin_color_value, sample_rate_label, scene_preview_key, timing_hint,
     timing_seconds_value, timing_value_seconds, un_premultiply_rgba, unique_resolutions,
 };
+pub use splash::{SPLASH_FADE_SECONDS, SPLASH_HOLD_SECONDS, SPLASH_TOTAL_SECONDS, splash_alpha};
 pub use state::{
     AUDIO_FEATURES, DrawCurveEditor, LibraryAssignmentTarget, LinkEditor, MAX_SMOOTHING,
     SMOOTHING_STEP, SidePanelTab, TweenCurveEditor, TweenHandleDrag, UiAction, UiCommand, UiState,

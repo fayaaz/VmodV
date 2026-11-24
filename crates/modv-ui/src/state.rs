@@ -261,6 +261,11 @@ pub struct UiState {
     pub output_open: bool,
     pub show_p0: bool,
     pub show_about: bool,
+    /// The one-shot startup splash, separate from the About dialog. `None` by
+    /// default so harnesses building `UiState::new()` render the normal shell.
+    pub splash: Option<crate::splash::SplashState>,
+    /// The VmodV logo texture, decoded once on the first splash frame.
+    pub splash_logo: Option<egui::TextureHandle>,
     pub show_shortcuts: bool,
     pub search_focus: bool,
     /// One-shot focus request for the Ctrl+K palette (separate from the
@@ -1218,6 +1223,12 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Request the one-shot startup splash. The shell stamps the egui clock on
+    /// its first frame, so callers need not know the context's time origin.
+    pub fn show_splash(&mut self) {
+        self.splash = Some(crate::splash::SplashState::default());
+    }
+
     pub fn new() -> Self {
         let mut inspector_probe = RangeControl::new("gain", 0.5, 0.0, 2.0, 0.001)
             .with_unit("")
@@ -1246,6 +1257,8 @@ impl UiState {
             output_open: false,
             show_p0: true,
             show_about: false,
+            splash: None,
+            splash_logo: None,
             show_shortcuts: false,
             search_focus: false,
             palette_focus: false,
