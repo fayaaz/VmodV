@@ -4493,6 +4493,7 @@ fn group_view(group: &Group) -> GroupView {
         inherit_from: match &group.inherit_from {
             modv_engine::engine_state::InheritFrom::Previous(_) => InheritTarget::Previous,
             modv_engine::engine_state::InheritFrom::Group(id) => InheritTarget::Group(id.clone()),
+            modv_engine::engine_state::InheritFrom::Composition => InheritTarget::Composition,
         },
         clearing: group.clearing,
         pipeline: group.pipeline,
@@ -6441,6 +6442,36 @@ module.exports = {
         assert_eq!(view.enabled, 1);
         assert!(view.draws_to_output());
         assert_eq!(view.inherit_from, InheritTarget::Previous);
+    }
+
+    #[test]
+    fn composed_output_sentinel_is_shared_and_maps_to_the_ui_target() {
+        // `modv-app` is the only crate that sees both definitions: keep the
+        // engine's wire sentinel and the UI's copy in lockstep, and check the
+        // engine -> UI view mapping that the real shell relies on.
+        assert_eq!(
+            modv_engine::engine_state::INHERIT_COMPOSITION,
+            modv_ui::model::INHERIT_COMPOSITION
+        );
+
+        let composed: Group = serde_json::from_value(serde_json::json!({
+            "id": "group-fx",
+            "name": "Effects",
+            "hidden": false,
+            "modules": [],
+            "enabled": 1,
+            "alpha": 1.0,
+            "inherit": true,
+            "inheritFrom": "vmodv:composition",
+            "pipeline": false,
+            "clearing": false,
+            "compositeOperation": "normal",
+        }))
+        .expect("group JSON");
+        assert_eq!(
+            group_view(&composed).inherit_from,
+            InheritTarget::Composition
+        );
     }
 
     #[test]

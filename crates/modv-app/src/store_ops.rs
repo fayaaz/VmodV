@@ -1131,7 +1131,7 @@ impl Store {
             enabled: int_field(params, "enabled").unwrap_or(GROUP_DISABLED),
             alpha: number_field(params, "alpha").unwrap_or(1.0),
             inherit: bool_field(params, "inherit").unwrap_or(true),
-            inherit_from: inherit_from_value(params.get("inheritFrom")),
+            inherit_from: InheritFrom::from_wire(params.get("inheritFrom")),
             pipeline: bool_field(params, "pipeline").unwrap_or(false),
             clearing: bool_field(params, "clearing").unwrap_or(false),
             composite_operation: params
@@ -1186,7 +1186,7 @@ impl Store {
             "enabled" => group.enabled = int_value(&value, group.enabled),
             "alpha" => group.alpha = number_value(&value, group.alpha),
             "inherit" => group.inherit = bool_value(&value, group.inherit),
-            "inheritFrom" => group.inherit_from = inherit_from_value(Some(&value)),
+            "inheritFrom" => group.inherit_from = InheritFrom::from_wire(Some(&value)),
             "pipeline" => group.pipeline = bool_value(&value, group.pipeline),
             "clearing" => group.clearing = bool_value(&value, group.clearing),
             "compositeOperation" => {
@@ -5469,19 +5469,6 @@ fn string_array_value(value: &Value) -> Option<Vec<String>> {
 
 fn string_array_field(params: &Map<String, Value>, key: &str) -> Option<Vec<String>> {
     params.get(key).and_then(string_array_value)
-}
-
-/// `inheritFrom` carries `-1` (previous Group in render order) or a Group UUID.
-fn inherit_from_value(value: Option<&Value>) -> InheritFrom {
-    match value {
-        Some(Value::String(id)) => InheritFrom::Group(id.clone()),
-        Some(other) => other
-            .as_i64()
-            .or_else(|| other.as_f64().map(|number| number as i64))
-            .map(InheritFrom::Previous)
-            .unwrap_or_default(),
-        None => InheritFrom::default(),
-    }
 }
 
 /// Serialise a value, falling back to `null` for the impossible failure.

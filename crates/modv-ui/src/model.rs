@@ -2044,6 +2044,9 @@ pub const GROUP_ENABLED: i64 = 1;
 /// (`GROUP_DRAW_TO_OUTPUT`).
 pub const GROUP_DRAW_TO_OUTPUT: i64 = 2;
 
+/// The reserved `inheritFrom` sentinel for the Composed Output target.
+pub const INHERIT_COMPOSITION: &str = "vmodv:composition";
+
 /// The target a Group inherits its canvas from (engine `InheritFrom`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum InheritTarget {
@@ -2052,6 +2055,9 @@ pub enum InheritTarget {
     Previous,
     /// The UUID of a specific Group.
     Group(String),
+    /// Everything composited onto `main` this frame, regardless of the earlier
+    /// Groups' own Inherit flags.
+    Composition,
 }
 
 impl InheritTarget {
@@ -2060,26 +2066,38 @@ impl InheritTarget {
         matches!(self, Self::Previous)
     }
 
+    /// Whether this target is the Composed Output accumulation. A raw
+    /// `Group(INHERIT_COMPOSITION)` (a sentinel that skipped the engine
+    /// mapping, e.g. a mirror built from raw JSON) is treated as one too.
+    pub fn is_composition(&self) -> bool {
+        matches!(self, Self::Composition)
+            || matches!(self, Self::Group(id) if id == INHERIT_COMPOSITION)
+    }
+
     /// The JSON value `groups/UPDATE_GROUP_BY_KEY` writes for `inheritFrom`:
     /// a number for the previous Group, a UUID string for a specific Group
-    /// (`groups.js:28`).
+    /// (`groups.js:28`), or the reserved Composed Output sentinel.
     pub fn value(&self) -> Value {
         match self {
             Self::Previous => serde_json::json!(-1),
             Self::Group(id) => Value::String(id.clone()),
+            Self::Composition => serde_json::json!(INHERIT_COMPOSITION),
         }
     }
 
-    /// The selector label: `Previous Group`, the Group's name, or its id when
-    /// the target no longer exists.
+    /// The selector label: `Previous Group`, the Group's name, its id when the
+    /// target no longer exists, or `Composed Output`.
     pub fn label(&self, groups: &[GroupView]) -> String {
         match self {
             Self::Previous => "Previous Group".to_string(),
-            Self::Group(id) => groups
+            Self::Group(id) if !self.is_composition() => groups
                 .iter()
                 .find(|group| &group.id == id)
                 .map(|group| group.name.clone())
                 .unwrap_or_else(|| id.clone()),
+            // Both `Composition` and a raw sentinel `Group` (a fixture mirror
+            // built from the wire value) display as Composed Output.
+            _ => "Composed Output".to_string(),
         }
     }
 }
