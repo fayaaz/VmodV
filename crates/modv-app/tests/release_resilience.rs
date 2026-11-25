@@ -1,20 +1,21 @@
-//! RED guard: cutting a release must never be gated on platform builds.
+//! Release workflow guards: create a draft, validate, then publish.
 //!
 //! The release workflow used to make `release` wait for the Windows and macOS
 //! build jobs, and to build the AppImage in the same job that called
-//! `gh release create`. A slow, flaky or capacity-starved build (the macOS
-//! arm64 runner, for example) therefore stopped the release from ever going
-//! out. The contract now is:
+//! `gh release create`. It also published that release before any lint or test
+//! run. The contract now is:
 //!
-//! 1. `release` depends on `version` only: it tags the commit and creates the
-//!    GitHub release with its notes, without waiting for any artifact.
-//! 2. `gh release create` publishes no files — a release with zero assets is
-//!    still a release and is still visible to users.
-//! 3. Each build job hands its artifact to a separate attach job that also
-//!    waits for `release`. When that build succeeds its artifact is uploaded;
-//!    when it fails the attach job is skipped but the release stands. The
-//!    macOS matrix is the exception: either architecture failing must not
-//!    drop the other architecture's ZIP.
+//! 1. `release` depends on `version` only: it tags the commit and creates a
+//!    GitHub release draft with its notes, without waiting for any artifact.
+//! 2. A validation job runs `make engine-lint` and the test suite.
+//! 3. A separate publish job depends on both `release` and validation, respects
+//!    `should_release`, and changes the draft to `--draft=false`. It never
+//!    depends on a platform build job.
+//! 4. Each build job hands its artifact to a separate attach job that also
+//!    waits for `release`. Artifacts may arrive after publication; a failed
+//!    build skips only its own attachment. The macOS matrix is the exception:
+//!    either architecture failing must not drop the other architecture's ZIP.
+//! 5. Manual `workflow_dispatch` runs are restricted to `refs/heads/main`.
 //!
 //! Pure text scanning of `.github/workflows/release.yml`: no YAML crate, no
 //! network and no env mutation. Run with:
@@ -114,6 +115,51 @@ fn needs_of(block: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// One shell invocation, bounded by the next step rather than later job steps.
+fn shell_command(block: &str, invocation: &str) -> Option<String> {
+    let start = block.find(invocation)?;
+    let command = &block[start..];
+    let end = command.find("\n      - name:").unwrap_or(command.len());
+    Some(command[..end].to_string())
+}
+
+fn if_conditions_at_indent(block: &str, indent: Option<usize>) -> Vec<String> {
+    let lines: Vec<&str> = block.lines().collect();
+    let mut conditions = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("if:") else {
+            continue;
+        };
+        let line_indent = line.len() - trimmed.len();
+        if indent.is_some_and(|expected| line_indent != expected) {
+            continue;
+        }
+        let mut condition = rest.trim().to_string();
+        for follow in lines.iter().skip(index + 1) {
+            let follow_trimmed = follow.trim_start();
+            let follow_indent = follow.len() - follow_trimmed.len();
+            if follow_trimmed.is_empty() {
+                continue;
+            }
+            if follow_indent <= line_indent {
+                break;
+            }
+            if !condition.is_empty() {
+                condition.push(' ');
+            }
+            condition.push_str(follow_trimmed);
+        }
+        conditions.push(condition);
+    }
+    conditions
+}
+
+/// The job-level guard, excluding conditions belonging to individual steps.
+fn job_condition(block: &str) -> Option<String> {
+    if_conditions_at_indent(block, Some(4)).into_iter().next()
+}
+
 #[test]
 fn release_job_never_waits_for_a_build_job() {
     let text = release_workflow();
@@ -136,30 +182,111 @@ fn release_job_never_waits_for_a_build_job() {
     assert_eq!(
         needs,
         vec!["version".to_string()],
-        "`release` must depend on `version` only so it can tag and publish before any \
-         build outcome is known"
+        "`release` must depend on `version` only so it can tag and create the draft \
+         before any build or validation outcome is known"
     );
 }
 
 #[test]
-fn release_creation_does_not_require_a_built_artifact() {
+fn release_is_drafted_then_published_only_after_validation() {
     let text = release_workflow();
     let release = job_block(&text, "release").expect("release.yml has no `release` job");
-    let start = release
-        .find("gh release create")
-        .expect("the `release` job must publish a GitHub release with `gh release create`");
-    // Bound the scan to the create invocation, not later steps in the job.
-    let command = &release[start..];
-    let command = command
-        .find("\n        - name:")
-        .map(|end| &command[..end])
-        .unwrap_or(command);
+    let create = shell_command(&release, "gh release create")
+        .expect("the `release` job must create a GitHub release with `gh release create`");
 
     assert!(
-        !command.contains("dist/"),
-        "`gh release create` must publish the release with notes only; attaching \
-         build artifacts here makes the release itself fail when a build did not \
-         produce a file:\n{command}"
+        create.split_whitespace().any(|arg| arg == "--draft"),
+        "`gh release create` must create a draft so validation can fail without exposing \
+         a stable release:\n{create}"
+    );
+    assert!(
+        !create.contains("dist/"),
+        "`gh release create` must create the draft with notes only; attaching build \
+         artifacts here makes draft creation fail when a build did not produce a file:\n\
+         {create}"
+    );
+
+    let names = job_names(&text);
+    let validation = names.iter().find(|name| {
+        let block = job_block(&text, name).unwrap_or_default();
+        block.contains("make engine-lint")
+            && (block.contains("make engine-test") || block.contains("cargo test"))
+    });
+    assert!(
+        validation.is_some(),
+        "no validation job runs both `make engine-lint` and `make engine-test` (or \
+         `cargo test`); publication must wait for lint and tests (jobs: {names:?})"
+    );
+    let validation = validation.expect("checked above");
+    let validation_block = job_block(&text, validation).expect("checked above");
+    assert!(
+        validation_block.contains("make engine-lint"),
+        "validation job `{validation}` must run `make engine-lint`"
+    );
+    assert!(
+        validation_block.contains("make engine-test") || validation_block.contains("cargo test"),
+        "validation job `{validation}` must run `make engine-test` or `cargo test`"
+    );
+
+    let publish = names.iter().find(|name| {
+        let block = job_block(&text, name).unwrap_or_default();
+        block.contains("gh release edit") && block.contains("--draft=false")
+    });
+    assert!(
+        publish.is_some(),
+        "no job converts the validated draft with `gh release edit ... --draft=false` \
+         (jobs: {names:?})"
+    );
+    let publish = publish.expect("checked above");
+    let publish_block = job_block(&text, publish).expect("checked above");
+    let edit = shell_command(&publish_block, "gh release edit").expect("checked above");
+    assert!(
+        edit.split_whitespace().any(|arg| arg == "--draft=false"),
+        "publish job `{publish}` must pass `--draft=false` to `gh release edit` so the \
+         release becomes visible only after validation:\n{edit}"
+    );
+
+    let needs = needs_of(&publish_block);
+    for required in ["release", validation.as_str()] {
+        assert!(
+            needs.iter().any(|item| item == required),
+            "publish job `{publish}` must depend on `{required}` so it runs only after \
+             the draft exists and validation succeeds; got needs {needs:?}"
+        );
+    }
+    for build in [
+        "build-appimage",
+        "windows-portable",
+        "macos-portable",
+        "linux-debs",
+        "publish-debs",
+    ] {
+        assert!(
+            !needs.iter().any(|item| item == build),
+            "publish job `{publish}` waits for `{build}` in needs {needs:?}; platform \
+             builds must not gate publication and may attach artifacts later"
+        );
+    }
+    let publish_condition = job_condition(&publish_block);
+    assert!(
+        publish_condition.as_deref().is_some_and(|condition| {
+            condition.contains("needs.version.outputs.should_release == 'true'")
+        }),
+        "publish job `{publish}` must retain a job-level `should_release == 'true'` \
+         guard; got condition {publish_condition:?}"
+    );
+
+    assert!(
+        if_conditions_at_indent(&text, Some(4))
+            .iter()
+            .any(|condition| {
+                condition.contains("workflow_dispatch")
+                    && condition.contains("github.ref == 'refs/heads/main'")
+            }),
+        "manual `workflow_dispatch` must be restricted to `refs/heads/main` by a \
+         job-level `if:` condition tying `workflow_dispatch` to \
+         `github.ref == 'refs/heads/main'`; got job conditions {:?}",
+        if_conditions_at_indent(&text, Some(4))
     );
 }
 
