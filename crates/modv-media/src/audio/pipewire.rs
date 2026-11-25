@@ -59,7 +59,7 @@
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pipewire as pw;
 use pw::properties::properties;
@@ -75,6 +75,11 @@ use super::capture::{CaptureConfig, CaptureError, ChunkAssembler, ChunkQueue};
 /// How long [`PipeWireMonitor::start`] waits for the loop thread to negotiate a
 /// stream format.
 pub const START_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound on [`sources`]' registry roundtrip. A wedged PipeWire daemon
+/// must not freeze source enumeration (the Audio panel calls it while building
+/// its device list); once the deadline passes, the sources seen so far are
+/// returned.
+pub const SOURCE_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Stream name shown in `pw-top` / `wpctl`.
 pub const STREAM_NAME: &str = "modv-system-audio";
 /// Stream name for a targeted `Audio/Source` capture (input devices).
@@ -132,8 +137,9 @@ pub fn source_from_props(
 /// PipeWire daemon answers (the caller then shows cpal devices only).
 ///
 /// One-shot registry roundtrip: register a listener, sync once, and return
-/// when the server has delivered every global, so this never blocks past the
-/// server's answer.
+/// when the server has delivered every global, or once
+/// [`SOURCE_ENUMERATION_TIMEOUT`] expires (returning what was seen so far), so
+/// a wedged server cannot block the caller forever.
 pub fn sources() -> Vec<SourceInfo> {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -196,8 +202,18 @@ pub fn sources() -> Vec<SourceInfo> {
         })
         .register();
 
+    let deadline = Instant::now() + SOURCE_ENUMERATION_TIMEOUT;
+
     while !done.get() {
-        mainloop.run();
+        let now = Instant::now();
+
+        if now >= deadline {
+            break;
+        }
+
+        mainloop
+            .loop_()
+            .iterate(pw::loop_::Timeout::Finite(deadline - now));
     }
 
     Rc::try_unwrap(found)
@@ -911,6 +927,39 @@ pub(crate) mod tests {
                 name: "node.c".to_string(),
                 description: "node.c".to_string(),
             }),
+        );
+    }
+
+    // A live-daemon test cannot deterministically simulate a connected server
+    // that never completes the registry sync, so inspect the source contract.
+    // Residual (out of scope): sources() still runs on the UI thread.
+    #[test]
+    fn sources_enumeration_has_a_bounded_registry_wait() {
+        let source = include_str!("pipewire.rs");
+        let start = source
+            .find("pub fn sources()")
+            .expect("sources() must exist");
+        let body = &source[start..];
+        let body = body
+            .split_once("\n}\n")
+            .expect("sources() must have a top-level closing brace")
+            .0;
+
+        let compact: String = body.chars().filter(|char| !char.is_whitespace()).collect();
+        assert!(
+            !compact.contains("while!done.get(){mainloop.run();}"),
+            "sources() must not use an unbounded mainloop.run() loop"
+        );
+        assert!(
+            body.contains("SOURCE_ENUMERATION_TIMEOUT")
+                || (body.contains("Duration") && body.contains("Instant::now")),
+            "sources() must declare a monotonic enumeration deadline"
+        );
+        assert!(
+            body.contains("iterate(")
+                || body.contains("recv_timeout(")
+                || body.contains("add_timer("),
+            "sources() must wait with a bounded/timed mainloop iteration"
         );
     }
 
