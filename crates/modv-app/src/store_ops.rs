@@ -4967,7 +4967,8 @@ impl Drop for SnapshotWriter {
 /// blocking save is never dropped, and any periodic snapshot older than it is
 /// superseded (writing an older frame after the explicit save would regress the
 /// file). On shutdown, still-pending blocking saves are acked with an error so
-/// their callers cannot hang.
+/// their callers cannot hang, and the newest coalesced periodic snapshot is
+/// still flushed before the worker exits.
 fn run_snapshot_writer(
     jobs: &std::sync::mpsc::Receiver<SnapshotJob>,
     #[cfg(test)] before_write: BeforeWrite,
@@ -5005,13 +5006,15 @@ fn run_snapshot_writer(
         }
 
         if shutdown {
-            for job in to_run {
+            for job in to_run.drain(..) {
                 ack_snapshot_error(job);
             }
             for job in jobs.try_iter() {
                 ack_snapshot_error(job);
             }
-            break;
+            // Do not break yet: the newest periodic write coalesced before
+            // the shutdown marker still has to reach disk before the join
+            // returns.
         }
         if let Some(job) = pending_periodic {
             to_run.push(job);
@@ -5048,6 +5051,10 @@ fn run_snapshot_writer(
             if let Some(ack) = ack {
                 let _ = ack.send(result);
             }
+        }
+
+        if shutdown {
+            break;
         }
     }
 }
@@ -10692,6 +10699,89 @@ mod tests {
         assert!(
             leftover_temps.is_empty(),
             "temporary snapshot files were left behind: {leftover_temps:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_writer_flushes_newest_periodic_write_when_shutdown_is_in_the_same_batch() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is after the epoch")
+            .as_nanos();
+        let name = format!("vmodv-shutdown-snapshot-{}-{nanos}", std::process::id());
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!("{name}.json"));
+        let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        let missing_parent = temp_dir.join(format!("{name}-missing"));
+        let unwritable_path = missing_parent.join("snapshot.json");
+
+        struct Cleanup(PathBuf, PathBuf, PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+                let _ = fs::remove_file(&self.1);
+                let _ = fs::remove_dir_all(&self.2);
+            }
+        }
+        let _cleanup = Cleanup(path.clone(), tmp.clone(), missing_parent);
+
+        let (tx, rx) = mpsc::channel::<SnapshotJob>();
+        tx.send(SnapshotJob::Write {
+            path: unwritable_path,
+            snapshot: json!({ "marker": "old" }),
+            ack: None,
+        })
+        .expect("queue the older periodic snapshot");
+        tx.send(SnapshotJob::Write {
+            path: path.clone(),
+            snapshot: json!({ "marker": "newest" }),
+            ack: None,
+        })
+        .expect("queue the newest periodic snapshot");
+        tx.send(SnapshotJob::Shutdown)
+            .expect("queue shutdown after both periodic snapshots");
+        drop(tx);
+
+        run_snapshot_writer(&rx, Arc::new(|_path: &Path, _snapshot: &Value| {}));
+
+        assert!(
+            path.exists(),
+            "shutdown must flush the newest periodic snapshot before returning"
+        );
+        let written: Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("the newest periodic snapshot is readable"),
+        )
+        .expect("the newest periodic snapshot is valid JSON");
+        assert_eq!(written["marker"], json!("newest"));
+        assert!(
+            !tmp.exists(),
+            "the atomic write must not leave its temp file"
+        );
+
+        let temp_prefix = format!(
+            ".{}.",
+            path.file_name()
+                .expect("snapshot file name")
+                .to_string_lossy()
+        );
+        let leftover_temps: Vec<PathBuf> = fs::read_dir(&temp_dir)
+            .expect("the temp directory is readable")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&temp_prefix)
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "tmp")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        assert!(
+            leftover_temps.is_empty(),
+            "the atomic write left temporary files behind: {leftover_temps:?}"
         );
     }
 
