@@ -268,12 +268,16 @@
 //! All internal textures are `Rgba8Unorm`; canvas blend math is done on the
 //! same UNORM values the browser canvas stores, which keeps the compositor
 //! pixel-compatible with the JS renderer (see `modv_render::blend`).
-//! [`Compositor::present`] samples the main texture without any colour-space
-//! conversion and draws it onto the swapchain. The surface format chosen by
-//! [`modv_render::surface::create_surface`] is usually sRGB, so the hardware
-//! applies its sRGB encode at this single boundary. That is the documented
-//! "sRGB at present only" contract of the frame graph, not a per-pass
-//! conversion: module-to-group and group-to-main composites never linearise.
+//! [`Compositor::present`] is the only place that touches colour space. The
+//! surface format chosen by [`modv_render::surface::create_surface`] is usually
+//! sRGB, whose hardware encode would gamma-lift the already display-referred
+//! main values (and make the output window brighter than the LIVE OUTPUT
+//! panel, which egui decodes correctly). The present fragment shader therefore
+//! decodes main to linear for sRGB targets so the hardware encode reproduces
+//! the stored byte; non-sRGB targets are a raw pass-through. This is the
+//! documented "sRGB at present only" contract of the frame graph, not a
+//! per-pass conversion: module-to-group and group-to-main composites never
+//! linearise.
 //!
 //! The presented frame is **opaque black-backed**: the engine output is a
 //! desktop visualiser, not a transparent overlay. `present` clears the
@@ -3645,6 +3649,14 @@ impl Compositor {
                 bind_group_layouts: &[Some(&self.present_layout)],
                 immediate_size: 0,
             });
+        // An sRGB target encodes whatever the fragment writes, so the
+        // display-referred main value has to be decoded first or the output
+        // window becomes brighter than the LIVE OUTPUT panel.
+        let fragment_entry = if format.is_srgb() {
+            "fs_main_srgb"
+        } else {
+            "fs_main"
+        };
         self.device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("modv-present-pipeline"),
@@ -3668,7 +3680,7 @@ impl Compositor {
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(fragment_entry),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -3987,9 +3999,13 @@ impl Compositor {
 
 /// WGSL for the present blit: one fullscreen triangle sampling main.
 ///
-/// `textureDimensions` supplies the uv scale so no uniform buffer is needed;
-/// the sampler is clamp/linear, and the sampled premultiplied value is written
-/// as-is (the surface format, often sRGB, is the present boundary).
+/// `textureDimensions` supplies the uv scale so no uniform buffer is needed and
+/// the sampler is clamp/linear. Main holds display-referred (canvas-compatible)
+/// values, so writing them raw into an sRGB surface would apply a second sRGB
+/// encode and brighten the output window relative to the LIVE OUTPUT panel.
+/// [`create_present_pipeline`] therefore selects `fs_main_srgb` for sRGB
+/// targets (it decodes to linear so the hardware's encode restores the stored
+/// value) and `fs_main` for non-sRGB targets (raw pass-through).
 const PRESENT_WGSL: &str = r#"// modV present blit — main texture to the swapchain.
 // The uv is derived from the fullscreen triangle's NDC, not from the
 // texture's own size: the main texture may render at a fraction of the
@@ -4015,8 +4031,23 @@ struct VertexOutput {
   out.uv = vec2<f32>(positions[vertex_index].x * 0.5 + 0.5, 0.5 - positions[vertex_index].y * 0.5);
   return out;
 }
+// 0-1 linear from 0-1 sRGB gamma.
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+  let cutoff = c < vec3<f32>(0.04045);
+  let lower = c / vec3<f32>(12.92);
+  let higher = pow((c + vec3<f32>(0.055)) / vec3<f32>(1.055), vec3<f32>(2.4));
+  return select(higher, lower, cutoff);
+}
+// Non-sRGB target: the swapchain performs no conversion, so the stored
+// display-referred value is already the byte the display should show.
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   return textureSample(main_texture, main_sampler, input.uv);
+}
+// sRGB target: decode the display-referred sample so the hardware's sRGB
+// encode reproduces the stored value instead of gamma-lifting it again.
+@fragment fn fs_main_srgb(input: VertexOutput) -> @location(0) vec4<f32> {
+  let sampled = textureSample(main_texture, main_sampler, input.uv);
+  return vec4<f32>(srgb_to_linear(sampled.rgb), sampled.a);
 }
 "#;
 /// Mask an ISF filter's output by the group canvas alpha.
@@ -5342,6 +5373,69 @@ mod tests {
         let pixels = read_back_texture(&engine.device, &engine.queue, &target.texture, SIZE, SIZE)
             .expect("present target reads back");
         assert_pixels_close(&pixels, [0, 0, 0, 255], 1, "presented empty main");
+    }
+
+    /// The output window's swapchain is normally sRGB (see
+    /// `modv_render::surface`). Main holds display-referred, canvas-compatible
+    /// values, and egui's gamma-aware native-texture path shows them unchanged
+    /// in the LIVE OUTPUT panel. The present blit must therefore linearise
+    /// before writing into an sRGB target; passing the value through raw makes
+    /// the hardware apply a second sRGB encode and the output window renders
+    /// brighter than the panel.
+    #[test]
+    fn present_srgb_target_shows_the_same_values_as_the_live_preview() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+        compositor
+            .render_frame(&invert_state(0.5), &frame_info())
+            .expect("half-alpha frame renders");
+
+        // The sRGB target is what the output window normally gets; Unorm is
+        // the fallback when no sRGB surface format is offered and must stay a
+        // pass-through (a blanket decode would darken it).
+        for format in [
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm,
+        ] {
+            let target = engine.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("present-target"),
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder =
+                engine
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("present-test"),
+                    });
+            compositor.present(&mut encoder, &view, format);
+            engine.queue.submit(Some(encoder.finish()));
+
+            let pixels = read_back_texture(&engine.device, &engine.queue, &target, SIZE, SIZE)
+                .expect("present target reads back");
+            // Premultiplied 0.5 white flattened onto the opaque black clear is
+            // 128 grey. Raw pass-through into an sRGB target stores ~188; a
+            // blind decode into a non-sRGB target stores ~55.
+            assert_pixels_close(
+                &pixels,
+                [128, 128, 128, 255],
+                2,
+                &format!("presented 0.5 white on a {format:?} target"),
+            );
+        }
     }
 
     #[test]
