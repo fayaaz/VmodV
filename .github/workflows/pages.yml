@@ -1,9 +1,9 @@
 name: GitHub Pages — module catalogue
 
-# Publishes the static docs/ site: the front page plus the generated module
-# catalogue with WebAssembly-driven WebGPU previews. The data and the .wasm
-# are regenerated from the Rust tree on every change so the site can never
-# silently drift from the app's module registry.
+# This repository serves Pages from the `gh-pages` branch (the `github-pages`
+# environment only allows that branch). So the workflow builds the catalogue
+# from the Rust tree and publishes it into `gh-pages` under /modules/, keeping
+# the hand-maintained front page intact.
 on:
   push:
     branches:
@@ -30,9 +30,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -44,11 +42,11 @@ env:
 
 jobs:
   build:
-    name: Build the Pages site
+    name: Build and publish the module catalogue
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
 
       - name: Cache cargo registry and target
@@ -98,20 +96,31 @@ jobs:
       - name: Check the committed catalogue is up to date
         run: git diff --exit-code -- docs/modules/modules.json docs/modules/previews.json
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Checkout the gh-pages branch
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/checkout@v4
         with:
-          path: docs
+          ref: gh-pages
+          path: gh-pages
 
-  deploy:
-    name: Deploy to GitHub Pages
-    if: ${{ github.event_name != 'pull_request' }}
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Stage the catalogue into gh-pages
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          mkdir -p gh-pages/modules gh-pages/assets/wasm
+          cp -R docs/modules/. gh-pages/modules/
+          cp docs/assets/site.css docs/assets/catalog.js docs/assets/preview.js docs/assets/icon.png gh-pages/assets/
+          cp docs/assets/wasm/*.js docs/assets/wasm/*.wasm gh-pages/assets/wasm/
+
+      - name: Commit and push to gh-pages
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Catalogue unchanged; nothing to publish."
+          else
+            git commit -m "docs(site): refresh module catalogue from ${GITHUB_SHA::7}"
+            git push origin HEAD:gh-pages
+          fi

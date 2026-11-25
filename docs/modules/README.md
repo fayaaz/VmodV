@@ -62,10 +62,12 @@ the native compositor's ping-pong targets.
 ## Publishing
 
 `.github/workflows/pages.yml` rebuilds both data files and the WASM runtime,
-fails if the committed JSON is stale, and deploys `docs/` to GitHub Pages.
-The repository's Pages source must be set to **GitHub Actions**. If you prefer
-the classic source, select `main` / `/docs` instead — the committed artifacts
-work there too.
+fails if the committed JSON is stale, then copies the catalogue into the
+`gh-pages` branch under `/modules/` (plus the shared assets under `/assets/`).
+Pages in this repository is served from `gh-pages`, and the `github-pages`
+environment only permits that branch — the workflow therefore does not use
+`actions/deploy-pages`. The existing hand-maintained front page stays in
+place and links to `/modules/`.
 
 Third-party licence information is in
 [`THIRD_PARTY_NOTICES.md`](https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md).
