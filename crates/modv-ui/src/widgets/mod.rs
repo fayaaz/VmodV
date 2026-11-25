@@ -4,6 +4,7 @@
 //! status badges. P3 adds the remaining control types from `Control.vue`.
 
 pub mod color_control;
+pub mod color_picker;
 pub mod draw_control;
 pub mod draw_curve;
 pub mod input_link;
@@ -16,6 +17,10 @@ pub mod tween_curve;
 pub mod vec_control;
 
 pub use color_control::ColorControl;
+pub use color_picker::{
+    ColorPicker, ColorPickerMode, hsv_to_rgb, rgb_to_hsv, square_position_to_rgb,
+    wheel_position_to_rgb,
+};
 pub use draw_control::DrawControl;
 pub use draw_curve::{DRAW_POINTS, DrawCurve, draw_middle};
 pub use range_control::RangeControl;

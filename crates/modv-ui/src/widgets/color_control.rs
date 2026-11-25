@@ -2,13 +2,15 @@
 //! `ColorControl.vue`.
 //!
 //! The legacy control edits `{ r, g, b, a }` ratios (0..1) and opens a separate
-//! Electron colour window. P3 uses an inline egui colour picker plus the four
-//! channel fields; the value shape stays the same so presets round-trip.
+//! Electron colour window. P3 uses an inline swatch button that opens the
+//! square/wheel [`crate::widgets::ColorPicker`] popup plus the four channel
+//! fields; the value shape stays the same so presets round-trip.
 
 use egui::{Color32, Sense};
 use serde_json::Value;
 
 use crate::theme;
+use crate::widgets::color_picker::show_picker_button;
 
 /// One `{r,g,b,a}` colour ratio control.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +56,7 @@ impl ColorControl {
     /// Draw the control. Returns `true` when any channel changed.
     pub fn draw(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
+        let mut picked = None;
         ui.horizontal(|ui| {
             ui.add_sized(
                 [82.0, 18.0],
@@ -63,11 +66,15 @@ impl ColorControl {
             )
             .on_hover_text(&self.label);
 
-            let mut color = ratio_to_color(self.rgba);
-            if ui.color_edit_button_srgba(&mut color).changed() {
-                self.rgba = color_to_ratio(color);
-                changed = true;
-            }
+            picked = show_picker_button(
+                ui,
+                &self.label,
+                self.rgba,
+                egui::vec2(46.0, 18.0),
+                ratio_to_color(self.rgba),
+                "color-control-picker-mode",
+            );
+
             for (index, channel) in ["R", "G", "B", "A"].iter().enumerate() {
                 ui.label(
                     egui::RichText::new(*channel)
@@ -89,6 +96,12 @@ impl ColorControl {
                 }
             }
         });
+        if let Some(rgba) = picked {
+            for (channel, value) in self.rgba.iter_mut().take(3).zip(rgba) {
+                *channel = value;
+            }
+            changed = true;
+        }
         changed
     }
 }
@@ -103,6 +116,7 @@ fn ratio_to_color(rgba: [f32; 4]) -> Color32 {
     )
 }
 
+#[cfg(test)]
 fn color_to_ratio(color: Color32) -> [f32; 4] {
     let [r, g, b, a] = color.to_srgba_unmultiplied();
     [

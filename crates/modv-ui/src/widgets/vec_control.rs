@@ -3,12 +3,14 @@
 //!
 //! The control keeps the numeric X/Y/Z/W rows (the load-bearing path for
 //! presets and links) and adds the legacy 2D pad for the first two lanes.
-//! `vec4` also gets an inline colour picker, which is how ISF declares colours.
+//! A vec4 is an ISF colour, so it gets a swatch button opening the square/wheel
+//! colour picker popup instead of the XY pad.
 
 use egui::Sense;
 use serde_json::Value;
 
 use crate::theme;
+use crate::widgets::color_picker::{rgb_color, show_picker_button};
 
 /// One vector prop control.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,11 +57,46 @@ impl VecControl {
         )
     }
 
-    /// Draw the numeric rows and the 2D pad. Returns `true` when a lane changed.
+    /// Draw the numeric rows and either the 2D pad or the vec4 colour picker.
+    /// Returns `true` when a lane changed.
     pub fn draw(&mut self, ui: &mut egui::Ui) -> bool {
         let rows_changed = self.draw_numeric_rows(ui);
-        let pad_changed = self.draw_pad(ui);
-        rows_changed || pad_changed
+        let detail_changed = if self.values.len() == 4 {
+            self.draw_colour_picker(ui)
+        } else {
+            self.draw_pad(ui)
+        };
+        rows_changed || detail_changed
+    }
+
+    /// A vec4 is an ISF colour: a swatch button plus a popup square/wheel picker
+    /// on the second row. Picks write lanes 0..2 and leave the alpha lane alone.
+    fn draw_colour_picker(&mut self, ui: &mut egui::Ui) -> bool {
+        let rgba = [
+            self.values[0] as f32,
+            self.values[1] as f32,
+            self.values[2] as f32,
+            self.values[3] as f32,
+        ];
+        let picked = ui
+            .horizontal(|ui| {
+                show_picker_button(
+                    ui,
+                    &self.label,
+                    rgba,
+                    egui::vec2(64.0, 20.0),
+                    rgb_color([rgba[0], rgba[1], rgba[2]]),
+                    "vec4-colour-picker-mode",
+                )
+            })
+            .inner;
+        let Some(picked) = picked else {
+            return false;
+        };
+        for (lane, value) in self.values.iter_mut().take(3).zip(picked) {
+            *lane = f64::from(value);
+        }
+        true
     }
 
     fn draw_numeric_rows(&mut self, ui: &mut egui::Ui) -> bool {
