@@ -1113,13 +1113,8 @@ mod tests {
             // envelope smoothed at `dt * 8` needs a deeper rollover than the
             // raw drop detector fixture's 0.02.
             for _ in 0..2 {
-                loud_flips += usize::from(feed(
-                    &mut scene,
-                    &mut bridge,
-                    &mut payload,
-                    peak * 0.6,
-                    dt,
-                ));
+                loud_flips +=
+                    usize::from(feed(&mut scene, &mut bridge, &mut payload, peak * 0.6, dt));
             }
         }
         assert_eq!(loud_flips, 4);
@@ -1136,8 +1131,7 @@ mod tests {
                 feed(&mut scene, &mut bridge, &mut payload, 0.6, dt);
             }
             for _ in 0..2 {
-                quiet_flips +=
-                    usize::from(feed(&mut scene, &mut bridge, &mut payload, 0.36, dt));
+                quiet_flips += usize::from(feed(&mut scene, &mut bridge, &mut payload, 0.36, dt));
             }
         }
 
