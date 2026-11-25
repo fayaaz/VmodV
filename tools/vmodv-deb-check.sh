@@ -132,6 +132,14 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 dpkg-deb -x "$DEB" "$TMP"
 
+# Do not trust `Architecture: amd64` metadata alone: the extracted payload must
+# be an x86_64 ELF. tools/elf-machine.sh lives beside this checker.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PAYLOAD_MACHINE=$(bash "$SCRIPT_DIR/elf-machine.sh" "$TMP/usr/lib/vmodv/modv") ||
+    fail "cannot read the ELF machine of usr/lib/vmodv/modv"
+[ "$PAYLOAD_MACHINE" = "x86_64" ] ||
+    fail "usr/lib/vmodv/modv is '$PAYLOAD_MACHINE', expected x86_64 (amd64-only package)"
+
 # VmodV's own licence and attribution payload, not just dependency metadata.
 PROJECT_NOTICES="$TMP/usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md"
 grep -q 'Point10' "$PROJECT_NOTICES" ||
