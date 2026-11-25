@@ -325,6 +325,34 @@ wall-clock sleeps; the harness timeouts are failure bounds, not pacing.
   passed as `--preset` is listed, sets `appliedSceneId`/`currentSceneId`, and
   its Group + Ball Module are live (no default Group is seeded on top).
 
+`tests/e2e_colour.rs`:
+
+- `colour_key_chroma_keys_a_live_solid_colour_through_colour_prop_updates` —
+  Group with `Solid Color` then `Colour Key` (`compositeOperation: "copy"`),
+  performance automation off; a 64×64 centre pixel is red, dispatching the
+  picker's vec4 `[1,0,0,1]` to `keyColor` keys it out to black, and restoring
+  the green key presents red again, with the live prop/meta asserted too.
+- `colour_prop_values_keep_their_picker_shapes_across_a_restart` — `Bar.color1`
+  as an object `{r,g,b,a}` and `Colour Key.keyColor` as an array `[r,g,b,a]`;
+  both shapes are checked live, in the saved `engine-state.json`, and after a
+  quit/relaunch over the same userData.
+
+`tests/e2e_regressions.rs` adds ten real-binary scenarios (including the
+same-Scene row-copy coverage) and is now part of the canonical
+`make test-e2e-vmodv` target.
+
+### Coverage boundary
+
+The colour picker's square/wheel/popup pointer gesture is covered by the
+kittest suite `crates/modv-ui/tests/colour_picker.rs`, not by this harness:
+`e2e_colour.rs` only checks the engine/render contract and persistence of the
+payload shapes. The sRGB present decode is guarded by the compositor unit test
+`present_srgb_target_shows_the_same_values_as_the_live_preview` because
+`screenshot` reads the main target before present. Window decoration/drag and
+vsync/occlusion are not observable over the control socket and stay unit-tested.
+`e2e_scene_editing`, `e2e_engine_status` and `e2e_user_modules` remain outside
+the canonical target (follow-up), so they do not run in CI.
+
 ### VmodV startup parity
 
 The VmodV shell owns the store instead of an Electron renderer, so it

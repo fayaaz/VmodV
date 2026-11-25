@@ -17,7 +17,7 @@ Everything runs in Docker. The host only needs Docker (with Buildx) and make —
 - `make engine` — release workspace build. `make engine-run` — run the headless `modv-engine` binary with GUI forwarding.
 - `make engine-test` — `cargo test` (pass ARGS to narrow, e.g. `make engine-test ARGS="-p modv-engine scene_timing"`). CI runs the workspace excluding `modv-app`, then `modv-app --lib`, all serial (`--test-threads=1`) because the GPU/kittest suites share one lavapipe device.
 - `make engine-lint` — `cargo clippy --all-targets -- -D warnings` + `cargo fmt --check`. `make lint` is an alias (kept for muscle memory). `make format` — `cargo fmt --all`.
-- `make test-e2e-vmodv` — the real-binary e2e harness and parity tests (`e2e_harness`, `e2e_process`, `e2e_scenes`, `e2e_defaults`, `e2e_manifest`), serial. Wayland preferred, X11/Xvfb fallback; with no display at all the harness starts Xvfb. `make test-e2e` is an alias. See `docs/vmodv-e2e.md`.
+- `make test-e2e-vmodv` — the real-binary e2e harness and parity tests (`e2e_harness`, `e2e_process`, `e2e_scenes`, `e2e_defaults`, `e2e_manifest`, `e2e_colour`, `e2e_regressions`), serial. Wayland preferred, X11/Xvfb fallback; with no display at all the harness starts Xvfb. `make test-e2e` is an alias. See `docs/vmodv-e2e.md`.
 - `make rave-reencode` — the one remaining Node usage: a throwaway `node:24-slim` container re-encodes `resources/isf/rave.exe.fs` from `tools/rave-words.txt`. Nothing else in the tree needs Node.
 - `make shell` — interactive shell in the Rust toolchain container with the repo bind-mounted at `/app` and a cargo cache volume.
 - `make docker-reset` — delete the `modv-cargo` cargo volume; the next cargo target reseeds it.

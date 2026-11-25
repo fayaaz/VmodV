@@ -297,9 +297,10 @@ lint: engine-lint
 format: docker-cargo-volume
 	$(call run-cargo,fmt --all)
 
-# Real-binary e2e: the process harness plus the Scene/defaults/manifest parity
-# tests. One worker at a time because a process owns a virtual display and the
-# software GPU is shared.
+# Real-binary e2e: the process harness, the Scene/defaults/manifest parity
+# tests, the control-set colour picker/Colour Key coverage and the regression
+# scenarios. One worker at a time because a process owns a virtual display and
+# the software GPU is shared.
 test-e2e-vmodv: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
 test-e2e-vmodv: docker-cargo-volume
 	$(call run-cargo,test -p modv-app \
@@ -308,6 +309,8 @@ test-e2e-vmodv: docker-cargo-volume
 		--test e2e_scenes \
 		--test e2e_defaults \
 		--test e2e_manifest \
+		--test e2e_colour \
+		--test e2e_regressions \
 		-- --test-threads=1)
 
 test-e2e: test-e2e-vmodv
