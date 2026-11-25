@@ -1,12 +1,12 @@
 {
-  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a VmodV-only 2D module added with start/finish playback trims (not present in the legacy registrations); Point10 The Cave is a VmodV-only port of the Plane9 preset from ../Point10.",
+  "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a VmodV-only 2D module added with start/finish playback trims (not present in the legacy registrations); Point10 The Cave is a VmodV-only port of the Plane9 preset from ../Point10; Colour Key is a VmodV-only ISF chroma-key filter (not present in the legacy registrations).",
   "counts": {
     "twoD": 16,
     "point10": 27,
     "shader": 36,
-    "isf": 395,
+    "isf": 396,
     "milkdrop": 0,
-    "total": 474
+    "total": 475
   },
   "milkdrop": [],
   "twoD": [
@@ -144,6 +144,7 @@
     "Color Schemes",
     "Color Test Grid",
     "Colour Distance",
+    "Colour Key",
     "Comet Tails",
     "Convergence",
     "Corner Color Tint",

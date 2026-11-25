@@ -1742,10 +1742,10 @@ mod tests {
         })
     }
 
-    fn solid_input(
+    fn upload_input(
         runtime: &IsfRuntime,
         size: u32,
-        rgba: [u8; 4],
+        data: &[u8],
     ) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = runtime.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("modV ISF test input"),
@@ -1761,7 +1761,6 @@ mod tests {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let data = rgba.repeat((size * size) as usize);
         runtime.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -1769,7 +1768,7 @@ mod tests {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &data,
+            data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(size * 4),
@@ -1783,6 +1782,31 @@ mod tests {
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         (texture, view)
+    }
+
+    fn solid_input(
+        runtime: &IsfRuntime,
+        size: u32,
+        rgba: [u8; 4],
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        upload_input(runtime, size, &rgba.repeat((size * size) as usize))
+    }
+
+    /// A two-tone texture split down the middle, so one draw covers a keyed
+    /// and a preserved pixel with no interpolation at the sampled columns.
+    fn two_tone_input(
+        runtime: &IsfRuntime,
+        size: u32,
+        left: [u8; 4],
+        right: [u8; 4],
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let mut data = Vec::with_capacity((size * size * 4) as usize);
+        for _row in 0..size {
+            for column in 0..size {
+                data.extend_from_slice(if column < size / 2 { &left } else { &right });
+            }
+        }
+        upload_input(runtime, size, &data)
     }
 
     #[test]
@@ -1985,6 +2009,90 @@ mod tests {
                 pixel[2]
             );
         }
+    }
+
+    /// The shipped Colour Key filter is the app's chroma-key path: the pixels
+    /// matching `keyColor` become transparent (premultiplied zero), and every
+    /// other colour keeps its opaque RGBA. It is parsed from the vendored
+    /// corpus rather than duplicated here, so a corpus edit that breaks the
+    /// keying path fails this test.
+    #[test]
+    fn colour_key_corpus_shader_keys_its_key_colour_to_transparency() {
+        let Some(mut runtime) = try_runtime() else {
+            return;
+        };
+        let path = std::path::Path::new(translate::DEFAULT_CORPUS_DIR).join("Colour Key.fs");
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "the Colour Key corpus shader must exist at {}: {error}",
+                path.display()
+            )
+        });
+        let document = parse_isf(&source, None).expect("Colour Key parses");
+        assert!(
+            document
+                .inputs
+                .iter()
+                .any(|input| input.name == "inputImage" && input.type_ == "image"),
+            "Colour Key must declare an inputImage input to act as a filter"
+        );
+        assert!(
+            document
+                .inputs
+                .iter()
+                .any(|input| input.name == "keyColor" && input.type_ == "color"),
+            "Colour Key must declare the keyColor input"
+        );
+
+        let mut compiled = runtime
+            .compile(&document, "Colour Key", wgpu::TextureFormat::Rgba8Unorm)
+            .expect("Colour Key compiles");
+
+        let (input_texture, input_view) =
+            two_tone_input(&runtime, 64, [0, 255, 0, 255], [255, 0, 0, 255]);
+        let destination = target(&runtime, 64, wgpu::TextureFormat::Rgba8Unorm);
+        let destination_view = destination.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut values = IsfValues::new();
+        values.insert("keyColor".into(), IsfValue::Vec4([0.0, 1.0, 0.0, 1.0]));
+        values.insert("tolerance".into(), IsfValue::Float(0.25));
+        values.insert("softness".into(), IsfValue::Float(0.01));
+        values.insert("spill".into(), IsfValue::Float(0.0));
+
+        runtime
+            .draw(
+                &mut compiled,
+                &destination_view,
+                [64, 64],
+                IsfFrameUniforms {
+                    time: 0.0,
+                    time_delta: 0.0,
+                    frame_index: 1,
+                    date: [2026.0, 11.0, 25.0, 0.0],
+                },
+                &values,
+                &[("inputImage", &input_view)],
+                &[],
+            )
+            .expect("draws");
+        let _ = input_texture;
+
+        let pixels =
+            read_texture(runtime.device(), &runtime.queue, &destination).expect("read back");
+        let pixel = |x: usize, y: usize| {
+            let offset = (y * 64 + x) * 4;
+            &pixels[offset..offset + 4]
+        };
+        assert_eq!(
+            pixel(16, 32),
+            &[0, 0, 0, 0],
+            "the key colour must leave transparent premultiplied pixels"
+        );
+        assert_eq!(
+            pixel(48, 32),
+            &[255, 0, 0, 255],
+            "non-key colours must stay opaque"
+        );
     }
 
     #[test]

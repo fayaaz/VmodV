@@ -1,7 +1,7 @@
 {
   "failed": [],
   "overridden": [],
-  "total": 395,
+  "total": 396,
   "translated": [
     "ASCII Art",
     "Angular",
@@ -52,6 +52,7 @@
     "Color Schemes",
     "Color Test Grid",
     "Colour Distance",
+    "Colour Key",
     "Comet Tails",
     "Convergence",
     "Corner Color Tint",
