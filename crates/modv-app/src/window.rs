@@ -1323,7 +1323,13 @@ fn acquire_output_frames(
 
 impl ApplicationHandler for WindowedApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() || self.failed {
+        if self.failed {
+            // A pre-init failure (e.g. the control socket could not bind) must
+            // terminate the loop so `run` returns the error instead of hanging.
+            event_loop.exit();
+            return;
+        }
+        if self.window.is_some() {
             return;
         }
         self.init(event_loop);
