@@ -74,9 +74,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
@@ -4564,7 +4565,10 @@ impl Store {
     /// `framesPresented` lives in `_engine` rather than in the preset so a
     /// Scene saved from this document never carries engine bookkeeping.
     pub fn snapshot_with_engine(&self, frames_presented: u64) -> Value {
-        self.preset_document(self.state.tweens.clone(), Some(frames_presented))
+        self.preset_document(
+            clone_snapshot_slot(&self.state.tweens),
+            Some(frames_presented),
+        )
     }
 
     /// Queue the snapshot for a background serialise + atomic write.
@@ -4577,10 +4581,23 @@ impl Store {
     /// write failure it hits. Use [`Self::save_snapshot_blocking`] when the
     /// caller needs the file on return (explicit Save, quit, headless/tests).
     pub fn save_snapshot(&self, path: &Path, frames_presented: u64) -> io::Result<()> {
-        let snapshot = self.preset_document(
-            clone_snapshot_slot(&self.state.tweens),
-            Some(frames_presented),
-        );
+        let snapshot = self.snapshot_with_engine(frames_presented);
+        self.with_snapshot_writer(|writer| writer.submit(path.to_path_buf(), snapshot))
+    }
+
+    /// Write the snapshot through the same background writer and wait for the
+    /// worker's completion ack, so older queued periodic work has already run
+    /// (or been superseded) and the file is on disk on return.
+    pub fn save_snapshot_blocking(&self, path: &Path, frames_presented: u64) -> io::Result<()> {
+        let snapshot = self.snapshot_with_engine(frames_presented);
+        self.with_snapshot_writer(|writer| writer.submit_blocking(path.to_path_buf(), snapshot))
+    }
+
+    /// Lazily start the writer, then run `submit` while its lock is held.
+    fn with_snapshot_writer<T>(
+        &self,
+        submit: impl FnOnce(&SnapshotWriter) -> io::Result<T>,
+    ) -> io::Result<T> {
         let mut writer = self
             .snapshot_writer
             .lock()
@@ -4588,16 +4605,7 @@ impl Store {
         if writer.is_none() {
             *writer = Some(SnapshotWriter::new()?);
         }
-        writer
-            .as_ref()
-            .expect("snapshot writer is initialized")
-            .submit(path.to_path_buf(), snapshot)
-    }
-
-    /// Write the snapshot atomically (tmp file + rename) before returning,
-    /// the M1 behaviour.
-    pub fn save_snapshot_blocking(&self, path: &Path, frames_presented: u64) -> io::Result<()> {
-        write_snapshot_atomically(path, &self.snapshot_with_engine(frames_presented))
+        submit(writer.as_ref().expect("snapshot writer is initialized"))
     }
 
     /// Replace the state from a preset/snapshot document
@@ -4789,9 +4797,20 @@ impl Store {
 
 /// One queued snapshot write for the background snapshot worker.
 enum SnapshotJob {
-    Write { path: PathBuf, snapshot: Value },
+    Write {
+        path: PathBuf,
+        snapshot: Value,
+        /// `Some` for an explicit save that waits for the worker to report the
+        /// actual write result; `None` for a periodic save.
+        ack: Option<std::sync::mpsc::Sender<io::Result<()>>>,
+    },
     Shutdown,
 }
+
+/// Test-only per-writer hook type: pause or observe a periodic job immediately
+/// before its real write without installing any process-global hook.
+#[cfg(test)]
+type BeforeWrite = Arc<dyn Fn(&Path, &Value) + Send + Sync>;
 
 /// The output frame thread's handle to the snapshot writer thread.
 ///
@@ -4808,17 +4827,71 @@ impl SnapshotWriter {
         let (jobs, rx) = std::sync::mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("modv-snapshot".to_string())
-            .spawn(move || run_snapshot_writer(&rx))?;
+            .spawn(move || {
+                #[cfg(test)]
+                run_snapshot_writer(&rx, Arc::new(|_path: &Path, _snapshot: &Value| {}));
+                #[cfg(not(test))]
+                run_snapshot_writer(&rx);
+            })?;
         Ok(Self {
             jobs,
             thread: Some(thread),
         })
     }
 
+    /// Test-only per-writer seam: pause or observe a job immediately before
+    /// its real write without installing any process-global hook.
+    #[cfg(test)]
+    fn with_before_write(before_write: BeforeWrite) -> io::Result<Self> {
+        let (jobs, rx) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("modv-snapshot".to_string())
+            .spawn(move || run_snapshot_writer(&rx, before_write))?;
+        Ok(Self {
+            jobs,
+            thread: Some(thread),
+        })
+    }
+
+    /// A non-owning test handle connected to this writer's queue. It lets a
+    /// thread-local `Store` exercise the real blocking API without requiring
+    /// the Boa-backed `Store` itself to be `Send` or `Sync`.
+    #[cfg(test)]
+    fn connected_test_handle(&self) -> Self {
+        Self {
+            jobs: self.jobs.clone(),
+            thread: None,
+        }
+    }
+
     fn submit(&self, path: PathBuf, snapshot: Value) -> io::Result<()> {
         self.jobs
-            .send(SnapshotJob::Write { path, snapshot })
+            .send(SnapshotJob::Write {
+                path,
+                snapshot,
+                ack: None,
+            })
             .map_err(io::Error::other)
+    }
+
+    /// Queue an explicit save and block until the writer reports the actual
+    /// result. The job goes through the same FIFO queue as the periodic saves,
+    /// so no older queued write can land after it.
+    fn submit_blocking(&self, path: PathBuf, snapshot: Value) -> io::Result<()> {
+        let (ack, result) = std::sync::mpsc::channel();
+        self.jobs
+            .send(SnapshotJob::Write {
+                path,
+                snapshot,
+                ack: Some(ack),
+            })
+            .map_err(io::Error::other)?;
+        result.recv().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "snapshot writer stopped before acknowledging the save",
+            )
+        })?
     }
 }
 
@@ -4827,6 +4900,13 @@ impl Drop for SnapshotWriter {
     /// queued before the shutdown marker is still written before the join
     /// returns and the store is dropped.
     fn drop(&mut self) {
+        #[cfg(test)]
+        if self.thread.is_some() {
+            // A test-only connected handle shares the job sender but does not
+            // own the worker, so dropping it must not shut that worker down.
+            let _ = self.jobs.send(SnapshotJob::Shutdown);
+        }
+        #[cfg(not(test))]
         let _ = self.jobs.send(SnapshotJob::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -4835,33 +4915,141 @@ impl Drop for SnapshotWriter {
 }
 
 /// Serialise and atomically write queued snapshots until told to stop.
-fn run_snapshot_writer(jobs: &std::sync::mpsc::Receiver<SnapshotJob>) {
+///
+/// Coalescing: each drained batch keeps only the newest periodic snapshot. A
+/// blocking save is never dropped, and any periodic snapshot older than it is
+/// superseded (writing an older frame after the explicit save would regress the
+/// file). On shutdown, still-pending blocking saves are acked with an error so
+/// their callers cannot hang.
+fn run_snapshot_writer(
+    jobs: &std::sync::mpsc::Receiver<SnapshotJob>,
+    #[cfg(test)] before_write: BeforeWrite,
+) {
     let mut warned = false;
-    for job in jobs {
-        let SnapshotJob::Write { path, snapshot } = job else {
+    loop {
+        let Ok(first) = jobs.recv() else {
             break;
         };
-        if let Err(error) = write_snapshot_atomically(&path, &snapshot)
-            && !warned
-        {
-            // The frame thread already moved on; report the first failure once
-            // so a read-only userData directory is still diagnosable.
-            warned = true;
-            eprintln!(
-                "engine: WARN could not save snapshot {}: {error}",
-                path.display()
-            );
+        let mut batch = vec![first];
+        batch.extend(jobs.try_iter());
+
+        let mut to_run: Vec<SnapshotJob> = Vec::new();
+        let mut pending_periodic: Option<SnapshotJob> = None;
+        let mut shutdown = false;
+        for job in batch {
+            match job {
+                SnapshotJob::Shutdown => shutdown = true,
+                SnapshotJob::Write { ack: Some(_), .. } => {
+                    if shutdown {
+                        ack_snapshot_error(job);
+                    } else {
+                        // The explicit save supersedes every older periodic
+                        // snapshot still waiting in this batch.
+                        pending_periodic = None;
+                        to_run.push(job);
+                    }
+                }
+                SnapshotJob::Write { ack: None, .. } => {
+                    if !shutdown {
+                        pending_periodic = Some(job);
+                    }
+                }
+            }
+        }
+
+        if shutdown {
+            for job in to_run {
+                ack_snapshot_error(job);
+            }
+            for job in jobs.try_iter() {
+                ack_snapshot_error(job);
+            }
+            break;
+        }
+        if let Some(job) = pending_periodic {
+            to_run.push(job);
+        }
+
+        for job in to_run {
+            let SnapshotJob::Write {
+                path,
+                snapshot,
+                ack,
+            } = job
+            else {
+                continue;
+            };
+            // The test seam pauses/observes the periodic writer; explicit
+            // saves are logged by their own caller and must not be paused.
+            #[cfg(test)]
+            if ack.is_none() {
+                before_write(&path, &snapshot);
+            }
+            let result = write_snapshot_atomically(&path, &snapshot);
+            if let Err(error) = &result
+                && ack.is_none()
+                && !warned
+            {
+                // The frame thread already moved on; report the first failure
+                // once so a read-only userData directory is still diagnosable.
+                warned = true;
+                eprintln!(
+                    "engine: WARN could not save snapshot {}: {error}",
+                    path.display()
+                );
+            }
+            if let Some(ack) = ack {
+                let _ = ack.send(result);
+            }
         }
     }
 }
 
-/// Serialise `snapshot` and write it atomically (tmp file + rename), the M1
-/// behaviour shared by the blocking path and the background worker.
+/// Report a shutdown error to a queued blocking save (periodic jobs are
+/// dropped silently).
+fn ack_snapshot_error(job: SnapshotJob) {
+    if let SnapshotJob::Write { ack: Some(ack), .. } = job {
+        let _ = ack.send(Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "snapshot writer shut down before the save completed",
+        )));
+    }
+}
+
+/// Serialise `snapshot` and write it atomically (unique tmp file + rename),
+/// the behaviour shared by the blocking path and the background worker.
+///
+/// The temporary name is unique per process and call (`create_new`), so
+/// concurrent writers to the same destination never share a scratch file. A
+/// failed write or rename removes the temporary file instead of leaving it
+/// behind.
 fn write_snapshot_atomically(path: &Path, snapshot: &Value) -> io::Result<()> {
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let payload = serde_json::to_vec_pretty(snapshot).map_err(io::Error::other)?;
-    let tmp = Path::new(&format!("{}.tmp", path.display())).to_path_buf();
-    fs::write(&tmp, payload)?;
-    fs::rename(&tmp, path)
+    let file_name = path.file_name().map_or_else(
+        || "snapshot".to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(
+        ".{file_name}.{}.{sequence}.tmp",
+        std::process::id()
+    ));
+
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all(&payload)?;
+        drop(file);
+        fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Copy a snapshot slot for hand-off to the background writer.
@@ -5383,6 +5571,26 @@ fn set_segments(root: &mut Value, segments: &[PathSegment], value: Value) {
 mod tests {
     use super::*;
     use modv_engine::preset::create_preset_from_state;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Barrier, mpsc};
+
+    struct SnapshotTestDirCleanup(PathBuf);
+
+    impl Drop for SnapshotTestDirCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn snapshot_test_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is after the epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("modv-{label}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&dir).expect("snapshot test directory");
+        dir
+    }
 
     fn store_with_group(name: &str) -> (Store, String) {
         let mut store = Store::new();
@@ -10127,6 +10335,180 @@ mod tests {
                 )
                 .expect("unknown type dispatches"),
             Value::Null
+        );
+    }
+
+    #[test]
+    fn blocking_save_supersedes_a_paused_periodic_write() {
+        let dir = snapshot_test_dir("blocking-save");
+        let _cleanup = SnapshotTestDirCleanup(dir.clone());
+        let path = dir.join("engine-state.json");
+
+        let first_write = Arc::new(AtomicBool::new(true));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let (log_tx, log_rx) = mpsc::channel();
+        let hook_log_tx = log_tx.clone();
+        let hook_first_write = Arc::clone(&first_write);
+        let before_write = move |_path: &Path, snapshot: &Value| {
+            let frames = snapshot[ENGINE_SIDECAR_KEY]["framesPresented"]
+                .as_u64()
+                .expect("snapshot frame counter");
+            hook_log_tx
+                .send(("periodic", frames))
+                .expect("snapshot write log receiver is alive");
+            if hook_first_write.swap(false, Ordering::SeqCst) {
+                started_tx.send(()).expect("test is waiting for the writer");
+                release_rx
+                    .lock()
+                    .expect("release mutex")
+                    .recv()
+                    .expect("test releases the paused periodic writer");
+            }
+        };
+
+        let store = Store::new();
+        *store.snapshot_writer.lock().expect("writer mutex") =
+            Some(SnapshotWriter::with_before_write(Arc::new(before_write)).expect("test writer"));
+        store
+            .save_snapshot(&path, 1)
+            .expect("periodic save is queued");
+
+        struct ReleaseOnDrop(mpsc::Sender<()>);
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let release = ReleaseOnDrop(release_tx);
+        started_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("periodic writer reaches the pause seam");
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let blocking_started = Instant::now();
+        let blocking_state = store.state.clone();
+        let blocking_path = path.clone();
+        // `Store` is intentionally !Sync (its Boa expression context is local
+        // to the UI thread). Build the caller inside the scope and connect it
+        // to the same writer queue, so the real blocking method still runs in
+        // a scoped thread without sharing the whole Store across threads.
+        let connected_writer = store
+            .snapshot_writer
+            .lock()
+            .expect("writer mutex")
+            .as_ref()
+            .expect("injected snapshot writer")
+            .connected_test_handle();
+        let blocking_result = std::thread::scope(|scope| {
+            let blocking = scope.spawn(move || {
+                let mut store = Store::new();
+                store.state = blocking_state;
+                *store.snapshot_writer.lock().expect("writer mutex") = Some(connected_writer);
+                let result = store.save_snapshot_blocking(&blocking_path, 2);
+                let _ = done_tx.send(());
+                result
+            });
+            let returned_while_paused = done_rx.recv_timeout(Duration::from_millis(100));
+            release
+                .0
+                .send(())
+                .expect("paused periodic writer can be released");
+            assert!(
+                returned_while_paused.is_err(),
+                "save_snapshot_blocking returned within {:?} while the periodic writer was paused; it must wait for the writer barrier",
+                blocking_started.elapsed()
+            );
+            blocking.join().expect("blocking save thread")
+        });
+        blocking_result.expect("blocking snapshot save succeeds");
+
+        log_tx
+            .send(("blocking", 2))
+            .expect("snapshot write log receiver is alive");
+        drop(log_tx);
+        // Joining the writer also proves no queued periodic job can overwrite
+        // the newer blocking save after the store is dropped.
+        drop(store);
+        let writes: Vec<_> = log_rx.iter().collect();
+        assert_eq!(
+            writes,
+            vec![("periodic", 1), ("blocking", 2)],
+            "no periodic write may be recorded after the blocking save"
+        );
+
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("snapshot file is readable"))
+                .expect("snapshot file is valid JSON");
+        assert_eq!(
+            written[ENGINE_SIDECAR_KEY]["framesPresented"],
+            json!(2),
+            "the newer blocking save must supersede the paused periodic snapshot"
+        );
+    }
+
+    #[test]
+    fn concurrent_atomic_writes_use_unique_temps() {
+        let dir = snapshot_test_dir("concurrent-snapshot");
+        let _cleanup = SnapshotTestDirCleanup(dir.clone());
+        let path = dir.join("engine-state.json");
+        let documents: Vec<Value> = (0..8)
+            .map(|writer| json!({ "writer": writer, "payload": "x".repeat(512 * 1024) }))
+            .collect();
+        let barrier = Arc::new(Barrier::new(documents.len()));
+
+        let results: Vec<io::Result<()>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = documents
+                .iter()
+                .map(|document| {
+                    let path = path.clone();
+                    let document = document.clone();
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        write_snapshot_atomically(&path, &document)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("snapshot writer thread"))
+                .collect()
+        });
+
+        let failures: Vec<_> = results
+            .iter()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|error| (index, error)))
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "concurrent snapshot writes all succeeded: {failures:?}"
+        );
+
+        let written: Value =
+            serde_json::from_slice(&fs::read(&path).expect("final snapshot file is readable"))
+                .expect("final snapshot is valid JSON");
+        assert!(
+            documents.contains(&written),
+            "the final snapshot must be one complete writer document"
+        );
+
+        let leftover_temps: Vec<PathBuf> = fs::read_dir(&dir)
+            .expect("snapshot test directory is readable")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "tmp")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        assert!(
+            leftover_temps.is_empty(),
+            "temporary snapshot files were left behind: {leftover_temps:?}"
         );
     }
 
