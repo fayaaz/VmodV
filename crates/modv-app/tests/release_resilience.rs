@@ -465,3 +465,25 @@ fn macos_build_failure_cannot_block_the_release() {
         "no job uploads any artifact to the release after it is created"
     );
 }
+
+#[test]
+fn previous_tag_excludes_the_version_being_released() {
+    // On a resumed run the tag being released already exists at HEAD and is
+    // therefore the highest tag. Selecting it as `previous_tag` gives the
+    // release notes an empty `vX.Y.Z..vX.Y.Z` range and a self-comparing link.
+    let text = release_workflow();
+    let version = job_block(&text, "version").expect("release.yml has no `version` job");
+    let compute = shell_command(&version, "tools/semver-next.sh")
+        .expect("`version` must compute the next version with tools/semver-next.sh");
+    let prev = compute
+        .lines()
+        .find(|line| line.trim_start().starts_with("PREV="))
+        .expect("`version` must select a previous tag for release notes");
+
+    assert!(
+        prev.contains("grep -v") && prev.contains("${VERSION}"),
+        "the previous-tag selection still includes the version being released \
+         ({prev}); on a resumed run that yields empty notes and a \
+         vX.Y.Z...vX.Y.Z compare link"
+    );
+}
