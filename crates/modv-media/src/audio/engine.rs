@@ -161,11 +161,24 @@ impl AudioFeed {
 
             match result {
                 Ok(Some(chunk)) => {
-                    let channels = match source {
-                        Source::Capture(capture) => capture.channels(),
+                    let (channels, rate) = match source {
+                        Source::Capture(capture) => (capture.channels(), capture.sample_rate()),
                         #[cfg(target_os = "linux")]
-                        Source::Monitor(monitor) => monitor.channels(),
+                        Source::Monitor(monitor) => {
+                            let format = monitor.negotiated_format();
+                            (u16::try_from(format.channels).unwrap_or(1), format.rate)
+                        }
                     };
+
+                    // The server can renegotiate mid-stream. A new rate needs a
+                    // fresh analyser (its FFT bin mapping depends on it); a
+                    // channel-only change keeps the analysis state and just
+                    // changes the downmix.
+                    let rate = rate as f32;
+                    if rate != self.analyser.sample_rate() {
+                        self.sample_rate = rate;
+                        self.analyser = AudioAnalyser::new(rate);
+                    }
 
                     let mono = downmix_mono(&chunk, channels);
                     self.analyser.push_mono(&mono);
@@ -203,9 +216,22 @@ impl AudioFeed {
 
 #[cfg(test)]
 mod tests {
+    use super::super::analyser::{FFT_SIZE, MEYDA_FFT_SIZE, WAVE_LEN};
+    #[cfg(target_os = "linux")]
+    use super::super::pipewire::tests::{AudioFormat, test_monitor};
     use super::*;
 
     const SAMPLE_RATE: f32 = 48_000.0;
+
+    #[cfg(target_os = "linux")]
+    fn feed_with_test_monitor(sample_rate: f32, monitor: PipeWireMonitor) -> AudioFeed {
+        AudioFeed {
+            analyser: AudioAnalyser::new(sample_rate),
+            source: Some(Source::Monitor(monitor)),
+            sample_rate,
+            last_error: None,
+        }
+    }
 
     #[test]
     fn synthetic_feed_analyses_injected_chunks_without_a_device() {
@@ -240,6 +266,80 @@ mod tests {
         assert_eq!(snapshot.bands, [0.0; 3]);
         assert!(!feed.has_source());
         assert_eq!(feed.pump(Duration::ZERO), 0);
+        assert!(feed.take_error().is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn audio_feed_rebuilds_the_analyser_on_a_rate_change() {
+        let (monitor, mut format) = test_monitor();
+        assert!(format.set_format(AudioFormat::F32LE, 44_100, 1));
+
+        let mut feed = feed_with_test_monitor(SAMPLE_RATE, monitor);
+        feed.analyser.push_mono(&vec![0.75; FFT_SIZE]);
+        feed.frame(0.0);
+
+        format.push_chunk(vec![-0.25; MEYDA_FFT_SIZE]);
+        assert_eq!(feed.pump(Duration::ZERO), 1);
+        assert_eq!(
+            (feed.sample_rate(), feed.analyser().sample_rate()),
+            (44_100.0, 44_100.0),
+            "a rate change must update the feed and rebuild its analyser"
+        );
+
+        let snapshot = feed.frame(0.0);
+        assert_eq!(snapshot.sample_rate, 44_100.0);
+        let silence = (128.0 / 255.0) * 2.0 - 1.0;
+        let stale = (223.0 / 255.0) * 2.0 - 1.0;
+        let expected = (96.0 / 255.0) * 2.0 - 1.0;
+        assert!(
+            snapshot.wave[..MEYDA_FFT_SIZE]
+                .iter()
+                .all(|&sample| (sample - silence).abs() < 1e-6),
+            "rebuilding must replace old-rate PCM with the documented silence floor"
+        );
+        assert!(
+            snapshot.wave[..MEYDA_FFT_SIZE]
+                .iter()
+                .all(|&sample| (sample - stale).abs() > 1e-3),
+            "rebuilding must discard the stale 0.75 old-rate PCM"
+        );
+        assert!(
+            snapshot.wave[MEYDA_FFT_SIZE..]
+                .iter()
+                .all(|&sample| (sample - expected).abs() < 1e-6),
+            "the rebuilt analyser must contain the new-rate PCM"
+        );
+        assert!(feed.take_error().is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn audio_feed_downmixes_with_the_current_channel_count() {
+        let (monitor, mut format) = test_monitor();
+        let mut feed = feed_with_test_monitor(SAMPLE_RATE, monitor);
+
+        // Stereo -> mono: both samples are independent mono frames, not one
+        // stereo frame to be averaged.
+        assert!(format.set_format(AudioFormat::F32LE, 48_000, 1));
+        format.push_chunk(vec![1.0, -1.0]);
+        let snapshot = feed.frame(0.0);
+        assert_eq!(
+            &snapshot.wave[WAVE_LEN - 2..],
+            &[1.0, -1.0],
+            "1ch PCM must pass through after renegotiation"
+        );
+
+        // Mono -> stereo: the two equal channels form one frame averaging 1.0.
+        // Analysis state is retained because the rate did not change.
+        assert!(format.set_format(AudioFormat::F32LE, 48_000, 2));
+        format.push_chunk(vec![1.0, 1.0]);
+        let snapshot = feed.frame(0.0);
+        assert_eq!(
+            &snapshot.wave[WAVE_LEN - 3..],
+            &[1.0, -1.0, 1.0],
+            "2ch PCM must be averaged with the current channel count"
+        );
         assert!(feed.take_error().is_none());
     }
 
