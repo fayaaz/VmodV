@@ -114,9 +114,11 @@
 //!   group's canvas, or the current group canvas (the JS default for an
 //!   unassigned or unresolvable prop, `renderers/isf/index.js:84-91`). A filter
 //!   whose canvas-sampling input is bound to that canvas keeps the alpha mask
-//!   described in [`Compositor::render_isf_module`]; a filter whose image
-//!   inputs are all external does not, so an assigned photo is not erased by a
-//!   transparent group.
+//!   described in [`Compositor::render_isf_module`] and replaces the canvas with
+//!   its result (default `normal` blend becomes `copy`), so transparency the
+//!   shader writes — e.g. Colour Key's chroma key — is actually visible; a
+//!   filter whose image inputs are all external does neither, so an assigned
+//!   photo is not erased by a transparent group.
 //! * **ISF whole-scene transitions run through the ISF runtime.** The six
 //!   native transitions are WGSL ports ([`crate::scene_transition`]) that bind
 //!   the captured outgoing frame and the incoming main frame; a registered ISF
@@ -3024,6 +3026,21 @@ impl Compositor {
                 }
                 None => target_texture.clone(),
             }
+        };
+
+        // A filter that samples the group canvas has already read the previous
+        // layer into its output. Layering that output back over the *same*
+        // canvas with the default `normal`/`source-over` blend preserves the
+        // pixels the shader removed, so a chroma key's transparency is
+        // invisible. Composite as `copy` so the filtered result replaces the
+        // canvas and its alpha is meaningful. An explicitly chosen blend mode
+        // is still honoured.
+        let blend = if samples_group_canvas
+            && matches!(blend, RenderBlendMode::Normal | RenderBlendMode::SourceOver)
+        {
+            RenderBlendMode::Copy
+        } else {
+            blend
         };
 
         self.surfaces.insert(texture_id.clone(), final_texture);
@@ -7096,6 +7113,71 @@ void main() {
         assert!(
             pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0),
             "an ISF filter turned the transparent group canvas opaque"
+        );
+    }
+
+    #[test]
+    fn canvas_sampling_isf_filter_replaces_the_keyed_pixels_on_the_group() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let Some(registry) = corpus_registry() else {
+            return;
+        };
+        let mut compositor = isf_compositor(engine, registry);
+
+        // Solid Color fills the group with opaque red. Colour Key samples that
+        // canvas (the Gallery default `inputImage: inherit`) and keys the same
+        // red to transparent. Both modules use the default `normal` blend, so
+        // layering the keyed output over the original canvas would leave the
+        // red visible: a filter's transparent pixels must replace the canvas.
+        let group_id = group_texture_id("group-a");
+        let read_group = |compositor: &Compositor| {
+            let texture = compositor
+                .surfaces
+                .get(&group_id)
+                .cloned()
+                .expect("the rendered group texture is registered");
+            let (width, height) = compositor.size;
+            read_back_texture(
+                &compositor.device,
+                &compositor.queue,
+                &texture,
+                width,
+                height,
+            )
+            .expect("group texture reads back")
+        };
+
+        // A non-matching key leaves the red canvas intact, which also proves
+        // the Solid Color layer really rendered.
+        let mut state = isf_state(&[
+            ("module-a", "Solid Color", json!({})),
+            (
+                "module-b",
+                "Colour Key",
+                json!({ "keyColor": [0.0, 1.0, 0.0, 1.0] }),
+            ),
+        ]);
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("filter frame renders");
+        let kept = read_group(&compositor);
+        assert!(
+            kept.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255),
+            "a non-matching key must leave the opaque red canvas intact"
+        );
+
+        state.modules.get_mut("module-b").expect("key module").props = json!({
+            "keyColor": [1.0, 0.0, 0.0, 1.0]
+        });
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("filter frame renders");
+        let keyed = read_group(&compositor);
+        assert!(
+            keyed.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0),
+            "keying the canvas colour must leave the group canvas transparent"
         );
     }
 
