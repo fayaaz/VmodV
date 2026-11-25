@@ -75,6 +75,31 @@ use crate::shader::uniforms::{
     PropLayout, PropSlots, SECONDS_TO_MILLISECONDS, SHADER_UNIFORMS_BYTES, ShaderUniforms,
 };
 
+/// Names of the fragment entry points in a parsed WGSL module, in declaration
+/// order. Shared with the user-module parser so discovery and pipeline setup
+/// agree on what counts as a fragment entry (and only that stage).
+pub(crate) fn fragment_entries(module: &naga::Module) -> Vec<&str> {
+    module
+        .entry_points
+        .iter()
+        .filter(|entry| entry.stage == naga::ShaderStage::Fragment)
+        .map(|entry| entry.name.as_str())
+        .collect()
+}
+
+/// The fragment entry a pipeline should use: `fs_main` when present (every
+/// built-in), otherwise a user module's sole fragment entry. Ambiguous or
+/// absent entries yield `None` and are rejected before GPU creation.
+pub(crate) fn preferred_fragment_entry<'a>(entries: &[&'a str]) -> Option<&'a str> {
+    if entries.contains(&"fs_main") {
+        Some("fs_main")
+    } else if let [only] = entries {
+        Some(*only)
+    } else {
+        None
+    }
+}
+
 /// Audio payload the renderer cannot derive itself. `kick` is the beat
 /// detector's edge flag; the bands are AGC-normalised 0..1.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -138,11 +163,12 @@ pub struct ShaderRenderer {
 
 /// Errors produced by the shader renderer.
 ///
-/// Pipeline/shader creation is fallible only on shape errors that can be
-/// checked cheaply up front; actual WGSL validity is asserted by the
-/// naga-based test suite (see `super::tests`) against every module in the
-/// registry. Anything that reaches `create_shader_module` invalid raises a
-/// device validation error exactly as it would for any other wgpu misuse.
+/// Pipeline/shader creation is fallible on shape errors and on WGSL that
+/// naga cannot parse or that has no unambiguous fragment entry. Both are
+/// checked cheaply up front, before any GPU object is created; the naga-based
+/// test suite (see `super::tests`) additionally validates every built-in
+/// module's full source. Anything invalid that reaches `create_shader_module`
+/// raises a device validation error exactly as it would for any wgpu misuse.
 #[derive(Debug)]
 pub enum ShaderError {
     /// [`ShaderRenderer::render`] or [`ShaderRenderer::remove_slot`] was
@@ -156,9 +182,10 @@ pub enum ShaderError {
         /// Lane count supplied.
         got: usize,
     },
-    /// [`ShaderRenderer::setup_module`] received a module whose fragment
-    /// source is empty or does not declare an `fs_main` entry point. This is
-    /// a registry bug, not a runtime condition — the in-tree modules all do.
+    /// [`ShaderRenderer::setup_module`] received a module whose combined
+    /// source does not parse or has no unambiguous fragment entry point.
+    /// This is a registry/discovery bug, not a runtime condition — the
+    /// in-tree modules all parse and expose `fs_main`.
     RejectedModule(String),
 }
 
@@ -173,7 +200,10 @@ impl fmt::Display for ShaderError {
                 )
             }
             ShaderError::RejectedModule(name) => {
-                write!(f, "shader module {name:?} has no fs_main entry point")
+                write!(
+                    f,
+                    "shader module {name:?} has no unambiguous fragment entry point"
+                )
             }
         }
     }
@@ -272,20 +302,16 @@ impl ShaderRenderer {
     ///
     /// # Errors
     ///
-    /// Returns [`ShaderError::RejectedModule`] when the module's fragment
-    /// source is empty or lacks an `fs_main` entry — a registry bug, caught
-    /// here before the driver raises a validation error. Well-formed
-    /// in-tree modules never see this.
+    /// Returns [`ShaderError::RejectedModule`] when the combined source does
+    /// not parse or has no unambiguous fragment entry — a registry/discovery
+    /// bug, caught here before the driver raises a validation error.
+    /// Well-formed in-tree modules never see this.
     pub fn setup_module(
         &mut self,
         module: &ShaderModule,
         target_format: wgpu::TextureFormat,
         is_gallery: bool,
     ) -> Result<usize, ShaderError> {
-        if module.fragment_wgsl.is_empty() || !module.fragment_wgsl.contains("fs_main") {
-            return Err(ShaderError::RejectedModule(module.name.to_string()));
-        }
-
         let prop_layout = PropLayout::from_props(&module.props);
 
         // One shader module holding both entry points: the shared full-screen
@@ -296,6 +322,16 @@ impl ShaderRenderer {
             crate::shader::default_shader::DEFAULT_VERTEX,
             module.fragment_wgsl
         );
+
+        // Resolve the fragment entry from the AST rather than a substring
+        // scan: a user module may name its entry anything, while the built-ins
+        // all expose `fs_main`.
+        let parsed = naga::front::wgsl::parse_str(&source)
+            .map_err(|_| ShaderError::RejectedModule(module.name.to_string()))?;
+        let fragment_entry = preferred_fragment_entry(&fragment_entries(&parsed))
+            .ok_or_else(|| ShaderError::RejectedModule(module.name.to_string()))?
+            .to_string();
+
         let shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -335,7 +371,7 @@ impl ShaderRenderer {
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(&fragment_entry),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target_format,

@@ -8,11 +8,13 @@
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+use crate::shader::pipeline::{fragment_entries, preferred_fragment_entry};
 use crate::shader::uniforms::PropKind;
 
 /// One user-declared prop, in declaration (= prop-buffer slot) order.
@@ -130,7 +132,37 @@ pub enum UserModuleParseError {
     MissingName,
     MissingWgslSource,
     InvalidPropType { name: String, found: String },
+    InvalidWgsl(String),
+    MissingEntry(String),
 }
+
+impl fmt::Display for UserModuleParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UserModuleParseError::InvalidJson(message) => {
+                write!(f, "descriptor is not valid JSON: {message}")
+            }
+            UserModuleParseError::DescriptorNotAnObject => {
+                write!(f, "descriptor must be a JSON object")
+            }
+            UserModuleParseError::MissingName => write!(f, "descriptor has no `name`"),
+            UserModuleParseError::MissingWgslSource => {
+                write!(f, "descriptor has no `wgslSource` or readable `wgsl` file")
+            }
+            UserModuleParseError::InvalidPropType { name, found } => {
+                write!(f, "prop {name:?} has unsupported type {found:?}")
+            }
+            UserModuleParseError::InvalidWgsl(message) => {
+                write!(f, "module WGSL does not parse: {message}")
+            }
+            UserModuleParseError::MissingEntry(entry) => {
+                write!(f, "module has no `@fragment` entry point named {entry:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for UserModuleParseError {}
 
 /// Parse a descriptor JSON document plus optional sibling WGSL source text.
 ///
@@ -168,6 +200,20 @@ fn descriptor_from_object(
         return Err(UserModuleParseError::MissingWgslSource);
     }
 
+    let declared_entry = optional_string_field(object, "entry");
+    let module = naga::front::wgsl::parse_str(&wgsl_source)
+        .map_err(|error| UserModuleParseError::InvalidWgsl(error.to_string()))?;
+    let entries = fragment_entries(&module);
+    let entry = match declared_entry {
+        Some(declared) if entries.contains(&declared.as_str()) => declared,
+        Some(declared) => return Err(UserModuleParseError::MissingEntry(declared)),
+        // No declared entry: keep the documented `fs_main` metadata, but
+        // accept a lone custom entry too — the pipeline resolves the real
+        // fragment entry from the AST with the same preference.
+        None if preferred_fragment_entry(&entries).is_some() => "fs_main".to_string(),
+        None => return Err(UserModuleParseError::MissingEntry("fs_main".to_string())),
+    };
+
     let mut props = Vec::new();
     if let Some(values) = object.get("props").and_then(Value::as_array) {
         for value in values {
@@ -183,7 +229,7 @@ fn descriptor_from_object(
         category: optional_string_field(object, "category"),
         license: optional_string_field(object, "license"),
         wgsl_source,
-        entry: non_empty_string_field(object, "entry", "fs_main"),
+        entry,
         audio: bool_field(object, "audio", false),
         preview_with_output: bool_field(object, "previewWithOutput", true),
         props,
@@ -261,4 +307,77 @@ fn optional_string_field(object: &Map<String, Value>, key: &str) -> Option<Strin
 
 fn bool_field(object: &Map<String, Value>, key: &str, default: bool) -> bool {
     object.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UserModuleParseError, parse_user_module};
+
+    const FS_MAIN_WGSL: &str =
+        "@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
+    const CUSTOM_WGSL: &str =
+        "@fragment fn custom() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
+
+    #[test]
+    fn malformed_wgsl_is_rejected_at_discovery() {
+        let descriptor = r#"{"name":"Malformed","wgslSource":"@fragment fn fs_main( {"}"#;
+
+        assert!(matches!(
+            parse_user_module(descriptor, None),
+            Err(UserModuleParseError::InvalidWgsl(_))
+        ));
+    }
+
+    #[test]
+    fn declared_entry_must_exist() {
+        let descriptor =
+            format!(r#"{{"name":"Missing Entry","wgslSource":"{FS_MAIN_WGSL}","entry":"custom"}}"#);
+
+        assert!(matches!(
+            parse_user_module(&descriptor, None),
+            Err(UserModuleParseError::MissingEntry(entry)) if entry == "custom"
+        ));
+    }
+
+    #[test]
+    fn declared_entry_must_be_a_fragment_entry() {
+        let descriptor = format!(
+            r#"{{"name":"Wrong Stage","wgslSource":"@vertex fn vs_main() -> @builtin(position) vec4<f32> {{ return vec4<f32>(0.0); }}\n{FS_MAIN_WGSL}","entry":"vs_main"}}"#
+        );
+
+        assert!(matches!(
+            parse_user_module(&descriptor, None),
+            Err(UserModuleParseError::MissingEntry(entry)) if entry == "vs_main"
+        ));
+    }
+
+    #[test]
+    fn custom_entry_is_accepted_when_declared() {
+        let descriptor =
+            format!(r#"{{"name":"Custom Entry","wgslSource":"{CUSTOM_WGSL}","entry":"custom"}}"#);
+
+        let parsed = parse_user_module(&descriptor, None).expect("declared entry must parse");
+
+        assert_eq!(parsed.entry, "custom");
+    }
+
+    #[test]
+    fn lone_custom_entry_is_accepted_when_undeclared() {
+        let descriptor = format!(r#"{{"name":"Lone Custom","wgslSource":"{CUSTOM_WGSL}"}}"#);
+
+        let parsed = parse_user_module(&descriptor, None).expect("lone entry must parse");
+
+        // Metadata keeps the documented default; the pipeline resolves the
+        // actual fragment entry from the AST.
+        assert_eq!(parsed.entry, "fs_main");
+    }
+
+    #[test]
+    fn default_entry_still_parses() {
+        let descriptor = format!(r#"{{"name":"Default Entry","wgslSource":"{FS_MAIN_WGSL}"}}"#);
+
+        let parsed = parse_user_module(&descriptor, None).expect("default entry must parse");
+
+        assert_eq!(parsed.entry, "fs_main");
+    }
 }
