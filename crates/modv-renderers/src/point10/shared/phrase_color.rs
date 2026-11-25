@@ -455,6 +455,57 @@ mod tests {
         assert_eq!(state.t, 0.0);
     }
 
+    /// Regression: a loud opening build must not pin the phrase ceiling for the
+    /// whole session. When later drops are quieter than that early peak the
+    /// `bass >= peak_frac * phrase_max` gate can never pass again, so the hue
+    /// freezes on whichever ROYGBIV state it last reached (reported as the DVD
+    /// Room's smoke getting stuck green).
+    #[test]
+    fn later_crests_flip_after_an_early_loud_phrase() {
+        fn feed(state: &mut DropColorState, hues: &mut Vec<f32>, bass: f32) {
+            if drop_color_pulse(state, bass, 1.0 / 60.0, 0.5) {
+                hues.push(state.hue);
+            }
+        }
+
+        let mut state = DropColorState::new();
+        let mut hues = Vec::new();
+
+        // Four loud phrase crests set a session ceiling of 0.95.
+        for peak in [0.5, 0.65, 0.80, 0.95] {
+            for _ in 0..660 {
+                feed(&mut state, &mut hues, 0.15);
+            }
+            for _ in 0..8 {
+                feed(&mut state, &mut hues, peak);
+            }
+            for _ in 0..2 {
+                feed(&mut state, &mut hues, peak - 0.02);
+            }
+        }
+        assert_eq!(hues.len(), 4, "the loud crests should flip four times");
+
+        // The track settles into a quieter groove: these drops are still
+        // strong relative to their rest level, but below the old ceiling.
+        for _ in 0..3 {
+            for _ in 0..660 {
+                feed(&mut state, &mut hues, 0.15);
+            }
+            for _ in 0..8 {
+                feed(&mut state, &mut hues, 0.60);
+            }
+            for _ in 0..2 {
+                feed(&mut state, &mut hues, 0.58);
+            }
+        }
+
+        assert!(
+            hues.len() > 4,
+            "a valid later drop must flip the hue; it froze at {:?}",
+            state.hue
+        );
+    }
+
     #[test]
     fn plain_climb_never_flips() {
         // Only rising bass: no crest, so the detector must never flip even

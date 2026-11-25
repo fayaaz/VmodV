@@ -1070,6 +1070,85 @@ mod tests {
         assert!(scene.glass_opacity() > 0.34);
     }
 
+    /// Reproduces the reported symptom end to end at the scene level: the
+    /// smoke hue flips through the palette, lands on green, and then stops
+    /// flipping when the music gets quieter than the loud opening build.
+    #[test]
+    fn smoke_hue_keeps_flipping_after_an_early_loud_phrase() {
+        use crate::point10::shared::phrase_color::ROYGBIV_HUES;
+
+        let mut scene = DvdRoom::new();
+        let mut bridge = AudioBridge::new();
+        let mut payload = BandPayload::silent(44_100.0);
+        let dt = 1.0 / 60.0;
+
+        // Feed a phrase envelope into the smoke room's first five FFT bins.
+        // `pulse.t` resets to 0 on a flip, so it counts flips without needing
+        // a getter on the private hue state.
+        fn feed(
+            scene: &mut DvdRoom,
+            bridge: &mut AudioBridge,
+            payload: &mut BandPayload,
+            bass: f32,
+            dt: f32,
+        ) -> bool {
+            let before = scene.pulse.t;
+            for value in payload.freq_mag.iter_mut().take(5) {
+                *value = bass;
+            }
+            bridge.update(dt, Some(payload), &Default::default());
+            scene.update(dt, bridge);
+            scene.pulse.t < before
+        }
+
+        let mut loud_flips = 0;
+        for peak in [0.5, 0.65, 0.8, 0.95] {
+            for _ in 0..660 {
+                feed(&mut scene, &mut bridge, &mut payload, 0.15, dt);
+            }
+            for _ in 0..8 {
+                feed(&mut scene, &mut bridge, &mut payload, peak, dt);
+            }
+            // The crest must fall well below the smoothed peak: an FFT
+            // envelope smoothed at `dt * 8` needs a deeper rollover than the
+            // raw drop detector fixture's 0.02.
+            for _ in 0..2 {
+                loud_flips += usize::from(feed(
+                    &mut scene,
+                    &mut bridge,
+                    &mut payload,
+                    peak * 0.6,
+                    dt,
+                ));
+            }
+        }
+        assert_eq!(loud_flips, 4);
+        // The fourth deterministic flip lands on the green ROYGBIV state —
+        // the colour the report says the smoke gets stuck on.
+        close(scene.pulse.hue, ROYGBIV_HUES[4], 1e-6);
+
+        let mut quiet_flips = 0;
+        for _ in 0..3 {
+            for _ in 0..660 {
+                feed(&mut scene, &mut bridge, &mut payload, 0.15, dt);
+            }
+            for _ in 0..8 {
+                feed(&mut scene, &mut bridge, &mut payload, 0.6, dt);
+            }
+            for _ in 0..2 {
+                quiet_flips +=
+                    usize::from(feed(&mut scene, &mut bridge, &mut payload, 0.36, dt));
+            }
+        }
+
+        assert!(
+            quiet_flips > 0,
+            "the smoke must change colour on later, quieter drops; \
+             it stayed on green (hue {:?})",
+            scene.pulse.hue
+        );
+    }
+
     #[test]
     fn the_logo_bounces_inside_the_js_bounds() {
         let scene = DvdRoom::new();
