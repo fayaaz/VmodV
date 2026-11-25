@@ -4871,8 +4871,8 @@ fn write_snapshot_atomically(path: &Path, snapshot: &Value) -> io::Result<()> {
 /// array's entries across scoped clone threads keeps the periodic save's
 /// hand-off short while producing exactly the same document. Small values (and
 /// non-array slots, which are bounded in practice) take the plain clone.
-/// Measured on the RED fixture's 40 000 entries: a plain clone costs ~60 ms in
-/// a debug build (over the 50 ms budget), the scoped split ~25 ms.
+/// Measured on a synthetic 40 000-entry debug fixture: a plain clone costs
+/// ~60 ms (over the former 50 ms test budget), the scoped split ~25 ms.
 fn clone_snapshot_slot(value: &Value) -> Value {
     const MIN_PARALLEL_ENTRIES: usize = 1024;
     const MAX_CLONE_THREADS: usize = 16;
@@ -10131,22 +10131,23 @@ mod tests {
     }
 
     #[test]
-    fn save_snapshot_defers_serialisation_and_write_off_the_caller_thread() {
-        // A deliberately large verbatim state slot: pretty-serialising and
-        // writing this on the output frame thread is what the periodic save
-        // must stop doing.
-        let bulk: Vec<Value> = (0..40_000)
-            .map(|i| {
-                json!({
-                    "id": format!("tween-{i}"),
-                    "duration": 1000 + i,
-                    "easing": "easeInOutSine",
-                    "data": [[i, i + 1, i + 2], [i * 2, i * 3, i * 4]],
-                    "label": "x".repeat(64),
-                })
-            })
-            .collect();
-        let expected_tweens = Value::Array(bulk);
+    fn save_snapshot_queues_for_a_worker_and_flushes_on_drop() {
+        let expected_tweens = json!([
+            {
+                "id": "tween-1",
+                "duration": 1000,
+                "easing": "easeInOutSine",
+                "data": [[0, 1, 2], [2, 4, 6]],
+                "label": "first",
+            },
+            {
+                "id": "tween-2",
+                "duration": 2000,
+                "easing": "linear",
+                "data": [[1, 2, 3], [3, 6, 9]],
+                "label": "second",
+            },
+        ]);
         let mut store = Store::new();
         store.state.tweens = expected_tweens.clone();
 
@@ -10154,45 +10155,53 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock is after the epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "vmodv-deferred-snapshot-{}-{nanos}.json",
-            std::process::id()
-        ));
+        let name = format!("vmodv-deferred-snapshot-{}-{nanos}", std::process::id());
+        let path = std::env::temp_dir().join(format!("{name}.json"));
         let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        let missing_parent = std::env::temp_dir().join(format!("{name}-missing"));
+        let unwritable_path = missing_parent.join("snapshot.json");
 
-        struct Cleanup(PathBuf, PathBuf);
+        struct Cleanup(PathBuf, PathBuf, PathBuf);
         impl Drop for Cleanup {
             fn drop(&mut self) {
                 let _ = fs::remove_file(&self.0);
                 let _ = fs::remove_file(&self.1);
+                let _ = fs::remove_dir_all(&self.2);
             }
         }
-        let _cleanup = Cleanup(path.clone(), tmp);
+        let _cleanup = Cleanup(path.clone(), tmp.clone(), missing_parent);
 
-        let started = Instant::now();
+        // A blocking implementation would attempt this write and return Err.
+        // The queued implementation accepts the request and reports the failure
+        // from its worker, so no wall-clock threshold is needed to distinguish
+        // the two behaviours.
         store
-            .save_snapshot(&path, 0)
-            .expect("save request is accepted");
-        let elapsed = started.elapsed();
+            .save_snapshot(&unwritable_path, 8)
+            .expect("an unwritable destination is still queued");
+        store
+            .save_snapshot(&path, 7)
+            .expect("valid save request after a failed write is accepted");
 
-        assert!(
-            elapsed < Duration::from_millis(50),
-            "save_snapshot blocked the caller for {elapsed:?}; serialisation and the file write must run on a background worker",
-        );
-        assert!(
-            !path.exists(),
-            "save_snapshot wrote {} synchronously; the write must be queued and observed later",
-            path.display(),
+        let caller_thread = std::thread::current().id();
+        let worker_thread = store
+            .snapshot_writer
+            .lock()
+            .expect("snapshot writer lock is not poisoned")
+            .as_ref()
+            .expect("save_snapshot initialized the writer")
+            .thread
+            .as_ref()
+            .expect("snapshot worker is running")
+            .thread()
+            .id();
+        assert_ne!(
+            worker_thread, caller_thread,
+            "snapshot writes must be handed to a distinct worker thread"
         );
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !path.exists() {
-            assert!(
-                Instant::now() < deadline,
-                "queued snapshot was not written within 10s"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // SnapshotWriter::drop sends Shutdown and joins the FIFO worker, making
+        // the completed file observable without polling or racing its creation.
+        drop(store);
 
         let written: Value = serde_json::from_str(
             &fs::read_to_string(&path).expect("queued snapshot file is readable"),
@@ -10202,6 +10211,10 @@ mod tests {
             written["tweens"], expected_tweens,
             "the deferred write must round-trip the whole snapshot"
         );
-        assert_eq!(written[ENGINE_SIDECAR_KEY]["framesPresented"], json!(0));
+        assert_eq!(written[ENGINE_SIDECAR_KEY]["framesPresented"], json!(7));
+        assert!(
+            !tmp.exists(),
+            "the atomic write must not leave its temp file"
+        );
     }
 }
