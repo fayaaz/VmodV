@@ -66,7 +66,10 @@ use crate::screen_share::{
 use crate::store_ops::Store;
 use crate::ui_layout::{LAYOUT_SETTINGS_FILENAME, LayoutSettings};
 use crate::video_sources::VideoSources;
-use crate::window::{DoubleClickTracker, is_fullscreen_exit_key, is_fullscreen_toggle_key};
+use crate::window::{
+    DoubleClickTracker, OutputPressAction, is_fullscreen_exit_key, is_fullscreen_toggle_key,
+    output_press_action,
+};
 use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_data_dir};
 use modv_engine::engine_state::{
     GALLERY_GROUP_NAME, GROUP_ENABLED, Group, ModuleInstance, js_truthy,
@@ -5248,21 +5251,29 @@ impl ApplicationHandler for VmodvApp {
                     self.toggle_output_fullscreen();
                 }
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } => {
+            WindowEvent::MouseInput { state, button, .. } => {
                 if is_ui {
                     return;
                 }
-                let double = self
-                    .double_click
-                    .entry(window_id)
-                    .or_default()
-                    .register(Instant::now(), MouseButton::Left);
-                if double {
-                    self.toggle_output_fullscreen();
+                let double = state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && self
+                        .double_click
+                        .entry(window_id)
+                        .or_default()
+                        .register(Instant::now(), button);
+                let fullscreen = self
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| output.window.fullscreen().is_some());
+                match output_press_action(button, state, double, fullscreen) {
+                    OutputPressAction::ToggleFullscreen => self.toggle_output_fullscreen(),
+                    OutputPressAction::Drag => {
+                        if let Some(output) = &self.output {
+                            let _ = output.window.drag_window();
+                        }
+                    }
+                    OutputPressAction::None => {}
                 }
             }
             WindowEvent::Occluded(false) => {

@@ -231,6 +231,41 @@ pub fn is_fullscreen_exit_key(key: &Key) -> bool {
     matches!(key, Key::Named(NamedKey::Escape))
 }
 
+/// The action a mouse press on an Output Window should take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputPressAction {
+    /// Nothing to do (a non-left button, a release, or a fullscreen window).
+    None,
+    /// A left double-click toggles the window's fullscreen state.
+    ToggleFullscreen,
+    /// A left press while windowed starts a window-manager drag.
+    Drag,
+}
+
+/// Decide what a mouse press on an Output Window should do.
+///
+/// Pure so the press policy is unit-testable without a display. `double_click`
+/// is the result of [`DoubleClickTracker::register`] for this press, and
+/// `fullscreen` suppresses the drag because a fullscreen window has nowhere to
+/// be dragged.
+pub fn output_press_action(
+    button: MouseButton,
+    state: ElementState,
+    double_click: bool,
+    fullscreen: bool,
+) -> OutputPressAction {
+    if state != ElementState::Pressed || button != MouseButton::Left {
+        return OutputPressAction::None;
+    }
+    if double_click {
+        return OutputPressAction::ToggleFullscreen;
+    }
+    if !fullscreen {
+        return OutputPressAction::Drag;
+    }
+    OutputPressAction::None
+}
+
 // `FrameStats` contains no public Clone; store it in an Option so `finish()`
 // can consume it exactly once.
 
@@ -1380,23 +1415,30 @@ impl ApplicationHandler for WindowedApp {
                     self.toggle_fullscreen(window_id);
                 }
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button,
-                ..
-            } => {
-                // A left double-click toggles that window's fullscreen,
-                // mirroring the legacy output window's `dblclick` handler.
-                if button != MouseButton::Left {
-                    return;
-                }
-                let double = self
-                    .double_click
-                    .entry(window_id)
-                    .or_default()
-                    .register(Instant::now(), button);
-                if double {
-                    self.toggle_fullscreen(window_id);
+            WindowEvent::MouseInput { state, button, .. } => {
+                // A left press starts a window-manager drag for Output Windows
+                // (borderless windows have no title bar to grab); a left
+                // double-click toggles that window's fullscreen, mirroring the
+                // legacy output window's `dblclick` handler.
+                let double = state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && self
+                        .double_click
+                        .entry(window_id)
+                        .or_default()
+                        .register(Instant::now(), button);
+                let fullscreen = self
+                    .window_for(window_id)
+                    .is_some_and(|window| window.fullscreen().is_some());
+                match output_press_action(button, state, double, fullscreen) {
+                    OutputPressAction::ToggleFullscreen => self.toggle_fullscreen(window_id),
+                    OutputPressAction::Drag => {
+                        // Only Output Windows drag; the primary window is the UI.
+                        if !is_main && let Some(window) = self.window_for(window_id) {
+                            let _ = window.drag_window();
+                        }
+                    }
+                    OutputPressAction::None => {}
                 }
             }
             _ => {}
@@ -1486,6 +1528,40 @@ mod tests {
         assert!(!mixed.register(start + Duration::from_millis(50), MouseButton::Right));
         assert!(!mixed.register(start + Duration::from_millis(100), MouseButton::Left));
         assert!(mixed.register(start + Duration::from_millis(150), MouseButton::Left));
+    }
+
+    #[test]
+    fn output_press_drags_when_windowed_and_toggles_on_double_click() {
+        assert_eq!(
+            output_press_action(MouseButton::Left, ElementState::Pressed, false, false),
+            OutputPressAction::Drag,
+            "a left press in a windowed Output Window should start a window-manager drag"
+        );
+        assert_eq!(
+            output_press_action(MouseButton::Left, ElementState::Pressed, false, true),
+            OutputPressAction::None,
+            "a left press in a fullscreen Output Window should not start a drag"
+        );
+        assert_eq!(
+            output_press_action(MouseButton::Left, ElementState::Pressed, true, false),
+            OutputPressAction::ToggleFullscreen,
+            "a left double-click in a windowed Output Window should toggle fullscreen"
+        );
+        assert_eq!(
+            output_press_action(MouseButton::Left, ElementState::Pressed, true, true),
+            OutputPressAction::ToggleFullscreen,
+            "a left double-click in a fullscreen Output Window should toggle fullscreen"
+        );
+        assert_eq!(
+            output_press_action(MouseButton::Right, ElementState::Pressed, false, false),
+            OutputPressAction::None,
+            "a right press in a windowed Output Window should not start a drag"
+        );
+        assert_eq!(
+            output_press_action(MouseButton::Left, ElementState::Released, false, false),
+            OutputPressAction::None,
+            "a left release in a windowed Output Window should not start a drag"
+        );
     }
 
     #[test]
