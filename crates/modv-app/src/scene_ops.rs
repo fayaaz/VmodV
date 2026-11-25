@@ -7183,7 +7183,9 @@ mod tests {
 
         let original = find_default_scene(&store, "Alpha");
         let source_group = original["groups"][0].clone();
-        let original_modules = original["modules"].clone();
+        let source_modules = original["modules"].clone();
+        let source_module_id = source_group["modules"][0].as_str().unwrap();
+        let source_module = &source_modules[source_module_id];
         assert_ne!(
             original["groups"][0], original["groups"][1],
             "the fixture has distinct rows"
@@ -7206,15 +7208,58 @@ mod tests {
             "copying to a different row of the same Scene should succeed"
         );
 
-        let alpha = find_default_scene(&store, "Alpha");
-        assert_eq!(
-            alpha["groups"][1], source_group,
-            "row 1 receives row 0's Group"
-        );
+        let alpha = find_default_scene(&store, "Alpha").clone();
         assert_eq!(alpha["groups"][0], source_group, "row 0 is untouched");
+
+        // Both rows share the Scene's Group/Module maps, so the copy must mint
+        // fresh ids instead of aliasing the source row's entries.
+        let copied_group = &alpha["groups"][1];
+        let copied_group_id = copied_group["id"].as_str().expect("copied Group id");
+        assert_ne!(
+            copied_group_id,
+            source_group["id"].as_str().unwrap(),
+            "the copied Group must not reuse the source Group id"
+        );
+        assert_ne!(
+            copied_group_id, "doc-effects",
+            "the copied Group must not reuse the target row's old id"
+        );
+        let copied_modules = copied_group["modules"].as_array().expect("copied modules");
+        assert_eq!(copied_modules.len(), 1);
+        let copied_module_id = copied_modules[0].as_str().unwrap();
+        assert_ne!(
+            copied_module_id, source_module_id,
+            "the copied row must not share the source row's Module id"
+        );
+        assert_ne!(
+            copied_module_id, "doc-ball",
+            "the copied row must not reuse the target row's Module id"
+        );
+
+        let modules = alpha["modules"].as_object().expect("modules");
         assert_eq!(
-            alpha["modules"], original_modules,
-            "the copied snapshot and the target's existing snapshot are retained"
+            modules.get(source_module_id),
+            Some(source_module),
+            "the source Module snapshot must survive the copy"
+        );
+        assert!(
+            modules.contains_key("doc-ball"),
+            "the target row's own snapshot must survive the copy"
+        );
+        let copied_module = modules
+            .get(copied_module_id)
+            .unwrap_or_else(|| panic!("copied Module snapshot {copied_module_id} exists"));
+        assert_eq!(
+            copied_module["$moduleName"], source_module["$moduleName"],
+            "the copied snapshot keeps the source Module's type"
+        );
+        assert_eq!(
+            copied_module["$id"], copied_module_id,
+            "the copied snapshot's canonical id must match its fresh map key"
+        );
+        assert_ne!(
+            copied_module["$id"], source_module["$id"],
+            "the copied snapshot's canonical id must not reuse the source id"
         );
 
         let same_row = store
@@ -7233,9 +7278,11 @@ mod tests {
             Value::Null,
             "copying a row onto itself remains a no-op"
         );
-        let alpha = find_default_scene(&store, "Alpha");
-        assert_eq!(alpha["groups"][0], source_group);
-        assert_eq!(alpha["groups"][1], source_group);
+        assert_eq!(
+            find_default_scene(&store, "Alpha"),
+            &alpha,
+            "a same-row copy leaves both rows, including the fresh ids, alone"
+        );
     }
 
     #[test]

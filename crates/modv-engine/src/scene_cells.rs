@@ -22,9 +22,11 @@
 //!   target with `null` holes and trims trailing holes.
 //!
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use serde_json::{Map, Value, json};
 
-use crate::inputs::source_uses_tween_descriptor;
+use crate::inputs::{data_type_input_keys, source_uses_tween_descriptor};
 use crate::scene_rows::{
     get_row_group, get_row_group_index, get_row_name_index, is_row_cell_empty,
 };
@@ -440,6 +442,20 @@ fn map_get<'a>(map: &'a [(String, Value)], key: &str) -> Option<&'a Value> {
         .map(|(_, value)| value)
 }
 
+/// The tween descriptor an input link resolves to: by input id first, then by
+/// the link's own id (`scenes.js:3669-3705`).
+fn copied_tween<'a>(
+    tweens: &'a [(String, Value)],
+    link: &Value,
+    input_id: &str,
+) -> Option<&'a Value> {
+    map_get(tweens, input_id).or_else(|| {
+        link.get("id")
+            .and_then(truthy_key)
+            .and_then(|id| map_get(tweens, &id))
+    })
+}
+
 /// A cloned JSON object, or an empty map for anything else (`|| {}`).
 fn object_or_empty(value: Option<&Value>) -> Map<String, Value> {
     value
@@ -471,6 +487,134 @@ enum TweenContainer {
     Omitted,
 }
 
+/// A process-unique id for a copy, mirroring
+/// [`crate::scenes_playlist::generate_scene_id`]. Only uniqueness within this
+/// engine matters.
+fn fresh_copy_id(prefix: &str) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or_default();
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    format!("{prefix}-{now:x}-{sequence:x}")
+}
+
+/// The fresh id minted for an old one, if any.
+fn lookup_fresh<'a>(map: &'a [(String, String)], id: &str) -> Option<&'a str> {
+    map.iter()
+        .find(|(existing, _)| existing == id)
+        .map(|(_, fresh)| fresh.as_str())
+}
+
+/// The old id with its fresh replacement, or the old id when it is not being
+/// remapped.
+fn remap_id(map: &[(String, String)], id: &str) -> String {
+    lookup_fresh(map, id)
+        .map(str::to_string)
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// Mints a fresh input id once per old id (so every reference agrees).
+fn fresh_input_id(map: &mut Vec<(String, String)>, input_id: &str) -> String {
+    if let Some(fresh) = lookup_fresh(map, input_id) {
+        return fresh.to_string();
+    }
+
+    let fresh = fresh_copy_id("input");
+    map.push((input_id.to_string(), fresh.clone()));
+    fresh
+}
+
+/// Rewrites a truthy id field to its fresh replacement, when mapped.
+fn remap_id_field(object: &mut Map<String, Value>, key: &str, map: &[(String, String)]) {
+    if let Some(fresh) = object
+        .get(key)
+        .and_then(truthy_key)
+        .and_then(|id| lookup_fresh(map, &id).map(str::to_string))
+    {
+        object.insert(key.to_string(), json!(fresh));
+    }
+}
+
+/// Rewrites a copied Group's id, Module references (snapshotted ids only) and
+/// `*InputId` fields to their fresh equivalents.
+fn remap_group(
+    group: &Value,
+    module_ids: &[(String, String)],
+    input_ids: &[(String, String)],
+) -> Value {
+    let mut copied = group.clone();
+    let Some(object) = copied.as_object_mut() else {
+        return copied;
+    };
+
+    object.insert("id".to_string(), json!(fresh_copy_id("group")));
+
+    match object.get_mut("modules") {
+        Some(Value::Array(modules)) => {
+            for module in modules.iter_mut() {
+                if let Some(module_id) = module.as_str()
+                    && let Some(fresh) = lookup_fresh(module_ids, module_id)
+                {
+                    *module = json!(fresh);
+                }
+            }
+        }
+        Some(Value::Object(modules)) => {
+            let remapped = modules
+                .iter()
+                .map(|(module_id, value)| {
+                    let key = lookup_fresh(module_ids, module_id)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| module_id.clone());
+                    (key, value.clone())
+                })
+                .collect::<Map<String, Value>>();
+            *modules = remapped;
+        }
+        _ => {}
+    }
+
+    for name in GROUP_INPUT_NAMES {
+        remap_id_field(object, &format!("{name}InputId"), input_ids);
+    }
+
+    copied
+}
+
+/// Rewrites a copied Module snapshot's id, `meta.*InputId` and `$props.*.id`
+/// to their fresh equivalents.
+fn remap_module(module: &Value, fresh_id: &str, input_ids: &[(String, String)]) -> Value {
+    let mut copied = module.clone();
+    let Some(object) = copied.as_object_mut() else {
+        return copied;
+    };
+
+    object.insert("id".to_string(), json!(fresh_id));
+    if object.contains_key("$id") {
+        object.insert("$id".to_string(), json!(fresh_id));
+    }
+
+    if let Some(meta) = object.get_mut("meta").and_then(Value::as_object_mut) {
+        for name in MODULE_META_INPUT_NAMES {
+            remap_id_field(meta, &format!("{name}InputId"), input_ids);
+        }
+    }
+
+    if let Some(props) = object.get_mut("$props").and_then(Value::as_object_mut) {
+        for prop in props.values_mut() {
+            if let Some(prop) = prop.as_object_mut() {
+                remap_id_field(prop, "id", input_ids);
+            }
+        }
+    }
+
+    copied
+}
+
 /// `copySceneCellToScene` (`scenes.js:3568-3735`): copy one Scene's cell into
 /// a row of the same Scene or of another Scene.
 ///
@@ -486,7 +630,9 @@ enum TweenContainer {
 /// `None` for the JS `return null` cases: the same Scene and the same row on
 /// both sides, a Scene that cannot be normalised, or a missing/empty source
 /// cell. Same Scene ids are compared as JS `===` on the id. Copying between
-/// different rows of one Scene is allowed and behaves like a cross-Scene copy.
+/// different rows of one Scene is allowed, but because both rows share the same
+/// Scene maps the copy mints fresh ids for its whole closure (Group, Modules,
+/// inputs, tween links/tweens and assignments) so the source row keeps its own.
 pub fn copy_scene_cell(
     from_scene: &Value,
     to_scene: &Value,
@@ -500,6 +646,10 @@ pub fn copy_scene_cell(
     if from_id == to_id && from_row_index == to_row_index {
         return None;
     }
+
+    // Same Scene on both sides: the merged maps already hold the source row's
+    // entries, so the copy must mint fresh ids instead of reusing them.
+    let remap = from_id == to_id;
 
     let source_scene = normalize_scene_document(from_scene)?;
     let source_group = get_row_group(&source_scene, from_row_index, row_names)?;
@@ -541,6 +691,68 @@ pub fn copy_scene_cell(
         }
     }
 
+    // Same-Scene copies remap the copied closure onto fresh ids. Build the
+    // Module and input maps before touching anything: every reference (Group,
+    // Module meta/props, links, assignments) resolves through them.
+    let mut module_id_map: Vec<(String, String)> = Vec::new();
+    let mut input_id_map: Vec<(String, String)> = Vec::new();
+
+    if remap {
+        for module_id in &copied_module_ids {
+            module_id_map.push((module_id.clone(), fresh_copy_id("module")));
+        }
+
+        for name in GROUP_INPUT_NAMES {
+            let input_id = source_group
+                .get(format!("{name}InputId"))
+                .and_then(truthy_key);
+
+            if let Some(input_id) = input_id {
+                fresh_input_id(&mut input_id_map, &input_id);
+            }
+        }
+
+        for module_id in &copied_module_ids {
+            let Some(module) = module_snapshots.get(module_id) else {
+                continue;
+            };
+
+            for name in MODULE_META_INPUT_NAMES {
+                let input_id = module
+                    .get("meta")
+                    .and_then(|meta| meta.get(format!("{name}InputId")))
+                    .and_then(truthy_key);
+
+                if let Some(input_id) = input_id {
+                    fresh_input_id(&mut input_id_map, &input_id);
+                }
+            }
+
+            let Some(props) = module.get("$props").and_then(Value::as_object) else {
+                continue;
+            };
+
+            for prop in props.values() {
+                let Some(prop_id) = prop.get("id").and_then(truthy_key) else {
+                    continue;
+                };
+
+                let fresh_prop_id = fresh_input_id(&mut input_id_map, &prop_id);
+                let type_name = prop.get("type").and_then(Value::as_str).unwrap_or_default();
+
+                // Sub-inputs keep the `-<key>` suffix and hang off the fresh
+                // base id, so the composite family stays together.
+                for key in data_type_input_keys(type_name) {
+                    let composite_id = format!("{prop_id}-{key}");
+
+                    if lookup_fresh(&input_id_map, &composite_id).is_none() {
+                        input_id_map.push((composite_id, format!("{fresh_prop_id}-{key}")));
+                    }
+                }
+            }
+        }
+    }
+
     // `data.modules = {...toScene.modules}`; copied snapshots win.
     let mut modules = to_scene
         .get("modules")
@@ -550,7 +762,15 @@ pub fn copy_scene_cell(
 
     for module_id in &copied_module_ids {
         if let Some(module) = module_snapshots.get(module_id) {
-            modules.insert(module_id.clone(), module.clone());
+            if remap {
+                let fresh_id = remap_id(&module_id_map, module_id);
+                modules.insert(
+                    fresh_id.clone(),
+                    remap_module(module, &fresh_id, &input_id_map),
+                );
+            } else {
+                modules.insert(module_id.clone(), module.clone());
+            }
         }
     }
 
@@ -566,7 +786,11 @@ pub fn copy_scene_cell(
         groups.push(Value::Null);
     }
 
-    groups[to_row_index] = source_group.clone();
+    groups[to_row_index] = if remap {
+        remap_group(source_group, &module_id_map, &input_id_map)
+    } else {
+        source_group.clone()
+    };
 
     while matches!(groups.last(), Some(Value::Null)) {
         groups.pop();
@@ -596,6 +820,12 @@ pub fn copy_scene_cell(
             .filter(|input| is_truthy(input))
         {
             inputs.insert(input_id.clone(), input.clone());
+
+            // A same-Scene copy duplicates the input under a fresh id; the
+            // original stays in place for the source row.
+            if remap {
+                inputs.insert(remap_id(&input_id_map, input_id), input.clone());
+            }
         }
 
         if let Some(link) = source_link_map.get(input_id).filter(|link| is_truthy(link)) {
@@ -654,11 +884,7 @@ pub fn copy_scene_cell(
             continue;
         }
 
-        let tween = map_get(&source_tweens, &input_id).or_else(|| {
-            link.get("id")
-                .and_then(truthy_key)
-                .and_then(|id| map_get(&source_tweens, &id))
-        });
+        let tween = copied_tween(&source_tweens, &link, &input_id);
 
         let resolved = tween.and_then(|tween| {
             let id = truthy_key(tween.get("id")?)?;
@@ -667,10 +893,91 @@ pub fn copy_scene_cell(
 
         match resolved {
             Some((id, tween)) => map_set(&mut tween_map, id, tween),
-            // A dangling tween link would leave the input without a value.
+            // A dangling tween link would leave the input without a value. A
+            // same-Scene copy leaves the original link alone and simply does
+            // not duplicate it.
             None => {
-                input_links.remove(&input_id);
+                if !remap {
+                    input_links.remove(&input_id);
+                }
             }
+        }
+    }
+
+    // Same-Scene copies duplicate each reachable tween under a fresh id, point
+    // the copied link at it, and re-key both onto the fresh input id.
+    if remap {
+        let mut fresh_tween_links: Vec<(String, String)> = Vec::new();
+        let mut tween_id_map: Vec<(String, String)> = Vec::new();
+
+        for input_id in &copied_input_ids {
+            let Some(link) = input_links.get(input_id) else {
+                continue;
+            };
+
+            if !source_uses_tween_descriptor(link.get("source").and_then(Value::as_str)) {
+                continue;
+            }
+
+            let Some(tween) = copied_tween(&source_tweens, link, input_id) else {
+                continue;
+            };
+            let Some(old_tween_id) = tween
+                .get("id")
+                .and_then(truthy_key)
+                .or_else(|| link.get("id").and_then(truthy_key))
+            else {
+                continue;
+            };
+
+            let fresh_tween_id = match lookup_fresh(&tween_id_map, &old_tween_id) {
+                Some(fresh) => fresh.to_string(),
+                None => {
+                    let fresh = fresh_copy_id("tween");
+                    tween_id_map.push((old_tween_id.clone(), fresh.clone()));
+                    fresh
+                }
+            };
+
+            let mut duplicated = tween.clone();
+            if let Some(object) = duplicated.as_object_mut() {
+                object.insert("id".to_string(), json!(fresh_tween_id));
+            }
+
+            map_set(&mut tween_map, fresh_tween_id.clone(), duplicated);
+            fresh_tween_links.push((input_id.clone(), fresh_tween_id));
+        }
+
+        for input_id in &copied_input_ids {
+            let Some(link) = input_links.get(input_id) else {
+                continue;
+            };
+
+            let is_tween = source_uses_tween_descriptor(link.get("source").and_then(Value::as_str));
+            let fresh_tween_id = fresh_tween_links
+                .iter()
+                .find(|(id, _)| id == input_id)
+                .map(|(_, fresh)| fresh.clone());
+
+            // A tween link without a duplicated tween would be dangling.
+            if is_tween && fresh_tween_id.is_none() {
+                continue;
+            }
+
+            let mut copied_link = link.clone();
+
+            if let Some(object) = copied_link.as_object_mut() {
+                if let Some(fresh_tween_id) = &fresh_tween_id {
+                    object.insert("id".to_string(), json!(fresh_tween_id));
+                } else if let Some(link_id) = object.get("id").and_then(truthy_key)
+                    && let Some(fresh) = lookup_fresh(&input_id_map, &link_id)
+                {
+                    object.insert("id".to_string(), json!(fresh));
+                }
+            }
+
+            let fresh_link_input_id = remap_id(&input_id_map, input_id);
+            input_links.insert(fresh_link_input_id, copied_link);
         }
     }
 
@@ -713,6 +1020,23 @@ pub fn copy_scene_cell(
             };
 
             assignments.insert(assignment_id, assignment.clone());
+
+            // Same-Scene copies duplicate the assignment onto fresh ids, with
+            // `inputId` pointing at the copied input.
+            if remap {
+                let fresh_assignment_id = fresh_copy_id("assignment");
+                let mut duplicated = assignment.clone();
+
+                if let Some(object) = duplicated.as_object_mut() {
+                    object.insert("id".to_string(), json!(fresh_assignment_id));
+                    object.insert(
+                        "inputId".to_string(),
+                        json!(remap_id(&input_id_map, input_id)),
+                    );
+                }
+
+                assignments.insert(fresh_assignment_id, duplicated);
+            }
         }
     }
 
@@ -982,9 +1306,8 @@ mod tests {
         copy_scene_cell(source, target, from_row, to_row, &[])
     }
 
-    #[test]
-    fn copy_allows_a_different_row_of_the_same_scene() {
-        let scene = json!({
+    fn same_scene_copy_fixture() -> Value {
+        json!({
             "id": "scene-a",
             "groups": [
                 {
@@ -1032,71 +1355,213 @@ mod tests {
                 {"id": "tw-amount", "duration": 2},
                 {"id": "tw-target", "duration": 4},
             ],
-        });
+        })
+    }
+
+    #[test]
+    fn copy_allows_a_different_row_of_the_same_scene() {
+        let scene = same_scene_copy_fixture();
+        let original = scene.clone();
         let source_group = scene["groups"][0].clone();
         let target_group = scene["groups"][1].clone();
         assert_ne!(source_group, target_group, "the fixture has distinct rows");
 
-        let result = copy_scene_cell(&scene, &scene, 0, 1, &[]);
+        let data = copy_scene_cell(&scene, &scene, 0, 1, &[]).unwrap();
 
-        assert!(
-            result.is_some(),
-            "copying to a different row of the same Scene should succeed"
-        );
-        let data = result.unwrap();
-        assert_eq!(
-            data["groups"][1], source_group,
-            "the source Group is copied verbatim"
+        assert_ne!(
+            data["groups"][1]["id"], "g-source",
+            "a same-Scene copy must mint a fresh Group id"
         );
         assert_eq!(
             data["groups"][0], source_group,
             "the source row is untouched"
         );
+
+        let copied_group = &data["groups"][1];
+        let copied_enabled_input_id = copied_group["enabledInputId"].as_str().unwrap();
+        assert_ne!(
+            copied_enabled_input_id, "i-enabled",
+            "the copied Group must use a fresh input id"
+        );
+
+        let copied_modules = copied_group["modules"].as_array().unwrap();
+        assert_eq!(copied_modules.len(), 1);
+        let copied_module_id = copied_modules[0].as_str().unwrap();
+        assert_ne!(
+            copied_module_id, "m-source",
+            "the copied Group must reference a fresh Module snapshot"
+        );
+
+        let modules = data["modules"].as_object().unwrap();
+        assert!(modules.contains_key("m-source"));
+        assert!(modules.contains_key("m-target"));
+        assert!(
+            modules.contains_key(copied_module_id),
+            "the copied Module snapshot must be keyed by its fresh id"
+        );
+        let copied_module = &modules[copied_module_id];
+        assert_eq!(copied_module["id"], json!(copied_module_id));
         assert_eq!(
-            data["modules"],
-            json!({
-                "m-source": scene["modules"]["m-source"],
-                "m-target": scene["modules"]["m-target"],
-            }),
-            "the source snapshot is copied alongside the target's existing snapshot"
+            copied_module["meta"]["enabledInputId"],
+            json!(copied_enabled_input_id),
+            "Module meta input references must be remapped"
+        );
+        let copied_amount_input_id = copied_module["$props"]["amount"]["id"].as_str().unwrap();
+        assert_ne!(
+            copied_amount_input_id, "i-amount",
+            "the copied prop must use a fresh input id"
+        );
+
+        let inputs = data["inputs"]["inputs"].as_object().unwrap();
+        for original_id in ["i-enabled", "i-amount", "i-colour"] {
+            assert!(
+                inputs.contains_key(original_id),
+                "the original input {original_id} must survive"
+            );
+        }
+        assert_eq!(inputs["i-enabled"], json!({"value": true}));
+        assert_eq!(inputs["i-amount"], json!({"value": 0.25}));
+        assert_eq!(inputs["i-colour"], json!({"value": "red"}));
+        assert_eq!(
+            inputs[copied_enabled_input_id],
+            json!({"value": true}),
+            "the copied enabled input keeps its value"
         );
         assert_eq!(
-            data["inputs"]["inputs"]["i-enabled"],
-            json!({"value": true})
+            inputs[copied_amount_input_id],
+            json!({"value": 0.25}),
+            "the copied amount input keeps its value"
         );
-        assert_eq!(data["inputs"]["inputs"]["i-amount"], json!({"value": 0.25}));
+
+        let links = data["inputs"]["inputLinks"].as_object().unwrap();
         assert_eq!(
-            data["inputs"]["inputs"]["i-colour"],
-            json!({"value": "red"})
+            links["i-amount"],
+            json!({"source": "tween", "id": "tw-amount"}),
+            "the original tween link must survive"
+        );
+        let copied_link = &links[copied_amount_input_id];
+        assert_eq!(copied_link["source"], json!("tween"));
+        let copied_tween_id = copied_link["id"].as_str().unwrap();
+        assert_ne!(
+            copied_tween_id, "tw-amount",
+            "the copied tween link must use a fresh tween id"
+        );
+        assert_eq!(copied_link["id"], json!(copied_tween_id));
+
+        let tweens = data["tweens"].as_array().unwrap();
+        let original_tween = tweens
+            .iter()
+            .find(|tween| tween["id"] == "tw-amount")
+            .expect("the original tween must survive");
+        assert_eq!(original_tween, &json!({"id": "tw-amount", "duration": 2}));
+        assert!(tweens.iter().any(|tween| tween["id"] == "tw-target"));
+        let copied_tween = tweens
+            .iter()
+            .find(|tween| tween["id"] == copied_tween_id)
+            .expect("the copied tween must be present");
+        assert_eq!(copied_tween["id"], json!(copied_tween_id));
+        assert_eq!(copied_tween["duration"], json!(2));
+
+        let assignments = data["expressions"]["assignments"].as_object().unwrap();
+        assert_eq!(
+            assignments["a-source"],
+            json!({"id": "a-source", "inputId": "i-amount"})
         );
         assert_eq!(
-            data["inputs"]["inputLinks"]["i-amount"],
-            json!({"source": "tween", "id": "tw-amount"})
+            assignments["a-target"],
+            json!({"id": "a-target", "inputId": "i-colour"})
         );
+        let copied_assignments = assignments
+            .iter()
+            .filter(|(id, _)| id.as_str() != "a-source" && id.as_str() != "a-target")
+            .collect::<Vec<_>>();
+        assert_eq!(copied_assignments.len(), 1);
+        let (copied_assignment_id, copied_assignment) = copied_assignments[0];
+        assert_ne!(*copied_assignment_id, "a-source");
+        assert_ne!(*copied_assignment_id, "a-target");
+        assert_eq!(copied_assignment["id"], json!(copied_assignment_id));
         assert_eq!(
-            data["inputs"]["inputLinks"]["i-colour"],
-            json!({"source": "bass"})
+            copied_assignment["inputId"],
+            json!(copied_amount_input_id),
+            "the copied assignment must target the fresh input"
         );
+
         assert_eq!(data["inputs"]["focusedInput"]["id"], json!("target-focus"));
-        assert_eq!(
-            data["expressions"]["assignments"],
-            json!({
-                "a-source": {"id": "a-source", "inputId": "i-amount"},
-                "a-target": {"id": "a-target", "inputId": "i-colour"},
-            })
-        );
-        assert_eq!(
-            data["tweens"],
-            json!([
-                {"id": "tw-amount", "duration": 2},
-                {"id": "tw-target", "duration": 4},
-            ])
-        );
+        assert_eq!(scene, original, "copying must not mutate the source Scene");
 
         assert!(
             copy_scene_cell(&scene, &scene, 0, 0, &[]).is_none(),
             "copying a row onto itself remains a no-op"
         );
+    }
+
+    #[test]
+    fn copy_same_scene_remaps_the_canonical_module_id() {
+        let scene = json!({
+            "id": "scene-a",
+            "groups": [
+                {"id": "g-source", "modules": ["m-source"]},
+                {"id": "g-target", "modules": []},
+            ],
+            "modules": {
+                "m-source": {"id": "m-source", "$id": "m-source"},
+            },
+        });
+
+        let data = copy_scene_cell(&scene, &scene, 0, 1, &[]).unwrap();
+        let copied_module_id = data["groups"][1]["modules"][0]
+            .as_str()
+            .expect("copied Module id");
+        assert_ne!(
+            copied_module_id, "m-source",
+            "the copied Group must reference a fresh Module snapshot"
+        );
+
+        let copied_module = &data["modules"][copied_module_id];
+        assert_eq!(
+            copied_module["$id"], copied_module_id,
+            "the copied snapshot's canonical id must match its fresh map key"
+        );
+        assert_eq!(
+            copied_module["id"], copied_module_id,
+            "the copied snapshot's id must match its fresh map key"
+        );
+    }
+
+    #[test]
+    fn copy_same_scene_clear_one_row_keeps_the_other_snapshot() {
+        let scene = same_scene_copy_fixture();
+        let original = scene.clone();
+        let data = copy_scene_cell(&scene, &scene, 0, 1, &[]).unwrap();
+
+        let source_module_id = scene["groups"][0]["modules"][0].as_str().unwrap();
+        let copied_module_id = data["groups"][1]["modules"][0].as_str().unwrap();
+        assert_ne!(
+            source_module_id, copied_module_id,
+            "same-Scene rows must not share a Module id"
+        );
+
+        let mut applied = scene.clone();
+        applied["groups"] = data["groups"].clone();
+        applied["modules"] = data["modules"].clone();
+        let before_clear = applied.clone();
+
+        let cleared = clear_scene_cell_modules(&applied, 0, &[]).unwrap();
+
+        assert_eq!(cleared.module_ids, vec![source_module_id]);
+        assert_eq!(cleared.groups[0]["modules"], json!([]));
+        assert_eq!(cleared.groups[1]["modules"], json!([copied_module_id]));
+        assert!(!cleared.modules.contains_key(source_module_id));
+        assert!(
+            cleared.modules.contains_key(copied_module_id),
+            "clearing the source row must preserve the copied snapshot"
+        );
+        assert_eq!(
+            cleared.modules[copied_module_id]["id"],
+            json!(copied_module_id)
+        );
+        assert_eq!(applied, before_clear, "clearing must not mutate the Scene");
+        assert_eq!(scene, original, "copying must not mutate the source Scene");
     }
 
     #[test]
