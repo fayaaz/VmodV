@@ -7,7 +7,10 @@
 # exports the AppImage-equivalent asset paths) plus the real binary under
 # /usr/lib/vmodv, the ISF corpus, the Point10 textures, a desktop entry
 # and an icon. GStreamer/PipeWire/Vulkan/ALSA/X11 are declared as host runtime
-# dependencies in DEBIAN/control.
+# dependencies in DEBIAN/control. VmodV's own LICENSE and
+# THIRD_PARTY_NOTICES.md install as usr/share/doc/vmodv/copyright and
+# usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md: the package's own licence and
+# Point10 / CC BY-NC-SA attribution travel with it.
 #
 # Modes
 #   real (default)  cargo build + stage + dpkg-deb + tools/vmodv-deb-check.sh.
@@ -123,6 +126,8 @@ install -Dm644 "$ROOT/packaging/vmodv/vmodv.desktop" \
 install -Dm644 "$ROOT/resources/icon.png" \
     "$PKGROOT/usr/share/icons/hicolor/512x512/apps/vmodv.png"
 install -Dm644 "$ROOT/LICENSE" "$PKGROOT/usr/share/doc/vmodv/copyright"
+install -Dm644 "$ROOT/THIRD_PARTY_NOTICES.md" \
+    "$PKGROOT/usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md"
 
 # cp -a preserves the checkout's permissions; normalise the payload so the
 # archive does not depend on the host umask/ownership.

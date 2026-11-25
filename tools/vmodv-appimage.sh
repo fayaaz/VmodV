@@ -38,7 +38,11 @@
 # The staged distro packages and versions are recorded in
 # usr/share/vmodv/gstreamer-bundle.json, and every bundled package's
 # /usr/share/doc/<package>/copyright licence text is shipped alongside (the
-# libav/ffmpeg decoder carries LGPL/GPL redistribution obligations).
+# libav/ffmpeg decoder carries LGPL/GPL redistribution obligations). VmodV's own
+# LICENSE and THIRD_PARTY_NOTICES.md are staged too, as
+# usr/share/doc/vmodv/copyright and usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md:
+# dependency copyrights are not a substitute for the project's own licence and
+# Point10 / CC BY-NC-SA attribution.
 #
 # packaging/vmodv/AppRun is the launcher: it exports GST_PLUGIN_PATH*,
 # GST_PLUGIN_SCANNER*, an EMPTY GST_PLUGIN_SYSTEM_PATH* (so the host's plugins
@@ -453,7 +457,17 @@ copy_bundle_licences() {
         cp -p -- "$src" "$dst"
         staged=$((staged + 1))
     done < "$PACKAGE_LIST"
-    echo "licences: $staged package copyright texts staged into usr/share/doc"
+    # VmodV's own licence and attribution payload: the bundled packages'
+    # copyright texts do not cover the project's own licensing.
+    local source staged_name project_doc
+    for project_doc in "LICENSE:copyright" "THIRD_PARTY_NOTICES.md:THIRD_PARTY_NOTICES.md"; do
+        source="${project_doc%%:*}"
+        staged_name="${project_doc##*:}"
+        [ -f "$ROOT/$source" ] || \
+            fail "missing project licence/attribution document: $ROOT/$source"
+        install -Dm644 "$ROOT/$source" "$APPDIR/usr/share/doc/vmodv/$staged_name"
+    done
+    echo "licences: $staged package copyright texts plus VmodV LICENSE and THIRD_PARTY_NOTICES.md staged into usr/share/doc"
 }
 
 # Point one staged ELF at the bundle. Non-ELF staged files (a --dry-run's stubs,

@@ -149,6 +149,19 @@ fi
 LICENCE_COUNT="$(find "$APPDIR/usr/share/doc" -type f -name copyright 2>/dev/null | wc -l)"
 [ "$LICENCE_COUNT" -ge 1 ] || fail "no usr/share/doc/<package>/copyright licence text: redistributing libav/ffmpeg needs its licence shipped"
 
+# --- 6b. VmodV's own licence and attribution payload ------------------------
+# Dependency copyrights are not a substitute for the project's own documents.
+PROJECT_COPYRIGHT="$APPDIR/usr/share/doc/vmodv/copyright"
+PROJECT_NOTICES="$APPDIR/usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md"
+[ -f "$PROJECT_COPYRIGHT" ] || \
+    fail "usr/share/doc/vmodv/copyright is missing: the AppImage must ship VmodV's own LICENSE"
+[ -f "$PROJECT_NOTICES" ] || \
+    fail "usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md is missing: the AppImage must ship VmodV's third-party attribution"
+grep -q 'Point10' "$PROJECT_NOTICES" || \
+    fail "usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md is missing the Point10 attribution marker"
+grep -q 'CC BY-NC-SA' "$PROJECT_NOTICES" || \
+    fail "usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md is missing the CC BY-NC-SA attribution marker"
+
 # --- 7..9. forbidden files: glibc family, host display stack, dev artifacts -
 # These patterns deliberately duplicate the staging script's filters
 # (is_glibc_family / is_host_display_stack_lib). The checker is an independent

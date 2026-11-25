@@ -33,7 +33,8 @@
 //! caller can assert which artifact would be built.
 //!
 //! A dry run stages a package tree under `--dist` from `--project-root`'s
-//! `packaging/vmodv/*`, `resources/*` and `LICENSE` fixtures. The natural path
+//! `packaging/vmodv/*`, `resources/*`, `LICENSE` and
+//! `THIRD_PARTY_NOTICES.md` fixtures. The natural path
 //! is `<dist>/VmodV-<version>-amd64<suffix>/DEBIAN/control`, but these tests
 //! locate any `DEBIAN/control` below `--dist`. The staged control must have
 //! `Version: <ver>` verbatim, a numeric `Installed-Size` greater than zero and
@@ -51,6 +52,15 @@
 //! injects Ubuntu bases. No Ubuntu base literal, no `UBUNTU_RELEASE` and no
 //! t64 PipeWire rename belong in the Dockerfile.
 //!
+//! ## Project licence and attribution payload (slug `REL-05`)
+//!
+//! The package must install the repository `LICENSE` as
+//! `usr/share/doc/vmodv/copyright` and `THIRD_PARTY_NOTICES.md` beside it. The
+//! notices preserve the Point10 / Shadertoy attribution and CC BY-NC-SA terms.
+//! Both artifact checkers must require those paths and grep the notices for the
+//! `Point10` and `CC BY-NC-SA` markers; the AppImage checker also has behavioural
+//! coverage in `appimage_bundle.rs`.
+//!
 //! Run with:
 //!
 //! ```text
@@ -61,7 +71,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -76,6 +86,11 @@ const DEB_FLAGS: [&str; 6] = [
     "--version",
     "--suffix",
 ];
+
+/// Attribution fixture staged into the fake project root and expected in the
+/// package's documentation directory.
+const FAKE_THIRD_PARTY_NOTICES: &str =
+    "VmodV third-party notices\nPoint10 material is licensed under CC BY-NC-SA.\n";
 
 /// The 12 host runtime dependencies in `packaging/vmodv/vmodv.control` and in
 /// `tools/vmodv-deb-check.sh`. One list serves Debian and every Ubuntu leg.
@@ -271,11 +286,10 @@ fn deb_script_advertises_the_dry_run_contract() {
     );
 }
 
-#[test]
-fn dry_run_stages_control_with_distro_suffix() {
+/// Build the minimal fake project used by the `.deb` dry-run tests and invoke
+/// the producer without cargo, dpkg-deb or the checker.
+fn stage_deb_dry_run(base: &Path) -> Output {
     let repo_root = repo_root();
-    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-matrix"));
-    let base = holder.path();
 
     // Minimal fake `--project-root`: the real control template (so the 12
     // Depends names are exact) and stubs for every other payload input.
@@ -303,6 +317,11 @@ fn dry_run_stages_control_with_distro_suffix() {
     fs::write(textures.join("stub.png"), "fake texture\n").expect("write a fake texture");
     fs::write(project.join("resources/icon.png"), "fake icon\n").expect("write a fake icon");
     fs::write(project.join("LICENSE"), "fake licence\n").expect("write a fake LICENSE");
+    fs::write(
+        project.join("THIRD_PARTY_NOTICES.md"),
+        FAKE_THIRD_PARTY_NOTICES,
+    )
+    .expect("write fake third-party notices");
 
     let binary = base.join("modv-stub");
     fs::write(&binary, "#!/bin/sh\nexit 0\n").expect("write the fake binary");
@@ -323,7 +342,7 @@ fn dry_run_stages_control_with_distro_suffix() {
     let script_text = read(&script);
     assert_dry_run_flags(&script_text);
 
-    let output = Command::new("bash")
+    Command::new("bash")
         .arg(&script)
         .arg("--dry-run")
         .arg("--project-root")
@@ -342,7 +361,15 @@ fn dry_run_stages_control_with_distro_suffix() {
         .env_remove("VMODV_VERSION")
         .current_dir(&repo_root)
         .output()
-        .expect("spawn bash tools/vmodv-deb.sh --dry-run");
+        .expect("spawn bash tools/vmodv-deb.sh --dry-run")
+}
+
+#[test]
+fn dry_run_stages_control_with_distro_suffix() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-matrix"));
+    let base = holder.path();
+    let dist = base.join("dist");
+    let output = stage_deb_dry_run(base);
 
     assert!(
         output.status.success(),
@@ -360,7 +387,7 @@ fn dry_run_stages_control_with_distro_suffix() {
          VmodV-9.9.9-amd64-ubuntu26.04.deb:\n{stdout}"
     );
 
-    let invoked = fs::read_to_string(&forbidden_log).unwrap_or_default();
+    let invoked = fs::read_to_string(base.join("forbidden-tools.log")).unwrap_or_default();
     assert!(
         invoked.trim().is_empty(),
         "the deb dry-run must not invoke cargo or dpkg-deb, but it invoked: \
@@ -434,6 +461,75 @@ fn dry_run_stages_control_with_distro_suffix() {
     }
 }
 
+/// The package's documentation directory must carry VmodV's own licence and
+/// third-party attribution payload, not just dependency metadata (REL-05).
+#[test]
+fn dry_run_stages_project_licence_and_third_party_notices() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-project-docs"));
+    let base = holder.path();
+    let dist = base.join("dist");
+    let output = stage_deb_dry_run(base);
+    assert!(
+        output.status.success(),
+        "tools/vmodv-deb.sh --dry-run failed with status {:?}\n\
+         stdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let mut staged_files = Vec::new();
+    collect_files(&dist, &mut staged_files);
+    let control = staged_files.iter().find(|path| {
+        path.file_name().and_then(|value| value.to_str()) == Some("control")
+            && path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|value| value.to_str())
+                == Some("DEBIAN")
+    });
+    let control = control.expect("the dry run must stage DEBIAN/control");
+    let package_root = control
+        .parent()
+        .and_then(Path::parent)
+        .expect("DEBIAN/control has a package root");
+    let docs = package_root.join("usr/share/doc/vmodv");
+
+    let copyright = docs.join("copyright");
+    assert!(
+        copyright.is_file(),
+        "{} is not a file: the .deb must install the project LICENSE as its copyright text",
+        copyright.display()
+    );
+    assert_eq!(
+        read(&copyright),
+        "fake licence\n",
+        "{} must be copied from the fake project LICENSE",
+        copyright.display()
+    );
+
+    let notices = docs.join("THIRD_PARTY_NOTICES.md");
+    assert!(
+        notices.is_file(),
+        "{} is not a file: the .deb must install VmodV's third-party notices",
+        notices.display()
+    );
+    let notices_text = read(&notices);
+    assert_eq!(
+        notices_text,
+        FAKE_THIRD_PARTY_NOTICES,
+        "{} must be copied from the fake project's THIRD_PARTY_NOTICES.md",
+        notices.display()
+    );
+    for marker in ["Point10", "CC BY-NC-SA"] {
+        assert!(
+            notices_text.contains(marker),
+            "{} is missing the {marker:?} attribution marker",
+            notices.display()
+        );
+    }
+}
+
 #[test]
 fn checker_uses_the_distro_suffix() {
     let checker = repo_root().join("tools/vmodv-deb-check.sh");
@@ -464,6 +560,38 @@ fn checker_uses_the_distro_suffix() {
     // Debian and all four Ubuntu bases.
     for dep in DEPENDS_NAMES {
         assert_contains(&text, dep, "tools/vmodv-deb-check.sh Depends assertions");
+    }
+}
+
+/// Both release gates must require VmodV's project documents and validate the
+/// attribution markers, rather than accepting dependency copyrights alone.
+#[test]
+fn artifact_checkers_require_project_attribution_documents() {
+    for script_name in ["tools/vmodv-deb-check.sh", "tools/vmodv-appimage-check.sh"] {
+        let script = repo_root().join(script_name);
+        assert!(
+            script.is_file(),
+            "{} is missing: there is no artifact checker",
+            script.display()
+        );
+        let text = read(&script);
+        for path in [
+            "usr/share/doc/vmodv/copyright",
+            "usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md",
+        ] {
+            assert_contains(
+                &text,
+                path,
+                &format!("{script_name} project attribution payload"),
+            );
+        }
+        for marker in ["Point10", "CC BY-NC-SA"] {
+            assert!(
+                text.lines()
+                    .any(|line| line.contains("grep") && line.contains(marker)),
+                "{script_name} does not grep the extracted notices for {marker:?}:\n{text}"
+            );
+        }
     }
 }
 

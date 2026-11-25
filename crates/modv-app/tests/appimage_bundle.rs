@@ -32,7 +32,11 @@
 //!                                       tag, orc, libav/ffmpeg, pipewire, alsa,
 //!                                       v4l2, ...)
 //! usr/share/vmodv/gstreamer-bundle.json machine-readable audit manifest
-//! usr/share/doc/<package>/copyright     licence texts (libav/ffmpeg is LGPL/GPL)
+//! usr/share/doc/<package>/copyright     distro licence texts (libav/ffmpeg is LGPL/GPL)
+//! usr/share/doc/vmodv/copyright        copy of the project's LICENSE
+//! usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md
+//!                                       project attribution, including Point10 /
+//!                                       Shadertoy material under CC BY-NC-SA
 //! ```
 //!
 //! The glibc family (`libc.so.6`, `libm.so.6`, `libdl*`, `libpthread*`,
@@ -217,6 +221,9 @@
 //! * `usr/share/vmodv/gstreamer-bundle.json` is present, JSON-parseable and
 //!   holds at least one package/version entry;
 //! * at least one `usr/share/doc/*/copyright` licence text is present;
+//! * `usr/share/doc/vmodv/copyright` is the project `LICENSE`, and
+//!   `usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md` carries the `Point10` and
+//!   `CC BY-NC-SA` attribution markers;
 //! * zero glibc-family files: `libc.so*`, `libm.so*`, `libdl*`, `libpthread*`,
 //!   `librt*`, `ld-linux*`, `libresolv*`, `libmvec*`, `libnsl*`, `libutil*`,
 //!   `libcrypt.so.1*`, `libanl*`, `libthread_db*` — plus no `libc6` licence text;
@@ -233,6 +240,15 @@
 //! size for an image input, payload byte totals and counts otherwise, with
 //! lines containing `plugins:`, `libraries:`, `licences:` and `bytes:`. NO size
 //! budget is asserted.
+//!
+//! ## Project licence and attribution payload (slug `REL-05`)
+//!
+//! Dependency copyright files are not a substitute for VmodV's own licence and
+//! attribution payload. Both modes must copy the repository `LICENSE` and
+//! `THIRD_PARTY_NOTICES.md` into `usr/share/doc/vmodv/` (as `copyright` and
+//! `THIRD_PARTY_NOTICES.md` respectively). The notices identify Point10 and the
+//! CC BY-NC-SA terms, so the checker must reject either a missing document or a
+//! notices file that has lost those markers.
 //!
 //! ## The `AppRun` contract
 //!
@@ -1239,6 +1255,50 @@ fn dry_run_records_the_bundle_manifest_and_licence_texts() {
     );
 }
 
+/// VmodV's own licence and attribution payload must travel with the AppDir in
+/// addition to the distro packages' copyright texts (REL-05).
+#[test]
+fn dry_run_stages_project_licence_and_third_party_notices() {
+    let toolchain = FakeToolchain::new();
+    let appdir = toolchain.staged();
+    let root = repo_root();
+    let docs = appdir.join("usr/share/doc/vmodv");
+
+    for (source_name, staged_name) in [
+        ("LICENSE", "copyright"),
+        ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
+    ] {
+        let source = root.join(source_name);
+        let staged = docs.join(staged_name);
+        assert!(
+            staged.is_file(),
+            "{} is not a file: the AppImage must ship VmodV's own {source_name} alongside \
+             the distro copyright texts",
+            staged.display()
+        );
+        let expected = fs::read(&source)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", source.display()));
+        let actual = fs::read(&staged)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", staged.display()));
+        assert_eq!(
+            actual,
+            expected,
+            "{} must be a byte-for-byte copy of {}",
+            staged.display(),
+            source.display()
+        );
+    }
+
+    let notices = fs::read_to_string(docs.join("THIRD_PARTY_NOTICES.md"))
+        .expect("read the staged third-party notices");
+    for marker in ["Point10", "CC BY-NC-SA"] {
+        assert!(
+            notices.contains(marker),
+            "the staged THIRD_PARTY_NOTICES.md is missing the {marker:?} attribution marker"
+        );
+    }
+}
+
 /// Filtering: development-only artifacts and the host's own glibc stay out.
 #[test]
 fn dry_run_never_stages_development_only_files_or_glibc() {
@@ -2036,6 +2096,52 @@ fn checker_accepts_a_well_formed_fat_appdir() {
             "the checker's size/content summary does not include {token:?}, so it is not the \
              readable summary CI needs:\n{stdout}"
         );
+    }
+}
+
+/// The project licence and attribution documents are independent release
+/// requirements, not satisfied merely by the bundled packages' copyright texts.
+/// The checker must name whichever VmodV document is absent (REL-05).
+#[test]
+fn checker_rejects_missing_project_attribution_documents() {
+    let toolchain = stage_checked_bundle();
+    let root = repo_root();
+    let docs = toolchain.appdir.join("usr/share/doc/vmodv");
+    fs::create_dir_all(&docs).expect("create the checker fixture's project docs directory");
+    for (source_name, staged_name) in [
+        ("LICENSE", "copyright"),
+        ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
+    ] {
+        fs::copy(root.join(source_name), docs.join(staged_name)).unwrap_or_else(|error| {
+            panic!(
+                "cannot seed {} from {source_name}: {error}",
+                docs.join(staged_name).display()
+            )
+        });
+    }
+
+    let accepted = run_checker(&toolchain.appdir);
+    assert!(
+        accepted.status.success(),
+        "the checker rejected an otherwise well-formed AppDir after the project licence and \
+         attribution documents were added:\n{}",
+        output_text(&accepted)
+    );
+
+    for (name, label) in [
+        (
+            "THIRD_PARTY_NOTICES.md",
+            "an AppDir missing usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md",
+        ),
+        (
+            "copyright",
+            "an AppDir missing usr/share/doc/vmodv/copyright",
+        ),
+    ] {
+        let appdir = copy_checked_bundle(&toolchain, &format!("missing-project-doc-{name}"));
+        fs::remove_file(appdir.join("usr/share/doc/vmodv").join(name))
+            .unwrap_or_else(|error| panic!("cannot remove project document {name}: {error}"));
+        assert_checker_rejects(&appdir, &format!("usr/share/doc/vmodv/{name}"), label);
     }
 }
 
