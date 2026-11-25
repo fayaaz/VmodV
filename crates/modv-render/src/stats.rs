@@ -4,17 +4,27 @@
 //! reported in USER_HZ units, which is 100 on Linux for the kernel's own
 //! accounting — this is a documented assumption, not a detected value.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// `USER_HZ` on Linux: the clock tick rate the kernel uses for `utime`/`stime`
 /// in `/proc/self/stat`. Assumed rather than probed (would need `libc`).
 const TICKS_PER_SECOND: u64 = 100;
 
+/// Maximum number of exact frame-time samples kept for percentiles. The
+/// running totals (`recorded`, `total`, `min`, `max`) still cover every frame,
+/// so only the percentile window is bounded.
+const MAX_RETAINED_FRAMES: usize = 4096;
+
 /// Collects per-frame timings and process CPU/RSS of the current process.
 #[derive(Debug)]
 pub struct FrameStats {
     start_wall: Instant,
-    frames: Vec<Duration>,
+    frames: VecDeque<Duration>,
+    recorded: u64,
+    total: Duration,
+    min: Option<Duration>,
+    max: Option<Duration>,
     cpu_ticks_start: Option<u64>,
 }
 
@@ -52,31 +62,41 @@ impl FrameStats {
     pub fn start() -> Self {
         Self {
             start_wall: Instant::now(),
-            frames: Vec::new(),
+            frames: VecDeque::new(),
+            recorded: 0,
+            total: Duration::ZERO,
+            min: None,
+            max: None,
             cpu_ticks_start: read_cpu_ticks().ok(),
         }
     }
 
     /// Record one rendered frame with the given frame time.
     pub fn record_frame(&mut self, dt: Duration) {
-        self.frames.push(dt);
+        self.recorded += 1;
+        self.total += dt;
+        self.min = Some(self.min.map_or(dt, |min| min.min(dt)));
+        self.max = Some(self.max.map_or(dt, |max| max.max(dt)));
+        self.frames.push_back(dt);
+        while self.frames.len() > MAX_RETAINED_FRAMES {
+            self.frames.pop_front();
+        }
     }
 
     /// Stop collecting and compute the report.
     pub fn finish(self) -> FrameReport {
         let wall_seconds = self.start_wall.elapsed().as_secs_f64();
-        let frames = self.frames.len() as u64;
-        let mut sorted = self.frames.clone();
+        let frames = self.recorded;
+        let mut sorted: Vec<Duration> = self.frames.iter().copied().collect();
         sorted.sort();
 
-        let total: Duration = sorted.iter().sum();
-        let mean_ms = if sorted.is_empty() {
+        let mean_ms = if frames == 0 {
             0.0
         } else {
-            total.as_secs_f64() * 1000.0 / sorted.len() as f64
+            self.total.as_secs_f64() * 1000.0 / frames as f64
         };
-        let min_ms = sorted.first().map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-        let max_ms = sorted.last().map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let min_ms = self.min.map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let max_ms = self.max.map_or(0.0, |d| d.as_secs_f64() * 1000.0);
 
         let cpu_seconds = match (self.cpu_ticks_start, read_cpu_ticks().ok()) {
             (Some(start), Some(end)) => end.saturating_sub(start) as f64 / TICKS_PER_SECOND as f64,
@@ -212,6 +232,34 @@ mod tests {
             percentile(&[Duration::from_millis(7)], 99.0),
             Duration::from_millis(7)
         );
+    }
+
+    #[test]
+    fn frame_stats_retain_a_bounded_sample_window() {
+        let mut stats = FrameStats::start();
+        for _ in 0..100_000 {
+            stats.record_frame(Duration::from_millis(1));
+        }
+        stats.record_frame(Duration::from_millis(50));
+
+        assert!(
+            stats.frames.len() <= MAX_RETAINED_FRAMES,
+            "expected at most {} retained samples, got {}",
+            MAX_RETAINED_FRAMES,
+            stats.frames.len()
+        );
+
+        let report = stats.finish();
+        assert_eq!(report.frames, 100_001);
+        assert!(
+            (report.mean_ms - 1.00049).abs() < 0.01,
+            "expected mean over all frames near 1.00049 ms, got {} ms",
+            report.mean_ms
+        );
+        assert_eq!(report.min_ms, 1.0);
+        assert_eq!(report.max_ms, 50.0);
+        // The window still holds the early 1 ms frames, not just the last one.
+        assert!((1.0..2.0).contains(&report.p99_ms));
     }
 
     #[test]
