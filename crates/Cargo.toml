@@ -8,6 +8,7 @@ members = [
     "modv-media",
     "modv-render",
     "modv-renderers",
+    "modv-preview-wasm",
 ]
 
 [workspace.package]

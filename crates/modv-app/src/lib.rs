@@ -27,6 +27,7 @@ pub mod media_profiles;
 pub mod media_settings;
 pub mod media_watch;
 pub mod midi;
+pub mod module_docs;
 pub mod module_preview;
 pub mod module_registry;
 pub mod ndi_readback;

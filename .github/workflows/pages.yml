@@ -1,0 +1,117 @@
+name: GitHub Pages — module catalogue
+
+# Publishes the static docs/ site: the front page plus the generated module
+# catalogue with WebAssembly-driven WebGPU previews. The data and the .wasm
+# are regenerated from the Rust tree on every change so the site can never
+# silently drift from the app's module registry.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'crates/**'
+      - 'resources/isf/**'
+      - 'docs/**'
+      - 'tools/build-preview-wasm.sh'
+      - 'Dockerfile'
+      - 'Makefile'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'crates/**'
+      - 'resources/isf/**'
+      - 'docs/**'
+      - 'tools/build-preview-wasm.sh'
+      - 'Dockerfile'
+      - 'Makefile'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MIN_FREE_GB: 8
+  CARGO_VOLUME: ${{ github.workspace }}/.cargo-cache
+
+jobs:
+  build:
+    name: Build the Pages site
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-cache
+            crates/target
+          key: ${{ runner.os }}-pages-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pages-cargo-
+
+      - name: Prepare cargo cache mounts
+        run: |
+          mkdir -p .cargo-cache crates/target
+          chmod -R a+rwX .cargo-cache crates/target
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Rust toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: rust
+          tags: modv-rust:local
+          load: true
+          cache-from: type=gha,scope=rust-toolchain
+
+      - name: Build WebAssembly toolchain image
+        run: docker build --target wasm -t modv-wasm:local .
+
+      - name: Regenerate the catalogue from the registry
+        run: make module-docs
+
+      - name: Rebuild the WebAssembly preview runtime
+        run: make preview-wasm
+
+      # The JSON is deterministic; if it changes in CI, the committed copy is
+      # stale. The .wasm blob can vary with the Rust toolchain patch version,
+      # so it is rebuilt but not diffed here.
+      - name: Check the committed catalogue is up to date
+        run: git diff --exit-code -- docs/modules/modules.json docs/modules/previews.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

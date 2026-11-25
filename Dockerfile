@@ -84,6 +84,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path \
     && rustup component add rustfmt clippy
 
+# WebAssembly toolchain for the GitHub Pages module catalogue's live
+# previews. Separate from `rust` so the normal app build/test image stays
+# lean; `make preview-wasm` builds this stage.
+FROM rust AS wasm
+RUN rustup target add wasm32-unknown-unknown \
+    && cargo install wasm-bindgen-cli --version 0.2.130 --locked
+
 # Build both VmodV installers in one stage. The scripts are the same ones the
 # Makefile runs with a cargo volume cache; this stage exists for reproducible
 # `docker buildx` release artifacts and does not use Node.
