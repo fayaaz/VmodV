@@ -7,7 +7,10 @@
 # exports the AppImage-equivalent asset paths) plus the real binary under
 # /usr/lib/vmodv, the ISF corpus, the Point10 textures, a desktop entry
 # and an icon. GStreamer/PipeWire/Vulkan/ALSA/X11 are declared as host runtime
-# dependencies in DEBIAN/control.
+# dependencies in DEBIAN/control. VmodV's own LICENSE and
+# THIRD_PARTY_NOTICES.md install as usr/share/doc/vmodv/copyright and
+# usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md: the package's own licence and
+# Point10 / CC BY-NC-SA attribution travel with it.
 #
 # Modes
 #   real (default)  cargo build + stage + dpkg-deb + tools/vmodv-deb-check.sh.
@@ -65,6 +68,24 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$ROOT" ] || ROOT="/app"
+# The shared ELF header reader lives beside this script, not under --project-root
+# (a dry run stages a minimal fake project that has no tools/).
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ELF_MACHINE="$SCRIPT_DIR/elf-machine.sh"
+
+# `.deb` packaging is amd64-only (the release matrix and dpkg architecture are
+# fixed), so reject a non-amd64 host before staging or building. Non-amd64
+# hosts get the native AppImage from `make build`.
+HOST_ARCH=$(uname -m)
+case "$HOST_ARCH" in
+    x86_64 | amd64) ;;
+    *)
+        echo "error: .deb packages are amd64-only, but this host is $HOST_ARCH." >&2
+        echo "       Use the native AppImage (make appimage-vmodv) or run this in an x86_64 container." >&2
+        exit 1
+        ;;
+esac
+
 BINARY="${BINARY:-${CARGO_TARGET_DIR:-$ROOT/crates/target}/release/modv}"
 DIST="${DIST_ARG:-${DIST_DIR:-$ROOT/dist}}"
 case "$DIST" in
@@ -107,6 +128,18 @@ if [ "$DRY_RUN" -eq 0 ]; then
         -p modv-app --bin modv
 fi
 
+# Validate the payload itself, not just the package metadata: a host-arch
+# mismatch (or a stale cross-built binary passed via --binary) would produce an
+# amd64-labelled .deb containing a foreign ELF.
+if ! BINARY_MACHINE=$(bash "$ELF_MACHINE" "$BINARY"); then
+    echo "error: cannot read the ELF machine of $BINARY (tools/elf-machine.sh failed)" >&2
+    exit 1
+fi
+if [ "$BINARY_MACHINE" != "x86_64" ]; then
+    echo "error: $BINARY is '$BINARY_MACHINE', but the .deb is amd64-only (needs x86_64)" >&2
+    exit 1
+fi
+
 install -Dm755 "$BINARY" \
     "$PKGROOT/usr/lib/vmodv/modv"
 install -Dm755 "$ROOT/packaging/vmodv/log-run.sh" \
@@ -123,6 +156,8 @@ install -Dm644 "$ROOT/packaging/vmodv/vmodv.desktop" \
 install -Dm644 "$ROOT/resources/icon.png" \
     "$PKGROOT/usr/share/icons/hicolor/512x512/apps/vmodv.png"
 install -Dm644 "$ROOT/LICENSE" "$PKGROOT/usr/share/doc/vmodv/copyright"
+install -Dm644 "$ROOT/THIRD_PARTY_NOTICES.md" \
+    "$PKGROOT/usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md"
 
 # cp -a preserves the checkout's permissions; normalise the payload so the
 # archive does not depend on the host umask/ownership.

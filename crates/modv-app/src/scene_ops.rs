@@ -249,6 +249,11 @@ pub struct ScenesState {
     /// Names of the default Scenes this install seeded (so deleting one does
     /// not resurrect it).
     pub seeded_default_scenes: Vec<String>,
+    /// Stable ids of the Scenes behind [`Self::seeded_default_scenes`], aligned
+    /// with the name list where practical. Persisted so a later rename/removal
+    /// migration can identify the seeded Scene even when a user Scene shares
+    /// its name. Empty for legacy installs.
+    pub seeded_default_scene_ids: Vec<String>,
     /// The performance config (`minSeconds`, `maxSeconds`,
     /// `transitionSeconds`, `allowedTransitions`, `order`, `rowNames`,
     /// `enabled`, `currentSceneId`).
@@ -262,6 +267,7 @@ impl Default for ScenesState {
             defaults_version: 0,
             defaults_seeded: false,
             seeded_default_scenes: Vec::new(),
+            seeded_default_scene_ids: Vec::new(),
             performance: default_performance(),
         }
     }
@@ -290,6 +296,7 @@ struct ParsedStoredScenes {
     defaults_version: i64,
     defaults_seeded: bool,
     seeded_default_scenes: Vec<String>,
+    seeded_default_scene_ids: Vec<String>,
 }
 
 /// What a row-level Scene apply did, so the performance runtime can record the
@@ -395,6 +402,7 @@ impl Store {
         self.scenes.defaults_version = parsed.defaults_version;
         self.scenes.defaults_seeded = parsed.defaults_seeded;
         self.scenes.seeded_default_scenes = parsed.seeded_default_scenes;
+        self.scenes.seeded_default_scene_ids = parsed.seeded_default_scene_ids;
         self.touch_scene_list();
 
         self.emit_scene_list();
@@ -461,6 +469,7 @@ impl Store {
         self.scenes.defaults_version = parsed.defaults_version;
         self.scenes.defaults_seeded = parsed.defaults_seeded;
         self.scenes.seeded_default_scenes = parsed.seeded_default_scenes;
+        self.scenes.seeded_default_scene_ids = parsed.seeded_default_scene_ids;
         self.touch_scene_list();
 
         self.emit_performance();
@@ -479,6 +488,8 @@ impl Store {
     pub fn ensure_default_scenes(&mut self) -> Result<Value, StoreError> {
         let current_version = self.scenes.defaults_version.max(0);
         let mut seeded = normalize_default_scene_name_list(&self.scenes.seeded_default_scenes);
+        let mut seeded_ids =
+            normalize_default_scene_id_list(&self.scenes.seeded_default_scene_ids, &seeded);
 
         // Rebuild the Scenes whose default definitions changed in this
         // version (`getDefaultScenesToReplace` → `ADD_SCENE`,
@@ -536,12 +547,15 @@ impl Store {
         // Rename/remove seeded Scenes that the defaults retired between the
         // persisted version and this one *before* seeding, so the new
         // definitions neither duplicate a renamed Scene nor resurrect a
-        // removed one. The plan's `seeds` are the still-missing defaults.
-        let plan = modv_engine::default_scene_migrations::ensure_default_scene_migration(
+        // removed one. The persisted ids let the migration target the seeded
+        // Scene even when a user Scene shares its name. The plan's `seeds` are
+        // the still-missing defaults.
+        let plan = modv_engine::default_scene_migrations::ensure_default_scene_migration_with_ids(
             current_version,
             DEFAULTS_VERSION,
             &mut self.scenes.scenes,
             &mut seeded,
+            &mut seeded_ids,
         );
         if !plan.report.renamed.is_empty() || !plan.report.removed.is_empty() {
             eprintln!(
@@ -564,7 +578,7 @@ impl Store {
             existing_names.iter().map(|name| scene_key(name)).collect();
 
         let definitions = plan.seeds;
-        let mut added = Vec::new();
+        let mut added: Vec<(String, String)> = Vec::new();
         let mut skipped_modules = 0usize;
 
         for definition in definitions {
@@ -577,29 +591,68 @@ impl Store {
             );
             self.register_link_smoothing(&built.smoothing_ids);
             skipped_modules += skipped;
-            added.push(definition.name.clone());
+            let id = built
+                .document
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            added.push((definition.name.clone(), id));
             self.scenes.scenes.push(built.document);
         }
 
         // `markSeeded` for every default whose name already exists in the list
         // (`scenes.js:3076-3087`): a user Scene sharing a default's name counts
-        // as seeded so deleting it later does not resurrect the default.
+        // as seeded so deleting it later does not resurrect the default. When
+        // *several* Scenes share the name, identity is ambiguous: marking
+        // either would make one of them deletable, so mark neither.
         for definition in modv_engine::default_scenes::default_scenes() {
             let key = scene_key(&definition.name);
-            if existing_keys.contains(&key) && !seeded_keys.contains(&key) {
-                seeded.push(definition.name.clone());
+            if !existing_keys.contains(&key) || seeded_keys.contains(&key) {
+                continue;
             }
+
+            let matches: Vec<&Value> = self
+                .scenes
+                .scenes
+                .iter()
+                .filter(|scene| {
+                    scene
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| scene_key(name) == key)
+                })
+                .collect();
+            let [scene] = matches.as_slice() else {
+                continue;
+            };
+
+            seeded.push(definition.name.clone());
+            seeded_ids.push(
+                scene
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            );
         }
-        for name in &added {
+        for (name, id) in &added {
             if !seeded
                 .iter()
                 .any(|existing| scene_key(existing) == scene_key(name))
             {
                 seeded.push(name.clone());
+                seeded_ids.push(id.clone());
             }
         }
 
+        // Keep the ids aligned with the final name list, recording the document
+        // id of every uniquely identifiable seeded Scene and keeping an empty
+        // slot for a seed whose Scene is gone (the deleted-seed sentinel).
+        let seeded_ids = align_seeded_ids(&self.scenes.scenes, &seeded, &seeded_ids);
+
         self.scenes.seeded_default_scenes = seeded;
+        self.scenes.seeded_default_scene_ids = seeded_ids;
         self.scenes.defaults_seeded = true;
         self.scenes.defaults_version = DEFAULTS_VERSION.max(current_version);
         self.touch_scene_list();
@@ -649,6 +702,7 @@ impl Store {
             "defaultsSeeded": self.scenes.defaults_seeded,
             "defaultsVersion": self.scenes.defaults_version,
             "seededDefaultScenes": self.scenes.seeded_default_scenes,
+            "seededDefaultSceneIds": self.scenes.seeded_default_scene_ids,
             "scenes": self.scenes.scenes,
             "performance": performance,
         });
@@ -4107,6 +4161,9 @@ fn parse_stored_scenes(stored: &Value) -> Option<ParsedStoredScenes> {
     if stored_version.is_none() && !stored_seeded && seeded.is_empty() {
         defaults_version = 0;
     }
+    // Normalise the ids against the final name list so an aligned empty entry
+    // survives as the "seeded then deleted" sentinel.
+    let seeded_ids = normalize_default_scene_ids(object.get("seededDefaultSceneIds"), &seeded);
 
     // VmodV-only per-cell flags: prune unknown Scenes/rows so a stale
     // `scenes.json` cannot disable a cell that no longer exists. The JS UI
@@ -4129,6 +4186,7 @@ fn parse_stored_scenes(stored: &Value) -> Option<ParsedStoredScenes> {
         defaults_version,
         defaults_seeded: stored_seeded || defaults_version > 0 || !seeded.is_empty(),
         seeded_default_scenes: seeded,
+        seeded_default_scene_ids: seeded_ids,
     })
 }
 
@@ -4199,6 +4257,113 @@ fn normalize_default_scene_name_list(names: &[String]) -> Vec<String> {
             result.push(name.to_string());
         }
     }
+    result
+}
+
+/// Parse `seededDefaultSceneIds` into a list aligned with `seeded_names`.
+///
+/// A list with one entry per seeded name is positional: a non-empty entry is
+/// the Scene's id and an empty entry is the sentinel for a seeded Scene the
+/// user deleted, so both are preserved. A missing key or an unaligned legacy
+/// list keeps the old behaviour: trim, drop empty/non-string entries and
+/// de-duplicate.
+fn normalize_default_scene_ids(value: Option<&Value>, seeded_names: &[String]) -> Vec<String> {
+    let entries: Vec<String> = value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.as_str().unwrap_or_default().to_string())
+        .collect();
+    normalize_default_scene_id_list(&entries, seeded_names)
+}
+
+/// Normalise an already-string list of seeded Scene ids against `seeded_names`.
+///
+/// An aligned list (one entry per name) keeps its positional sentinels; any
+/// other list is trimmed, blank-free and de-duplicated.
+fn normalize_default_scene_id_list(ids: &[String], seeded_names: &[String]) -> Vec<String> {
+    if ids.len() == seeded_names.len() {
+        return ids.iter().map(|id| id.trim().to_string()).collect();
+    }
+
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    for id in ids {
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if seen.insert(id.to_string()) {
+            result.push(id.to_string());
+        }
+    }
+    result
+}
+
+/// Re-align the seeded ids with `seeded_names`, one entry per name.
+///
+/// An aligned entry is positional: the previous id at the same index is
+/// preferred (so a seeded Scene the user renamed keeps its identity), and an
+/// empty entry is the sentinel for a seeded Scene the user deleted — it stays
+/// empty, because the unique-name fallback would adopt a same-named user Scene
+/// as seeded. A recorded id whose Scene is gone becomes the sentinel too. A
+/// legacy unaligned list falls back to the unique Scene carrying the seeded
+/// name. Ambiguous or missing Scenes contribute an empty slot, never a dropped
+/// one, so the list stays aligned with the names.
+fn align_seeded_ids(
+    scenes: &[Value],
+    seeded_names: &[String],
+    seeded_ids: &[String],
+) -> Vec<String> {
+    let aligned = seeded_ids.len() == seeded_names.len();
+    let mut result = Vec::with_capacity(seeded_names.len());
+    let mut seen = HashSet::new();
+
+    for (index, name) in seeded_names.iter().enumerate() {
+        let key = scene_key(name);
+        let existing = if aligned { seeded_ids.get(index) } else { None };
+
+        if let Some(id) = existing {
+            let id = id.trim();
+            if id.is_empty() {
+                result.push(String::new());
+                continue;
+            }
+
+            let still_exists = scenes
+                .iter()
+                .any(|scene| scene.get("id").and_then(Value::as_str) == Some(id));
+            if still_exists && seen.insert(id.to_string()) {
+                result.push(id.to_string());
+            } else {
+                result.push(String::new());
+            }
+            continue;
+        }
+
+        let unique_name_id = {
+            let matches: Vec<&str> = scenes
+                .iter()
+                .filter(|scene| {
+                    scene
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|scene_name| scene_key(scene_name) == key)
+                })
+                .filter_map(|scene| scene.get("id").and_then(Value::as_str))
+                .collect();
+            match matches.as_slice() {
+                [id] => Some((*id).to_string()),
+                _ => None,
+            }
+        };
+
+        match unique_name_id {
+            Some(id) if seen.insert(id.clone()) => result.push(id),
+            _ => result.push(String::new()),
+        }
+    }
+
     result
 }
 
@@ -4407,6 +4572,45 @@ mod tests {
                 json!({ "scene": scene, "apply": false, "persist": false }),
             )
             .expect("scene loads");
+    }
+
+    fn saved_scene(id: &str, name: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "enabled": true,
+            "minSeconds": 7,
+            "maxSeconds": 18,
+            "groups": [],
+            "modules": {},
+            "inputs": { "inputs": {}, "inputLinks": {} },
+            "expressions": { "assignments": {} },
+            "tweens": [],
+        })
+    }
+
+    fn write_strobe_upgrade_fixture(dir: &Path, seeded_ids: Option<&[&str]>) {
+        let mut user_scene = saved_scene("scene-user-strobe", "Strobe Riot");
+        user_scene["userNote"] = json!("keep this user Scene intact");
+        let mut document = json!({
+            "version": SCENES_STORAGE_VERSION,
+            "defaultsSeeded": true,
+            "defaultsVersion": 17,
+            "seededDefaultScenes": ["Strobe Riot"],
+            "scenes": [
+                user_scene,
+                saved_scene("scene-seeded-strobe", "Strobe Riot"),
+            ],
+            "performance": {},
+        });
+        if let Some(ids) = seeded_ids {
+            document["seededDefaultSceneIds"] = json!(ids);
+        }
+        fs::write(
+            dir.join(SCENES_STORAGE_FILENAME),
+            serde_json::to_vec(&document).expect("scenes fixture JSON"),
+        )
+        .expect("write scenes fixture");
     }
 
     /// The bind-side input id a default Scene link targets, resolved from the
@@ -5976,6 +6180,211 @@ mod tests {
         );
     }
 
+    #[test]
+    fn deleted_seeded_scene_does_not_retarget_a_reused_name() {
+        let dir = temp_dir();
+        let state_path = dir.join("engine-state.json");
+        let mut user_scene = saved_scene("scene-user-strobe", "Strobe Riot");
+        user_scene["userNote"] = json!("keep this user Scene intact");
+        let document = json!({
+            "version": SCENES_STORAGE_VERSION,
+            "defaultsSeeded": true,
+            "defaultsVersion": 17,
+            "seededDefaultScenes": ["Strobe Riot"],
+            "seededDefaultSceneIds": [""],
+            "scenes": [user_scene],
+            "performance": {},
+        });
+        fs::write(
+            dir.join(SCENES_STORAGE_FILENAME),
+            serde_json::to_vec(&document).expect("scenes fixture JSON"),
+        )
+        .expect("write scenes fixture");
+
+        let mut store = Store::with_state_path(Some(&state_path));
+        store
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("hydrate");
+        let user_before_upgrade = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .find(|scene| scene["id"] == json!("scene-user-strobe"))
+            .expect("hydrated user Scene")
+            .clone();
+
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("upgrade defaults");
+
+        let user_after_upgrade = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .find(|scene| scene["id"] == json!("scene-user-strobe"));
+        assert_eq!(
+            user_after_upgrade,
+            Some(&user_before_upgrade),
+            "the aligned empty id marks the seed as deleted, so the reused name must not be migrated"
+        );
+        assert_eq!(
+            store
+                .scenes_state()
+                .seeded_default_scene_ids
+                .first()
+                .map(String::as_str),
+            Some(""),
+            "the deleted-seed sentinel must stay aligned instead of adopting the user Scene id"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn seeded_ids_remove_the_seeded_duplicate_not_the_user_scene() {
+        let dir = temp_dir();
+        let state_path = dir.join("engine-state.json");
+        write_strobe_upgrade_fixture(&dir, Some(&["scene-seeded-strobe"]));
+        let mut store = Store::with_state_path(Some(&state_path));
+        store
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("hydrate");
+        let user_before_upgrade = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .find(|scene| scene["id"] == json!("scene-user-strobe"))
+            .expect("hydrated user Scene")
+            .clone();
+
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("upgrade defaults");
+
+        let user_after_upgrade = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .find(|scene| scene["id"] == json!("scene-user-strobe"));
+        assert!(
+            user_after_upgrade.is_some(),
+            "the same-named user Scene must survive intact"
+        );
+        assert_eq!(
+            user_after_upgrade,
+            Some(&user_before_upgrade),
+            "the surviving user Scene payload must not change"
+        );
+        assert!(
+            !store
+                .scenes_state()
+                .scenes
+                .iter()
+                .any(|scene| scene["id"] == json!("scene-seeded-strobe")),
+            "the persisted seeded id must identify the Scene to retire"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn without_ids_duplicate_default_names_survive_an_upgrade() {
+        let dir = temp_dir();
+        let state_path = dir.join("engine-state.json");
+        write_strobe_upgrade_fixture(&dir, None);
+        let mut store = Store::with_state_path(Some(&state_path));
+        store
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("hydrate");
+
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("upgrade defaults");
+
+        let strobe_ids: Vec<&str> = store
+            .scenes_state()
+            .scenes
+            .iter()
+            .filter(|scene| scene["name"] == json!("Strobe Riot"))
+            .map(|scene| scene["id"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            strobe_ids,
+            vec!["scene-user-strobe", "scene-seeded-strobe"],
+            "legacy duplicate names are ambiguous and must both survive"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ambiguous_existing_names_are_not_marked_seeded() {
+        // Both names are in the current default-scenes.json; neither is retired.
+        let shared_name = "Geometric Tunnel";
+        let normally_seeded_name = "Mycelium Bloom";
+        let mut store = Store::new();
+        store.scenes.scenes = vec![
+            saved_scene("scene-user-geometric", shared_name),
+            saved_scene("scene-other-geometric", shared_name),
+        ];
+
+        store
+            .dispatch("scenes/ensureDefaultScenes", json!({}))
+            .expect("seeding");
+
+        let seeded_names = &store.scenes_state().seeded_default_scenes;
+        assert!(
+            !seeded_names
+                .iter()
+                .any(|name| scene_key(name) == scene_key(shared_name)),
+            "an ambiguous existing name must not make either Scene deletable"
+        );
+        assert!(
+            seeded_names
+                .iter()
+                .any(|name| scene_key(name) == scene_key(normally_seeded_name)),
+            "a normally seeded default must still be recorded"
+        );
+        assert_eq!(
+            store
+                .scenes_state()
+                .scenes
+                .iter()
+                .filter(|scene| scene["name"] == json!(shared_name))
+                .count(),
+            2,
+            "seeding must preserve both ambiguous Scenes"
+        );
+    }
+
+    #[test]
+    fn seeded_ids_round_trip_through_scenes_json() {
+        let dir = temp_dir();
+        let state_path = dir.join("engine-state.json");
+        write_strobe_upgrade_fixture(&dir, Some(&["scene-seeded-strobe"]));
+        let mut store = Store::with_state_path(Some(&state_path));
+        store
+            .dispatch("scenes/hydrateScenes", json!({}))
+            .expect("hydrate");
+        assert_eq!(store.scenes_state().scenes.len(), 2);
+
+        store
+            .dispatch("scenes/persistScenes", json!({}))
+            .expect("persist");
+
+        let saved: Value = serde_json::from_slice(
+            &fs::read(dir.join(SCENES_STORAGE_FILENAME)).expect("scenes.json"),
+        )
+        .expect("scenes JSON");
+        assert_eq!(
+            saved.get("seededDefaultSceneIds"),
+            Some(&json!(["scene-seeded-strobe"])),
+            "hydrated seeded ids must survive a scenes.json write"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     // ————————————————— persistence —————————————————
 
     #[test]
@@ -7183,7 +7592,9 @@ mod tests {
 
         let original = find_default_scene(&store, "Alpha");
         let source_group = original["groups"][0].clone();
-        let original_modules = original["modules"].clone();
+        let source_modules = original["modules"].clone();
+        let source_module_id = source_group["modules"][0].as_str().unwrap();
+        let source_module = &source_modules[source_module_id];
         assert_ne!(
             original["groups"][0], original["groups"][1],
             "the fixture has distinct rows"
@@ -7206,15 +7617,58 @@ mod tests {
             "copying to a different row of the same Scene should succeed"
         );
 
-        let alpha = find_default_scene(&store, "Alpha");
-        assert_eq!(
-            alpha["groups"][1], source_group,
-            "row 1 receives row 0's Group"
-        );
+        let alpha = find_default_scene(&store, "Alpha").clone();
         assert_eq!(alpha["groups"][0], source_group, "row 0 is untouched");
+
+        // Both rows share the Scene's Group/Module maps, so the copy must mint
+        // fresh ids instead of aliasing the source row's entries.
+        let copied_group = &alpha["groups"][1];
+        let copied_group_id = copied_group["id"].as_str().expect("copied Group id");
+        assert_ne!(
+            copied_group_id,
+            source_group["id"].as_str().unwrap(),
+            "the copied Group must not reuse the source Group id"
+        );
+        assert_ne!(
+            copied_group_id, "doc-effects",
+            "the copied Group must not reuse the target row's old id"
+        );
+        let copied_modules = copied_group["modules"].as_array().expect("copied modules");
+        assert_eq!(copied_modules.len(), 1);
+        let copied_module_id = copied_modules[0].as_str().unwrap();
+        assert_ne!(
+            copied_module_id, source_module_id,
+            "the copied row must not share the source row's Module id"
+        );
+        assert_ne!(
+            copied_module_id, "doc-ball",
+            "the copied row must not reuse the target row's Module id"
+        );
+
+        let modules = alpha["modules"].as_object().expect("modules");
         assert_eq!(
-            alpha["modules"], original_modules,
-            "the copied snapshot and the target's existing snapshot are retained"
+            modules.get(source_module_id),
+            Some(source_module),
+            "the source Module snapshot must survive the copy"
+        );
+        assert!(
+            modules.contains_key("doc-ball"),
+            "the target row's own snapshot must survive the copy"
+        );
+        let copied_module = modules
+            .get(copied_module_id)
+            .unwrap_or_else(|| panic!("copied Module snapshot {copied_module_id} exists"));
+        assert_eq!(
+            copied_module["$moduleName"], source_module["$moduleName"],
+            "the copied snapshot keeps the source Module's type"
+        );
+        assert_eq!(
+            copied_module["$id"], copied_module_id,
+            "the copied snapshot's canonical id must match its fresh map key"
+        );
+        assert_ne!(
+            copied_module["$id"], source_module["$id"],
+            "the copied snapshot's canonical id must not reuse the source id"
         );
 
         let same_row = store
@@ -7233,9 +7687,11 @@ mod tests {
             Value::Null,
             "copying a row onto itself remains a no-op"
         );
-        let alpha = find_default_scene(&store, "Alpha");
-        assert_eq!(alpha["groups"][0], source_group);
-        assert_eq!(alpha["groups"][1], source_group);
+        assert_eq!(
+            find_default_scene(&store, "Alpha"),
+            &alpha,
+            "a same-row copy leaves both rows, including the fresh ids, alone"
+        );
     }
 
     #[test]

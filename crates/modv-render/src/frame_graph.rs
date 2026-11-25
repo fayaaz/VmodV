@@ -50,6 +50,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::blend::{BLEND_WGSL, BlendMode};
 use crate::texture_pool::{PooledTexture, TexturePool, TexturePoolKey, UsageClass};
@@ -367,6 +369,22 @@ struct BlendUniform {
     src_alpha_scale: f32,
 }
 
+/// Fixed-function premultiplied source-over (`co = cs + cb·(1-αs)`), matching
+/// Porter-Duff §9 with the shader's premultiplied RGBA output: `one` for both
+/// colour and alpha, `one-minus-src-alpha` for the destination, `Add`.
+const PREMULTIPLIED_SOURCE_OVER: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
 /// Executes [`FrameGraph`]s: pool management, blend passes, copies.
 pub struct Executor {
     device: wgpu::Device,
@@ -380,6 +398,12 @@ pub struct Executor {
     blend_pipeline: Option<wgpu::RenderPipeline>,
     /// Format `blend_pipeline` was built for.
     blend_pipeline_format: Option<wgpu::TextureFormat>,
+    /// The direct-composite pipeline for `normal`/`source-over`: the same
+    /// shader, but with fixed-function premultiplied source-over blending
+    /// enabled and drawn straight into the destination (`LoadOp::Load`).
+    source_over_pipeline: Option<wgpu::RenderPipeline>,
+    /// Format `source_over_pipeline` was built for.
+    source_over_pipeline_format: Option<wgpu::TextureFormat>,
     /// Layout shared by every blend pipeline (DST/SRC textures + sampler + uniform).
     blend_bind_group_layout: wgpu::BindGroupLayout,
     /// 8-byte uniform holding `{ mode, src_alpha_scale }` for the blend pass.
@@ -390,6 +414,9 @@ pub struct Executor {
     /// One-shot flags for the unimplemented passes (avoid per-frame spam).
     module_warned: bool,
     scene_transition_warned: bool,
+    /// Test-only count of full-frame pipeline-scratch acquisitions.
+    #[cfg(test)]
+    scratch_acquisitions: AtomicUsize,
 }
 
 impl Executor {
@@ -500,12 +527,28 @@ impl Executor {
             sampler,
             blend_pipeline: None,
             blend_pipeline_format: None,
+            source_over_pipeline: None,
+            source_over_pipeline_format: None,
             blend_bind_group_layout,
             blend_uniform_buffer,
             transparent_texel,
             module_warned: false,
             scene_transition_warned: false,
+            #[cfg(test)]
+            scratch_acquisitions: AtomicUsize::new(0),
         }
+    }
+
+    /// Reset the test-only pipeline-scratch acquisition counter.
+    #[cfg(test)]
+    pub(crate) fn reset_scratch_acquisitions(&self) {
+        self.scratch_acquisitions.store(0, Ordering::Relaxed);
+    }
+
+    /// Number of pipeline-scratch acquisitions since the last reset.
+    #[cfg(test)]
+    pub(crate) fn scratch_acquisitions(&self) -> usize {
+        self.scratch_acquisitions.load(Ordering::Relaxed)
     }
 
     /// Execute the graph. The `main` surface ([`MAIN_TEXTURE_ID`]), when
@@ -587,8 +630,13 @@ impl Executor {
 
     /// `Composite`: blend `source` over `target` with `alpha` and `blend`.
     ///
-    /// Ping-pongs through a pooled scratch (sampling `target` while it would
-    /// be the render attachment is illegal), then copies the scratch back.
+    /// `normal`/`source-over` draw the blend shader straight into the
+    /// destination with fixed-function premultiplied source-over: the shader
+    /// already emits the premultiplied source (a transparent DST is bound so
+    /// its contribution vanishes), so no full-frame scratch or copy-back is
+    /// needed. Every other mode samples the destination (the non-separable
+    /// HSL modes cannot be expressed as blend factors) and ping-pongs through
+    /// a pooled scratch, then copies it back.
     fn run_composite(
         &mut self,
         source: &TextureId,
@@ -599,6 +647,7 @@ impl Executor {
     ) -> Result<(), GraphError> {
         let pass = "composite";
         let alpha = clamp_unit(alpha, 1.0) as f32;
+        let direct = matches!(blend, BlendMode::Normal | BlendMode::SourceOver);
         let src_texture = self.texture_of(surfaces, source, pass)?;
         let dst_texture = self.texture_of(surfaces, target, pass)?;
         // The blend pass samples both textures with normalised UVs, so a
@@ -608,11 +657,17 @@ impl Executor {
         self.check_usage(src_texture, wgpu::TextureUsages::TEXTURE_BINDING, pass)?;
         self.check_usage(
             dst_texture,
-            // The blend pass renders into a scratch and the result is written
-            // with `copy_texture_to_texture`, which requires COPY_DST.
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST,
+            // The direct path renders into the destination, so it is
+            // neither sampled nor copied into. The scratch path renders
+            // into a scratch and writes the result back with
+            // `copy_texture_to_texture`, which requires COPY_DST.
+            if direct {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+            },
             pass,
         )?;
         self.check_format(
@@ -622,9 +677,29 @@ impl Executor {
         )?;
         self.check_format(
             dst_texture.format(),
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            if direct {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            },
             pass,
         )?;
+
+        if direct {
+            // The DST sample must contribute nothing twice: a 1×1 transparent
+            // texel leaves the shader output as the premultiplied source,
+            // which the fixed-function source-over blends over `dst_texture`.
+            let transparent = self.transparent_texel.clone();
+            self.record_source_over_pass(
+                dst_texture,
+                &transparent,
+                src_texture,
+                blend,
+                alpha,
+                "composite",
+            );
+            return Ok(());
+        }
 
         let scratch = self.acquire_scratch(
             dst_texture.width(),
@@ -801,6 +876,10 @@ impl Executor {
         format: wgpu::TextureFormat,
         usage_class: UsageClass,
     ) -> PooledTexture {
+        #[cfg(test)]
+        if usage_class == UsageClass::PipelineScratch {
+            self.scratch_acquisitions.fetch_add(1, Ordering::Relaxed);
+        }
         self.pool.acquire(
             &self.device,
             &self.queue,
@@ -853,10 +932,75 @@ impl Executor {
         src_alpha_scale: f32,
         label: &str,
     ) {
-        if self.blend_pipeline_format != Some(output.format()) {
-            self.blend_pipeline = Some(self.create_blend_pipeline(output.format(), label));
-            self.blend_pipeline_format = Some(output.format());
-        }
+        self.record_blend_pass_ops(
+            output,
+            dst,
+            src,
+            mode,
+            src_alpha_scale,
+            label,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            false,
+        );
+    }
+
+    /// Draw the blend shader into `output` with fixed-function premultiplied
+    /// source-over, preserving whatever `output` already holds
+    /// (`LoadOp::Load`). Valid only when the shader's own output is the
+    /// premultiplied source — i.e. `normal`/`source-over` with a transparent
+    /// DST — so no double contribution can occur.
+    #[allow(clippy::too_many_arguments)]
+    fn record_source_over_pass(
+        &mut self,
+        output: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        mode: BlendMode,
+        src_alpha_scale: f32,
+        label: &str,
+    ) {
+        self.record_blend_pass_ops(
+            output,
+            dst,
+            src,
+            mode,
+            src_alpha_scale,
+            label,
+            wgpu::LoadOp::Load,
+            true,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_blend_pass_ops(
+        &mut self,
+        output: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        mode: BlendMode,
+        src_alpha_scale: f32,
+        label: &str,
+        load: wgpu::LoadOp<wgpu::Color>,
+        source_over: bool,
+    ) {
+        let format = output.format();
+        let pipeline = if source_over {
+            if self.source_over_pipeline_format != Some(format) {
+                self.source_over_pipeline = Some(self.create_blend_pipeline(
+                    format,
+                    "modv-blend-source-over-pipeline",
+                    Some(PREMULTIPLIED_SOURCE_OVER),
+                ));
+                self.source_over_pipeline_format = Some(format);
+            }
+            self.source_over_pipeline.as_ref()
+        } else {
+            if self.blend_pipeline_format != Some(format) {
+                self.blend_pipeline = Some(self.create_blend_pipeline(format, label, None));
+                self.blend_pipeline_format = Some(format);
+            }
+            self.blend_pipeline.as_ref()
+        };
         let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
         let dst_view = dst.create_view(&wgpu::TextureViewDescriptor::default());
         let src_view = src.create_view(&wgpu::TextureViewDescriptor::default());
@@ -906,7 +1050,7 @@ impl Executor {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -915,7 +1059,7 @@ impl Executor {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Some(pipeline) = self.blend_pipeline.as_ref() {
+            if let Some(pipeline) = pipeline {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 // Full-screen triangle; no vertex buffer.
@@ -929,6 +1073,7 @@ impl Executor {
         &self,
         format: wgpu::TextureFormat,
         label: &str,
+        blend: Option<wgpu::BlendState>,
     ) -> wgpu::RenderPipeline {
         let shader = self
             .device
@@ -970,8 +1115,10 @@ impl Executor {
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        // Blending happens in the shader; fixed-function off.
-                        blend: None,
+                        // The shader does the mode maths itself; the direct
+                        // `normal`/`source-over` variant additionally lets
+                        // fixed-function premultiplied source-over apply.
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),

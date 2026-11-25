@@ -1,8 +1,8 @@
 //! OSC ingestion (WS-11), ported from
 //! `src/renderer/src/application/worker/store/modules/osc.js`.
 //!
-//! The legacy renderer creates a `node-osc` `Server` on `0.0.0.0:3333` at worker
-//! setup (`application/index.js:186-189`) and writes every message into
+//! The legacy renderer created a `node-osc` `Server` on `0.0.0.0:3333` at worker
+//! setup (`application/index.js:186-189`) and wrote every message into
 //! `state.data` with
 //!
 //! ```js
@@ -35,14 +35,16 @@
 //!
 //! # Network bounds (R-18)
 //!
-//! The server binds `0.0.0.0:3333` like `node-osc` and has no authentication,
-//! so every write is treated as hostile input: array indexes are capped at
+//! The server binds loopback [`DEFAULT_OSC_HOST`]:`DEFAULT_OSC_PORT` (the legacy
+//! Electron build listened on `0.0.0.0`) and has no authentication, so every
+//! write is treated as hostile input: array indexes are capped at
 //! [`MAX_ARRAY_INDEX`] (larger indexes become object keys), a message stores at
-//! most [`MAX_MESSAGE_ARGUMENTS`] arguments, bundles nest at most
-//! [`MAX_BUNDLE_DEPTH`] deep, and [`OscStore`] caps the store's distinct
-//! addresses ([`MAX_STORE_ADDRESSES`]) and materialised nodes
-//! ([`MAX_STORE_NODES`]). `node-osc`/lodash has none of these bounds; they are
-//! deliberate hardening deviations.
+//! most [`MAX_MESSAGE_ARGUMENTS`] arguments and [`MAX_MESSAGE_BYTES`] compact
+//! JSON bytes, bundles nest at most [`MAX_BUNDLE_DEPTH`] deep, and [`OscStore`]
+//! caps the store's distinct addresses ([`MAX_STORE_ADDRESSES`]), materialised
+//! nodes ([`MAX_STORE_NODES`]) and each stored value's compact JSON
+//! ([`DEFAULT_MAX_VALUE_BYTES`]). `node-osc`/lodash has none of these bounds;
+//! they are deliberate hardening deviations.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -53,8 +55,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// Default OSC bind host (`application/index.js:186-189`, `new Server(3333, "0.0.0.0")`).
-pub const DEFAULT_OSC_HOST: &str = "0.0.0.0";
+/// Default OSC bind host.
+///
+/// The legacy renderer listened on `0.0.0.0` (`application/index.js:186-189`,
+/// `new Server(3333, "0.0.0.0")`); VmodV binds loopback by default so an
+/// unauthenticated UDP listener is not exposed to the local network.
+pub const DEFAULT_OSC_HOST: &str = "127.0.0.1";
 
 /// Default OSC port (`application/index.js:186-189`).
 pub const DEFAULT_OSC_PORT: u16 = 3333;
@@ -85,6 +91,21 @@ pub const MAX_ARRAY_INDEX: usize = 1 << 16;
 /// dropped (the first [`MAX_MESSAGE_ARGUMENTS`] win), matching the bounded
 /// treatment of array indexes above.
 pub const MAX_MESSAGE_ARGUMENTS: usize = 64;
+
+/// Largest compact JSON a single dispatched message's argument list may occupy.
+///
+/// `rosc` decodes up to ~16k floats per datagram; converting all of them into
+/// JSON before storing or publishing them would let one packet allocate
+/// megabytes. Dispatch stops before the first argument whose compact JSON
+/// would push the message over this budget (R-18).
+pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
+/// Largest compact JSON a single value stored in an [`OscStore`] may occupy.
+///
+/// An OSC blob is rendered as a hex string (two characters per byte), so a
+/// datagram-sized blob can exceed 128 KiB of JSON. A value above this budget
+/// is refused rather than stored (R-18).
+pub const DEFAULT_MAX_VALUE_BYTES: usize = 1024 * 1024;
 
 /// Deepest bundle nesting [`dispatch_packet`] walks.
 ///
@@ -151,9 +172,11 @@ impl OscValue {
 
     /// The JSON value written into `osc.data`.
     ///
-    /// `Blob` becomes an array of byte numbers — the store is JSON-serialisable
-    /// and an array round-trips better than a base64 string. A non-finite float
-    /// becomes `null` (JSON cannot represent `NaN`/`Infinity`).
+    /// `Blob` becomes a compact `{"$blob": "<lowercase hex>"}` object: hex is
+    /// twice the raw size but stays a JSON string, whereas a per-byte array
+    /// costs several bytes per byte *and* allocates a `Value` per element. A
+    /// non-finite float becomes `null` (JSON cannot represent
+    /// `NaN`/`Infinity`).
     pub fn to_json(&self) -> serde_json::Value {
         use serde_json::{Number, Value};
 
@@ -163,14 +186,99 @@ impl OscValue {
                 .unwrap_or(Value::Null),
             Self::Int(v) => Value::Number(Number::from(*v)),
             Self::String(v) => Value::String(v.clone()),
-            Self::Blob(bytes) => Value::Array(
-                bytes
-                    .iter()
-                    .map(|byte| Value::Number(Number::from(*byte)))
-                    .collect(),
-            ),
+            Self::Blob(bytes) => {
+                let mut map = serde_json::Map::new();
+                map.insert("$blob".to_string(), Value::String(hex_encode(bytes)));
+                Value::Object(map)
+            }
         }
     }
+
+    /// Length of the compact JSON `to_json` produces, without building it.
+    ///
+    /// Used by the dispatch/store byte budgets so an oversized argument is
+    /// rejected before its JSON value is materialised.
+    pub fn compact_json_len(&self) -> usize {
+        use serde_json::{Number, Value};
+
+        match self {
+            Self::Float(v) => Number::from_f64(f64::from(*v))
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
+                .to_string()
+                .len(),
+            Self::Int(v) => v.to_string().len(),
+            // A JSON string is quoted plus any escapes serde adds.
+            Self::String(v) => serde_json::to_string(v).map_or(usize::MAX, |json| json.len()),
+            // `{"$blob":"` + two hex chars per byte + `"}`.
+            Self::Blob(bytes) => 12usize.saturating_add(bytes.len().saturating_mul(2)),
+        }
+    }
+}
+
+/// Lowercase hex for an OSC blob, without a hex crate dependency.
+fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        out.push(DIGITS[(byte >> 4) as usize] as char);
+        out.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Running compact-JSON byte count for an OSC argument array.
+///
+/// The two array brackets are charged up front and every accepted argument
+/// carries its own comma, so the count is exactly the size of the array's
+/// compact JSON. Shared by packet dispatch and [`fit_osc_arguments`] so the
+/// two paths cannot drift apart.
+#[derive(Clone, Copy, Debug)]
+struct ArgumentBudget {
+    used: usize,
+    count: usize,
+}
+
+impl ArgumentBudget {
+    fn new() -> Self {
+        Self {
+            used: 2, // compact JSON array brackets
+            count: 0,
+        }
+    }
+
+    /// Account for `value` if it fits `max_bytes`; leave the budget untouched
+    /// otherwise, so every caller truncates at the same argument.
+    fn accept(&mut self, value: &OscValue, max_bytes: usize) -> bool {
+        let comma = usize::from(self.count > 0);
+        let addition = value.compact_json_len().saturating_add(comma);
+        if self.used.saturating_add(addition) > max_bytes {
+            return false;
+        }
+        self.used += addition;
+        self.count += 1;
+        true
+    }
+}
+
+/// Truncates an argument list to the count and compact-byte budgets.
+///
+/// Arguments are kept in order; the returned prefix stops *before* the first
+/// argument that would push the array over `max_bytes` (or after
+/// [`MAX_MESSAGE_ARGUMENTS`] entries), so a later smaller argument never
+/// jumps the queue. The bracket/comma overhead is included, which makes the
+/// prefix's compact JSON fit the budget exactly. Shared by packet dispatch,
+/// [`apply_osc_message`] and [`OscStore`] so all three truncate identically.
+pub fn fit_osc_arguments(values: &[OscValue], max_bytes: usize) -> &[OscValue] {
+    let mut budget = ArgumentBudget::new();
+    for value in values.iter().take(MAX_MESSAGE_ARGUMENTS) {
+        if !budget.accept(value, max_bytes) {
+            break;
+        }
+    }
+
+    &values[..budget.count]
 }
 
 impl fmt::Display for OscValue {
@@ -418,11 +526,7 @@ fn dispatch_packet_messages_at_depth(
 ) {
     match packet {
         rosc::OscPacket::Message(message) => {
-            let values: Vec<OscValue> = message
-                .args
-                .iter()
-                .filter_map(OscValue::from_osc_type)
-                .collect();
+            let values = bounded_packet_arguments(&message.args);
             if !values.is_empty() {
                 on_message(&message.addr, &values);
             }
@@ -438,6 +542,28 @@ fn dispatch_packet_messages_at_depth(
     }
 }
 
+/// Converts a message's arguments and applies the count/byte budgets while
+/// converting, so an oversized argument's JSON is never built.
+fn bounded_packet_arguments(args: &[rosc::OscType]) -> Vec<OscValue> {
+    let mut values: Vec<OscValue> = Vec::new();
+    let mut budget = ArgumentBudget::new();
+
+    for argument in args {
+        if budget.count >= MAX_MESSAGE_ARGUMENTS {
+            break;
+        }
+        let Some(value) = OscValue::from_osc_type(argument) else {
+            continue;
+        };
+        if !budget.accept(&value, MAX_MESSAGE_BYTES) {
+            break;
+        }
+        values.push(value);
+    }
+
+    values
+}
+
 fn dispatch_packet_at_depth(
     packet: &rosc::OscPacket,
     depth: usize,
@@ -445,10 +571,8 @@ fn dispatch_packet_at_depth(
 ) {
     match packet {
         rosc::OscPacket::Message(message) => {
-            for argument in &message.args {
-                if let Some(value) = OscValue::from_osc_type(argument) {
-                    on_value(&message.addr, value);
-                }
+            for value in bounded_packet_arguments(&message.args) {
+                on_value(&message.addr, value);
             }
         }
         rosc::OscPacket::Bundle(bundle) => {
@@ -645,12 +769,18 @@ pub fn apply_osc_value(data: &mut serde_json::Value, address: &str, value: &OscV
 /// Applies a whole OSC message: `set(data, path, [arg0, arg1, …])`, exactly
 /// like `msg.slice(1)` (`store/modules/osc.js:69-71`).
 ///
-/// The JS always stores an array, even for a single argument. Only the first
-/// [`MAX_MESSAGE_ARGUMENTS`] arguments are stored (R-18).
-pub fn apply_osc_message(data: &mut serde_json::Value, address: &str, values: &[OscValue]) {
-    let values = &values[..values.len().min(MAX_MESSAGE_ARGUMENTS)];
+/// The JS always stores an array, even for a single argument. Arguments are
+/// truncated to [`MAX_MESSAGE_ARGUMENTS`] and [`DEFAULT_MAX_VALUE_BYTES`] of
+/// compact JSON (R-18); returns `false` when no argument fits, in which case
+/// `data` is untouched.
+pub fn apply_osc_message(data: &mut serde_json::Value, address: &str, values: &[OscValue]) -> bool {
+    let values = fit_osc_arguments(values, DEFAULT_MAX_VALUE_BYTES);
+    if values.is_empty() {
+        return false;
+    }
     let array = serde_json::Value::Array(values.iter().map(OscValue::to_json).collect());
     set_json_path(data, &osc_address_to_path(address), array, MAX_ARRAY_INDEX);
+    true
 }
 
 /// Limits for [`OscStore`].
@@ -686,13 +816,18 @@ impl Default for OscStoreLimits {
 ///   overwriting an existing leaf is free but replacing a subtree is charged
 ///   twice — and a write may overshoot the budget by its own cost (at most
 ///   [`MAX_ARRAY_INDEX`] + the path length) before subsequent writes are
-///   refused. Both bounds are documented worst cases, not amortised guesses.
+///   refused. Both bounds are documented worst cases, not amortised guesses;
+/// * a value whose compact JSON exceeds [`DEFAULT_MAX_VALUE_BYTES`] is refused
+///   ([`Self::with_max_value_bytes`] overrides the budget). Messages are
+///   truncated argument by argument first, so a message whose first arguments
+///   fit still stores that prefix.
 #[derive(Clone, Debug)]
 pub struct OscStore {
     data: serde_json::Value,
     addresses: BTreeMap<String, usize>,
     nodes: usize,
     limits: OscStoreLimits,
+    max_value_bytes: usize,
 }
 
 impl Default for OscStore {
@@ -714,7 +849,22 @@ impl OscStore {
             addresses: BTreeMap::new(),
             nodes: 0,
             limits,
+            max_value_bytes: DEFAULT_MAX_VALUE_BYTES,
         }
+    }
+
+    /// Overrides the compact-JSON byte budget for one stored value.
+    ///
+    /// Defaults to [`DEFAULT_MAX_VALUE_BYTES`]; kept separate from
+    /// [`OscStoreLimits`] so existing limit literals stay source-compatible.
+    pub fn with_max_value_bytes(mut self, max_value_bytes: usize) -> Self {
+        self.max_value_bytes = max_value_bytes;
+        self
+    }
+
+    /// The compact-JSON byte budget for one stored value.
+    pub fn max_value_bytes(&self) -> usize {
+        self.max_value_bytes
     }
 
     /// The stored JSON (`osc.data`).
@@ -752,9 +902,15 @@ impl OscStore {
 
     /// Apply a whole message, mirroring [`apply_osc_message`].
     ///
-    /// Returns `false` when the write was refused.
+    /// The argument list is truncated incrementally to
+    /// [`MAX_MESSAGE_ARGUMENTS`] and [`Self::max_value_bytes`] of compact
+    /// JSON. Returns `false` when no argument fits (or another limit refuses
+    /// the write), leaving `data` and the counters untouched.
     pub fn apply_message(&mut self, address: &str, values: &[OscValue]) -> bool {
-        let values = &values[..values.len().min(MAX_MESSAGE_ARGUMENTS)];
+        let values = fit_osc_arguments(values, self.max_value_bytes);
+        if values.is_empty() {
+            return false;
+        }
         self.write(
             address,
             serde_json::Value::Array(values.iter().map(OscValue::to_json).collect()),
@@ -765,6 +921,13 @@ impl OscStore {
         let path = osc_address_to_path(address);
 
         if path.is_empty() {
+            return false;
+        }
+
+        // The authoritative byte guard: scalar values and fitted messages both
+        // pass through here, and a refused write must not touch the counters.
+        let bytes = serde_json::to_vec(&value).map_or(usize::MAX, |json| json.len());
+        if bytes > self.max_value_bytes {
             return false;
         }
 
@@ -791,6 +954,9 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::mpsc;
+
+    const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+    const DEFAULT_MAX_VALUE_BYTES: usize = 1024 * 1024;
 
     // store/modules/osc.js:69-71 — "/modv/bass" → set(data, "modv.bass", …)
     #[test]
@@ -901,6 +1067,171 @@ mod tests {
             data["other"],
             json!({ (MAX_ARRAY_INDEX + 1).to_string(): 1 }),
             "above the cap the index degrades to an object key"
+        );
+    }
+
+    #[test]
+    fn message_dispatch_enforces_argument_and_compact_byte_budgets() {
+        use rosc::{OscBundle, OscMessage, OscPacket, OscTime, OscType};
+
+        fn bundle_with(args: Vec<OscType>) -> OscPacket {
+            OscPacket::Bundle(OscBundle {
+                timetag: OscTime {
+                    seconds: 0,
+                    fractional: 0,
+                },
+                content: vec![OscPacket::Message(OscMessage {
+                    addr: "/modv/oversized".into(),
+                    args,
+                })],
+            })
+        }
+
+        for oversized in [
+            OscType::Blob(vec![0xab; MAX_MESSAGE_BYTES * 2]),
+            OscType::String("x".repeat(MAX_MESSAGE_BYTES * 2)),
+        ] {
+            let packet = bundle_with(vec![
+                OscType::Int(7),
+                oversized,
+                OscType::String("tail".into()),
+                OscType::Int(9),
+            ]);
+
+            let mut messages = Vec::new();
+            dispatch_packet_messages(&packet, &mut |address, values| {
+                messages.push((address.to_string(), values.to_vec()));
+            });
+            assert_eq!(messages.len(), 1, "the bundled message is delivered once");
+            assert_eq!(
+                messages[0].1.len(),
+                1,
+                "dispatch stops before an argument whose compact JSON exceeds 64 KiB"
+            );
+            assert_eq!(messages[0].1[0], OscValue::Int(7));
+            let compact: Vec<_> = messages[0].1.iter().map(OscValue::to_json).collect();
+            assert!(
+                serde_json::to_vec(&compact)
+                    .expect("compact message JSON")
+                    .len()
+                    <= MAX_MESSAGE_BYTES,
+                "the message callback receives at most 64 KiB of compact JSON"
+            );
+
+            let mut values = Vec::new();
+            dispatch_packet(&packet, &mut |_, value| values.push(value));
+            assert_eq!(
+                values.len(),
+                1,
+                "the scalar callback never receives the oversized argument or arguments after it"
+            );
+            assert_eq!(values[0], OscValue::Int(7));
+        }
+
+        let packet = OscPacket::Message(OscMessage {
+            addr: "/modv/many".into(),
+            args: (0..MAX_MESSAGE_ARGUMENTS + 8)
+                .map(|index| OscType::Int(index as i32))
+                .collect(),
+        });
+        let mut messages = Vec::new();
+        dispatch_packet_messages(&packet, &mut |_, values| messages.push(values.to_vec()));
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].len(),
+            MAX_MESSAGE_ARGUMENTS,
+            "dispatch applies the argument-count budget before callback"
+        );
+
+        let mut count = 0;
+        dispatch_packet(&packet, &mut |_, _| count += 1);
+        assert_eq!(count, MAX_MESSAGE_ARGUMENTS);
+    }
+
+    #[test]
+    fn compact_json_len_matches_the_serialised_argument() {
+        let values = [
+            OscValue::String("quote \" backslash \\ newline \n snowman ☃".into()),
+            OscValue::Blob(vec![0x00, 0xff, 0xab]),
+            OscValue::Float(0.1),
+            OscValue::Float(f32::NAN),
+            OscValue::Int(i32::MIN),
+        ];
+
+        for value in &values {
+            assert_eq!(
+                value.compact_json_len(),
+                serde_json::to_vec(&value.to_json())
+                    .expect("compact argument JSON")
+                    .len(),
+                "{value:?} byte count must match its compact JSON"
+            );
+        }
+        for budget in [2, 3, 10, 20, 64, 1024] {
+            let fitted = fit_osc_arguments(&values, budget);
+            let array: Vec<_> = fitted.iter().map(OscValue::to_json).collect();
+            assert!(
+                serde_json::to_vec(&array)
+                    .expect("compact argument array")
+                    .len()
+                    <= budget,
+                "a {budget}-byte budget never admits an oversized argument array"
+            );
+        }
+    }
+
+    #[test]
+    fn osc_store_truncates_messages_to_the_default_value_byte_budget() {
+        let mut store = OscStore::new();
+        let first = OscValue::String("a".repeat(600 * 1024));
+        let second = OscValue::String("b".repeat(600 * 1024));
+
+        assert!(store.apply_message("/modv/large", &[first.clone(), second, OscValue::Int(9)],));
+        let stored = store.data()["modv"]["large"]
+            .as_array()
+            .expect("stored argument array");
+        assert_eq!(
+            stored.len(),
+            1,
+            "arguments are truncated before the stored array exceeds the 1 MiB value budget"
+        );
+        assert_eq!(stored[0], first.to_json());
+        assert!(
+            serde_json::to_vec(stored).expect("stored JSON").len() <= DEFAULT_MAX_VALUE_BYTES,
+            "the accepted value fits the default byte budget"
+        );
+    }
+
+    #[test]
+    fn osc_store_rejects_oversized_values_without_growing() {
+        let mut store = OscStore::new();
+        let oversized = OscValue::Blob(vec![0xcd; 512 * 1024]);
+        let data_before = store.data().clone();
+        let nodes_before = store.node_count();
+        let addresses_before = store.address_count();
+
+        assert!(
+            !store.apply_value("/modv/rejected", &oversized),
+            "a scalar whose compact JSON exceeds 1 MiB is refused"
+        );
+        assert!(
+            !store.apply_message("/modv/rejected-message", std::slice::from_ref(&oversized)),
+            "a message with no argument fitting the 1 MiB budget is refused"
+        );
+        assert_eq!(
+            store.data(),
+            &data_before,
+            "rejected writes do not change data"
+        );
+        assert_eq!(
+            store.node_count(),
+            nodes_before,
+            "rejected writes create no nodes"
+        );
+        assert_eq!(
+            store.address_count(),
+            addresses_before,
+            "rejected writes create no addresses"
         );
     }
 
@@ -1081,7 +1412,10 @@ mod tests {
         assert_eq!(OscValue::Float(0.5).to_json(), json!(0.5));
         assert_eq!(OscValue::Int(-3).to_json(), json!(-3));
         assert_eq!(OscValue::String("hello".into()).to_json(), json!("hello"));
-        assert_eq!(OscValue::Blob(vec![1, 2, 3]).to_json(), json!([1, 2, 3]));
+        assert_eq!(
+            OscValue::Blob(vec![0xab, 0xcd, 0xef]).to_json(),
+            json!({ "$blob": "abcdef" })
+        );
         // JSON cannot represent NaN / Infinity.
         assert_eq!(OscValue::Float(f32::NAN).to_json(), json!(null));
         assert_eq!(OscValue::Float(f32::INFINITY).to_json(), json!(null));

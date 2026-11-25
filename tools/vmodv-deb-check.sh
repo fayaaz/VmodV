@@ -109,6 +109,8 @@ has_path '\./usr/lib/vmodv/modv'
 has_path '\./usr/lib/vmodv/log-run.sh'
 has_path '\./usr/share/applications/vmodv.desktop'
 has_path '\./usr/share/icons/hicolor/512x512/apps/vmodv.png'
+has_path '\./usr/share/doc/vmodv/copyright'
+has_path '\./usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md'
 grep -qE ' \./usr/bin/vmodv -> modv$' <<<"$CONTENTS" ||
     fail "missing usr/bin/vmodv symlink"
 grep -qE '^-rwxr-xr-x root/root .* \./usr/bin/modv$' <<<"$CONTENTS" ||
@@ -129,6 +131,21 @@ texture_count=$(grep -cE '^-.* \./usr/share/vmodv/textures/.*$' <<<"$CONTENTS" |
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 dpkg-deb -x "$DEB" "$TMP"
+
+# Do not trust `Architecture: amd64` metadata alone: the extracted payload must
+# be an x86_64 ELF. tools/elf-machine.sh lives beside this checker.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PAYLOAD_MACHINE=$(bash "$SCRIPT_DIR/elf-machine.sh" "$TMP/usr/lib/vmodv/modv") ||
+    fail "cannot read the ELF machine of usr/lib/vmodv/modv"
+[ "$PAYLOAD_MACHINE" = "x86_64" ] ||
+    fail "usr/lib/vmodv/modv is '$PAYLOAD_MACHINE', expected x86_64 (amd64-only package)"
+
+# VmodV's own licence and attribution payload, not just dependency metadata.
+PROJECT_NOTICES="$TMP/usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md"
+grep -q 'Point10' "$PROJECT_NOTICES" ||
+    fail "usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md is missing the Point10 attribution marker"
+grep -q 'CC BY-NC-SA' "$PROJECT_NOTICES" ||
+    fail "usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md is missing the CC BY-NC-SA attribution marker"
 
 [ -x "$TMP/usr/lib/vmodv/modv" ] || fail "binary lacks the executable bit"
 grep -q 'MODV_ISF_DIR' "$TMP/usr/bin/modv" ||

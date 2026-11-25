@@ -13,6 +13,13 @@
 # only source of truth). The bare next version is printed on stdout — no
 # output means no release. Diagnostics go to stderr.
 #
+# Resume: when HEAD is already tagged with a strictly-valid `vX.Y.Z`, that
+# version is printed instead of scanning commits (highest tag wins if there
+# are several). `release.yml` pushes the tag before creating the release, so
+# a cancelled/failed run leaves the tag at HEAD; a rerun must recompute the
+# same version for the idempotent release/publish jobs to finish the job.
+# Non-semver tags at HEAD (e.g. `nightly`) never trigger a resume.
+#
 # Usage:
 #   tools/semver-next.sh              compute the next version for the repo
 #   tools/semver-next.sh --repo DIR   same, for the repo at DIR
@@ -33,12 +40,31 @@ latest_semver_tag() { # repo root is $1
   git -C "$1" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1
 }
 
+head_semver_tag() { # repo root is $1; highest strictly-valid vX.Y.Z at HEAD, or nothing
+  local repo=$1 tag base
+  while IFS= read -r tag; do
+    [ -n "$tag" ] || continue
+    base=${tag#v}
+    if [[ $base =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$base"
+      return 0
+    fi
+  done < <(git -C "$repo" tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname)
+  return 0
+}
+
 compute() { # repo root is $1; prints bare version or nothing
-  local repo=$1 latest base range
+  local repo=$1 latest base range resume
   latest=$(latest_semver_tag "$repo")
   if [ -z "$latest" ]; then
     echo "error: no vX.Y.Z tag found; tag an initial release (e.g. v2.0.0) first" >&2
     exit 2
+  fi
+  resume=$(head_semver_tag "$repo")
+  if [ -n "$resume" ]; then
+    echo "resuming release: HEAD is already tagged v$resume" >&2
+    echo "$resume"
+    return 0
   fi
   base=${latest#v}
   if ! [[ $base =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -108,6 +134,31 @@ selftest() {
     fi
   }
 
+  # check_head_tag <expected> <commit message> <tag>...
+  #   base commit tagged v2.0.0, then <commit message>, then every <tag> on HEAD
+  check_head_tag() {
+    local expected=$1 msg=$2; shift 2
+    total=$((total + 1))
+    rm -rf "$tmp/repo"; mkdir -p "$tmp/repo"; cd "$tmp/repo"
+    git init -q
+    git config user.email selftest@example.com
+    git config user.name selftest
+    git commit -q --allow-empty -m "chore: base"
+    git tag v2.0.0
+    git commit -q --allow-empty -m "$msg"
+    local tag
+    for tag in "$@"; do
+      git tag "$tag"
+    done
+    local got; got=$("$SCRIPT" --repo "$tmp/repo" 2>/dev/null)
+    if [ "$got" = "$expected" ]; then
+      echo "ok   - expected '${expected:-<no release>}'"
+    else
+      echo "FAIL - expected '${expected:-<no release>}', got '${got:-<no release>}'" >&2
+      fails=$((fails + 1))
+    fi
+  }
+
   # feat: -> minor
   check "2.1.0" "feat: add thing"
   check "2.1.0" "feat(vmodv-ui): scoped feature"
@@ -127,10 +178,17 @@ selftest() {
   check "3.0.0" "feat: a" "fix: b" "feat!: c"
   # non-releaseable types produce no release
   check "" "chore: a" "docs: b" "perf: c" "refactor: d" "test: e" "ci: f" "style: g" "build: h" "revert: i"
-  check "" # no commits since the tag
+  # HEAD sitting exactly on the release tag is a resumable release (see check_head_tag)
+  check "2.0.0"
   check "2.1.0" "feat: a" "fix: b" "chore: c" "docs: d"
   # mixed case scope-less breaking with bodies before the !: marker
   check "3.0.0" $'feat(engine): subject\n\nBREAKING CHANGE: footer wins over type'
+
+  # resuming a release whose tag was pushed but whose release never appeared
+  check_head_tag "2.1.0" "feat: add thing" v2.1.0
+  check_head_tag "2.1.0" "chore: nothing releaseable" v2.1.0
+  check_head_tag "2.2.0" "feat: x" v2.1.0 v2.2.0
+  check_head_tag "2.0.1" "fix: bug" nightly
 
   # no tags at all -> error out (the tree keeps no version literal)
   total=$((total + 1))

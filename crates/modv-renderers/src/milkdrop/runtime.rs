@@ -16,12 +16,17 @@
 //! built with [`MilkRuntime::new`]:
 //!
 //! ```ignore
-//! let runtime = MilkRuntime::new(Arc::new(device), Arc::new(queue), 4);
+//! let runtime = MilkRuntime::new(
+//!     Arc::new(device),
+//!     Arc::new(queue),
+//!     DEFAULT_PIPELINE_CACHE_CAPACITY,
+//! );
 //! ```
 //!
 //! `new` keeps the device/queue as `Arc`s and bounds the pipeline cache to
-//! `cache_capacity` entries (at least one; four matches the ISF runtime's
-//! convention). The runtime also owns a [`MilkFailureCache`] for compilation
+//! `cache_capacity` entries (at least one;
+//! [`DEFAULT_PIPELINE_CACHE_CAPACITY`] leaves headroom over the per-frame
+//! working set). The runtime also owns a [`MilkFailureCache`] for compilation
 //! failures and a lazily populated, `Arc<Mutex<_>>`-wrapped GPU cache of
 //! bind-group layouts, samplers, a shared full-screen vertex module and render
 //! pipelines. None of this changes the CPU API below.
@@ -1524,6 +1529,13 @@ impl MilkGpuTargets {
     }
 }
 
+/// Default bound on the MilkDrop pipeline cache.
+///
+/// One rendered frame needs five pipelines at once — warp, comp, blur, copy
+/// and post — so a smaller cache evicts entries and recompiles every frame.
+/// Eight leaves headroom for overlay and utility pipelines.
+pub const DEFAULT_PIPELINE_CACHE_CAPACITY: usize = 8;
+
 /// Per-compositor owner of MilkDrop state.
 ///
 /// Holds the shared failure cache plus optional device/queue handles and the
@@ -1547,8 +1559,10 @@ impl Default for MilkRuntime {
             failures: MilkFailureCache::new(),
             device: None,
             queue: None,
-            cache_capacity: 4,
-            cache: Arc::new(Mutex::new(MilkGpuCache::new(4))),
+            cache_capacity: DEFAULT_PIPELINE_CACHE_CAPACITY,
+            cache: Arc::new(Mutex::new(MilkGpuCache::new(
+                DEFAULT_PIPELINE_CACHE_CAPACITY,
+            ))),
         }
     }
 }
@@ -1565,7 +1579,7 @@ impl fmt::Debug for MilkRuntime {
 
 impl MilkRuntime {
     /// Create a runtime backed by `device`/`queue`, with caches bounded to
-    /// `cache_capacity` entries (4 matches the ISF runtime's convention).
+    /// `cache_capacity` entries (see [`DEFAULT_PIPELINE_CACHE_CAPACITY`]).
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, cache_capacity: usize) -> Self {
         let capacity = cache_capacity.max(1);
         Self {
@@ -3871,6 +3885,37 @@ ret = uv;\n\
                 wave: vec![0.0; 1024],
                 byte_frequency_data: vec![128; 1024],
             },
+        }
+    }
+
+    #[test]
+    fn milk_pipeline_cache_holds_the_full_render_working_set() {
+        let runtime = MilkRuntime::default();
+
+        // The compositor's create_milk_runtime must use this same default
+        // capacity, not a literal 4 that silently undersizes the working set.
+        assert!(
+            runtime.cache_capacity >= 5,
+            "MilkDrop pipeline cache capacity ({}) must hold all five per-frame \
+             pipelines (warp, comp, blur, copy, post); otherwise LRU eviction \
+             forces pipeline recreation every frame",
+            runtime.cache_capacity
+        );
+
+        let mut cache = BoundedCache::new(runtime.cache_capacity);
+        for key in ["warp", "comp", "blur", "copy", "post"] {
+            cache.insert(key.to_string(), ());
+        }
+        assert_eq!(
+            cache.len(),
+            5,
+            "the pipeline cache must retain the complete per-frame working set"
+        );
+        for key in ["warp", "comp", "blur", "copy", "post"] {
+            assert!(
+                cache.get(&key.to_string()).is_some(),
+                "the {key} pipeline was evicted from the per-frame working set"
+            );
         }
     }
 

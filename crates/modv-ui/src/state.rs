@@ -426,8 +426,9 @@ impl SidePanelTab {
 }
 
 /// The default OSC bind host the VmodV app listens on at startup
-/// (`application/index.js` creates the same listener).
-pub const DEFAULT_OSC_HOST: &str = "0.0.0.0";
+/// (`application/index.js` creates the same listener). Loopback by default so
+/// OSC ingress is not exposed off-host unless the user opts in.
+pub const DEFAULT_OSC_HOST: &str = "127.0.0.1";
 
 /// The default OSC port (`application/index.js`).
 pub const DEFAULT_OSC_PORT: u16 = 3333;
@@ -1702,6 +1703,15 @@ pub fn filter_gallery_modules<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn osc_server_draft_defaults_to_loopback() {
+        assert_eq!(DEFAULT_OSC_HOST, "127.0.0.1");
+
+        let state = UiState::default();
+        assert_eq!(state.osc_host_draft, "127.0.0.1");
+        assert_eq!(state.osc_port_draft, DEFAULT_OSC_PORT.to_string());
+    }
 
     #[test]
     fn actions_and_commands_drain_in_order() {

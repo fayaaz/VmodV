@@ -146,8 +146,15 @@ version:
 	@"$(CURDIR)/tools/version.sh"
 
 # Build the VmodV AppImage and Debian package. This is the release entry
-# point; there is no Electron fallback build.
-build: clean appimage-vmodv vmodv-deb
+# point; there is no Electron fallback build. The `.deb` is amd64-only, so a
+# non-amd64 host builds just its native AppImage (an explicit `make vmodv-deb`
+# still reaches the script, which fails fast with the detected host arch).
+BUILD_TARGETS := appimage-vmodv
+ifneq ($(filter $(shell uname -m),x86_64 amd64),)
+BUILD_TARGETS += vmodv-deb
+endif
+
+build: clean $(BUILD_TARGETS)
 
 # VmodV AppImage: reusable Rust toolchain image + cargo cache, no Electron.
 # tools/vmodv-appimage.sh verifies the fat bundle with
@@ -311,6 +318,9 @@ test-e2e-vmodv: docker-cargo-volume
 		--test e2e_manifest \
 		--test e2e_colour \
 		--test e2e_regressions \
+		--test e2e_engine_status \
+		--test e2e_scene_editing \
+		--test e2e_user_modules \
 		-- --test-threads=1)
 
 test-e2e: test-e2e-vmodv

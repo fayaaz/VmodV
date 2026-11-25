@@ -14,8 +14,12 @@
 mod e2e;
 
 use std::fs;
+use std::io::Read;
+use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -384,4 +388,116 @@ fn numeric_module_meta_in_a_saved_snapshot_hydrates_as_booleans() {
     app.quit();
     app.assert_exit(0);
     let _ = fs::remove_dir_all(root);
+}
+
+/// APP-01: a control-socket bind failure must terminate the windowed event loop
+/// and return a non-zero exit instead of leaving `modv-engine` running forever.
+#[test]
+fn control_socket_bind_failure_exits_within_timeout() {
+    let root = e2e::temp_root("vmodv-engine-bind-failure");
+    let user_data = root.join("userData");
+    let home = root.join("home");
+    let runtime_dir = root.join("runtime");
+    fs::create_dir_all(&user_data).expect("create userData");
+    fs::create_dir_all(&home).expect("create home");
+    fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+
+    let socket_path = root.join("control.sock");
+    let _bound_socket =
+        UnixListener::bind(&socket_path).expect("pre-bind the engine's control socket");
+    let display = e2e::TestDisplay::ensure(&root);
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_modv-engine"));
+    command
+        .arg("--socket")
+        .arg(&socket_path)
+        .arg("--width")
+        .arg("320")
+        .arg("--height")
+        .arg("180")
+        .env("MODV_USER_DATA", &user_data)
+        .env("HOME", &home)
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("RUST_BACKTRACE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for key in [
+        "MODV_AUDIO_SOURCE",
+        "MODV_AUDIO_DEVICE",
+        "MODV_ISF_DIR",
+        "MODV_USER_ISF_DIR",
+        "MODV_MEDIA_DIR",
+        "MODV_ENGINE",
+        "MODV_UI",
+    ] {
+        command.env_remove(key);
+    }
+    display.apply(&mut command);
+
+    let mut guard = ChildKillGuard(command.spawn().unwrap_or_else(|error| {
+        panic!(
+            "could not launch {}: {error}",
+            env!("CARGO_BIN_EXE_modv-engine")
+        )
+    }));
+    let mut stdout = guard.0.stdout.take().expect("capture engine stdout");
+    let mut stderr = guard.0.stderr.take().expect("capture engine stderr");
+    let stdout_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).expect("read engine stdout");
+        output
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        stderr.read_to_end(&mut output).expect("read engine stderr");
+        output
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = guard.0.try_wait().expect("poll modv-engine") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = guard.0.kill();
+            let _ = guard.0.wait();
+            let stdout = stdout_reader.join().expect("join engine stdout reader");
+            let stderr = stderr_reader.join().expect("join engine stderr reader");
+            panic!(
+                "modv-engine did not exit after a control-socket bind failure (startup hang)\n\
+                 --- stdout ---\n{}\n--- stderr ---\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+
+    let stdout = stdout_reader.join().expect("join engine stdout reader");
+    let stderr = stderr_reader.join().expect("join engine stderr reader");
+    let output = format!(
+        "--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    assert!(
+        !status.success(),
+        "modv-engine must exit non-zero after a control-socket bind failure ({status})\n{output}"
+    );
+    assert!(
+        output.contains("could not bind control socket"),
+        "modv-engine must fail for the control-socket bind, not display/adapter startup\n{output}"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+struct ChildKillGuard(Child);
+
+impl Drop for ChildKillGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }

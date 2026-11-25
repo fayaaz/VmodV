@@ -569,7 +569,7 @@ impl ControlClient {
 
 // ————————————————— Virtual display —————————————————
 
-struct TestDisplay {
+pub(crate) struct TestDisplay {
     kind: DisplayKind,
     child: Option<Child>,
     env: Vec<(String, String)>,
@@ -585,7 +585,7 @@ enum DisplayKind {
 }
 
 impl TestDisplay {
-    fn ensure(temp_dir: &Path) -> Self {
+    pub(crate) fn ensure(temp_dir: &Path) -> Self {
         // Prefer Wayland when the session offers it; X11/XWayland is the
         // fallback. The headless path below stays on Xvfb because the CI
         // image has no Wayland compositor.
@@ -724,7 +724,7 @@ impl TestDisplay {
         }
     }
 
-    fn apply(&self, command: &mut Command) {
+    pub(crate) fn apply(&self, command: &mut Command) {
         match self.kind {
             DisplayKind::External => {
                 // The harness launches the shell with its private temp

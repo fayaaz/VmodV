@@ -57,8 +57,9 @@
 //! [`PipeWireMonitor::next_chunk`] as [`CaptureError::Stream`].
 
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pipewire as pw;
 use pw::properties::properties;
@@ -74,6 +75,11 @@ use super::capture::{CaptureConfig, CaptureError, ChunkAssembler, ChunkQueue};
 /// How long [`PipeWireMonitor::start`] waits for the loop thread to negotiate a
 /// stream format.
 pub const START_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound on [`sources`]' registry roundtrip. A wedged PipeWire daemon
+/// must not freeze source enumeration (the Audio panel calls it while building
+/// its device list); once the deadline passes, the sources seen so far are
+/// returned.
+pub const SOURCE_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Stream name shown in `pw-top` / `wpctl`.
 pub const STREAM_NAME: &str = "modv-system-audio";
 /// Stream name for a targeted `Audio/Source` capture (input devices).
@@ -131,8 +137,9 @@ pub fn source_from_props(
 /// PipeWire daemon answers (the caller then shows cpal devices only).
 ///
 /// One-shot registry roundtrip: register a listener, sync once, and return
-/// when the server has delivered every global, so this never blocks past the
-/// server's answer.
+/// when the server has delivered every global, or once
+/// [`SOURCE_ENUMERATION_TIMEOUT`] expires (returning what was seen so far), so
+/// a wedged server cannot block the caller forever.
 pub fn sources() -> Vec<SourceInfo> {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -195,8 +202,18 @@ pub fn sources() -> Vec<SourceInfo> {
         })
         .register();
 
+    let deadline = Instant::now() + SOURCE_ENUMERATION_TIMEOUT;
+
     while !done.get() {
-        mainloop.run();
+        let now = Instant::now();
+
+        if now >= deadline {
+            break;
+        }
+
+        mainloop
+            .loop_()
+            .iterate(pw::loop_::Timeout::Finite(deadline - now));
     }
 
     Rc::try_unwrap(found)
@@ -326,6 +343,14 @@ pub fn decode_interleaved_into(bytes: &[u8], format: PcmFormat, out: &mut Vec<f3
     }
 }
 
+/// Latest format the loop thread accepted, readable by the capture handle.
+///
+/// The `process` callback keeps its own copy (so it never locks while
+/// decoding); only [`FormatState::set_format`] / [`FormatState::reject`] write
+/// this slot and only [`PipeWireMonitor`]'s accessors read it. The lock is
+/// therefore held for a single enum assignment at most.
+type SharedFormat = Arc<Mutex<Option<NegotiatedFormat>>>;
+
 /// Format state shared by the `param_changed` and `process` callbacks.
 ///
 /// `param_changed` records the accepted format; `process` decodes nothing
@@ -333,16 +358,33 @@ pub fn decode_interleaved_into(bytes: &[u8], format: PcmFormat, out: &mut Vec<f3
 /// message in the queue and fails the readiness channel exactly once, so
 /// [`PipeWireMonitor::next_chunk`] can keep reporting it without the error
 /// being a one-shot that a single log line swallows.
+///
+/// Every accepted/rejected negotiation is mirrored into [`Self::shared`] so a
+/// [`PipeWireMonitor`] created at startup reports the *current* rate/channel
+/// count after the server renegotiates mid-stream.
 struct FormatState {
     negotiated: Option<NegotiatedFormat>,
+    shared: SharedFormat,
     ready: Option<SyncSender<Result<NegotiatedFormat, CaptureError>>>,
     queue: ChunkQueue,
 }
 
 impl FormatState {
+    /// Test-only constructor: a private shared slot (the production path always
+    /// shares it with the [`PipeWireMonitor`] handle via [`Self::with_shared`]).
+    #[cfg(test)]
     fn new(ready: SyncSender<Result<NegotiatedFormat, CaptureError>>, queue: ChunkQueue) -> Self {
+        Self::with_shared(ready, queue, SharedFormat::default())
+    }
+
+    fn with_shared(
+        ready: SyncSender<Result<NegotiatedFormat, CaptureError>>,
+        queue: ChunkQueue,
+        shared: SharedFormat,
+    ) -> Self {
         Self {
             negotiated: None,
+            shared,
             ready: Some(ready),
             queue,
         }
@@ -351,6 +393,15 @@ impl FormatState {
     /// The accepted format, if the server has negotiated a usable one.
     fn negotiated(&self) -> Option<NegotiatedFormat> {
         self.negotiated
+    }
+
+    /// Mirror the callback-local format into the handle-readable slot. Callers
+    /// must not hold the lock across decoding; it is only ever held for the
+    /// assignment below.
+    fn publish(&self) {
+        if let Ok(mut current) = self.shared.lock() {
+            *current = self.negotiated;
+        }
     }
 
     /// Records a `SPA_PARAM_Format` outcome. Returns whether the format was
@@ -364,6 +415,7 @@ impl FormatState {
         match negotiate(format, rate, channels) {
             Ok(negotiated) => {
                 self.negotiated = Some(negotiated);
+                self.publish();
                 // A successful (re)negotiation clears an earlier rejection.
                 self.queue.clear_error();
                 if let Some(ready) = self.ready.take() {
@@ -383,6 +435,7 @@ impl FormatState {
     /// [`PipeWireMonitor::next_chunk`] after startup).
     fn reject(&mut self, message: String) {
         self.negotiated = None;
+        self.publish();
         self.queue.set_error(message.clone());
         if let Some(ready) = self.ready.take() {
             let _ = ready.send(Err(CaptureError::ConfigUnsupported(message)));
@@ -419,7 +472,11 @@ pub struct PipeWireMonitor {
     quit: Option<pw::channel::Sender<()>>,
     handle: Option<JoinHandle<()>>,
     queue: ChunkQueue,
-    format: NegotiatedFormat,
+    /// Live format published by the loop thread (updated on renegotiation).
+    format: SharedFormat,
+    /// First negotiated format; only used while the live slot is empty (a
+    /// rejected renegotiation parks the stream).
+    startup: NegotiatedFormat,
 }
 
 impl PipeWireMonitor {
@@ -443,10 +500,14 @@ impl PipeWireMonitor {
         let (quit_tx, quit_rx) = pw::channel::channel::<()>();
         let (ready_tx, ready_rx) = sync_channel::<Result<NegotiatedFormat, CaptureError>>(1);
         let thread_queue = queue.clone();
+        let shared = SharedFormat::default();
+        let thread_shared = shared.clone();
 
         let handle = thread::Builder::new()
             .name("modv-pw-monitor".to_string())
-            .spawn(move || monitor_thread(config, thread_queue, ready_tx, quit_rx))
+            .spawn(move || {
+                monitor_thread(config, thread_queue, ready_tx, thread_shared, quit_rx);
+            })
             .map_err(|error| CaptureError::ServerUnavailable(error.to_string()))?;
 
         match ready_rx.recv_timeout(START_TIMEOUT) {
@@ -454,7 +515,8 @@ impl PipeWireMonitor {
                 quit: Some(quit_tx),
                 handle: Some(handle),
                 queue,
-                format,
+                format: shared,
+                startup: format,
             }),
             Ok(Err(error)) => {
                 let _ = quit_tx.send(());
@@ -478,19 +540,34 @@ impl PipeWireMonitor {
         }
     }
 
-    /// The **negotiated** sample rate in Hz (the analyser is built from it).
+    /// The **current** negotiated sample rate in Hz (the analyser is built from
+    /// it and rebuilt when the server renegotiates).
     pub fn sample_rate(&self) -> u32 {
-        self.format.rate
+        self.current_format().rate
     }
 
-    /// The **negotiated** channel count (the monitor emits this interleaved).
+    /// The **current** negotiated channel count (the monitor emits this
+    /// interleaved).
     pub fn channels(&self) -> u16 {
-        u16::try_from(self.format.channels).unwrap_or(1)
+        u16::try_from(self.current_format().channels).unwrap_or(1)
     }
 
-    /// The full negotiated format (sample layout, rate and channels).
+    /// The full current format (sample layout, rate and channels).
+    ///
+    /// Reads the slot the loop thread publishes on every negotiation, so a
+    /// mid-stream renegotiation is visible without another readiness exchange.
     pub fn negotiated_format(&self) -> NegotiatedFormat {
+        self.current_format()
+    }
+
+    /// Live negotiated format, falling back to the startup format only while
+    /// the stream is parked (the shared slot is cleared on a rejection).
+    fn current_format(&self) -> NegotiatedFormat {
         self.format
+            .lock()
+            .ok()
+            .and_then(|current| *current)
+            .unwrap_or(self.startup)
     }
 
     /// Wait up to `timeout` for the next interleaved f32 chunk.
@@ -532,6 +609,7 @@ fn monitor_thread(
     config: CaptureConfig,
     queue: ChunkQueue,
     ready: SyncSender<Result<NegotiatedFormat, CaptureError>>,
+    shared: SharedFormat,
     quit_rx: pw::channel::Receiver<()>,
 ) {
     pw::init();
@@ -595,7 +673,7 @@ fn monitor_thread(
     let data = UserData {
         format: spa::param::audio::AudioInfoRaw::new(),
         assembler: ChunkAssembler::new(config.channels, config.block_frames),
-        formats: FormatState::new(ready.clone(), queue.clone()),
+        formats: FormatState::with_shared(ready.clone(), queue.clone(), shared),
         scratch: Vec::new(),
     };
 
@@ -758,9 +836,50 @@ fn monitor_thread(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use spa::param::audio::AudioFormat;
+    pub(crate) use spa::param::audio::AudioFormat;
+
+    /// Drives negotiation and queues PCM for a hardware-free [`PipeWireMonitor`].
+    /// [`test_monitor`] hands the monitor the same shared format slot this
+    /// control publishes to, so tests can renegotiate mid-stream exactly as a
+    /// live PipeWire server would.
+    pub(crate) struct TestFormatControl {
+        formats: FormatState,
+    }
+
+    impl TestFormatControl {
+        pub(crate) fn set_format(&mut self, format: AudioFormat, rate: u32, channels: u32) -> bool {
+            self.formats.set_format(format, rate, channels)
+        }
+
+        pub(crate) fn negotiated(&self) -> Option<NegotiatedFormat> {
+            self.formats.negotiated()
+        }
+
+        pub(crate) fn push_chunk(&self, chunk: Vec<f32>) {
+            self.formats.queue.push(chunk);
+        }
+    }
+
+    pub(crate) fn test_monitor() -> (PipeWireMonitor, TestFormatControl) {
+        let queue = ChunkQueue::new(super::super::capture::QUEUE_CAPACITY);
+        let (ready_tx, _ready_rx) = sync_channel(1);
+        let shared = SharedFormat::default();
+        let mut formats = FormatState::with_shared(ready_tx, queue.clone(), shared.clone());
+        assert!(formats.set_format(AudioFormat::F32LE, 48_000, 2));
+
+        let startup = formats.negotiated().expect("startup format");
+        let monitor = PipeWireMonitor {
+            quit: None,
+            handle: None,
+            queue,
+            format: shared,
+            startup,
+        };
+
+        (monitor, TestFormatControl { formats })
+    }
 
     #[test]
     fn source_props_keep_only_named_audio_sources() {
@@ -808,6 +927,39 @@ mod tests {
                 name: "node.c".to_string(),
                 description: "node.c".to_string(),
             }),
+        );
+    }
+
+    // A live-daemon test cannot deterministically simulate a connected server
+    // that never completes the registry sync, so inspect the source contract.
+    // Residual (out of scope): sources() still runs on the UI thread.
+    #[test]
+    fn sources_enumeration_has_a_bounded_registry_wait() {
+        let source = include_str!("pipewire.rs");
+        let start = source
+            .find("pub fn sources()")
+            .expect("sources() must exist");
+        let body = &source[start..];
+        let body = body
+            .split_once("\n}\n")
+            .expect("sources() must have a top-level closing brace")
+            .0;
+
+        let compact: String = body.chars().filter(|char| !char.is_whitespace()).collect();
+        assert!(
+            !compact.contains("while!done.get(){mainloop.run();}"),
+            "sources() must not use an unbounded mainloop.run() loop"
+        );
+        assert!(
+            body.contains("SOURCE_ENUMERATION_TIMEOUT")
+                || (body.contains("Duration") && body.contains("Instant::now")),
+            "sources() must declare a monotonic enumeration deadline"
+        );
+        assert!(
+            body.contains("iterate(")
+                || body.contains("recv_timeout(")
+                || body.contains("add_timer("),
+            "sources() must wait with a bounded/timed mainloop iteration"
         );
     }
 
@@ -1099,6 +1251,31 @@ mod tests {
                 rate: 44_100,
                 channels: 1,
             })
+        );
+    }
+
+    #[test]
+    fn format_state_renegotiation_updates_the_shared_format() {
+        let (monitor, mut format) = test_monitor();
+
+        assert_eq!(
+            (monitor.sample_rate(), monitor.channels()),
+            (48_000, 2),
+            "the monitor starts at the first negotiation"
+        );
+
+        assert!(format.set_format(AudioFormat::F32LE, 44_100, 1));
+        assert_eq!(
+            (monitor.sample_rate(), monitor.channels()),
+            (44_100, 1),
+            "monitor accessors must follow renegotiation, not the startup copy"
+        );
+
+        assert!(!format.set_format(AudioFormat::S24LE, 44_100, 1));
+        assert_eq!(
+            format.negotiated(),
+            None,
+            "a rejected negotiation must clear the shared format"
         );
     }
 

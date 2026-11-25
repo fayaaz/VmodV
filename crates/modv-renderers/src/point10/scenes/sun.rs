@@ -583,14 +583,15 @@ struct SunTargets {
     blur_aux_view: wgpu::TextureView,
     mips: [(wgpu::Texture, wgpu::TextureView); 5],
     copy_bind_group: wgpu::BindGroup,
-    /// One bind group per blur source: index 0-4 sample `mips[i]`, index 5
-    /// samples `blur_aux`.
-    blur_bind_groups: [wgpu::BindGroup; 6],
+    /// One bind group per blur pass: index 0-3 sample `mips[i]` for the
+    /// horizontal passes, index 4-7 sample `blur_aux` for the vertical passes.
+    blur_bind_groups: [wgpu::BindGroup; 8],
     composite_bind_group: wgpu::BindGroup,
     tint_bind_group: wgpu::BindGroup,
     screen_bind_group: wgpu::BindGroup,
     copy_uniforms: wgpu::Buffer,
-    blur_uniforms: wgpu::Buffer,
+    /// One per blur pass: 0-3 horizontal, 4-7 vertical.
+    blur_uniforms: [wgpu::Buffer; 8],
     composite_uniforms: wgpu::Buffer,
     tint_uniforms: wgpu::Buffer,
     screen_uniforms: wgpu::Buffer,
@@ -833,11 +834,13 @@ fn build_targets(
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let blur_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("point10-sun-blur-uniforms"),
-        size: std::mem::size_of::<SunBlurUniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
+    let blur_uniforms: [wgpu::Buffer; 8] = std::array::from_fn(|i| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("point10-sun-blur-uniforms-{i}")),
+            size: std::mem::size_of::<SunBlurUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
     });
     let composite_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("point10-sun-composite-uniforms"),
@@ -876,22 +879,15 @@ fn build_targets(
             },
         ],
     });
-    let blur_sources: [&wgpu::TextureView; 6] = [
-        &mips[0].1,
-        &mips[1].1,
-        &mips[2].1,
-        &mips[3].1,
-        &mips[4].1,
-        &blur_aux_view,
-    ];
-    let blur_bind_groups: [wgpu::BindGroup; 6] = blur_sources.map(|source| {
+    let blur_bind_groups: [wgpu::BindGroup; 8] = std::array::from_fn(|i| {
+        let source = if i < 4 { &mips[i].1 } else { &blur_aux_view };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("point10-sun-blur-bind-group"),
+            label: Some(&format!("point10-sun-blur-bind-group-{i}")),
             layout: blur_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: blur_uniforms.as_entire_binding(),
+                    resource: blur_uniforms[i].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1526,7 +1522,7 @@ impl Point10Scene for Sun {
                 _pad: [0.0; 2],
             };
             gpu.queue.write_buffer(
-                &gpu.targets.blur_uniforms,
+                &gpu.targets.blur_uniforms[from_index as usize],
                 0,
                 bytemuck::bytes_of(&horizontal),
             );
@@ -1559,8 +1555,11 @@ impl Point10Scene for Sun {
                 texel: [0.0, spread / to_height as f32],
                 _pad: [0.0; 2],
             };
-            gpu.queue
-                .write_buffer(&gpu.targets.blur_uniforms, 0, bytemuck::bytes_of(&vertical));
+            gpu.queue.write_buffer(
+                &gpu.targets.blur_uniforms[4 + from_index as usize],
+                0,
+                bytemuck::bytes_of(&vertical),
+            );
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("point10-sun-blur-vertical"),
@@ -1579,8 +1578,12 @@ impl Point10Scene for Sun {
                     multiview_mask: None,
                 });
                 pass.set_pipeline(&gpu.blur_pipeline);
-                // Vertical pass samples the aux (`blur_bind_groups[5]`).
-                pass.set_bind_group(0, &gpu.targets.blur_bind_groups[5], &[]);
+                // Vertical pass samples the aux (`blur_bind_groups[4 + i]`).
+                pass.set_bind_group(
+                    0,
+                    &gpu.targets.blur_bind_groups[4 + from_index as usize],
+                    &[],
+                );
                 pass.draw(0..3, 0..1);
             }
         }
@@ -2379,6 +2382,52 @@ mod tests {
         assert_eq!(SUN.tint, [0.882, 0.439, 0.024]);
     }
 
+    // The scene harness always regenerates `sunTarget` inside `render`, so it
+    // cannot feed a controlled impulse into the blur chain. Pin the resource
+    // ownership that prevents queued writes from aliasing across passes.
+    #[test]
+    fn each_blur_pass_has_its_own_uniform_slot() {
+        let Some((device, queue)) = gpu() else {
+            eprintln!("skipping sun blur ownership test: no fallback adapter");
+            return;
+        };
+
+        let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        ctx.resize(64, 64);
+        let mut scene = Sun::new();
+        scene.init(&mut ctx);
+        let targets = &scene
+            .gpu
+            .as_ref()
+            .expect("init creates GPU targets")
+            .targets;
+
+        // Four horizontal passes sample mips[0..4]; four vertical passes
+        // sample the half-resolution auxiliary target.
+        let groups = &targets.blur_bind_groups;
+        assert_eq!(
+            groups.len(),
+            8,
+            "the blur pyramid needs four horizontal and four vertical bind groups"
+        );
+        let slots = &targets.blur_uniforms;
+        assert_eq!(
+            slots.len(),
+            8,
+            "each blur pass needs its own uniform buffer"
+        );
+        for pass in 0..groups.len() {
+            assert!(
+                !groups[pass + 1..].contains(&groups[pass]),
+                "blur pass {pass} reuses another pass's bind group"
+            );
+            assert!(
+                !slots[pass + 1..].contains(&slots[pass]),
+                "blur pass {pass} reuses another pass's uniform buffer"
+            );
+        }
+    }
+
     /// A loud payload for the smoke test (mirrors `scene_tests::loud_payload`).
     fn loud_payload() -> BandPayload {
         let mut payload = BandPayload::silent(44_100.0);
@@ -2447,8 +2496,10 @@ mod tests {
 
         // A frame with the default god-ray weight: the preset's 50-sample
         // accumulate over the blurred tint never reaches exactly zero in the
-        // far corners (measured 2-3/255 in Rgba8, in the JS preset too), so
-        // the compositing contract here is a bound, not an equality.
+        // far corners. A genuine separable pyramid spreads more energy toward
+        // the corners than the old aliased passes (observed alpha 9/255 at
+        // 64 px, versus 2-3/255 before), so keep headroom for adapter rounding
+        // while still bounding the compositing ghost.
         let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         ctx.resize(SIZE, SIZE);
         let mut scene = Sun::new();
@@ -2471,8 +2522,8 @@ mod tests {
         for (x, y) in [(0, 0), (SIZE - 1, 0), (0, SIZE - 1), (SIZE - 1, SIZE - 1)] {
             let index = ((y * SIZE + x) * 4) as usize;
             assert!(
-                pixels[index + 3] <= 4,
-                "corner ({x}, {y}) halo exceeded the preset floor: {:?}",
+                pixels[index + 3] <= 12,
+                "corner ({x}, {y}) halo exceeded the separable-blur ceiling: {:?}",
                 &pixels[index..index + 4]
             );
         }

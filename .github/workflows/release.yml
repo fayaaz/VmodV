@@ -11,12 +11,14 @@ name: Release
 # Every push to `main` that contains qualifying commits cuts a release: the
 # workflow computes the next version, tags the pushed commit `vX.Y.Z` (no
 # version-bump commit is made — the tree keeps no version literal, the tags
-# are the source of truth) and publishes the GitHub release immediately. Each
-# artifact is built once by its own job and attached by a separate `attach-*`
-# job once that build has produced it, so a failed/slow platform build can cost
-# an asset but can never stop the release going out. Versions are tagged
-# `vX.Y.Z`; the `v2.0.0` tag seeds the base for the first automated release
-# (v2.1.0). Commits without feat:/fix:/breaking types do not produce a release.
+# are the source of truth) and creates the GitHub release as a draft
+# immediately. `validate` then runs lint and the test suite, and `publish`
+# flips the draft visible only if both succeed. Each artifact is built once by
+# its own job and attached by a separate `attach-*` job once that build has
+# produced it, so a failed/slow platform build can cost an asset but can never
+# stop the release going out. Versions are tagged `vX.Y.Z`; the `v2.0.0` tag
+# seeds the base for the first automated release (v2.1.0). Commits without
+# feat:/fix:/breaking types do not produce a release.
 on:
   push:
     branches:
@@ -40,6 +42,10 @@ jobs:
   version:
     name: Compute next version
     runs-on: ubuntu-latest
+    # Manual runs are restricted to main: dispatching from a feature branch
+    # must not tag and publish a release from that branch. Push events are
+    # unaffected because they already target `main`.
+    if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
     outputs:
       version: ${{ steps.next.outputs.version }}
       previous_tag: ${{ steps.next.outputs.previous_tag }}
@@ -59,11 +65,71 @@ jobs:
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          # On a resumed run the tag being released is already at HEAD and is
+          # the highest tag; it must not become its own "previous" release.
+          PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -v -F -x "v${VERSION}" | head -n1 || true)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "previous_tag=$PREV" >> "$GITHUB_OUTPUT"
           echo "should_release=true" >> "$GITHUB_OUTPUT"
           echo "Next release: v$VERSION (previous tag: ${PREV:-none})"
+
+  # Lints and tests the tagged commit before the draft release is made
+  # visible. This job gates `publish` only: the draft is created first, so a
+  # failure here leaves an unpublished draft instead of exposing a stable
+  # release. No build job is involved, so publication never waits for an
+  # artifact.
+  validate:
+    name: Lint and test before publishing
+    runs-on: ubuntu-latest
+    needs: version
+    if: ${{ needs.version.outputs.should_release == 'true' }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-cache
+            crates/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Prepare cargo cache mounts
+        run: |
+          mkdir -p .cargo-cache crates/target
+          chmod -R a+rwX .cargo-cache crates/target
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Rust toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: rust
+          tags: modv-rust:local
+          load: true
+          cache-from: type=gha,scope=rust-toolchain
+
+      - name: Clippy and rustfmt
+        run: make engine-lint
+
+      # Same split as vmodv.yml: the GPU/kittest suites share one lavapipe
+      # device, so the workspace runs serial and modv-app is run separately.
+      - name: Workspace tests (modv-app excluded, serial)
+        run: make engine-test ARGS="--workspace --exclude modv-app -- --test-threads=1"
+
+      - name: modv-app unit tests (serial)
+        run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
 
   # Builds the AppImages separately from the `release` job so a Docker/toolchain
   # failure cannot stop the release from being tagged and published. Each
@@ -446,9 +512,9 @@ jobs:
 
   publish-debs:
     name: Publish Ubuntu .debs
-    # The release job builds and publishes the AppImage with the portable
-    # ZIPs; this job attaches only the four per-Ubuntu .debs after the release
-    # exists, so a slow Ubuntu leg cannot block tagging.
+    # The release job tags the commit and creates the draft; this job attaches
+    # only the four per-Ubuntu .debs once the draft exists, so a slow Ubuntu
+    # leg cannot block tagging or publication.
     runs-on: ubuntu-latest
     needs: [version, release, linux-debs]
     if: ${{ needs.version.outputs.should_release == 'true' }}
@@ -470,12 +536,14 @@ jobs:
       - name: Upload Ubuntu debs to the release
         run: gh release upload "v${VERSION}" dist/VmodV-*.deb --clobber
 
-  # Publishes the release as soon as the version is known. No build job is in
-  # `needs`: a slow, flaky or capacity-starved platform leg must never stop the
-  # release going out. Build artifacts are uploaded by the `attach-*` jobs only
-  # when their own build succeeded (see the comment on each attach job).
+  # Tags the commit and creates the GitHub release as a *draft* as soon as the
+  # version is known. No build job is in `needs`: a slow, flaky or
+  # capacity-starved platform leg must never stop the draft from being tagged.
+  # The draft stays invisible until `validate` passes and `publish` flips it;
+  # build artifacts are uploaded by the `attach-*` jobs only when their own
+  # build succeeded (see the comment on each attach job).
   release:
-    name: Tag and publish GitHub release
+    name: Tag and draft GitHub release
     runs-on: ubuntu-latest
     needs: version
     if: ${{ needs.version.outputs.should_release == 'true' }}
@@ -516,17 +584,37 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
-      - name: Publish GitHub release
+      - name: Create draft GitHub release
         run: |
-          # Publish notes only, never build files: the release exists even when
-          # no artifact was produced. Idempotent so a re-run can still attach.
+          # Create a *draft* with notes only, never build files: it stays
+          # invisible if validation fails, and a missing artifact cannot make
+          # creation fail. Idempotent so a re-run can still attach.
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
             echo "Release v${VERSION} already exists; leaving it in place."
           else
             gh release create "v${VERSION}" \
               --title "v${VERSION}" \
+              --draft \
               --notes-file release-notes.md
           fi
+
+  # Makes the validated draft visible. `needs` deliberately contains no build
+  # job: platform artifacts may attach before or after publication, and a
+  # failed build must not keep a validated release hidden.
+  publish:
+    name: Publish the validated GitHub release
+    runs-on: ubuntu-latest
+    needs: [version, release, validate]
+    if: ${{ needs.version.outputs.should_release == 'true' }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # gh cannot infer OWNER/REPO without a checkout, so state it explicitly.
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Publish the validated draft
+        run: gh release edit "v${VERSION}" --draft=false
 
   # Each attach job waits for the release and for one build job with the
   # default `success()` status check: a failed build skips only its own attach

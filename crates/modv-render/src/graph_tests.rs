@@ -111,6 +111,11 @@ fn read_pixels(engine: &Engine, texture: &wgpu::Texture) -> Vec<u8> {
 }
 
 fn assert_pixels_close(actual: &[u8], expected: [u8; 4], tolerance: i16, context: &str) {
+    assert_eq!(
+        actual.len(),
+        (SIZE * SIZE * 4) as usize,
+        "{context}: pixel buffer must contain exactly width × height × 4 bytes"
+    );
     for (index, chunk) in actual.as_chunks::<4>().0.iter().enumerate() {
         for channel in 0..4 {
             let diff = chunk[channel] as i16 - expected[channel] as i16;
@@ -269,6 +274,81 @@ fn normal_source_over_alpha() {
     }
 }
 
+/// `normal` and its `source-over` alias only need the source: fixed-function
+/// source-over can blend straight into the destination without a full-frame
+/// scratch or copy-back. The current shader path must produce the same pixels.
+#[test]
+fn normal_composite_avoids_the_full_frame_scratch() {
+    let Some(engine) = try_engine() else {
+        return;
+    };
+    for blend in [BlendMode::Normal, BlendMode::SourceOver] {
+        let mut surfaces = TextureSurfaces::new();
+        insert_surfaces(&engine, &mut surfaces, &[("src", RED), ("dst", BLUE)]);
+        let graph = FrameGraph {
+            nodes: vec![PassNode::Composite {
+                source: id("src"),
+                target: id("dst"),
+                alpha: 0.5,
+                blend,
+            }],
+        };
+        let mut executor = Executor::new(&engine.device, &engine.queue);
+        executor.reset_scratch_acquisitions();
+        executor
+            .execute(&graph, &mut surfaces)
+            .unwrap_or_else(|e| panic!("composite {} must execute: {e}", blend.name()));
+
+        let dst = surfaces
+            .get(&id("dst"))
+            .expect("dst surface stays registered");
+        let pixels = read_pixels(&engine, dst);
+        assert_pixels_close(&pixels, [128, 0, 128, 255], 1, blend.name());
+        assert_eq!(
+            executor.scratch_acquisitions(),
+            0,
+            "{} must render directly into the destination",
+            blend.name()
+        );
+    }
+}
+
+/// Hue needs the destination to compute the non-separable blend, so it must
+/// retain the scratch path and its existing pixel result.
+#[test]
+fn non_separable_composite_still_uses_the_scratch() {
+    let Some(engine) = try_engine() else {
+        return;
+    };
+    let mut surfaces = TextureSurfaces::new();
+    insert_surfaces(&engine, &mut surfaces, &[("src", RED), ("dst", BLUE)]);
+    let graph = FrameGraph {
+        nodes: vec![PassNode::Composite {
+            source: id("src"),
+            target: id("dst"),
+            alpha: 1.0,
+            blend: BlendMode::Hue,
+        }],
+    };
+    let mut executor = Executor::new(&engine.device, &engine.queue);
+    executor.reset_scratch_acquisitions();
+    executor
+        .execute(&graph, &mut surfaces)
+        .expect("hue composite must execute");
+
+    let dst = surfaces
+        .get(&id("dst"))
+        .expect("dst surface stays registered");
+    let pixels = read_pixels(&engine, dst);
+    // Hue(red, blue): retain red's hue and blue's saturation/luminance.
+    // set_lum clips [1, 0, 0] to luma 0.11, yielding [0.3667, 0, 0].
+    assert_pixels_close(&pixels, [94, 0, 0, 255], 1, "hue");
+    assert!(
+        executor.scratch_acquisitions() > 0,
+        "hue must keep sampling the destination through the full-frame scratch"
+    );
+}
+
 #[test]
 fn composite_missing_texture_reports_error() {
     let Some(engine) = try_engine() else {
@@ -364,12 +444,52 @@ fn composite_scales_a_larger_source_down_onto_the_destination() {
     }
 }
 
-/// The composite writes its destination with `copy_texture_to_texture`, which
-/// needs `COPY_DST`. A destination created without it must be rejected by the
-/// validator *before* the wgpu call (which would otherwise raise an
-/// uncaptured validation error).
+/// `normal`/`source-over` render directly into the destination, so they do
+/// not require `COPY_DST` for a scratch copy-back.
 #[test]
-fn composite_rejects_a_destination_without_copy_dst() {
+fn normal_composite_accepts_a_destination_without_copy_dst() {
+    let Some(engine) = try_engine() else {
+        return;
+    };
+    for blend in [BlendMode::Normal, BlendMode::SourceOver] {
+        let mut surfaces = TextureSurfaces::new();
+        insert_surfaces(&engine, &mut surfaces, &[("src", RED)]);
+        let dst = texture_with_usage(
+            &engine,
+            BLUE,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+        );
+        surfaces.insert(id("dst"), dst);
+        let graph = FrameGraph {
+            nodes: vec![PassNode::Composite {
+                source: id("src"),
+                target: id("dst"),
+                alpha: 1.0,
+                blend,
+            }],
+        };
+        let mut executor = Executor::new(&engine.device, &engine.queue);
+        executor.execute(&graph, &mut surfaces).unwrap_or_else(|e| {
+            panic!(
+                "{} must accept a destination without COPY_DST: {e}",
+                blend.name()
+            )
+        });
+
+        let dst = surfaces
+            .get(&id("dst"))
+            .expect("dst surface stays registered");
+        let pixels = read_pixels(&engine, dst);
+        assert_pixels_close(&pixels, RED, 0, blend.name());
+    }
+}
+
+/// Non-separable modes still render through scratch and copy back, so the
+/// validator must reject a destination without `COPY_DST` before wgpu sees it.
+#[test]
+fn non_separable_composite_rejects_a_destination_without_copy_dst() {
     let Some(engine) = try_engine() else {
         return;
     };
@@ -383,19 +503,18 @@ fn composite_rejects_a_destination_without_copy_dst() {
             | wgpu::TextureUsages::COPY_SRC,
     );
     surfaces.insert(id("dst"), dst);
-
     let graph = FrameGraph {
         nodes: vec![PassNode::Composite {
             source: id("src"),
             target: id("dst"),
             alpha: 1.0,
-            blend: BlendMode::Normal,
+            blend: BlendMode::Hue,
         }],
     };
     let mut executor = Executor::new(&engine.device, &engine.queue);
     let error = executor
         .execute(&graph, &mut surfaces)
-        .expect_err("a destination without COPY_DST must be rejected");
+        .expect_err("hue must reject a destination without COPY_DST");
     let message = format!("{error}");
     assert!(message.contains("COPY_DST"), "{message}");
     assert!(message.contains("composite"), "{message}");

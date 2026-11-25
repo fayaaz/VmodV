@@ -33,7 +33,8 @@
 //! caller can assert which artifact would be built.
 //!
 //! A dry run stages a package tree under `--dist` from `--project-root`'s
-//! `packaging/vmodv/*`, `resources/*` and `LICENSE` fixtures. The natural path
+//! `packaging/vmodv/*`, `resources/*`, `LICENSE` and
+//! `THIRD_PARTY_NOTICES.md` fixtures. The natural path
 //! is `<dist>/VmodV-<version>-amd64<suffix>/DEBIAN/control`, but these tests
 //! locate any `DEBIAN/control` below `--dist`. The staged control must have
 //! `Version: <ver>` verbatim, a numeric `Installed-Size` greater than zero and
@@ -51,6 +52,29 @@
 //! injects Ubuntu bases. No Ubuntu base literal, no `UBUNTU_RELEASE` and no
 //! t64 PipeWire rename belong in the Dockerfile.
 //!
+//! ## Project licence and attribution payload (slug `REL-05`)
+//!
+//! The package must install the repository `LICENSE` as
+//! `usr/share/doc/vmodv/copyright` and `THIRD_PARTY_NOTICES.md` beside it. The
+//! notices preserve the Point10 / Shadertoy attribution and CC BY-NC-SA terms.
+//! Both artifact checkers must require those paths and grep the notices for the
+//! `Point10` and `CC BY-NC-SA` markers; the AppImage checker also has behavioural
+//! coverage in `appimage_bundle.rs`.
+//!
+//! ## amd64-only `.deb` architecture guards (slug `REL-06`)
+//!
+//! `tools/vmodv-deb.sh` must reject non-x86_64/amd64 hosts before building and
+//! validate the ELF machine of any provided or built binary, including in
+//! `--dry-run --binary FILE` mode. `tools/elf-machine.sh FILE` is the shared,
+//! std-only header reader used by the producer and checker; it prints `x86_64`,
+//! `aarch64` or `unknown` for an ELF file and exits non-zero for missing or
+//! non-ELF input. `tools/vmodv-deb-check.sh` must inspect the extracted
+//! `usr/lib/vmodv/modv` and require `x86_64`, rather than trusting the package's
+//! `Architecture: amd64` metadata alone.
+//!
+//! `make build` must select only the native AppImage on non-amd64 hosts, while
+//! an explicit `make vmodv-deb` still reaches the script and fails fast.
+//!
 //! Run with:
 //!
 //! ```text
@@ -61,7 +85,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -76,6 +100,11 @@ const DEB_FLAGS: [&str; 6] = [
     "--version",
     "--suffix",
 ];
+
+/// Attribution fixture staged into the fake project root and expected in the
+/// package's documentation directory.
+const FAKE_THIRD_PARTY_NOTICES: &str =
+    "VmodV third-party notices\nPoint10 material is licensed under CC BY-NC-SA.\n";
 
 /// The 12 host runtime dependencies in `packaging/vmodv/vmodv.control` and in
 /// `tools/vmodv-deb-check.sh`. One list serves Debian and every Ubuntu leg.
@@ -168,6 +197,34 @@ fn write_executable(path: &Path, contents: &str) {
         .unwrap_or_else(|error| panic!("cannot write {}: {error}", path.display()));
     fs::set_permissions(path, fs::Permissions::from_mode(0o755))
         .unwrap_or_else(|error| panic!("cannot chmod {}: {error}", path.display()));
+}
+
+/// A minimal 64-bit little-endian ELF header. Only the identification bytes and
+/// `e_machine` are populated because `tools/elf-machine.sh` must not depend on
+/// `readelf`, `file` or a runnable binary.
+fn write_elf_header(path: &Path, machine: u16) {
+    let mut header = [0_u8; 64];
+    header[..4].copy_from_slice(b"\x7fELF");
+    header[4] = 2; // ELFCLASS64
+    header[5] = 1; // ELFDATA2LSB
+    header[6] = 1; // EV_CURRENT
+    header[18..20].copy_from_slice(&machine.to_le_bytes());
+    fs::write(path, header)
+        .unwrap_or_else(|error| panic!("cannot write ELF fixture {}: {error}", path.display()));
+}
+
+/// Shadow only `uname -m`; every other invocation reaches the real system tool.
+fn write_uname_shim(dir: &Path, machine: &str) {
+    fs::create_dir_all(dir)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", dir.display()));
+    let contents = format!(
+        "#!/bin/sh\n\
+         case \"${{1:-}}\" in\n\
+         \t-m|--machine) printf '%s\\n' '{machine}'; exit 0 ;;\n\
+         \tesac\n\
+         exec /usr/bin/uname \"$@\"\n"
+    );
+    write_executable(&dir.join("uname"), &contents);
 }
 
 /// Recursively collect every regular file under `dir` (std-only, no walkdir).
@@ -271,11 +328,16 @@ fn deb_script_advertises_the_dry_run_contract() {
     );
 }
 
-#[test]
-fn dry_run_stages_control_with_distro_suffix() {
+/// Build the minimal fake project used by the `.deb` dry-run tests and invoke
+/// the producer without cargo, dpkg-deb or the checker.
+fn stage_deb_dry_run(base: &Path) -> Output {
+    stage_deb_dry_run_with_path_prefix(base, None)
+}
+
+/// Variant that puts an additional directory (for example an architecture
+/// `uname` shim) ahead of the forbidden cargo/dpkg-deb shims.
+fn stage_deb_dry_run_with_path_prefix(base: &Path, path_prefix: Option<&Path>) -> Output {
     let repo_root = repo_root();
-    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-matrix"));
-    let base = holder.path();
 
     // Minimal fake `--project-root`: the real control template (so the 12
     // Depends names are exact) and stubs for every other payload input.
@@ -303,9 +365,14 @@ fn dry_run_stages_control_with_distro_suffix() {
     fs::write(textures.join("stub.png"), "fake texture\n").expect("write a fake texture");
     fs::write(project.join("resources/icon.png"), "fake icon\n").expect("write a fake icon");
     fs::write(project.join("LICENSE"), "fake licence\n").expect("write a fake LICENSE");
+    fs::write(
+        project.join("THIRD_PARTY_NOTICES.md"),
+        FAKE_THIRD_PARTY_NOTICES,
+    )
+    .expect("write fake third-party notices");
 
     let binary = base.join("modv-stub");
-    fs::write(&binary, "#!/bin/sh\nexit 0\n").expect("write the fake binary");
+    write_elf_header(&binary, 0x003e); // EM_X86_64
     let dist = base.join("dist");
 
     // `cargo` and `dpkg-deb` are forbidden in a dry run. Put recording shims
@@ -318,12 +385,20 @@ fn dry_run_stages_control_with_distro_suffix() {
     let inherited_path = std::env::var_os("PATH")
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let path = match path_prefix {
+        Some(prefix) => format!(
+            "{}:{}:{inherited_path}",
+            prefix.display(),
+            shim_dir.display()
+        ),
+        None => format!("{}:{inherited_path}", shim_dir.display()),
+    };
 
     let script = repo_root.join("tools/vmodv-deb.sh");
     let script_text = read(&script);
     assert_dry_run_flags(&script_text);
 
-    let output = Command::new("bash")
+    Command::new("bash")
         .arg(&script)
         .arg("--dry-run")
         .arg("--project-root")
@@ -336,13 +411,21 @@ fn dry_run_stages_control_with_distro_suffix() {
         .arg("9.9.9")
         .arg("--suffix")
         .arg("-ubuntu26.04")
-        .env("PATH", format!("{}:{inherited_path}", shim_dir.display()))
+        .env("PATH", path)
         .env("DRY_RUN_FORBIDDEN_LOG", &forbidden_log)
         .env_remove("APP_VERSION")
         .env_remove("VMODV_VERSION")
         .current_dir(&repo_root)
         .output()
-        .expect("spawn bash tools/vmodv-deb.sh --dry-run");
+        .expect("spawn bash tools/vmodv-deb.sh --dry-run")
+}
+
+#[test]
+fn dry_run_stages_control_with_distro_suffix() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-matrix"));
+    let base = holder.path();
+    let dist = base.join("dist");
+    let output = stage_deb_dry_run(base);
 
     assert!(
         output.status.success(),
@@ -360,7 +443,7 @@ fn dry_run_stages_control_with_distro_suffix() {
          VmodV-9.9.9-amd64-ubuntu26.04.deb:\n{stdout}"
     );
 
-    let invoked = fs::read_to_string(&forbidden_log).unwrap_or_default();
+    let invoked = fs::read_to_string(base.join("forbidden-tools.log")).unwrap_or_default();
     assert!(
         invoked.trim().is_empty(),
         "the deb dry-run must not invoke cargo or dpkg-deb, but it invoked: \
@@ -434,6 +517,75 @@ fn dry_run_stages_control_with_distro_suffix() {
     }
 }
 
+/// The package's documentation directory must carry VmodV's own licence and
+/// third-party attribution payload, not just dependency metadata (REL-05).
+#[test]
+fn dry_run_stages_project_licence_and_third_party_notices() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-project-docs"));
+    let base = holder.path();
+    let dist = base.join("dist");
+    let output = stage_deb_dry_run(base);
+    assert!(
+        output.status.success(),
+        "tools/vmodv-deb.sh --dry-run failed with status {:?}\n\
+         stdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let mut staged_files = Vec::new();
+    collect_files(&dist, &mut staged_files);
+    let control = staged_files.iter().find(|path| {
+        path.file_name().and_then(|value| value.to_str()) == Some("control")
+            && path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|value| value.to_str())
+                == Some("DEBIAN")
+    });
+    let control = control.expect("the dry run must stage DEBIAN/control");
+    let package_root = control
+        .parent()
+        .and_then(Path::parent)
+        .expect("DEBIAN/control has a package root");
+    let docs = package_root.join("usr/share/doc/vmodv");
+
+    let copyright = docs.join("copyright");
+    assert!(
+        copyright.is_file(),
+        "{} is not a file: the .deb must install the project LICENSE as its copyright text",
+        copyright.display()
+    );
+    assert_eq!(
+        read(&copyright),
+        "fake licence\n",
+        "{} must be copied from the fake project LICENSE",
+        copyright.display()
+    );
+
+    let notices = docs.join("THIRD_PARTY_NOTICES.md");
+    assert!(
+        notices.is_file(),
+        "{} is not a file: the .deb must install VmodV's third-party notices",
+        notices.display()
+    );
+    let notices_text = read(&notices);
+    assert_eq!(
+        notices_text,
+        FAKE_THIRD_PARTY_NOTICES,
+        "{} must be copied from the fake project's THIRD_PARTY_NOTICES.md",
+        notices.display()
+    );
+    for marker in ["Point10", "CC BY-NC-SA"] {
+        assert!(
+            notices_text.contains(marker),
+            "{} is missing the {marker:?} attribution marker",
+            notices.display()
+        );
+    }
+}
+
 #[test]
 fn checker_uses_the_distro_suffix() {
     let checker = repo_root().join("tools/vmodv-deb-check.sh");
@@ -464,6 +616,38 @@ fn checker_uses_the_distro_suffix() {
     // Debian and all four Ubuntu bases.
     for dep in DEPENDS_NAMES {
         assert_contains(&text, dep, "tools/vmodv-deb-check.sh Depends assertions");
+    }
+}
+
+/// Both release gates must require VmodV's project documents and validate the
+/// attribution markers, rather than accepting dependency copyrights alone.
+#[test]
+fn artifact_checkers_require_project_attribution_documents() {
+    for script_name in ["tools/vmodv-deb-check.sh", "tools/vmodv-appimage-check.sh"] {
+        let script = repo_root().join(script_name);
+        assert!(
+            script.is_file(),
+            "{} is missing: there is no artifact checker",
+            script.display()
+        );
+        let text = read(&script);
+        for path in [
+            "usr/share/doc/vmodv/copyright",
+            "usr/share/doc/vmodv/THIRD_PARTY_NOTICES.md",
+        ] {
+            assert_contains(
+                &text,
+                path,
+                &format!("{script_name} project attribution payload"),
+            );
+        }
+        for marker in ["Point10", "CC BY-NC-SA"] {
+            assert!(
+                text.lines()
+                    .any(|line| line.contains("grep") && line.contains(marker)),
+                "{script_name} does not grep the extracted notices for {marker:?}:\n{text}"
+            );
+        }
     }
 }
 
@@ -664,5 +848,232 @@ fn release_workflow_builds_and_publishes_four_ubuntu_debs() {
         "`gh release create` must publish notes only; artifacts are attached \
          later by the `attach-*` jobs so a failed build cannot stop the release:\n\
          {create_command}"
+    );
+}
+
+#[test]
+fn elf_machine_helper_identifies_supported_arches() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-elf-machine"));
+    let base = holder.path();
+    let helper = repo_root().join("tools/elf-machine.sh");
+
+    for (machine, expected) in [(0x003e_u16, "x86_64"), (0x00b7_u16, "aarch64")] {
+        let elf = base.join(format!("elf-{machine:04x}"));
+        write_elf_header(&elf, machine);
+        let output = Command::new("bash")
+            .arg(&helper)
+            .arg(&elf)
+            .current_dir(repo_root())
+            .output()
+            .expect("spawn bash tools/elf-machine.sh");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "tools/elf-machine.sh failed for e_machine {machine:#06x} with status {:?}\n\
+             stdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status,
+        );
+        assert_eq!(
+            stdout.trim(),
+            expected,
+            "tools/elf-machine.sh misidentified e_machine {machine:#06x}:\n{stdout}"
+        );
+    }
+
+    let text = base.join("not-an-elf");
+    fs::write(&text, "plain text, not an ELF file\n").expect("write the non-ELF fixture");
+    let output = Command::new("bash")
+        .arg(&helper)
+        .arg(&text)
+        .current_dir(repo_root())
+        .output()
+        .expect("spawn bash tools/elf-machine.sh on non-ELF input");
+    assert!(
+        !output.status.success(),
+        "tools/elf-machine.sh accepted non-ELF input with status {:?}\n\
+         stdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn deb_script_rejects_a_non_amd64_host() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-host-arch"));
+    let base = holder.path();
+    let shim_dir = base.join("uname-shims");
+    write_uname_shim(&shim_dir, "aarch64");
+
+    let output = stage_deb_dry_run_with_path_prefix(base, Some(&shim_dir));
+    let diagnostics = format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !output.status.success(),
+        "tools/vmodv-deb.sh accepted an aarch64 host and would build an amd64 .deb \
+         (status {:?}):\n{diagnostics}",
+        output.status,
+    );
+    assert_contains(
+        &diagnostics,
+        "amd64",
+        "the non-amd64 host rejection must explain that .deb packages are amd64-only",
+    );
+    assert_contains(
+        &diagnostics,
+        "aarch64",
+        "the non-amd64 host rejection must name the detected host architecture",
+    );
+}
+
+#[test]
+fn deb_script_rejects_a_non_x86_64_binary() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-deb-binary-arch"));
+    let base = holder.path();
+    let setup = stage_deb_dry_run(base);
+    assert!(
+        setup.status.success(),
+        "could not stage the fake project before testing binary validation: {:?}\n\
+         stdout:\n{}\nstderr:\n{}",
+        setup.status,
+        String::from_utf8_lossy(&setup.stdout),
+        String::from_utf8_lossy(&setup.stderr),
+    );
+
+    let binary = base.join("modv-aarch64");
+    write_elf_header(&binary, 0x00b7); // EM_AARCH64
+    let repo_root = repo_root();
+    let output = Command::new("bash")
+        .arg(repo_root.join("tools/vmodv-deb.sh"))
+        .arg("--dry-run")
+        .arg("--project-root")
+        .arg(base.join("project"))
+        .arg("--binary")
+        .arg(&binary)
+        .arg("--version")
+        .arg("9.9.9")
+        .env_remove("APP_VERSION")
+        .env_remove("VMODV_VERSION")
+        .current_dir(&repo_root)
+        .output()
+        .expect("spawn bash tools/vmodv-deb.sh --dry-run --binary <aarch64 ELF>");
+    let diagnostics = format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !output.status.success(),
+        "tools/vmodv-deb.sh --dry-run accepted an AArch64 ELF for an amd64 package \
+         (status {:?}):\n{diagnostics}",
+        output.status,
+    );
+    assert_contains(
+        &diagnostics,
+        "aarch64",
+        "the binary rejection must name the detected ELF machine",
+    );
+}
+
+#[test]
+fn deb_checker_validates_the_payload_elf_machine() {
+    let checker = repo_root().join("tools/vmodv-deb-check.sh");
+    assert!(
+        checker.is_file(),
+        "{} is missing: there is no .deb checker",
+        checker.display()
+    );
+    let text = read(&checker);
+
+    assert!(
+        text.lines().any(|line| {
+            let line = line.trim();
+            !line.starts_with('#')
+                && line.contains("elf-machine")
+                && line.contains("usr/lib/vmodv/modv")
+        }),
+        "tools/vmodv-deb-check.sh must invoke tools/elf-machine.sh on the extracted \
+         usr/lib/vmodv/modv payload:\n{text}"
+    );
+    assert!(
+        text.lines().any(|line| {
+            let line = line.trim();
+            !line.starts_with('#')
+                && line.contains("x86_64")
+                && (line.contains('=') || line.starts_with("x86_64)"))
+        }),
+        "tools/vmodv-deb-check.sh must require the payload ELF machine to be x86_64:\n{text}"
+    );
+}
+
+#[test]
+fn build_target_skips_the_deb_on_non_amd64() {
+    let holder = TempDirGuard::new(&unique_dir_name("vmodv-build-host-arch"));
+    let base = holder.path();
+    let shim_dir = base.join("uname-shims");
+    write_uname_shim(&shim_dir, "aarch64");
+    let repo_root = repo_root();
+
+    let arm_output = Command::new("make")
+        .args(["-n", "build"])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                shim_dir.display(),
+                std::env::var_os("PATH")
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ),
+        )
+        .current_dir(&repo_root)
+        .output()
+        .expect("spawn make -n build with the aarch64 uname shim");
+    assert!(
+        arm_output.status.success(),
+        "make -n build failed with the aarch64 shim: {:?}\nstdout:\n{}\nstderr:\n{}",
+        arm_output.status,
+        String::from_utf8_lossy(&arm_output.stdout),
+        String::from_utf8_lossy(&arm_output.stderr),
+    );
+    let arm_plan = String::from_utf8_lossy(&arm_output.stdout);
+    assert_contains(
+        &arm_plan,
+        "tools/vmodv-appimage.sh",
+        "the aarch64 make -n build plan (native AppImage)",
+    );
+    assert!(
+        !arm_plan.contains("vmodv-deb"),
+        "make -n build on aarch64 still includes the amd64-only vmodv-deb target:\n{arm_plan}"
+    );
+
+    // Run the same dry-run command without the shim so the AppImage and .deb
+    // assertions cannot both pass against a broken or empty make plan.
+    let native_output = Command::new("make")
+        .args(["-n", "build"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("spawn make -n build with the real host architecture");
+    assert!(
+        native_output.status.success(),
+        "make -n build failed on the native host: {:?}\nstdout:\n{}\nstderr:\n{}",
+        native_output.status,
+        String::from_utf8_lossy(&native_output.stdout),
+        String::from_utf8_lossy(&native_output.stderr),
+    );
+    let native_plan = String::from_utf8_lossy(&native_output.stdout);
+    assert_contains(
+        &native_plan,
+        "tools/vmodv-appimage.sh",
+        "the native make -n build plan (AppImage)",
+    );
+    assert_contains(
+        &native_plan,
+        "vmodv-deb",
+        "the native x86_64 make -n build plan must retain the .deb target",
     );
 }

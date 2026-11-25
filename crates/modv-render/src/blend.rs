@@ -7,18 +7,24 @@
 //!   composite modes); the JS classifies the non-separable quartet
 //!   (`hue`/`saturation`/`color`/`luminosity`) under "Blend Modes".
 //!
-//! ## One code path, by design
+//! ## One shader, two record paths
 //!
 //! The doc sketch optimises the Porter-Duff modes onto fixed-function
 //! `wgpu::BlendState` factors and reserves the shader path for the
-//! non-separable blend modes. This module deliberately implements **every**
-//! mode as one shader code path ([`BLEND_WGSL`]) instead: the separable
-//! blend functions (e.g. multiply needs the `Cb × Cs` product) and the
-//! non-separable HSL functions are not expressible as blend-state factors,
-//! and splitting the path early risks drifting the two implementations apart
-//! on edge cases (un-premultiplication, zero-alpha backdrops). Uniform
-//! correctness first; the fixed-function Porter-Duff fast path is a
-//! documented follow-up once the golden-pixel suite is green.
+//! non-separable blend modes. This module implements **every** mode as one
+//! shader code path ([`BLEND_WGSL`]): the separable blend functions (e.g.
+//! multiply needs the `Cb × Cs` product) and the non-separable HSL functions
+//! are not expressible as blend-state factors, and splitting the formulation
+//! risks drifting two implementations apart on edge cases (un-premultiplication,
+//! zero-alpha backdrops).
+//!
+//! The frame graph does take the fixed-function path where the shader's
+//! output is exactly the premultiplied source: `normal`/`source-over` are
+//! drawn straight into the destination with `LoadOp::Load` and
+//! `src = One, dst = OneMinusSrcAlpha, Add` (a transparent 1×1 DST is bound so
+//! nothing is counted twice). That skips the full-frame scratch and the
+//! copy-back; every other mode still renders into a scratch and copies it
+//! back because it must sample the destination.
 //!
 //! ## Formula reference
 //!

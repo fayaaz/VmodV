@@ -18,6 +18,9 @@
 //! - [`get_default_scene_migrations`] — aggregates the rules in `from..=to`.
 //! - [`apply_default_scene_migrations`] — applies the aggregate to a Scene list
 //!   and the `seededDefaultScenes` list, reporting what happened.
+//! - [`apply_default_scene_migrations_with_ids`] / [`ensure_default_scene_migration_with_ids`]
+//!   — the same entry points with the persisted seeded Scene ids, which
+//!   disambiguate duplicates and target a seeded Scene after a user rename.
 //! - [`ensure_default_scene_migration`] — the call the store makes before
 //!   seeding: applies the migration and returns the definitions that still
 //!   need to be built for the new version.
@@ -90,10 +93,15 @@
 //! `modv-app`), so the helpers take `&mut Vec<Value>`.
 //!
 //! - Names are matched with [`crate::default_scenes::scene_key`] (trim +
-//!   lower-case), like every other seeding/migration helper.
+//!   lower-case), like every other seeding/migration helper. When ids are
+//!   supplied, the id aligned with a seeded name identifies that Scene even
+//!   after a user renames it; a recorded id that no longer exists means the
+//!   rule is skipped, never retargeted to a same-named Scene.
 //! - Only names listed in `seeded_names` are migrated. A user-created Scene
 //!   that happens to share a default's name is never touched (and a user Scene
 //!   whose name is not in `seeded_names` blocks a rename collision, see below).
+//!   Without an id, a name carried by more than one Scene is ambiguous and is
+//!   skipped rather than guessing which one was seeded.
 //! - A **rename** rewrites the Scene's `name` in place, keeps its `id`, and
 //!   replaces the old entry in `seeded_names`. The JS
 //!   `getDefaultScenesToReplace` implements a rename as remove + re-add, so the
@@ -101,12 +109,12 @@
 //!   preserves `currentSceneId`, the Scene's timing override and playlist
 //!   references across the bump; `seeded_names` still maps old → name so
 //!   seeding cannot add a duplicate.
-//! - A **removal** deletes the first seeded Scene carrying the retired name
-//!   (the JS removes one Scene per rule, by id) and drops the name from
-//!   `seeded_names`. Another same-named Scene — a seeded duplicate, a user
-//!   Scene, or an import — is kept. A removed name that still exists in the
-//!   current defaults would be re-seeded, so a rule must only retire names that
-//!   left the data (guarded by the consistency test).
+//! - A **removal** deletes the seeded Scene carrying the retired name (the JS
+//!   removes one Scene per rule, by id) and drops the name from `seeded_names`.
+//!   Another same-named Scene — a seeded duplicate, a user Scene, or an import
+//!   — is kept. A removed name that still exists in the current defaults would
+//!   be re-seeded, so a rule must only retire names that left the data (guarded
+//!   by the consistency test).
 //! - A rename whose target name is already carried by another Scene is
 //!   **skipped** (reported in [`MigrationReport::skipped`]), never merged or
 //!   overwritten.
@@ -195,7 +203,8 @@ pub struct MigrationReport {
     /// Seeded Scenes removed (each name once).
     pub removed: Vec<String>,
     /// Rules that did not apply, keyed by their old/retired name: no seeded
-    /// Scene carried it, or the rename target was already taken.
+    /// Scene carried it, the name was ambiguous, or the rename target was
+    /// already taken.
     pub skipped: Vec<String>,
 }
 
@@ -265,22 +274,50 @@ pub fn get_default_scene_migrations_with(
 /// Renames run before removals (so a bump may rename into a name it retires
 /// later, though the consistency test discourages that). Only names listed in
 /// `seeded_names` are touched; see the module docs for the id/collision rules.
-// The removal path uses `Vec::retain` and the store passes its Scene list, so
-// the public API keeps `&mut Vec` rather than a slice.
+///
+/// This name-only wrapper is the legacy/compatibility entry point: because it
+/// has no seeded ids, a rule whose name is carried by more than one Scene is
+/// treated as ambiguous and skipped.
+// The removal path removes elements from the store's Scene list, so the public
+// API keeps `&mut Vec` rather than a slice.
 #[allow(clippy::ptr_arg)]
 pub fn apply_default_scene_migrations(
     scenes: &mut Vec<Value>,
     seeded_names: &mut Vec<String>,
     migration: &DefaultSceneMigration,
 ) -> MigrationReport {
+    let mut seeded_ids = Vec::new();
+    apply_default_scene_migrations_with_ids(scenes, seeded_names, &mut seeded_ids, migration)
+}
+
+/// [`apply_default_scene_migrations`] with the persisted seeded Scene ids.
+///
+/// `seeded_ids` is kept aligned with `seeded_names` where practical: a rename
+/// keeps the id under the new name and a removal drops it. A recorded id
+/// identifies the seeded Scene regardless of its current name; without one (a
+/// legacy install) a rule only applies when exactly one Scene carries the name.
+#[allow(clippy::ptr_arg)]
+pub fn apply_default_scene_migrations_with_ids(
+    scenes: &mut Vec<Value>,
+    seeded_names: &mut Vec<String>,
+    seeded_ids: &mut Vec<String>,
+    migration: &DefaultSceneMigration,
+) -> MigrationReport {
     let mut report = MigrationReport::default();
 
     for (old_name, new_name) in &migration.rename {
-        apply_rename(scenes, seeded_names, old_name, new_name, &mut report);
+        apply_rename(
+            scenes,
+            seeded_names,
+            seeded_ids,
+            old_name,
+            new_name,
+            &mut report,
+        );
     }
 
     for name in &migration.remove {
-        apply_removal(scenes, seeded_names, name, &mut report);
+        apply_removal(scenes, seeded_names, seeded_ids, name, &mut report);
     }
 
     report
@@ -301,12 +338,31 @@ pub fn ensure_default_scene_migration(
     scenes: &mut Vec<Value>,
     seeded_names: &mut Vec<String>,
 ) -> DefaultSceneMigrationPlan {
-    ensure_default_scene_migrations_with(
+    let mut seeded_ids = Vec::new();
+    ensure_default_scene_migration_with_ids(
+        from_version,
+        to_version,
+        scenes,
+        seeded_names,
+        &mut seeded_ids,
+    )
+}
+
+/// [`ensure_default_scene_migration`] with the persisted seeded Scene ids.
+pub fn ensure_default_scene_migration_with_ids(
+    from_version: i64,
+    to_version: i64,
+    scenes: &mut Vec<Value>,
+    seeded_names: &mut Vec<String>,
+    seeded_ids: &mut Vec<String>,
+) -> DefaultSceneMigrationPlan {
+    ensure_default_scene_migrations_with_rules_and_ids(
         DEFAULT_SCENE_MIGRATIONS,
         from_version,
         to_version,
         scenes,
         seeded_names,
+        seeded_ids,
     )
 }
 
@@ -318,8 +374,28 @@ pub fn ensure_default_scene_migrations_with(
     scenes: &mut Vec<Value>,
     seeded_names: &mut Vec<String>,
 ) -> DefaultSceneMigrationPlan {
+    let mut seeded_ids = Vec::new();
+    ensure_default_scene_migrations_with_rules_and_ids(
+        rules,
+        from_version,
+        to_version,
+        scenes,
+        seeded_names,
+        &mut seeded_ids,
+    )
+}
+
+fn ensure_default_scene_migrations_with_rules_and_ids(
+    rules: &[DefaultSceneMigrationRule],
+    from_version: i64,
+    to_version: i64,
+    scenes: &mut Vec<Value>,
+    seeded_names: &mut Vec<String>,
+    seeded_ids: &mut Vec<String>,
+) -> DefaultSceneMigrationPlan {
     let migration = get_default_scene_migrations_with(rules, from_version, to_version);
-    let report = apply_default_scene_migrations(scenes, seeded_names, &migration);
+    let report =
+        apply_default_scene_migrations_with_ids(scenes, seeded_names, seeded_ids, &migration);
     let existing_names: Vec<String> = scenes
         .iter()
         .filter_map(|scene| scene.get("name").and_then(Value::as_str))
@@ -339,10 +415,100 @@ fn scene_name(scene: &Value) -> Option<&str> {
     scene.get("name").and_then(Value::as_str)
 }
 
-/// Rename the first seeded Scene called `old_name` to `new_name`.
+/// A Scene document's `id`, if it is a string.
+fn scene_id(scene: &Value) -> Option<&str> {
+    scene.get("id").and_then(Value::as_str)
+}
+
+/// The seeded Scene a rule targets, when it can be identified safely.
+enum SeededTarget {
+    /// The Scene index the rule may edit.
+    Scene(usize),
+    /// No seeded Scene matched (the name is not seeded, its recorded Scene is
+    /// gone, or its aligned id is the deleted-seed sentinel).
+    Missing,
+    /// Several Scenes share the name and nothing disambiguates them.
+    Ambiguous,
+}
+
+/// Resolve a rule's `key` to the seeded Scene it may touch.
+///
+/// A recorded id (aligned with `seeded_names`) wins regardless of the Scene's
+/// current name. An aligned empty id is the persisted sentinel for a seeded
+/// Scene the user deleted: it is a known seed with no Scene, so the rule is
+/// skipped rather than retargeted by name. Without an aligned id list at all
+/// (legacy name-only state) the name is only safe to use when exactly one
+/// Scene carries it; duplicate names are ambiguous and must be left alone.
+fn resolve_seeded_target(
+    scenes: &[Value],
+    seeded_names: &[String],
+    seeded_ids: &[String],
+    key: &str,
+) -> SeededTarget {
+    // A rule only applies to names the install recorded as seeded.
+    let Some(name_position) = seeded_names.iter().position(|name| scene_key(name) == key) else {
+        return SeededTarget::Missing;
+    };
+
+    // Ids are aligned with `seeded_names` when both lists were written
+    // together. A recorded id identifies the seeded Scene even after a rename.
+    if seeded_ids.len() == seeded_names.len() {
+        let Some(id) = seeded_ids.get(name_position) else {
+            return SeededTarget::Missing;
+        };
+        let id = id.trim();
+
+        // The empty sentinel: the seed is known, its Scene was deleted. Never
+        // fall back to a same-named Scene, which may be the user's.
+        if id.is_empty() {
+            return SeededTarget::Missing;
+        }
+
+        return match scenes.iter().position(|scene| scene_id(scene) == Some(id)) {
+            Some(index) => SeededTarget::Scene(index),
+            // The recorded Scene is gone. Never fall back to a same-named
+            // Scene, which may be the user's.
+            None => SeededTarget::Missing,
+        };
+    }
+
+    let matches: Vec<usize> = scenes
+        .iter()
+        .enumerate()
+        .filter(|(_, scene)| scene_name(scene).is_some_and(|name| scene_key(name) == key))
+        .map(|(index, _)| index)
+        .collect();
+
+    match matches.len() {
+        0 => SeededTarget::Missing,
+        1 => SeededTarget::Scene(matches[0]),
+        _ => {
+            // Without an aligned id, only the recorded id set can tell a
+            // seeded duplicate from a user Scene sharing the name.
+            let recorded: HashSet<&str> = seeded_ids
+                .iter()
+                .map(String::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .collect();
+            let by_id: Vec<usize> = matches
+                .iter()
+                .copied()
+                .filter(|index| scene_id(&scenes[*index]).is_some_and(|id| recorded.contains(id)))
+                .collect();
+
+            match by_id.as_slice() {
+                [index] => SeededTarget::Scene(*index),
+                _ => SeededTarget::Ambiguous,
+            }
+        }
+    }
+}
+
+/// Rename the seeded Scene called `old_name` to `new_name`.
 fn apply_rename(
     scenes: &mut [Value],
     seeded_names: &mut Vec<String>,
+    seeded_ids: &mut Vec<String>,
     old_name: &str,
     new_name: &str,
     report: &mut MigrationReport,
@@ -357,9 +523,12 @@ fn apply_rename(
         return;
     }
 
-    let Some(index) = seeded_scene_index(scenes, seeded_names, &old_key) else {
-        report.skipped.push(old_name.to_string());
-        return;
+    let index = match resolve_seeded_target(scenes, seeded_names, seeded_ids, &old_key) {
+        SeededTarget::Scene(index) => index,
+        SeededTarget::Missing | SeededTarget::Ambiguous => {
+            report.skipped.push(old_name.to_string());
+            return;
+        }
     };
 
     // Never merge into or overwrite a Scene that already owns the new name
@@ -381,87 +550,103 @@ fn apply_rename(
         return;
     }
 
-    rename_seeded_entry(seeded_names, &old_key, new_name);
+    rename_seeded_entry(seeded_names, seeded_ids, &old_key, new_name);
     report.renamed.push((actual_old, new_name.to_string()));
 }
 
-/// Delete the first seeded Scene called `name` and stop treating the name as
-/// seeded.
+/// Delete the seeded Scene called `name` and stop treating the name as seeded.
 ///
 /// The JS removal path removes **one** Scene per rule — the id
 /// `getDefaultScenesToRemove` reported — and then deletes the name from its
 /// `seededKeys` set (`scenes.js:3028-3047`). Removing every same-named Scene
-/// would delete an unrelated seeded duplicate as well. Dropping *all*
+/// would delete an unrelated user or seeded duplicate as well. Dropping *all*
 /// `seeded_names` entries for the name (not just the first) keeps a second run
 /// from retiring the surviving duplicate: the JS never runs a removal twice for
 /// the same bump, but the engine may re-apply a migration on a failed upgrade.
 fn apply_removal(
     scenes: &mut Vec<Value>,
     seeded_names: &mut Vec<String>,
+    seeded_ids: &mut Vec<String>,
     name: &str,
     report: &mut MigrationReport,
 ) {
     let key = scene_key(name);
-    let seeded: HashSet<String> = seeded_names.iter().map(|name| scene_key(name)).collect();
 
-    if !seeded.contains(&key) {
-        report.skipped.push(name.to_string());
-        return;
-    }
-
-    // Only seeded Scenes are retired; a same-named user Scene is kept, and
-    // exactly one duplicate is removed.
-    let Some(index) = scenes
-        .iter()
-        .position(|scene| scene_name(scene).is_some_and(|scene| scene_key(scene) == key))
-    else {
-        report.skipped.push(name.to_string());
-        return;
+    let index = match resolve_seeded_target(scenes, seeded_names, seeded_ids, &key) {
+        SeededTarget::Scene(index) => index,
+        SeededTarget::Missing | SeededTarget::Ambiguous => {
+            report.skipped.push(name.to_string());
+            return;
+        }
     };
 
     let actual = scene_name(&scenes[index]).unwrap_or(name).to_string();
     scenes.remove(index);
 
-    seeded_names.retain(|seeded| scene_key(seeded) != key);
+    remove_seeded_entries(seeded_names, seeded_ids, &key);
     report.removed.push(actual);
 }
 
-/// Index of the first Scene whose name matches `key` and that was seeded.
-fn seeded_scene_index(scenes: &[Value], seeded_names: &[String], key: &str) -> Option<usize> {
-    let seeded = seeded_names.iter().any(|name| scene_key(name) == key);
-
-    if !seeded {
-        return None;
-    }
-
-    scenes
-        .iter()
-        .position(|scene| scene_name(scene).is_some_and(|name| scene_key(name) == key))
-}
-
-/// Replace the `seeded_names` entry for `old_key` with `new_name`.
+/// Replace the `seeded_names` entry for `old_key` with `new_name`, keeping the
+/// aligned id (if any) under the new name.
 ///
 /// Duplicate old entries collapse to one; when the new name is already in
 /// `seeded_names` (a Scene the user deleted after it was seeded) the old entry
 /// is dropped instead of creating a second entry for the same name.
-fn rename_seeded_entry(seeded_names: &mut Vec<String>, old_key: &str, new_name: &str) {
+fn rename_seeded_entry(
+    seeded_names: &mut Vec<String>,
+    seeded_ids: &mut Vec<String>,
+    old_key: &str,
+    new_name: &str,
+) {
     let new_key = scene_key(new_name);
     let has_new = seeded_names.iter().any(|name| scene_key(name) == new_key);
     let mut replaced = false;
 
-    seeded_names.retain_mut(|name| {
+    retain_seeded_entries(seeded_names, seeded_ids, |name| {
         if scene_key(name) != old_key {
-            return true;
+            return Some(name.to_string());
         }
-
         if has_new || replaced {
-            return false;
+            return None;
         }
-
-        *name = new_name.to_string();
         replaced = true;
-        true
+        Some(new_name.to_string())
     });
+}
+
+/// Drop every `seeded_names` entry for `key` and its aligned id.
+fn remove_seeded_entries(seeded_names: &mut Vec<String>, seeded_ids: &mut Vec<String>, key: &str) {
+    retain_seeded_entries(seeded_names, seeded_ids, |name| {
+        (scene_key(name) != key).then(|| name.to_string())
+    });
+}
+
+/// Rebuild `seeded_names` from the entries `keep` retains, keeping ids aligned
+/// when they were aligned on entry. Dropped entries drop their id with them.
+fn retain_seeded_entries(
+    seeded_names: &mut Vec<String>,
+    seeded_ids: &mut Vec<String>,
+    mut keep: impl FnMut(&str) -> Option<String>,
+) {
+    let ids_aligned = seeded_ids.len() == seeded_names.len();
+    let mut kept_names = Vec::with_capacity(seeded_names.len());
+    let mut kept_ids = Vec::with_capacity(seeded_ids.len());
+
+    for (index, name) in seeded_names.iter().enumerate() {
+        let Some(kept) = keep(name) else {
+            continue;
+        };
+        kept_names.push(kept);
+        if ids_aligned && let Some(id) = seeded_ids.get(index) {
+            kept_ids.push(id.clone());
+        }
+    }
+
+    *seeded_names = kept_names;
+    if ids_aligned {
+        *seeded_ids = kept_ids;
+    }
 }
 
 #[cfg(test)]
@@ -684,6 +869,33 @@ mod tests {
     }
 
     #[test]
+    fn legacy_duplicate_names_are_skipped_not_renamed() {
+        let mut scenes = vec![
+            scene("Strobe Riot", "user-strobe"),
+            scene("Strobe Riot", "seeded-strobe"),
+        ];
+        let mut seeded = vec!["Strobe Riot".to_string()];
+        let before = scenes.clone();
+
+        let report = apply_default_scene_migrations(
+            &mut scenes,
+            &mut seeded,
+            &migration(&[("Strobe Riot", "Renamed Strobe Riot")], &[]),
+        );
+
+        assert_eq!(
+            names(&scenes),
+            vec!["Strobe Riot".to_string(), "Strobe Riot".to_string()],
+            "legacy name-only state must not rename either ambiguous Scene"
+        );
+        assert_eq!(scenes, before, "both Scene payloads must remain untouched");
+        assert_eq!(seeded, vec!["Strobe Riot".to_string()]);
+        assert!(report.renamed.is_empty());
+        assert!(report.removed.is_empty());
+        assert_eq!(report.skipped, vec!["Strobe Riot".to_string()]);
+    }
+
+    #[test]
     fn a_rename_keeps_the_scene_id_and_payload() {
         let mut scenes = vec![scene("Old Mirror Chamber", "mirror-id")];
         let mut seeded = vec!["Old Mirror Chamber".to_string()];
@@ -858,20 +1070,84 @@ mod tests {
     }
 
     #[test]
-    fn removes_one_of_two_duplicate_seeded_scenes_and_keeps_the_other() {
-        // The JS removal path removes **one** Scene (by id) per rule
-        // (`scenes.js:3028-3047`) and splices one `seededDefaultScenes` entry.
-        // A duplicate seeded Scene must not be collateral damage.
+    fn legacy_duplicate_names_are_skipped_not_removed() {
         let mut scenes = vec![
-            scene("Old Retired Scene", "first-id"),
-            scene("Old Retired Scene", "second-id"),
-            scene("Smoke Room", "smoke-id"),
+            scene("Strobe Riot", "user-strobe"),
+            scene("Strobe Riot", "seeded-strobe"),
         ];
-        let mut seeded = vec![
-            "Old Retired Scene".to_string(),
-            "Old Retired Scene".to_string(),
-            "Smoke Room".to_string(),
+        let mut seeded = vec!["Strobe Riot".to_string()];
+        let before = scenes.clone();
+
+        let report = apply_default_scene_migrations(
+            &mut scenes,
+            &mut seeded,
+            &migration(&[], &["Strobe Riot"]),
+        );
+
+        assert_eq!(
+            scenes
+                .iter()
+                .map(|scene| scene["id"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["user-strobe", "seeded-strobe"],
+            "legacy name-only state must not remove either ambiguous Scene"
+        );
+        assert_eq!(scenes, before, "both Scene payloads must remain untouched");
+        assert_eq!(seeded, vec!["Strobe Riot".to_string()]);
+        assert!(report.removed.is_empty());
+        assert!(report.renamed.is_empty());
+        assert_eq!(report.skipped, vec!["Strobe Riot".to_string()]);
+    }
+
+    #[test]
+    fn legacy_unique_name_still_removes_and_renames() {
+        let mut removed_scenes = vec![scene("Strobe Riot", "retired-strobe")];
+        let mut removed_seeded = vec!["Strobe Riot".to_string()];
+
+        let removed_report = apply_default_scene_migrations(
+            &mut removed_scenes,
+            &mut removed_seeded,
+            &migration(&[], &["Strobe Riot"]),
+        );
+
+        assert!(removed_scenes.is_empty());
+        assert!(removed_seeded.is_empty());
+        assert_eq!(removed_report.removed, vec!["Strobe Riot".to_string()]);
+        assert!(removed_report.renamed.is_empty());
+        assert!(removed_report.skipped.is_empty());
+
+        let mut renamed_scenes = vec![scene("Strobe Riot", "renamed-strobe")];
+        let mut renamed_seeded = vec!["Strobe Riot".to_string()];
+
+        let renamed_report = apply_default_scene_migrations(
+            &mut renamed_scenes,
+            &mut renamed_seeded,
+            &migration(&[("Strobe Riot", "Renamed Strobe Riot")], &[]),
+        );
+
+        assert_eq!(
+            names(&renamed_scenes),
+            vec!["Renamed Strobe Riot".to_string()]
+        );
+        assert_eq!(renamed_scenes[0]["id"], json!("renamed-strobe"));
+        assert_eq!(renamed_seeded, vec!["Renamed Strobe Riot".to_string()]);
+        assert_eq!(
+            renamed_report.renamed,
+            vec![("Strobe Riot".to_string(), "Renamed Strobe Riot".to_string())]
+        );
+        assert!(renamed_report.removed.is_empty());
+        assert!(renamed_report.skipped.is_empty());
+    }
+
+    #[test]
+    fn removes_the_unique_seeded_scene_and_keeps_an_unseeded_scene() {
+        // Legacy name-only state is safe when the retired name is unique. The
+        // unrelated unseeded Scene must remain untouched.
+        let mut scenes = vec![
+            scene("Old Retired Scene", "retired-id"),
+            scene("Smoke Room", "user-id"),
         ];
+        let mut seeded = vec!["Old Retired Scene".to_string()];
 
         let report = apply_default_scene_migrations(
             &mut scenes,
@@ -879,42 +1155,37 @@ mod tests {
             &migration(&[], &["Old Retired Scene"]),
         );
 
-        // Exactly one duplicate is gone; the survivor keeps its payload.
         assert_eq!(
             scenes
                 .iter()
                 .map(|scene| scene["id"].as_str().unwrap_or_default())
                 .collect::<Vec<_>>(),
-            vec!["second-id", "smoke-id"]
+            vec!["user-id"]
         );
+        assert_eq!(scenes[0]["name"], json!("Smoke Room"));
         assert_eq!(report.removed, vec!["Old Retired Scene".to_string()]);
-        // The retired name is no longer seeded, so the survivor is not removed
-        // by a re-run (see `a_removal_is_idempotent_with_duplicate_seeded_scenes`).
-        assert_eq!(seeded, vec!["Smoke Room".to_string()]);
+        assert!(report.renamed.is_empty());
+        assert!(report.skipped.is_empty());
+        assert!(seeded.is_empty());
     }
 
     #[test]
-    fn a_removal_is_idempotent_with_duplicate_seeded_scenes() {
-        let mut scenes = vec![
-            scene("Old Retired Scene", "first-id"),
-            scene("Old Retired Scene", "second-id"),
-        ];
-        let mut seeded = vec![
-            "Old Retired Scene".to_string(),
-            "Old Retired Scene".to_string(),
-        ];
+    fn a_removal_is_idempotent() {
+        let mut scenes = vec![scene("Old Retired Scene", "retired-id")];
+        let mut seeded = vec!["Old Retired Scene".to_string()];
         let migration = migration(&[], &["Old Retired Scene"]);
 
         let first = apply_default_scene_migrations(&mut scenes, &mut seeded, &migration);
         assert_eq!(first.removed, vec!["Old Retired Scene".to_string()]);
-        assert_eq!(scenes.len(), 1);
+        assert!(scenes.is_empty());
+        assert!(seeded.is_empty());
 
-        // Re-running the same migration must not eat the surviving duplicate.
+        // Re-running the same migration has no Scene or seeded name left to
+        // remove, so it reports the rule as skipped and changes nothing.
         let second = apply_default_scene_migrations(&mut scenes, &mut seeded, &migration);
         assert!(second.removed.is_empty());
         assert_eq!(second.skipped, vec!["Old Retired Scene".to_string()]);
-        assert_eq!(scenes.len(), 1);
-        assert_eq!(scenes[0]["id"], json!("second-id"));
+        assert!(scenes.is_empty());
         assert!(seeded.is_empty());
     }
 
@@ -950,6 +1221,87 @@ mod tests {
         assert!(report == MigrationReport::default());
         assert_eq!(scenes, before);
         assert_eq!(seeded, vec!["Smoke Room".to_string()]);
+    }
+
+    // ————————————————— id-aware renames and removals —————————————————
+
+    #[test]
+    fn id_aware_removal_skips_a_deleted_seed_without_retargeting_the_name() {
+        let mut scenes = vec![scene("Strobe Riot", "user-strobe")];
+        let mut seeded = vec!["Strobe Riot".to_string()];
+        let mut seeded_ids = vec![String::new()];
+        let before = scenes.clone();
+
+        let report = apply_default_scene_migrations_with_ids(
+            &mut scenes,
+            &mut seeded,
+            &mut seeded_ids,
+            &migration(&[], &["Strobe Riot"]),
+        );
+
+        assert_eq!(
+            scenes, before,
+            "an aligned empty id marks the seed as deleted; a same-named user Scene must survive intact"
+        );
+        assert!(report.removed.is_empty());
+        assert!(report.renamed.is_empty());
+        assert_eq!(report.skipped, vec!["Strobe Riot".to_string()]);
+        assert_eq!(seeded, vec!["Strobe Riot".to_string()]);
+        assert_eq!(seeded_ids, vec![String::new()]);
+    }
+
+    #[test]
+    fn id_aware_rename_targets_the_seeded_scene_after_a_user_rename() {
+        let mut scenes = vec![
+            scene("My Strobe", "seed-strobe"),
+            scene("Strobe Riot", "user-strobe"),
+        ];
+        let mut seeded = vec!["Strobe Riot".to_string()];
+        let mut seeded_ids = vec!["seed-strobe".to_string()];
+
+        let report = apply_default_scene_migrations_with_ids(
+            &mut scenes,
+            &mut seeded,
+            &mut seeded_ids,
+            &migration(&[("Strobe Riot", "New Name")], &[]),
+        );
+
+        assert_eq!(scenes[0]["id"], json!("seed-strobe"));
+        assert_eq!(scenes[0]["name"], json!("New Name"));
+        assert_eq!(scenes[1]["id"], json!("user-strobe"));
+        assert_eq!(scenes[1]["name"], json!("Strobe Riot"));
+        assert_eq!(seeded, vec!["New Name".to_string()]);
+        assert_eq!(seeded_ids, vec!["seed-strobe".to_string()]);
+        assert_eq!(
+            report.renamed,
+            vec![("My Strobe".to_string(), "New Name".to_string())]
+        );
+        assert!(report.removed.is_empty());
+        assert!(report.skipped.is_empty());
+    }
+
+    #[test]
+    fn id_aware_removal_removes_the_seeded_scene_when_names_collide() {
+        let mut scenes = vec![
+            scene("Strobe Riot", "user-strobe"),
+            scene("Strobe Riot", "seed-strobe"),
+        ];
+        let mut seeded = vec!["Strobe Riot".to_string()];
+        let mut seeded_ids = vec!["seed-strobe".to_string()];
+
+        let report = apply_default_scene_migrations_with_ids(
+            &mut scenes,
+            &mut seeded,
+            &mut seeded_ids,
+            &migration(&[], &["Strobe Riot"]),
+        );
+
+        assert_eq!(scenes, vec![scene("Strobe Riot", "user-strobe")]);
+        assert!(seeded.is_empty());
+        assert!(seeded_ids.is_empty());
+        assert_eq!(report.removed, vec!["Strobe Riot".to_string()]);
+        assert!(report.renamed.is_empty());
+        assert!(report.skipped.is_empty());
     }
 
     // ————————————————— seeding integration —————————————————
