@@ -49,6 +49,7 @@ APPIMAGE_ARCH ?= $(shell uname -m | sed -e 's/^amd64$$/x86_64/' -e 's/^arm64$$/a
 
 DOCKER ?= docker
 RUST_IMAGE ?= modv-rust:local
+WASM_IMAGE ?= modv-wasm:local
 CARGO_VOLUME ?= modv-cargo
 HOST_UID ?= $(shell id -u)
 HOST_GID ?= $(shell id -g)
@@ -290,6 +291,29 @@ engine-test: docker-cargo-volume
 engine-lint: docker-cargo-volume
 	$(call run-cargo,clippy --all-targets -- -D warnings)
 	$(call run-cargo,fmt --check)
+
+# GitHub Pages module catalogue. `module-docs` regenerates docs/modules/*.json
+# from the app's registry; `preview-wasm` rebuilds the WebAssembly runtime the
+# live WebGPU previews use. Both outputs are committed so Pages serves plain
+# static files. `pages-data` refreshes both at once.
+module-docs: docker-cargo-volume
+	$(call run-cargo,run --quiet -p modv-app --bin gen-module-docs)
+
+preview-wasm: docker-cargo-volume
+	$(DOCKER) build --target wasm -t "$(WASM_IMAGE)" .
+	$(DOCKER) run --rm \
+		--ulimit core=0 \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		-e HOME=/tmp \
+		-e CARGO_HOME=/cargo \
+		$(CARGO_TARGET_ENV) \
+		-v "$(CURDIR)":/app \
+		-v "$(CARGO_VOLUME)":/cargo \
+		-w /app \
+		"$(WASM_IMAGE)" \
+		bash /app/tools/build-preview-wasm.sh
+
+pages-data: module-docs preview-wasm
 
 # Re-encode resources/isf/rave.exe.fs from tools/rave-words.txt.
 # Uses a throwaway Node container; the app build/tests stay Node-free.

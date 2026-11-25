@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Module catalogue — VmodV</title>
+  <meta name="description" content="Browse all VmodV modules: the ISF shader corpus, built-in effects, 2D modules and Point10 scenes.">
+  <link rel="icon" href="../assets/icon.png">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+  <header class="site-header">
+    <img src="../assets/icon.png" alt="VmodV logo">
+    <a class="brand" href="../index.html">Vmod<span>V</span></a>
+    <nav class="site-nav">
+      <a href="../index.html">Home</a>
+      <a href="../index.html#stats">About</a>
+      <a href="https://github.com/fayaaz/VmodV#readme">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <div class="catalog-head">
+      <h1>Module catalogue</h1>
+      <p>Every module registered by the VmodV engine. Select one to inspect its
+         inputs and — for shaders — watch it render live in your browser.</p>
+    </div>
+
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Search 475 modules by name, author, category…" autocomplete="off">
+      <div class="chips" id="kinds" role="group" aria-label="Filter by module type"></div>
+      <select id="sort" aria-label="Sort modules">
+        <option value="name">Name A–Z</option>
+        <option value="kind">Type</option>
+        <option value="category">Category</option>
+      </select>
+      <span class="result-count" id="count"></span>
+    </div>
+
+    <div class="grid" id="grid" aria-live="polite"></div>
+  </main>
+
+  <div class="backdrop" id="backdrop"></div>
+  <aside class="detail" id="detail" role="dialog" aria-modal="true" aria-labelledby="detail-title" tabindex="-1">
+    <div class="detail-head">
+      <div>
+        <h2 id="detail-title"></h2>
+        <div class="card-meta" id="detail-badges"></div>
+      </div>
+      <button class="close" id="close" aria-label="Close details">×</button>
+    </div>
+    <div id="detail-body"></div>
+  </aside>
+
+  <footer class="footer">
+    <div class="wrap">
+      <span>Generated from the engine's module registry. Live previews need WebGPU.</span>
+      <span><a href="https://github.com/fayaaz/VmodV/blob/main/docs/modules/README.md">How this is built</a> · <a href="https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md">Licences</a></span>
+    </div>
+  </footer>
+
+  <script type="module" src="../assets/catalog.js"></script>
+</body>
+</html>
