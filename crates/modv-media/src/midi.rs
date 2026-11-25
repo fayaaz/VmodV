@@ -76,6 +76,16 @@ pub const TYPE_CLOCK: u8 = 248;
 /// `setup-midi.js:112-114`).
 pub const CC_VALUE_MAX: f64 = 127.0;
 
+/// The channel-voice message type of a status byte: its high nibble, so every
+/// channel of a message family decodes to the same type (`0x90..=0x9F` →
+/// [`TYPE_NOTE_ON`], `0xB0..=0xBF` → [`TYPE_CONTROL_CHANGE`]).
+///
+/// The low nibble stays the MIDI channel, which [`MidiRawMessage::channel`]
+/// carries separately.
+pub const fn channel_voice_type(status: u8) -> u8 {
+    status & 0xF0
+}
+
 /// The `midi/raw` IPC payload:
 ///
 /// ```json
@@ -400,13 +410,14 @@ pub fn apply_raw_message_at(
         return Vec::new();
     }
 
+    // The status byte carries the channel in its low nibble; mask it so every
+    // channel of a family decodes to the same type (`setup-midi.js:87-114`
+    // compares full status bytes and so only understood channel 0).
+    let voice_type = channel_voice_type(message.type_);
+
     // setup-midi.js:87-91 — a latched CC is a note-on from here on.
-    let latched_cc = message.type_ == TYPE_CONTROL_CHANGE && device_state.cc_latch;
-    let written_type = if latched_cc {
-        TYPE_NOTE_ON
-    } else {
-        message.type_
-    };
+    let latched_cc = voice_type == TYPE_CONTROL_CHANGE && device_state.cc_latch;
+    let written_type = if latched_cc { TYPE_NOTE_ON } else { voice_type };
 
     let value = if written_type == TYPE_NOTE_ON {
         if message.data > 0 {
@@ -543,6 +554,57 @@ mod tests {
         assert_eq!(first[0].kind, MidiEventKind::NoteOnLatch);
         assert_eq!(first[0].type_, TYPE_NOTE_ON);
         assert_eq!(state.channel_value(KEY, 2, TYPE_NOTE_ON), Some(1.0));
+    }
+
+    #[test]
+    fn every_channel_decodes_note_on() {
+        let mut state = MidiState::new();
+
+        for channel in 0..=15 {
+            let message = cc(0x90 | channel, channel, 100);
+            let first = apply_raw_message(&mut state, KEY, &message);
+            assert_eq!(first.len(), 1, "channel {channel} emits one event");
+            assert_eq!(
+                first[0].type_, TYPE_NOTE_ON,
+                "channel {channel} note-on type"
+            );
+            assert_eq!(first[0].channel, channel);
+            assert_eq!(
+                state.channel_value(KEY, channel, TYPE_NOTE_ON),
+                Some(1.0),
+                "channel {channel} note-on press"
+            );
+
+            let second = apply_raw_message(&mut state, KEY, &message);
+            assert_eq!(second.len(), 1, "channel {channel} emits one toggle event");
+            assert_eq!(second[0].type_, TYPE_NOTE_ON);
+            assert_eq!(
+                state.channel_value(KEY, channel, TYPE_NOTE_ON),
+                Some(0.0),
+                "channel {channel} note-on toggle"
+            );
+        }
+    }
+
+    #[test]
+    fn every_channel_decodes_control_change() {
+        let mut state = MidiState::new();
+
+        for channel in 0..=15 {
+            let events = apply_raw_message(&mut state, KEY, &cc(0xB0 | channel, channel, 64));
+
+            assert_eq!(events.len(), 1, "channel {channel} emits one event");
+            assert_eq!(
+                events[0].type_, TYPE_CONTROL_CHANGE,
+                "channel {channel} CC type"
+            );
+            assert_eq!(events[0].channel, channel);
+            assert_eq!(
+                state.channel_value(KEY, channel, TYPE_CONTROL_CHANGE),
+                Some(64.0 / 127.0),
+                "channel {channel} CC value is normalised"
+            );
+        }
     }
 
     // setup-midi.js:104-109 — `noteOnLatch` ignores the release.

@@ -11,6 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use midir::{MidiInput, MidiInputConnection};
+use modv_media::midi::channel_voice_type;
 use modv_ui::{MidiLearnArmView, MidiLearnResultView};
 use serde_json::Value;
 
@@ -451,7 +452,7 @@ fn apply_message(store: &mut Store, key: &str, bytes: &[u8]) -> Option<AppliedMi
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let mut type_ = i64::from(message.status);
+    let mut type_ = i64::from(channel_voice_type(message.status));
     let mut data = f64::from(message.data);
     if type_ == TYPE_CC && cc_latch {
         type_ = TYPE_NOTEON;
@@ -496,6 +497,7 @@ fn apply_message(store: &mut Store, key: &str, bytes: &[u8]) -> Option<AppliedMi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn store_with_device() -> (Store, String) {
         let mut store = Store::new();
@@ -549,6 +551,62 @@ mod tests {
             channel_value(&store, &key, 0, 176),
             Some(serde_json::json!(0.5039370078740157))
         );
+    }
+
+    #[test]
+    fn app_path_decodes_note_on_and_cc_on_every_channel() {
+        let (mut store, key) = store_with_device();
+        store.drain_deltas();
+
+        for channel in 0..=15 {
+            let note_status = 0x90 | channel;
+            let applied =
+                apply_message(&mut store, &key, &[note_status, 60, 100]).expect("note-on applied");
+            let deltas = store.drain_deltas();
+            assert_eq!(deltas.len(), 1, "channel {channel} note-on delta");
+            assert_eq!(deltas[0].r#type, "midi/WRITE_DATA");
+            assert_eq!(
+                deltas[0].payload["type"],
+                json!(144),
+                "channel {channel} note-on delta type"
+            );
+            assert_eq!(applied.type_, 144);
+            assert_eq!(
+                channel_value(&store, &key, i64::from(channel), 144),
+                Some(json!(1)),
+                "channel {channel} note-on press"
+            );
+
+            let applied = apply_message(&mut store, &key, &[note_status, 60, 100])
+                .expect("note-on toggle applied");
+            let deltas = store.drain_deltas();
+            assert_eq!(deltas.len(), 1, "channel {channel} note-on toggle delta");
+            assert_eq!(deltas[0].payload["type"], json!(144));
+            assert_eq!(applied.type_, 144);
+            assert_eq!(
+                channel_value(&store, &key, i64::from(channel), 144),
+                Some(json!(0)),
+                "channel {channel} note-on toggle"
+            );
+
+            let cc_status = 0xB0 | channel;
+            let applied = apply_message(&mut store, &key, &[cc_status, 7, 64])
+                .expect("control change applied");
+            let deltas = store.drain_deltas();
+            assert_eq!(deltas.len(), 1, "channel {channel} CC delta");
+            assert_eq!(deltas[0].r#type, "midi/WRITE_DATA");
+            assert_eq!(
+                deltas[0].payload["type"],
+                json!(176),
+                "channel {channel} CC delta type"
+            );
+            assert_eq!(applied.type_, 176);
+            assert_eq!(
+                channel_value(&store, &key, i64::from(channel), 176),
+                Some(json!(64.0 / 127.0)),
+                "channel {channel} CC value is normalised"
+            );
+        }
     }
 
     #[test]
