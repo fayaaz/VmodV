@@ -311,6 +311,9 @@ test-e2e-vmodv: docker-cargo-volume
 		--test e2e_manifest \
 		--test e2e_colour \
 		--test e2e_regressions \
+		--test e2e_engine_status \
+		--test e2e_scene_editing \
+		--test e2e_user_modules \
 		-- --test-threads=1)
 
 test-e2e: test-e2e-vmodv

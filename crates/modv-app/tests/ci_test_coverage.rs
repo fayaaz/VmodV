@@ -1,0 +1,113 @@
+//! REL-03: guard CI coverage for every top-level modv-app integration target.
+//!
+//! Clippy compiles integration test targets, but compilation is not execution:
+//! licence, removed-content, release and packaging guards can rot unnoticed if
+//! CI never runs them. This fast text/filesystem check derives the target stems
+//! from `crates/modv-app/tests/*.rs` and requires each one to be selected by an
+//! explicit `--test` argument in `.github/workflows/vmodv.yml` or by a recipe
+//! line in the Makefile's `test-e2e-vmodv` target, which the workflow invokes.
+//!
+//! Run with:
+//!
+//! ```text
+//! make engine-test ARGS="-p modv-app --test ci_test_coverage -- --test-threads=1"
+//! ```
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+fn repo_root() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    root.canonicalize().unwrap_or(root)
+}
+
+fn read_text(path: &Path) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+}
+
+/// Active lines: no blanks, no comments (`#` starts one even mid-line, so a
+/// commented-out `--test` cannot fake coverage). Makefile lines are limited to
+/// recipes, where the cargo invocation actually lives.
+fn active_lines(contents: &str, recipes_only: bool) -> impl Iterator<Item = &str> {
+    contents
+        .lines()
+        .filter(move |line| {
+            (!recipes_only || line.starts_with('\t'))
+                && !line.trim().is_empty()
+                && !line.trim_start().starts_with('#')
+        })
+        .map(|line| line.split('#').next().unwrap_or_default())
+}
+
+/// Every `--test <target>` selected on an active line.
+fn selected_targets(contents: &str, recipes_only: bool) -> BTreeSet<String> {
+    active_lines(contents, recipes_only)
+        .flat_map(|line| {
+            let tokens = line.split_whitespace().collect::<Vec<_>>();
+            tokens
+                .windows(2)
+                .filter(|pair| pair[0] == "--test")
+                .map(|pair| {
+                    pair[1]
+                        .trim_matches(|ch| matches!(ch, '"' | '\'' | ',' | ';'))
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn every_top_level_integration_target_runs_in_ci() {
+    let root = repo_root();
+    let tests_dir = root.join("crates/modv-app/tests");
+    let targets = fs::read_dir(&tests_dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", tests_dir.display()))
+        .filter_map(|entry| {
+            let path = entry.expect("read integration test entry").path();
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                return None;
+            }
+            Some(
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .expect("UTF-8 integration test stem")
+                    .to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+
+    let workflow = read_text(&root.join(".github/workflows/vmodv.yml"));
+    assert!(
+        active_lines(&workflow, false).any(|line| line.contains("make test-e2e-vmodv")),
+        "REL-03: .github/workflows/vmodv.yml must invoke `make test-e2e-vmodv`; \
+         otherwise integration targets listed only in that Makefile recipe never run in CI"
+    );
+    let workflow_targets = selected_targets(&workflow, false);
+
+    let makefile = read_text(&root.join("Makefile"));
+    let makefile_targets = selected_targets(&makefile, true);
+    let covered = workflow_targets
+        .union(&makefile_targets)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let missing = targets.difference(&covered).cloned().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "REL-03: top-level crates/modv-app/tests/*.rs targets not executed by CI: \
+         {missing:?}. Add `--test <name>` to the modv-app integration step in \
+         .github/workflows/vmodv.yml, or to the `test-e2e-vmodv` recipe in the \
+         Makefile for real-binary tests. Clippy compiling a test does not run it."
+    );
+
+    let unknown = covered.difference(&targets).cloned().collect::<Vec<_>>();
+    assert!(
+        unknown.is_empty(),
+        "REL-03: `--test` targets in .github/workflows/vmodv.yml or Makefile \
+         do not name existing top-level crates/modv-app/tests/*.rs files: {unknown:?}. \
+         Fix the stale or misspelled target names."
+    );
+}
