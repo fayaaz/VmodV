@@ -47,7 +47,7 @@ pub const ROYGBIV_HUES: [f32; 7] = [
 /// The white rotation axis (`_hueAxis = new THREE.Vector3(0.57735, …)`).
 pub const HUE_AXIS: [f32; 3] = [0.577_35, 0.577_35, 0.577_35];
 
-/// Drop-detector thresholds (`phraseColor.js: DROP`).
+/// Drop-detector thresholds (`phraseColor.js: DROP`, plus the adaptive ceiling).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DropOptions {
     /// Minimum climb as a fraction of the current level.
@@ -60,15 +60,25 @@ pub struct DropOptions {
     pub release_sec: f32,
     /// Minimum spacing between hue flips, seconds.
     pub rearm_sec: f32,
+    /// How quickly the phrase ceiling leaks towards the current bass, seconds.
+    ///
+    /// Documented deviation from `phraseColor.js`: the JS keeps a session-wide
+    /// `phraseMax` that never resets. With real (AGC-normalised) audio an early
+    /// loud build can set a ceiling that later, quieter drops never reach, so
+    /// the hue freezes on one colour forever. The ceiling here still tracks
+    /// upward peaks instantly, but decays towards the current level over this
+    /// window, keeping the "near the track's own crest" gate adaptive.
+    pub ceiling_release_sec: f32,
 }
 
-/// `DROP` exactly as the JS declares it.
+/// `DROP` as the JS declares it, plus the adaptive ceiling release.
 pub const DROP: DropOptions = DropOptions {
     rise_frac: 0.4,
     peak_frac: 0.75,
     floor: 0.05,
     release_sec: 2.0,
     rearm_sec: 10.0,
+    ceiling_release_sec: 20.0,
 };
 
 /// `hueRotate(color, angle)` — Rodrigues rotation about [`HUE_AXIS`].
@@ -153,7 +163,7 @@ pub struct DropColorState {
     pub t: f32,
     /// The released rest level of the bass band.
     pub low: Option<f32>,
-    /// The session's running bass maximum.
+    /// The session's peak bass, leaking towards the current level.
     pub phrase_max: Option<f32>,
     /// The previous frame's bass.
     pub prev: Option<f32>,
@@ -189,7 +199,10 @@ impl DropColorState {
 ///   cannot eat the climb on the same step;
 /// * `peak_rise` resets to 0 once the bass sinks (`rise <= 0`) so an earlier
 ///   climb cannot leak into a later re-charge;
-/// * `phrase_max` is the session maximum and never resets;
+/// * the phrase ceiling tracks the session maximum instantly but leaks down
+///   towards the current bass over [`DropOptions::ceiling_release_sec`], so a
+///   loud early build cannot gate out every later, quieter phrase (deviation
+///   from the JS' never-reset `phraseMax`);
 /// * a flip needs `bass < prev` (the crest rolled over), a strong climb, a
 ///   near-ceiling level and the rearm floor.
 ///
@@ -209,7 +222,12 @@ pub fn drop_color_pulse(state: &mut DropColorState, bass: f32, dt: f32, rand: f3
         state.peak_rise.unwrap_or(0.0).max(rise)
     };
     let low = bass.min(prev_low + (bass - prev_low) * (dt / opts.release_sec).min(1.0));
-    let phrase_max = state.phrase_max.unwrap_or(bass).max(bass);
+    // The ceiling rises with a new peak immediately, but leaks towards the
+    // current level so the near-crest gate stays meaningful when the track
+    // settles into a quieter section.
+    let previous_max = state.phrase_max.unwrap_or(bass);
+    let ceiling_k = (dt / opts.ceiling_release_sec).min(1.0);
+    let phrase_max = bass.max(previous_max + (bass - previous_max) * ceiling_k);
     let t = state.t + dt;
 
     let flip = bass < prev
@@ -551,12 +569,15 @@ mod tests {
     }
 
     #[test]
-    fn drop_options_match_the_js() {
+    fn drop_options_match_the_js_except_the_adaptive_ceiling() {
         assert_eq!(DROP.rise_frac, 0.4);
         assert_eq!(DROP.peak_frac, 0.75);
         assert_eq!(DROP.floor, 0.05);
         assert_eq!(DROP.release_sec, 2.0);
         assert_eq!(DROP.rearm_sec, 10.0);
+        // Two rearm windows: a quieter section is recognised after the same
+        // sort of interval the detector requires between flips.
+        assert_eq!(DROP.ceiling_release_sec, 2.0 * DROP.rearm_sec);
         assert_eq!(ROYGBIV_HUES.len(), 7);
     }
 }
