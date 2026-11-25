@@ -93,7 +93,9 @@ use modv_engine::preset::{
 use modv_engine::props::{PropSchema, coerce_prop_value};
 use modv_media::audio::analyser::AudioSnapshot;
 use modv_media::midi::device_key;
-use modv_media::osc::{OscServer, OscValue, apply_osc_message};
+use modv_media::osc::{
+    DEFAULT_MAX_VALUE_BYTES, OscServer, OscValue, apply_osc_message, fit_osc_arguments,
+};
 use modv_renderers::two_d::AudioFrame;
 
 use crate::expressions::{ExpressionCache, ExpressionFailure, resolve_input_value};
@@ -217,10 +219,11 @@ pub struct Store {
     /// Dropping a `Store` drops the servers, which joins their reader threads.
     osc_servers: HashMap<String, OscServer>,
     /// Sender clones handed to the OSC reader threads.
-    osc_tx: Option<std::sync::mpsc::Sender<(String, String, Vec<OscValue>)>>,
+    osc_tx: Option<std::sync::mpsc::SyncSender<OscDatagram>>,
     /// One coalesced message per datagram, drained into `state.osc.data` at
-    /// the start of every frame.
-    osc_rx: Option<std::sync::mpsc::Receiver<(String, String, Vec<OscValue>)>>,
+    /// the start of every frame. Bounded at [`OSC_QUEUE_CAPACITY`]: the reader
+    /// threads drop overload instead of blocking or growing without bound.
+    osc_rx: Option<std::sync::mpsc::Receiver<OscDatagram>>,
     /// Per-smoothing-id state for `meyda/getFeature` smoothing links
     /// (`audio-features.js` `smoothedFeatures`), keyed by `args[1]`.
     link_smoothing: HashMap<String, f64>,
@@ -269,6 +272,33 @@ const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(750);
 
 /// Action namespaces whose successful, state-changing edits enter the history.
 const HISTORY_NAMESPACES: [&str; 5] = ["groups/", "modules/", "inputs/", "expressions/", "tweens/"];
+
+/// OSC messages applied to `state.osc.data` per [`Store::drain_osc`] call.
+///
+/// A datagram flood must not stall the frame: the rest stays queued for the
+/// next frame (the queue itself is bounded by [`OSC_QUEUE_CAPACITY`]).
+pub const MAX_OSC_MESSAGES_PER_FRAME: usize = 256;
+
+/// Capacity of the OSC listener queue shared with the reader threads.
+///
+/// When full, the reader's `try_send` drops the datagram rather than blocking
+/// the socket thread or growing the queue without bound.
+pub const OSC_QUEUE_CAPACITY: usize = 1024;
+
+/// One coalesced datagram queued by an OSC reader: (server id, address, args).
+type OscDatagram = (String, String, Vec<OscValue>);
+
+/// Queues one datagram from a reader thread without ever blocking on a full
+/// queue: overload is dropped rather than stalling the UDP socket or growing
+/// the channel past [`OSC_QUEUE_CAPACITY`].
+fn try_enqueue_osc(
+    tx: &std::sync::mpsc::SyncSender<OscDatagram>,
+    server_id: &str,
+    address: &str,
+    values: &[OscValue],
+) {
+    let _ = tx.try_send((server_id.to_string(), address.to_string(), values.to_vec()));
+}
 
 /// The newest value an Input Link wrote and when its delta was last sent.
 #[derive(Clone, Debug)]
@@ -1572,12 +1602,16 @@ impl Store {
     }
 
     /// `osc/createServer` (`osc.js:26-48`): bind a real UDP listener.
+    ///
+    /// A missing `host` uses [`modv_media::osc::DEFAULT_OSC_HOST`] (loopback),
+    /// so the unauthenticated listener is not exposed to the network unless the
+    /// caller explicitly asks for a wider bind.
     fn osc_create_server(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
         let action = "osc/createServer";
         let host = params
             .get("host")
             .and_then(Value::as_str)
-            .unwrap_or("0.0.0.0")
+            .unwrap_or(modv_media::osc::DEFAULT_OSC_HOST)
             .to_string();
         let port = params
             .get("port")
@@ -1586,7 +1620,7 @@ impl Store {
             .min(u64::from(u16::MAX)) as u16;
 
         if self.osc_tx.is_none() {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = std::sync::mpsc::sync_channel(OSC_QUEUE_CAPACITY);
             self.osc_tx = Some(tx);
             self.osc_rx = Some(rx);
         }
@@ -1595,7 +1629,7 @@ impl Store {
         let thread_id = id.clone();
 
         let server = OscServer::start_messages(&host, port, move |address, values| {
-            let _ = tx.send((thread_id.clone(), address.to_string(), values.to_vec()));
+            try_enqueue_osc(&tx, &thread_id, address, values);
         })
         .map_err(|error| invalid(action, error.to_string()))?;
         let local = server.local_addr();
@@ -1890,17 +1924,21 @@ impl Store {
         })
     }
 
-    /// Drain coalesced OSC datagrams into `state.osc.data` and the mirror.
+    /// Drain up to [`MAX_OSC_MESSAGES_PER_FRAME`] queued OSC datagrams into
+    /// `state.osc.data` and the mirror; the remainder stays queued for the next
+    /// frame so a flood cannot stall a frame.
     ///
     /// The window loop calls this once per frame before Input Links, so a
     /// value that arrived since the last frame is visible to the renderer.
     pub fn drain_osc(&mut self) {
-        let Some(receiver) = &self.osc_rx else {
-            return;
-        };
         let mut messages = Vec::new();
-        while let Ok(message) = receiver.try_recv() {
-            messages.push(message);
+        if let Some(receiver) = &self.osc_rx {
+            while messages.len() < MAX_OSC_MESSAGES_PER_FRAME {
+                match receiver.try_recv() {
+                    Ok(message) => messages.push(message),
+                    Err(_) => break,
+                }
+            }
         }
         for (server_id, address, values) in messages {
             self.apply_osc_datagram(&server_id, &address, &values);
@@ -1908,6 +1946,13 @@ impl Store {
     }
 
     fn apply_osc_datagram(&mut self, server_id: &str, address: &str, values: &[OscValue]) {
+        // Bound the argument list before touching `state.osc`: a value over
+        // the store's budget is refused outright and emits no mirror write.
+        let values = fit_osc_arguments(values, DEFAULT_MAX_VALUE_BYTES);
+        if values.is_empty() {
+            return;
+        }
+
         if !self.state.osc.is_object() {
             self.state.osc = json!({ "data": {} });
         }
@@ -1922,7 +1967,9 @@ impl Store {
         let Some(data) = root.get_mut("data") else {
             return;
         };
-        apply_osc_message(data, address, values);
+        if !apply_osc_message(data, address, values) {
+            return;
+        }
 
         let mut msg = Vec::with_capacity(values.len() + 1);
         msg.push(json!(address));
@@ -5574,6 +5621,9 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Barrier, mpsc};
 
+    const MAX_OSC_MESSAGES_PER_FRAME: usize = 256;
+    const OSC_QUEUE_CAPACITY: usize = 1024;
+
     struct SnapshotTestDirCleanup(PathBuf);
 
     impl Drop for SnapshotTestDirCleanup {
@@ -5599,6 +5649,16 @@ mod tests {
             .expect("createGroup dispatches");
         let id = group["id"].as_str().expect("id").to_string();
         (store, id)
+    }
+
+    fn loopback_osc_server(store: &mut Store) -> Option<String> {
+        match store.dispatch("osc/createServer", json!({ "port": 0 })) {
+            Ok(created) => created["id"].as_str().map(str::to_string),
+            Err(err) => {
+                eprintln!("skipping OSC store test: {err}");
+                None
+            }
+        }
     }
 
     fn gallery_group() -> Value {
@@ -10270,6 +10330,142 @@ mod tests {
                 assert_eq!(delta.payload["id"], json!(id));
             }
         }
+    }
+
+    #[test]
+    fn osc_create_server_defaults_to_loopback() {
+        let mut store = Store::new();
+        let created = match store.dispatch("osc/createServer", json!({ "port": 0 })) {
+            Ok(created) => created,
+            Err(err) => {
+                eprintln!("skipping OSC loopback-default test: {err}");
+                return;
+            }
+        };
+        let returned_host = created["host"].as_str().unwrap_or("<missing>");
+        assert!(
+            returned_host == "127.0.0.1" && modv_media::osc::DEFAULT_OSC_HOST == "127.0.0.1",
+            "osc/createServer returned host {returned_host:?}; DEFAULT_OSC_HOST is {:?}",
+            modv_media::osc::DEFAULT_OSC_HOST
+        );
+        let id = created["id"].as_str().expect("server id");
+        let bound = store.osc_servers.get(id).expect("live server").local_addr();
+        assert!(bound.ip().is_loopback(), "the socket is bound to loopback");
+        assert_ne!(bound.port(), 0, "port 0 selects an ephemeral port");
+    }
+
+    #[test]
+    fn osc_production_writes_obey_the_value_byte_budget() {
+        let mut store = Store::new();
+        store.drain_deltas();
+        let before = store.state().osc.clone();
+
+        store.apply_osc_datagram(
+            "server-1",
+            "/modv/oversized",
+            &[OscValue::Blob(vec![0xab; 512 * 1024])],
+        );
+
+        let unchanged = store.state().osc == before;
+        let writes = store
+            .drain_deltas()
+            .iter()
+            .filter(|delta| delta.r#type == "osc/WRITE_DATA")
+            .count();
+        assert!(
+            unchanged,
+            "an OSC value whose compact JSON exceeds 1 MiB does not reach state.osc.data"
+        );
+        assert_eq!(writes, 0, "a rejected OSC value emits no mirror write");
+    }
+
+    #[test]
+    fn drain_osc_caps_each_frame_and_preserves_the_backlog() {
+        let mut store = Store::new();
+        let Some(server_id) = loopback_osc_server(&mut store) else {
+            return;
+        };
+        let tx = store.osc_tx.as_ref().expect("OSC channel").clone();
+        let queued = MAX_OSC_MESSAGES_PER_FRAME + 44;
+        for index in 0..queued {
+            tx.send((
+                server_id.clone(),
+                format!("/frame/{index}"),
+                vec![OscValue::Int(index as i32)],
+            ))
+            .expect("queue OSC message");
+        }
+
+        store.drain_osc();
+        let first = store
+            .drain_deltas()
+            .iter()
+            .filter(|delta| delta.r#type == "osc/WRITE_DATA")
+            .count();
+        assert_eq!(
+            store.state().osc["data"]["frame"]
+                .as_array()
+                .expect("OSC frame array")
+                .len(),
+            MAX_OSC_MESSAGES_PER_FRAME,
+            "the first frame applies only its capped share"
+        );
+        store.drain_osc();
+        let second = store
+            .drain_deltas()
+            .iter()
+            .filter(|delta| delta.r#type == "osc/WRITE_DATA")
+            .count();
+
+        assert_eq!(
+            (first, second),
+            (
+                MAX_OSC_MESSAGES_PER_FRAME,
+                queued - MAX_OSC_MESSAGES_PER_FRAME
+            ),
+            "each frame applies at most 256 messages and leaves the remainder queued"
+        );
+        assert_eq!(
+            store.state().osc["data"]["frame"]
+                .as_array()
+                .expect("OSC frame array")
+                .len(),
+            queued,
+            "the second frame applies the preserved backlog"
+        );
+    }
+
+    #[test]
+    fn osc_listener_queue_is_bounded_under_overload() {
+        let mut store = Store::new();
+        let Some(server_id) = loopback_osc_server(&mut store) else {
+            return;
+        };
+        store
+            .dispatch("osc/removeServer", json!({ "id": server_id }))
+            .expect("remove OSC server");
+        let tx = store.osc_tx.as_ref().expect("OSC channel").clone();
+        let receiver = store.osc_rx.take().expect("OSC receiver");
+
+        for index in 0..OSC_QUEUE_CAPACITY {
+            tx.send((
+                "server-1".to_string(),
+                format!("/overload/{index}"),
+                vec![OscValue::Int(index as i32)],
+            ))
+            .expect("fill OSC queue");
+        }
+
+        // The reader's production path drops on a full queue: blocking here
+        // would stall the UDP socket instead of bounding the channel.
+        try_enqueue_osc(&tx, "server-1", "/dropped", &[OscValue::Int(1)]);
+
+        assert_eq!(
+            receiver.try_iter().count(),
+            OSC_QUEUE_CAPACITY,
+            "a full queue accepts no extra datagram"
+        );
+        assert!(receiver.try_recv().is_err(), "the queue stays bounded");
     }
 
     #[test]

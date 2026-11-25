@@ -325,13 +325,13 @@ pub struct OscServerView {
     pub id: String,
     /// The listener label; the engine defaults it to `host:port`.
     pub name: String,
-    /// The bound host (`0.0.0.0` for the default server).
+    /// The bound host (`127.0.0.1` for the default server).
     pub host: String,
     pub port: u16,
 }
 
 impl OscServerView {
-    /// `0.0.0.0:3333`.
+    /// `127.0.0.1:3333`.
     pub fn address_label(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
