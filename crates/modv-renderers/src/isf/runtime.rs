@@ -60,8 +60,10 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use super::parser::{IsfDocument, IsfPass};
 use super::props::truthy;
@@ -644,7 +646,9 @@ pub struct IsfRuntime {
     device: wgpu::Device,
     queue: wgpu::Queue,
     /// Compiled fragment pipelines, keyed by
-    /// `"<name>|<format>|<uniform layout signature>"`.
+    /// `"<name>|<format>|<vertex+fragment WGSL hash>|<layout signature>"`.
+    /// The WGSL hashes make a source change under the same name miss; the
+    /// layout signature covers the uniform block and bind-group entries.
     pipelines: BoundedCache<String, wgpu::RenderPipeline>,
     linear_sampler: wgpu::Sampler,
     nearest_sampler: wgpu::Sampler,
@@ -936,6 +940,16 @@ impl IsfRuntime {
         // texture keeps the wgpu-native top-left one, so input sampling stays
         // upright.
         let bottom_left = !custom_vertex && slots.is_empty();
+        // Key the pipeline cache on the final translated stages and the full
+        // layout: the same name can be reused with a different source (media
+        // shader vs corpus name) and must build a fresh pipeline.
+        let vertex_source = vertex_wgsl.as_deref().unwrap_or(if bottom_left {
+            BOTTOM_LEFT_VERTEX_WGSL
+        } else {
+            DEFAULT_VERTEX_WGSL
+        });
+        let shader_hash = hash_shader_stages(vertex_source, &wgsl);
+        let layout_signature = hash_layout_signature(&layout, &layout_entries);
         let (vertex, vertex_entry) = if let Some(wgsl) = vertex_wgsl {
             let module = self
                 .device
@@ -1042,8 +1056,8 @@ impl IsfRuntime {
             let pipeline = self.fragment_pipeline(
                 name,
                 format,
-                layout.size,
-                slots.len(),
+                shader_hash,
+                layout_signature,
                 bottom_left || custom_vertex,
                 custom_vertex,
                 vertex_entry,
@@ -1072,14 +1086,17 @@ impl IsfRuntime {
         })
     }
 
-    /// Get (or create) the fragment pipeline for one target format.
+    /// Get (or create) the fragment pipeline for one target format and layout.
+    ///
+    /// `shader_hash` covers the final translated vertex and fragment WGSL;
+    /// `layout_signature` covers the uniform block and bind-group entries.
     #[allow(clippy::too_many_arguments)]
     fn fragment_pipeline(
         &mut self,
         name: &str,
         format: wgpu::TextureFormat,
-        uniform_size: usize,
-        texture_slots: usize,
+        shader_hash: u64,
+        layout_signature: u64,
         bottom_left: bool,
         custom_vertex: bool,
         vertex_entry: &str,
@@ -1088,7 +1105,7 @@ impl IsfRuntime {
         fragment: &wgpu::ShaderModule,
     ) -> wgpu::RenderPipeline {
         let cache_key = format!(
-            "{name}|{format:?}|{uniform_size}|{texture_slots}|{}|{}",
+            "{name}|{format:?}|{shader_hash:016x}|{layout_signature:016x}|{}|{}",
             if bottom_left { "bl" } else { "tl" },
             if custom_vertex { "vs" } else { "builtin" }
         );
@@ -1548,6 +1565,51 @@ fn round_up_u64(value: u64, align: u64) -> u64 {
     value.div_ceil(align) * align
 }
 
+/// Process-local hash of the final translated vertex/fragment WGSL.
+///
+/// `DefaultHasher` has no cross-process or cross-version stability guarantee,
+/// which is fine for an in-memory cache: only equal strings need equal hashes
+/// within one runtime.
+fn hash_shader_stages(vertex_wgsl: &str, fragment_wgsl: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    vertex_wgsl.hash(&mut hasher);
+    fragment_wgsl.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Process-local hash of the uniform layout and bind-group entries a pipeline
+/// is created against.
+fn hash_layout_signature(layout: &UniformLayout, entries: &[wgpu::BindGroupLayoutEntry]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    layout.size.hash(&mut hasher);
+    for member in &layout.members {
+        member.name.hash(&mut hasher);
+        member.offset.hash(&mut hasher);
+        member.kind.hash(&mut hasher);
+    }
+    for entry in entries {
+        entry.binding.hash(&mut hasher);
+        format!("{:?}", entry.visibility).hash(&mut hasher);
+        match &entry.ty {
+            wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset,
+                min_binding_size,
+            } => format!("buffer:{ty:?}:{has_dynamic_offset}:{min_binding_size:?}"),
+            wgpu::BindingType::Texture {
+                sample_type,
+                view_dimension,
+                multisampled,
+            } => format!("texture:{sample_type:?}:{view_dimension:?}:{multisampled}"),
+            wgpu::BindingType::Sampler(sampler) => format!("sampler:{sampler:?}"),
+            other => format!("{other:?}"),
+        }
+        .hash(&mut hasher);
+        format!("{:?}", entry.count).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 fn write_f32(destination: &mut [u8], offset: usize, value: f32) {
     let bytes = value.to_ne_bytes();
     destination[offset..offset + 4].copy_from_slice(&bytes);
@@ -1935,6 +1997,51 @@ mod tests {
             .compile(&document, "Cache Test", wgpu::TextureFormat::Rgba8Unorm)
             .expect("compiles again");
         assert_eq!(runtime.cached_pipelines(), 1, "the cache is reused");
+    }
+
+    #[test]
+    fn different_source_same_name_does_not_reuse_the_pipeline() {
+        let Some(mut runtime) = try_runtime() else {
+            eprintln!("skipping ISF cache invalidation test: no adapter");
+            return;
+        };
+        let document_a = doc("void main() { gl_FragColor = vec4(1.0); }");
+        let document_b = doc("void main() { gl_FragColor = vec4(0.0); }");
+        let mut compiled_a = runtime
+            .compile(&document_a, "Cache Test", wgpu::TextureFormat::Rgba8Unorm)
+            .expect("document A compiles");
+        assert_eq!(runtime.cached_pipelines(), 1);
+
+        let mut compiled_b = runtime
+            .compile(&document_b, "Cache Test", wgpu::TextureFormat::Rgba8Unorm)
+            .expect("document B compiles");
+        assert_eq!(
+            runtime.cached_pipelines(),
+            2,
+            "changed fragment source must not reuse the old pipeline under the same name"
+        );
+
+        let destination = target(&runtime, 8, wgpu::TextureFormat::Rgba8Unorm);
+        let view = destination.create_view(&wgpu::TextureViewDescriptor::default());
+        for (compiled, expected) in [(&mut compiled_a, 255), (&mut compiled_b, 0)] {
+            runtime
+                .draw(
+                    compiled,
+                    &view,
+                    [8, 8],
+                    IsfFrameUniforms::default(),
+                    &IsfValues::new(),
+                    &[],
+                    &[],
+                )
+                .expect("draws");
+            let pixels =
+                read_texture(runtime.device(), &runtime.queue, &destination).expect("read back");
+            assert_eq!(
+                pixels[0], expected,
+                "the compiled source must reach the target"
+            );
+        }
     }
 
     #[test]
