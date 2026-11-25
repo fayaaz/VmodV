@@ -71,9 +71,9 @@ pub use props::{
 };
 
 pub use runtime::{
-    MILK_UNIFORM_STRIDE, MilkAudio, MilkCompiledPreset, MilkFailureCache, MilkFrameInfo,
-    MilkGpuTargets, MilkInstance, MilkMesh, MilkMeshGpu, MilkQUniforms, MilkRuntime,
-    MilkRuntimeError, MilkUniforms, OverlayFrame, OverlayState, ShapeOverlay, ShapeProgram,
-    WaveOverlay, WavePoint, WaveProgram, begin_frame, compile_preset, evaluate_mesh,
-    evaluate_overlays, new_instance,
+    DEFAULT_PIPELINE_CACHE_CAPACITY, MILK_UNIFORM_STRIDE, MilkAudio, MilkCompiledPreset,
+    MilkFailureCache, MilkFrameInfo, MilkGpuTargets, MilkInstance, MilkMesh, MilkMeshGpu,
+    MilkQUniforms, MilkRuntime, MilkRuntimeError, MilkUniforms, OverlayFrame, OverlayState,
+    ShapeOverlay, ShapeProgram, WaveOverlay, WavePoint, WaveProgram, begin_frame, compile_preset,
+    evaluate_mesh, evaluate_overlays, new_instance,
 };

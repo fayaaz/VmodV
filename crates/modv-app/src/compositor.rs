@@ -310,8 +310,9 @@ use modv_renderers::isf::{
     CompiledIsf, IsfDocument, IsfFrameUniforms, IsfRuntime, IsfValue, IsfValues,
 };
 use modv_renderers::milkdrop::{
-    MILKDROP_LOOK_PROP_NAMES, MilkAudio, MilkFrameInfo, MilkGpuTargets, MilkInstance, MilkRuntime,
-    begin_frame, compile_preset, evaluate_mesh, new_instance,
+    DEFAULT_PIPELINE_CACHE_CAPACITY, MILKDROP_LOOK_PROP_NAMES, MilkAudio, MilkFrameInfo,
+    MilkGpuTargets, MilkInstance, MilkRuntime, begin_frame, compile_preset, evaluate_mesh,
+    new_instance,
 };
 use modv_renderers::point10::audio_bridge::{
     AudioBridge, BandPayload, RawBands, ResponsivenessLevers,
@@ -4165,14 +4166,13 @@ pub(crate) fn scene_prop_number(value: &Value) -> Option<f32> {
 ///
 /// Used both on construction and on [`Compositor::reset`] (a restored state can
 /// reference different presets, so no cached pipelines or failures survive).
-/// The runtime owns `Arc` clones of the device/queue, matching
-/// [`IsfRuntime::new`]'s cache-capacity convention.
+/// The runtime owns `Arc` clones of the device/queue and uses the MilkDrop
+/// default capacity, which holds the full per-frame pipeline working set.
 fn create_milk_runtime(device: &wgpu::Device, queue: &wgpu::Queue) -> MilkRuntime {
-    const CACHE_CAPACITY: usize = 4;
     MilkRuntime::new(
         Arc::new(device.clone()),
         Arc::new(queue.clone()),
-        CACHE_CAPACITY,
+        DEFAULT_PIPELINE_CACHE_CAPACITY,
     )
 }
 
