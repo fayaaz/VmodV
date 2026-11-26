@@ -74,6 +74,9 @@ use crate::window_state::{SavedWindow, WINDOW_STATE_FILENAME, WindowState, user_
 use modv_engine::engine_state::{
     GALLERY_GROUP_NAME, GROUP_ENABLED, Group, ModuleInstance, js_truthy,
 };
+use modv_engine::scene_transition_pick::{
+    FADE_TRANSITION, NATIVE_TRANSITION_NAMES, NONE_TRANSITION,
+};
 use modv_engine::tweens::TweenDescriptor;
 use modv_media::video::{PortalError, PortalStream, ScreenSupport, TestPattern, VideoSourceConfig};
 
@@ -3444,11 +3447,23 @@ impl VmodvApp {
             &scenes_state.scenes,
             &row_names,
         );
-        let performance = performance_view(
+        let mut performance = performance_view(
             &scenes_state.performance,
             self.store.performance_runtime().enabled,
             &row_names,
         );
+        performance.available_transitions = {
+            let mut names = vec![FADE_TRANSITION.to_string(), NONE_TRANSITION.to_string()];
+            names.extend(NATIVE_TRANSITION_NAMES.iter().map(|name| name.to_string()));
+            names.extend(
+                registry
+                    .isf_definitions()
+                    .iter()
+                    .filter(|definition| definition.document.filter_type() == "transition")
+                    .map(|definition| definition.name.clone()),
+            );
+            names
+        };
         let timing_fallback = (performance.min_value, performance.max_value);
         let scenes = scenes_state
             .scenes
