@@ -19,6 +19,13 @@ pub enum HelpTopic {
     Groups,
     Modules,
     InputLinks,
+    AudioLink,
+    MidiLink,
+    TweenLink,
+    DrawLink,
+    OscLink,
+    StateLink,
+    ExpressionLink,
     Gallery,
     Scenes,
     LiveOutput,
@@ -42,6 +49,13 @@ impl HelpTopic {
         Self::Groups,
         Self::Modules,
         Self::InputLinks,
+        Self::AudioLink,
+        Self::MidiLink,
+        Self::TweenLink,
+        Self::DrawLink,
+        Self::OscLink,
+        Self::StateLink,
+        Self::ExpressionLink,
         Self::Gallery,
         Self::Scenes,
         Self::LiveOutput,
@@ -65,6 +79,13 @@ impl HelpTopic {
             Self::Groups => "Groups",
             Self::Modules => "Modules",
             Self::InputLinks => "Input Links",
+            Self::AudioLink => "Audio link",
+            Self::MidiLink => "MIDI link",
+            Self::TweenLink => "Tween link",
+            Self::DrawLink => "Draw link",
+            Self::OscLink => "OSC link",
+            Self::StateLink => "State link",
+            Self::ExpressionLink => "Expression",
             Self::Gallery => "Module Gallery",
             Self::Scenes => "Scenes",
             Self::LiveOutput => "Live Output",
@@ -105,6 +126,38 @@ impl HelpTopic {
                 click + link on one of its controls to drive it from an audio feature, the \
                 detected BPM, Draw, a Tween, MIDI or OSC. Use the editor to set the source, its \
                 range and an optional expression, then click x to remove the link."
+            }
+            Self::AudioLink => {
+                "Audio links drive a Module control from the analysed audio: a band such as \
+                kick, bass, mid or treble, RMS, spectral features, or the detected BPM. Pick a \
+                feature, then set its Min/Max and smoothing to shape how the value moves."
+            }
+            Self::MidiLink => {
+                "MIDI links learn a CC or note from a device and use it to drive the control. Click \
+                Learn, move the control on your MIDI device, then save the link; Forget releases it. \
+                The toggles in the MIDI tab decide which devices and MIDI Clock are accepted."
+            }
+            Self::TweenLink => {
+                "Tween links animate a control from one value to another over time. Edit the \
+                keyframes and durations, then choose whether the cycle follows seconds or BPM; it \
+                can loop or play once."
+            }
+            Self::DrawLink => {
+                "Draw links drive a control from a freehand curve you sketch. Draw the shape across \
+                the pad, set its duration, and the value follows the curve each cycle."
+            }
+            Self::OscLink => {
+                "OSC links read a value written to a state path by an incoming OSC address. Click \
+                Use OSC to fill the default path, or type the path that your OSC messages write to."
+            }
+            Self::StateLink => {
+                "State links read a value straight from an engine state path, such as modules/active. \
+                Use one when another Module or Scene writes the value you want to follow."
+            }
+            Self::ExpressionLink => {
+                "Expressions shape the incoming value with JavaScript-style math. `value` is the \
+                incoming number: `value * 3` triples it, `value / 2` halves it. The identity value \
+                removes the assignment."
             }
             Self::Gallery => {
                 "The Module Gallery displays all available Modules. A module can be dragged \

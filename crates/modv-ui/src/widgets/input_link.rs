@@ -139,6 +139,17 @@ fn open_link_editor_for(
     state.focus_help_topic(HelpTopic::InputLinks);
 }
 
+/// Show the docs for a link source when the user expands its section.
+fn note_section_help<R>(
+    state: &mut UiState,
+    topic: HelpTopic,
+    response: &egui::CollapsingResponse<R>,
+) {
+    if response.header_response.clicked() {
+        state.focus_help_topic(topic);
+    }
+}
+
 fn link_summary(link: &InputLinkView) -> String {
     let source = link.source.as_deref().unwrap_or("?");
     let location = link.location.as_deref().unwrap_or("");
@@ -287,7 +298,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
             } else {
                 editor.tween.clone()
             };
-            egui::CollapsingHeader::new("Tween")
+            let tween_header = egui::CollapsingHeader::new("Tween")
                 .default_open(!draw_source && (editor.source == "tween" || editor.tween.is_some()))
                 .show(ui, |ui| {
                     ui.add_enabled_ui(tween_enabled, |ui| {
@@ -321,6 +332,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                         }
                     });
                 });
+            note_section_help(state, HelpTopic::TweenLink, &tween_header);
 
             let draw_enabled = !editor.exists
                 || editor.source.is_empty()
@@ -328,7 +340,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
             let (draw_min, draw_max) = snapshot
                 .input_value_range(&editor.input_id)
                 .unwrap_or((editor.min, editor.max));
-            egui::CollapsingHeader::new("Draw")
+            let draw_header = egui::CollapsingHeader::new("Draw")
                 .default_open(editor.source == "draw")
                 .show(ui, |ui| {
                     ui.add_enabled_ui(draw_enabled, |ui| {
@@ -368,11 +380,12 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                         }
                     });
                 });
+            note_section_help(state, HelpTopic::DrawLink, &draw_header);
 
             let osc_enabled = !editor.exists
                 || editor.source.is_empty()
                 || matches!(editor.source.as_str(), "osc" | "state");
-            egui::CollapsingHeader::new("OSC")
+            let osc_header = egui::CollapsingHeader::new("OSC")
                 .default_open(editor.source == "osc")
                 .show(ui, |ui| {
                     ui.add_enabled_ui(osc_enabled, |ui| {
@@ -393,10 +406,11 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                         });
                     });
                 });
+            note_section_help(state, HelpTopic::OscLink, &osc_header);
 
-            state_section(ui, &mut editor);
+            state_section(ui, &mut editor, state);
 
-            egui::CollapsingHeader::new("Expression")
+            let expression_header = egui::CollapsingHeader::new("Expression")
                 .default_open(editor.expression_id.is_some())
                 .show(ui, |ui| {
                     ui.label(
@@ -439,6 +453,7 @@ pub fn link_editor_window(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &
                         }
                     });
                 });
+            note_section_help(state, HelpTopic::ExpressionLink, &expression_header);
 
             if let Some(error) = &editor.error {
                 ui.colored_label(theme::DANGER, error);
@@ -527,7 +542,7 @@ fn midi_section(
         || matches!(editor.source.as_str(), "midi" | "state");
     let existing = snapshot.input_links.get(&editor.input_id);
     let has_midi_link = existing.is_some_and(|link| link.source.as_deref() == Some("midi"));
-    egui::CollapsingHeader::new("MIDI")
+    let midi_header = egui::CollapsingHeader::new("MIDI")
         .default_open(editor.source == "midi")
         .show(ui, |ui| {
             if !snapshot.midi.available {
@@ -624,6 +639,7 @@ fn midi_section(
                 });
             });
         });
+    note_section_help(state, HelpTopic::MidiLink, &midi_header);
 }
 
 fn audio_section(
@@ -635,7 +651,7 @@ fn audio_section(
     let audio_enabled = !editor.exists
         || editor.source.is_empty()
         || matches!(editor.source.as_str(), "meyda" | "bpm");
-    egui::CollapsingHeader::new("Audio")
+    let audio_header = egui::CollapsingHeader::new("Audio")
         .default_open(matches!(editor.source.as_str(), "meyda" | "bpm"))
         .show(ui, |ui| {
             ui.add_enabled_ui(audio_enabled, |ui| {
@@ -731,12 +747,13 @@ fn audio_section(
                 }
             });
         });
+    note_section_help(state, HelpTopic::AudioLink, &audio_header);
 }
 
-fn state_section(ui: &mut egui::Ui, editor: &mut LinkEditor) {
+fn state_section(ui: &mut egui::Ui, editor: &mut LinkEditor, state: &mut UiState) {
     let state_enabled =
         editor.source.is_empty() || matches!(editor.source.as_str(), "state" | "midi" | "osc");
-    egui::CollapsingHeader::new("State")
+    let state_header = egui::CollapsingHeader::new("State")
         .default_open(editor.source == "state")
         .show(ui, |ui| {
             ui.add_enabled_ui(state_enabled, |ui| {
@@ -773,6 +790,7 @@ fn state_section(ui: &mut egui::Ui, editor: &mut LinkEditor) {
                 }
             });
         });
+    note_section_help(state, HelpTopic::StateLink, &state_header);
 }
 
 #[cfg(test)]

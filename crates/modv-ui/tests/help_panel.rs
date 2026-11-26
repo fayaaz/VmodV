@@ -8,7 +8,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::model::{GROUP_ENABLED, InheritTarget, module_license};
 use modv_ui::{
-    EngineSnapshot, GroupView, ModuleMetaView, ModuleView, PerformanceView, PropView,
+    EngineSnapshot, GroupView, HelpTopic, ModuleMetaView, ModuleView, PerformanceView, PropView,
     SceneCellView, SceneView, UiState,
 };
 
@@ -39,6 +39,10 @@ const INPUT_LINKS_HELP: &str = "Input Links automate a Module control. Select a 
     Inspector, then click + link on one of its controls to drive it from an audio feature, the \
     detected BPM, Draw, a Tween, MIDI or OSC. Use the editor to set the source, its range and an \
     optional expression, then click x to remove the link.";
+
+const MIDI_LINK_HELP: &str = "MIDI links learn a CC or note from a device and use it to drive the \
+    control. Click Learn, move the control on your MIDI device, then save the link; Forget releases \
+    it. The toggles in the MIDI tab decide which devices and MIDI Clock are accepted.";
 
 fn module_meta() -> ModuleMetaView {
     ModuleMetaView {
@@ -199,8 +203,7 @@ fn assert_module_licence(harness: &mut Harness<'_, UiState>, meta: &ModuleMetaVi
     harness.get_by_label(&format!("License: {}", module_license(meta)));
 }
 
-#[test]
-fn clicking_a_link_shows_input_link_help() {
+fn link_editor_harness() -> Harness<'static, UiState> {
     let mut group = group("group-1", "Effects");
     group.module_ids = vec!["module-1".to_string()];
     let mut module = module_view("module-1", "group-1");
@@ -234,8 +237,57 @@ fn clicking_a_link_shows_input_link_help() {
         .expect("a link control in the Inspector")
         .click();
     harness.run();
+    harness
+}
 
+#[test]
+fn clicking_a_link_shows_input_link_help() {
+    let harness = link_editor_harness();
     harness.get_by_label(INPUT_LINKS_HELP);
+}
+
+#[test]
+fn expanding_a_midi_link_shows_midi_link_help() {
+    let mut harness = link_editor_harness();
+
+    harness
+        .get_by_role_and_label(accesskit::Role::DisclosureTriangle, "MIDI")
+        .click();
+    harness.run();
+
+    assert_eq!(
+        harness.state().help_topic,
+        HelpTopic::MidiLink,
+        "expanding a link source should switch the Help frame"
+    );
+    harness.get_by_label(MIDI_LINK_HELP);
+}
+
+#[test]
+fn every_link_type_section_shows_its_docs() {
+    for (header, topic) in [
+        ("Audio", HelpTopic::AudioLink),
+        ("MIDI", HelpTopic::MidiLink),
+        ("Tween", HelpTopic::TweenLink),
+        ("Draw", HelpTopic::DrawLink),
+        ("OSC", HelpTopic::OscLink),
+        ("State", HelpTopic::StateLink),
+        ("Expression", HelpTopic::ExpressionLink),
+    ] {
+        let mut harness = link_editor_harness();
+        harness
+            .get_all_by_role_and_label(accesskit::Role::DisclosureTriangle, header)
+            .next()
+            .expect("the link editor section header")
+            .click();
+        harness.run();
+
+        assert_eq!(harness.state().help_topic, topic, "{header} section");
+        assert!(
+            harness.get_all_by_label(topic.title()).next().is_some(),
+            "the Help frame should show the {header} docs"
+        );
+    }
 }
 
 #[test]
