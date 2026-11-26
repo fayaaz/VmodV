@@ -45,8 +45,21 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
 - The live compositor output is registered as an egui native texture; there is
   no browser readback in the preview path.
 - **Audio**: the shell starts **silent** — no capture or synthesis on open.
-  The "Use microphone" button requests WebAudio capture and feeds the existing
-  `AudioFrame` contract (bands, wave, FFT magnitudes) into the modules.
+  The microphone selector and button request WebAudio capture, then feed the
+  samples through the native `AudioAnalyser` (FFT, bands, Meyda features,
+  BeatDetektor and TempoDetector), so B-M-T, kicks and BPM match the desktop
+  pipeline.
+- **Default Scenes**: the 56 versioned default Scenes are seeded into the
+  Scenes tab. A cell/whole-Scene apply rebuilds the live stack with its module
+  props, input links and tweens; capture, rename, reorder, enable, timing and
+  cell actions update the Scene documents in place.
+- **Persistence**: the live stack, Tweens, Scenes and performance config are
+  saved to `localStorage` (`vmodv-web-state`) after structural edits and
+  throttled prop edits, and restored on refresh. New default Scenes are seeded
+  when the saved defaults version is older.
+- **Output tab**: `Open output` opens `output.html`, a chrome-less second
+  engine instance that restores the saved stack and renders it full-window. It
+  has its own optional microphone button and never writes the saved state.
 - **Status/health**: real adapter/backend (`webgpu` or `webgl2`), FPS, frame
   time, resolution and audio activity.
 
@@ -54,16 +67,19 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
 
 These are out of scope for this branch, not accidental omissions:
 
-- Filesystem persistence: presets, `scenes.json`, project profiles, media
-  library folders and user ISF/MilkDrop hot-reload.
+- Filesystem persistence: presets, `scenes.json` files, project profiles,
+  media library folders and user ISF/MilkDrop hot-reload. The browser keeps
+  its own state in `localStorage` instead.
 - MilkDrop presets. The ISF corpus is embedded and parsed at startup; user
   ISF/MilkDrop folders still need the browser file API.
 - Input-link expressions, MIDI/OSC link sources and plugin-provided features
   are not wired in the browser shell.
 - OSC, NDI, MIDI and the local JavaScript plugin host.
-- Performance-mode Scenes/playlists (the Scenes tab renders its empty state).
-- Extra native output windows. The browser has one canvas; fullscreen uses the
-  browser's fullscreen API instead.
+- Automatic performance-mode Scene advancing and playlists. The Scenes grid,
+  manual apply and capture work; the performance tick/playlist runtime is
+  native-only.
+- Native output windows. `Open output` opens a browser tab running a second
+  chrome-less instance; there is no cross-tab GPU texture sharing.
 - The JSONL control socket and the native e2e harness. Browser smoke tests use
   Playwright/CDP against the canvas.
 
@@ -73,10 +89,12 @@ These are out of scope for this branch, not accidental omissions:
 | --- | --- |
 | `crates/modv-app` `web` feature | Compiles only the platform-neutral core: compositor, module registry, previews, quality, scene transitions, texture sources. Native modules are `cfg`'d out; `modv-media`, `modv-ipc`, winit, MIDI, notify and the shell are desktop-only target dependencies. |
 | `crates/modv-web/src/state.rs` | Pure `WebState`: one or more Groups, active modules, prop/meta edits, `UiAction` dispatch and the `EngineSnapshot` read model. Unit-tested on the host. |
-| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, egui texture registration, `modv_ui::shell::draw`, action/command drain. |
-| `crates/modv-web/src/audio.rs` | Demo audio and the WebAudio dB → band conversion. |
-| `crates/modv-web/src/mic.rs` | `getUserMedia` → `AnalyserNode` → `AudioFrame`. |
-| `web/` | Canvas page, boot/error overlay, microphone button. |
+| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, egui texture registration, `modv_ui::shell::draw`, action/command drain, and the chrome-less output view. |
+| `crates/modv-web/src/scenes.rs` | Default Scene seeding, Scene apply/capture and the performance read model. |
+| `crates/modv-web/src/storage.rs` | `localStorage` load/save for the persisted live stack. |
+| `crates/modv-web/src/audio.rs` | Demo audio and the native `AudioSnapshot` → `AudioFrame` mapping. |
+| `crates/modv-web/src/mic.rs` | `getUserMedia` → `AnalyserNode` → native `AudioAnalyser` → `AudioFrame`. |
+| `web/` | Canvas page, boot/error overlay, microphone controls, output tab. |
 
 The compositor still owns group targets, module textures, ISF/Point10/2D
 instances and the present pipeline. The only core change needed for WebGPU was
