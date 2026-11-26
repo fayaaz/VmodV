@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use serde_json::Value;
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::file_dialog::{FileDialogAction, FileDialogState};
 use crate::library_drag;
@@ -251,7 +252,7 @@ pub struct UiState {
     pub preview_requests: Vec<PreviewRequest>,
     /// The last Gallery tile we requested a preview for, so a hover does not
     /// enqueue one request per frame.
-    pub last_gallery_request: Option<std::time::Instant>,
+    pub last_gallery_request: Option<Instant>,
     pub gallery_hover: Option<String>,
     /// The Gallery tile whose name is marqueeing and the `egui` clock time its
     /// hover started (seconds). Kept apart from `gallery_hover`, which drives
@@ -283,7 +284,7 @@ pub struct UiState {
     pub command_query: String,
     pub command_selection: usize,
     pub bpm_source: String,
-    pub tap_times: Vec<std::time::Instant>,
+    pub tap_times: Vec<Instant>,
     pub side_panel_tab: SidePanelTab,
     /// The tab an in-flight right-panel drag is carrying, refreshed at the
     /// start of every frame from egui's drag-and-drop payload.
@@ -1179,8 +1180,8 @@ impl DrawCurveEditor {
 pub fn mint_smoothing_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1508,7 +1509,7 @@ impl UiState {
         with_output: bool,
         interval: std::time::Duration,
     ) {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let due = self
             .last_gallery_request
             .map(|last| now.saturating_duration_since(last) >= interval)

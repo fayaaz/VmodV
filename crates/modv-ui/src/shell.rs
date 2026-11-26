@@ -8,6 +8,7 @@
 use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, Vec2, vec2,
 };
+use web_time::Instant;
 
 use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_window};
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
@@ -5120,7 +5121,7 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
             )
             .on_hover_text("The rate the analyser and BPM detector run at");
             if ui.button("Tap").clicked() {
-                let now = std::time::Instant::now();
+                let now = Instant::now();
                 state
                     .tap_times
                     .retain(|tap| now.saturating_duration_since(*tap).as_secs_f64() <= 2.0);

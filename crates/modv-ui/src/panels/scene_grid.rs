@@ -10,6 +10,7 @@ use egui::emath::GuiRounding as _;
 use egui::{Align2, Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind, Vec2};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use web_time::Instant;
 
 use crate::gallery_drag::GalleryDrag;
 use crate::group_drag::GroupDrag;
@@ -49,7 +50,7 @@ pub struct SceneGridState {
     copy_is_drag: bool,
     /// Hover-preview requests drained by the shell after drawing.
     pub preview_requests: Vec<PreviewRequest>,
-    last_preview_request: Option<std::time::Instant>,
+    last_preview_request: Option<Instant>,
     hover_scene: Option<(String, usize)>,
     /// Cells whose cached preview keeps painting after the pointer leaves
     /// (the legacy grid "leaves a still"), keyed by the saved modules they
@@ -248,7 +249,7 @@ impl SceneGridState {
     }
 
     pub fn request_preview(&mut self, scene_id: &str, row: usize, interval: std::time::Duration) {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let current = (scene_id.to_string(), row);
         let due = self
             .last_preview_request
