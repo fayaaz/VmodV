@@ -1,31 +1,52 @@
-import init, { enable_microphone, start_output } from "./pkg/modv_web.js";
-
 const boot = document.getElementById("boot");
 const status = document.getElementById("boot-status");
 const error = document.getElementById("boot-error");
-const mic = document.getElementById("mic");
+const video = document.getElementById("output-video");
 
-mic.addEventListener("click", async () => {
-  mic.disabled = true;
-  mic.textContent = "Requesting microphone…";
+try {
+  if (window.opener) window.opener.__modvOutputActive = true;
+} catch (reason) {
+  console.warn("could not activate the output renderer", reason);
+}
+addEventListener("pagehide", () => {
   try {
-    await enable_microphone();
-    mic.textContent = "Microphone live";
-  } catch (reason) {
-    console.error(reason);
-    mic.textContent = "Microphone unavailable";
-    setTimeout(() => {
-      mic.disabled = false;
-      mic.textContent = "Enable microphone";
-    }, 2500);
+    if (window.opener) window.opener.__modvOutputActive = false;
+  } catch {
+    // The opener may already be gone.
   }
 });
 
+async function waitForStream() {
+  // The main tab starts the hidden renderer and exposes its capture stream on
+  // `opener`; the renderer may take a few seconds to boot.
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const stream = window.opener?.modvCaptureStream;
+    if (stream) return stream;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
 try {
-  await init();
-  status.textContent = "Restoring the live stack…";
-  await start_output("output-canvas");
-  boot.remove();
+  const stream = await waitForStream();
+  if (!stream) {
+    status.textContent = "Open output from the VmodV browser tab.";
+    error.textContent = "The output window needs the main tab to supply its stream.";
+  } else {
+    video.srcObject = stream;
+    video.classList.add("visible");
+    try {
+      await video.play();
+    } catch (reason) {
+      console.warn("the output stream needs a click to start", reason);
+      addEventListener("click", () => video.play().catch(() => {}), { once: true });
+    }
+    stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      status.textContent = "The main VmodV window stopped the output.";
+      boot.classList.remove("hidden");
+    });
+    boot.remove();
+  }
 } catch (reason) {
   console.error(reason);
   status.textContent = "The output view could not start.";
