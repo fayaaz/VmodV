@@ -680,6 +680,8 @@ impl eframe::App for WebApp {
             // Silence until the user explicitly enables the microphone.
             // Nothing is captured or synthesized on open. Once enabled, the
             // native analyser supplies the bands, tempo and BeatDetektor kick.
+            let (bpm_min, bpm_max) = self.state.bpm_range();
+            crate::mic::set_tempo_range(bpm_min, bpm_max);
             let (audio, bpm, kick, phrase_drop) = match crate::mic::frame(dt as f32) {
                 Some(frame) => (frame.audio, frame.bpm, frame.kick, frame.phrase_drop),
                 None => (Default::default(), None, false, false),

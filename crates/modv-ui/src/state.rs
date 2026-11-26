@@ -14,8 +14,9 @@ use crate::file_dialog::{FileDialogAction, FileDialogState};
 use crate::help::HelpTopic;
 use crate::library_drag;
 use crate::model::{
-    EngineSnapshot, LibraryKind, MediaAction, MediaAssetView, ModuleMetaView, PreviewRequest,
-    PropView, join_library_folder, normalise_library_folder, parent_library_folder,
+    BPM_RANGE_MAX, BPM_RANGE_MIN, DEFAULT_BPM_MAX, DEFAULT_BPM_MIN, EngineSnapshot, LibraryKind,
+    MediaAction, MediaAssetView, ModuleMetaView, PreviewRequest, PropView, join_library_folder,
+    normalise_library_folder, parent_library_folder,
 };
 use crate::panels::scene_grid::SceneGridState;
 use crate::widgets::{DrawCurve, RangeControl, TweenCurve};
@@ -293,6 +294,14 @@ pub struct UiState {
     pub command_query: String,
     pub command_selection: usize,
     pub bpm_source: String,
+    /// The Tempo window's typed-BPM draft, committed on Enter or lost focus.
+    pub bpm_input: String,
+    /// The Tempo window's detector BPM range drafts, seeded from the snapshot
+    /// and kept while the user edits them.
+    pub bpm_min: f64,
+    pub bpm_max: f64,
+    /// The last snapshot BPM range adopted into the drafts.
+    pub bpm_range_seen: (f64, f64),
     pub tap_times: Vec<Instant>,
     pub side_panel_tab: SidePanelTab,
     /// The tab an in-flight right-panel drag is carrying, refreshed at the
@@ -1284,6 +1293,10 @@ impl UiState {
             command_query: String::new(),
             command_selection: 0,
             bpm_source: "beatdetektor".to_string(),
+            bpm_input: String::new(),
+            bpm_min: DEFAULT_BPM_MIN,
+            bpm_max: DEFAULT_BPM_MAX,
+            bpm_range_seen: (DEFAULT_BPM_MIN, DEFAULT_BPM_MAX),
             tap_times: Vec::new(),
             side_panel_tab: SidePanelTab::Inspector,
             tab_drag: None,
@@ -1418,6 +1431,43 @@ impl UiState {
     /// Push one engine action.
     pub fn push_action(&mut self, action: impl Into<String>, payload: Value) {
         self.actions.push(UiAction::new(action, payload));
+    }
+
+    /// Register one tempo tap (the Tap button and the space bar share this).
+    ///
+    /// Taps older than two seconds are dropped; with at least two remaining,
+    /// the intervals between consecutive taps are averaged into a BPM. A
+    /// plausible tempo selects the `tap` source and dispatches its BPM;
+    /// anything else only records the tap.
+    pub fn register_tap(&mut self, now: Instant) {
+        self.tap_times
+            .retain(|tap| now.saturating_duration_since(*tap).as_secs_f64() <= 2.0);
+        self.tap_times.push(now);
+        if self.tap_times.len() < 2 {
+            return;
+        }
+        let intervals: Vec<f64> = self
+            .tap_times
+            .windows(2)
+            .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64())
+            .filter(|interval| *interval > 0.0)
+            .collect();
+        if intervals.is_empty() {
+            return;
+        }
+        let average = intervals.iter().sum::<f64>() / intervals.len() as f64;
+        let bpm = 60.0 / average;
+        if bpm.is_finite() && (BPM_RANGE_MIN..=BPM_RANGE_MAX).contains(&bpm) {
+            self.bpm_source = "tap".to_string();
+            self.push_action(
+                "beats/SET_BPM_SOURCE",
+                serde_json::json!({ "source": "tap" }),
+            );
+            self.push_action(
+                "beats/setBpm",
+                serde_json::json!({ "bpm": bpm, "source": "tap" }),
+            );
+        }
     }
 
     /// Show documentation for the feature the user just clicked.

@@ -20,10 +20,11 @@ use crate::layout::{
 };
 use crate::library_drag::MediaLibraryDrag;
 use crate::model::{
-    COMPOSITE_OPERATIONS, EngineSnapshot, InheritTarget, LibraryKind, MediaAction, MediaAssetView,
-    MediaSourceView, ModuleMetaView, ModuleView, PropView, ScreenCaptureView, VideoTransportAction,
-    VideoTransportView, asset_meta_label, format_duration, gallery_preview_key,
-    group_enabled_indicator, letterbox_rect, module_license, next_group_enabled, sample_rate_label,
+    BPM_RANGE_MAX, BPM_RANGE_MIN, COMPOSITE_OPERATIONS, EngineSnapshot, InheritTarget, LibraryKind,
+    MediaAction, MediaAssetView, MediaSourceView, ModuleMetaView, ModuleView, PropView,
+    ScreenCaptureView, VideoTransportAction, VideoTransportView, asset_meta_label, format_duration,
+    gallery_preview_key, group_enabled_indicator, letterbox_rect, module_license,
+    next_group_enabled, sample_rate_label, valid_bpm_range,
 };
 use crate::module_drag::{ModuleDrag, insertion_index, module_drop_action};
 use crate::panels::scene_grid::draw_scene_grid;
@@ -108,6 +109,15 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
     // save a preset, and Ctrl+O must not stack a second picker.
     let modal =
         state.file_dialog.is_some() || state.show_profile_dialog || state.show_plugin_consent;
+    // Space taps the tempo, with or without the Tempo window open. A focused
+    // text field keeps its literal space, and a modal picker owns the keyboard.
+    // A focused non-text widget (e.g. a button) must not mask the tap.
+    if !ui.ctx().text_edit_focused()
+        && !modal
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
+    {
+        state.register_tap(Instant::now());
+    }
     // Backspace removes the focused Group (`Group.vue`'s `keydown.self`), but
     // only outside a text field and while no dialog owns the keyboard.
     let backspace = ui.input(|input| input.key_pressed(egui::Key::Backspace));
@@ -1056,6 +1066,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                     );
                     state.focus_help_topic(HelpTopic::Scenes);
                 }
+            });
             ui.separator();
             help_frame(ui, state);
         });
@@ -5176,6 +5187,17 @@ fn command_palette(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut U
 }
 
 fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiState) {
+    // Adopt a changed snapshot range (e.g. from another control client). A
+    // range echoed from this window already matches the drafts, so the two
+    // steps only resync when the engine actually accepted a different range.
+    let live = (snapshot.audio.bpm_min, snapshot.audio.bpm_max);
+    if live != state.bpm_range_seen {
+        state.bpm_range_seen = live;
+        if (state.bpm_min, state.bpm_max) != live {
+            state.bpm_min = live.0;
+            state.bpm_max = live.1;
+        }
+    }
     let mut open = state.show_bpm;
     let window = restore_window(
         egui::Window::new("Tempo")
@@ -5195,7 +5217,7 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
             egui::ComboBox::from_id_salt("bpm-source")
                 .selected_text(&state.bpm_source)
                 .show_ui(ui, |ui| {
-                    for source in ["beatdetektor", "midi", "tap"] {
+                    for source in ["beatdetektor", "midi", "tap", "manual"] {
                         if ui
                             .selectable_label(state.bpm_source == source, source)
                             .clicked()
@@ -5209,6 +5231,25 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
                     }
                 });
         });
+        let min_response = ui.add(
+            egui::Slider::new(&mut state.bpm_min, BPM_RANGE_MIN..=BPM_RANGE_MAX).text("Min BPM"),
+        );
+        let max_response = ui.add(
+            egui::Slider::new(&mut state.bpm_max, BPM_RANGE_MIN..=BPM_RANGE_MAX).text("Max BPM"),
+        );
+        if min_response.changed() || max_response.changed() {
+            let (min, max) = (state.bpm_min, state.bpm_max);
+            if valid_bpm_range(min, max) {
+                state.push_action(
+                    "beats/SET_BPM_RANGE",
+                    serde_json::json!({ "min": min, "max": max }),
+                );
+            } else {
+                // Ignore the crossed/out-of-range edit; snap back to the
+                // last range the engine accepted.
+                (state.bpm_min, state.bpm_max) = state.bpm_range_seen;
+            }
+        }
         ui.horizontal(|ui| {
             ui.label(format!("Detected {:.1} BPM", snapshot.audio.bpm));
             ui.label(
@@ -5221,37 +5262,38 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
             )
             .on_hover_text("The rate the analyser and BPM detector run at");
             if ui.button("Tap").clicked() {
-                let now = Instant::now();
-                state
-                    .tap_times
-                    .retain(|tap| now.saturating_duration_since(*tap).as_secs_f64() <= 2.0);
-                state.tap_times.push(now);
-                if state.tap_times.len() >= 2 {
-                    let intervals: Vec<f64> = state
-                        .tap_times
-                        .windows(2)
-                        .map(|pair| pair[1].saturating_duration_since(pair[0]).as_secs_f64())
-                        .filter(|interval| *interval > 0.0)
-                        .collect();
-                    if !intervals.is_empty() {
-                        let average = intervals.iter().sum::<f64>() / intervals.len() as f64;
-                        let bpm = 60.0 / average;
-                        if bpm.is_finite() && (30.0..=300.0).contains(&bpm) {
-                            state.bpm_source = "tap".to_string();
-                            state.push_action(
-                                "beats/SET_BPM_SOURCE",
-                                serde_json::json!({ "source": "tap" }),
-                            );
-                            state.push_action(
-                                "beats/setBpm",
-                                serde_json::json!({ "bpm": bpm, "source": "tap" }),
-                            );
-                        }
-                    }
-                }
+                state.register_tap(Instant::now());
             }
             if ui.button("Reset taps").clicked() {
                 state.tap_times.clear();
+            }
+        });
+        ui.horizontal(|ui| {
+            let label = ui.label("Set BPM");
+            let response = ui
+                .add(
+                    egui::TextEdit::singleline(&mut state.bpm_input)
+                        .desired_width(60.0)
+                        .hint_text("BPM"),
+                )
+                .labelled_by(label.id);
+            let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if ((response.has_focus() && enter) || response.lost_focus())
+                && let Ok(bpm) = state.bpm_input.trim().parse::<f64>()
+                && bpm.is_finite()
+                && (BPM_RANGE_MIN..=BPM_RANGE_MAX).contains(&bpm)
+            {
+                state.bpm_source = "manual".to_string();
+                state.push_action(
+                    "beats/SET_BPM_SOURCE",
+                    serde_json::json!({ "source": "manual" }),
+                );
+                state.push_action(
+                    "beats/setBpm",
+                    serde_json::json!({ "bpm": bpm, "source": "manual" }),
+                );
+                // The draft is committed; a refocus/Enter must not repeat it.
+                state.bpm_input.clear();
             }
         });
         ui.label(

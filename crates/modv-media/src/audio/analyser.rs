@@ -81,9 +81,13 @@ pub const MAX_DECIBELS: f32 = -30.0;
 /// Fraction of the complex spectrum used for tempo onset strength
 /// (`setup-beat-detektor.js:5`).
 pub const ONSET_SPECTRUM_PORTION: f64 = 0.25;
-/// Confidence at or above which a tempo estimate is published
-/// (`setup-beat-detektor.js:86-90`).
-pub const TEMPO_CONFIDENCE_THRESHOLD: f64 = 0.35;
+/// Confidence at or above which a tempo estimate is published.
+///
+/// This matches `TempoDetectorOptions::default`'s `confidence_threshold`
+/// (0.25). It is deliberately below the legacy `setup-beat-detektor.js:86-90`
+/// gate of 0.35: real music typically peaks around 0.27–0.34 confidence, so
+/// the stricter value suppressed the estimate entirely and left BPM at 0.
+pub const TEMPO_CONFIDENCE_THRESHOLD: f64 = 0.25;
 
 /// One frame of analysis, mirroring the legacy `payload` + Meyda feature bag.
 ///
@@ -420,6 +424,16 @@ impl AudioAnalyser {
         self.frontend.sample_rate()
     }
 
+    /// Update the tempo detector's supported BPM range.
+    pub fn set_tempo_range(&mut self, min_bpm: f64, max_bpm: f64) {
+        self.tempo.set_bpm_range(min_bpm, max_bpm);
+    }
+
+    /// The tempo detector's current supported BPM range `(min, max)`.
+    pub fn tempo_range(&self) -> (f64, f64) {
+        (self.tempo.min_bpm, self.tempo.max_bpm)
+    }
+
     /// The most recent snapshot, if [`Self::frame`] has run.
     pub fn last_snapshot(&self) -> Option<&AudioSnapshot> {
         self.last_snapshot.as_ref()
@@ -627,6 +641,21 @@ mod tests {
             analyser.push_mono(&pcm);
             analyser.frame(FRAME_DT);
         }
+    }
+
+    #[test]
+    fn publishes_a_tempo_when_confidence_is_at_the_detector_default() {
+        let mut analyser = AudioAnalyser::new(SAMPLE_RATE);
+        analyser.tempo.bpm = 128.0;
+        analyser.tempo.confidence = 0.30;
+
+        let snapshot = analyser.frame(FRAME_DT);
+
+        assert_eq!(
+            snapshot.bpm,
+            Some(128.0),
+            "a 0.30-confidence 128 BPM estimate must publish at the detector's default threshold"
+        );
     }
 
     #[test]

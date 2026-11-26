@@ -236,6 +236,24 @@ impl TempoDetector {
         }
     }
 
+    /// Updates the supported BPM range. Finite bounds are clamped like
+    /// [`TempoDetector::new`] (`min` to `[1, 400]`, `max` to `[min + 1, 400]`);
+    /// a non-finite bound resets both ends to [`MIN_BPM`]/[`MAX_BPM`].
+    ///
+    /// History is kept; only stored estimates outside the new bounds are
+    /// dropped so the median adapts. Empty history is a no-op.
+    pub fn set_bpm_range(&mut self, min_bpm: f64, max_bpm: f64) {
+        if !min_bpm.is_finite() || !max_bpm.is_finite() {
+            self.min_bpm = MIN_BPM;
+            self.max_bpm = MAX_BPM;
+        } else {
+            self.min_bpm = clamp(min_bpm, 1.0, 400.0);
+            self.max_bpm = clamp(max_bpm, self.min_bpm + 1.0, 400.0);
+        }
+        self.estimates
+            .retain(|bpm| (self.min_bpm..=self.max_bpm).contains(bpm));
+    }
+
     /// Feeds one sample of the onset-strength envelope (tempo-detector.js:73-113).
     ///
     /// `time_seconds` is a monotonic timestamp in seconds; `onset_strength` is a

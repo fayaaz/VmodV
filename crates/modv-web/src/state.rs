@@ -36,12 +36,20 @@ use modv_engine::scenes_playlist::normalize_transition_list;
 use modv_engine::tweens::{TweenDescriptor, TweenSet};
 use modv_renderers::two_d::AudioFrame;
 use modv_ui::model::{
-    AudioView, EngineHealth, EngineSnapshot, GroupView, InheritTarget, InputLinkView,
-    ModuleMetaView, ModuleView, PropEnumMember, PropView, TweenView,
+    AudioView, DEFAULT_BPM_MAX, DEFAULT_BPM_MIN, EngineHealth, EngineSnapshot, GroupView,
+    InheritTarget, InputLinkView, ModuleMetaView, ModuleView, PropEnumMember, PropView, TweenView,
+    valid_bpm_range,
 };
 use modv_ui::state::UiAction;
 
 use crate::scenes::SceneLibrary;
+
+/// Consecutive unconfident detector frames that clear a stale tempo: 300
+/// frames is ~5 s at the output's 60 fps cap, matching the desktop store's
+/// 5 s wall-clock hold. `set_tempo` has no clock, so the browser counts frames
+/// instead and the two holds are documented separately rather than sharing a
+/// cross-crate constant with different units.
+const UNCONFIDENT_TEMPO_FRAME_LIMIT: u32 = 300;
 
 /// The browser's live engine document.
 pub struct WebState {
@@ -55,6 +63,14 @@ pub struct WebState {
     adapter: String,
     backend: String,
     bpm: f64,
+    /// The selected tempo source; only the detector may publish into `bpm`.
+    bpm_source: String,
+    /// Consecutive unconfident detector frames; a stale tempo is cleared once
+    /// this reaches [`UNCONFIDENT_TEMPO_FRAME_LIMIT`] (~5 s at the 60 fps cap).
+    unconfident_tempo_frames: u32,
+    /// The tempo detector's supported BPM range.
+    bpm_min: f64,
+    bpm_max: f64,
     tweens: TweenSet,
     smoothing: HashMap<String, f64>,
     beats: BeatsState,
@@ -176,6 +192,10 @@ impl WebState {
             adapter: "Browser adapter".to_string(),
             backend: "webgpu".to_string(),
             bpm: 0.0,
+            bpm_source: "beatdetektor".to_string(),
+            unconfident_tempo_frames: 0,
+            bpm_min: DEFAULT_BPM_MIN,
+            bpm_max: DEFAULT_BPM_MAX,
             tweens: TweenSet::new(),
             smoothing: HashMap::new(),
             beats: BeatsState::default(),
@@ -312,6 +332,11 @@ impl WebState {
     /// The current tempo estimate (0 when no confident BPM yet).
     pub fn bpm(&self) -> f64 {
         self.bpm
+    }
+
+    /// The tempo detector's supported BPM range `(min, max)`.
+    pub fn bpm_range(&self) -> (f64, f64) {
+        (self.bpm_min, self.bpm_max)
     }
 
     /// Replace the audio frame.
@@ -521,20 +546,37 @@ impl WebState {
         self.backend = backend.into();
     }
 
-    /// Set the tempo shown by the meters (the demo audio runs at this BPM).
+    /// Set the published tempo (manual/tap/MIDI actions and demo audio).
     pub fn set_bpm(&mut self, bpm: f64) {
         if bpm.is_finite() && bpm > 0.0 {
             self.bpm = bpm;
             self.beats.bpm = bpm;
+            self.unconfident_tempo_frames = 0;
         }
     }
 
     /// Apply the analyser's tempo/beat result for this frame.
+    ///
+    /// Only the `beatdetektor` source and a valid positive finite tempo update
+    /// the published BPM; an unconfident frame (`None`, zero, negative or
+    /// non-finite) holds the last confident value for up to
+    /// [`UNCONFIDENT_TEMPO_FRAME_LIMIT`] frames, then clears it so a stale
+    /// tempo cannot stick forever. A tap/manual/MIDI tempo is left untouched.
+    /// The beat state tracks the current BPM and kick every frame.
     pub fn set_tempo(&mut self, bpm: Option<f32>, kick: bool) {
-        self.bpm = bpm
-            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
-            .map(f64::from)
-            .unwrap_or(0.0);
+        if self.bpm_source == "beatdetektor" {
+            if let Some(bpm) = bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0) {
+                self.bpm = f64::from(bpm);
+                self.unconfident_tempo_frames = 0;
+            } else {
+                self.unconfident_tempo_frames = self.unconfident_tempo_frames.saturating_add(1);
+                if self.unconfident_tempo_frames >= UNCONFIDENT_TEMPO_FRAME_LIMIT {
+                    self.bpm = 0.0;
+                }
+            }
+        } else {
+            self.unconfident_tempo_frames = 0;
+        }
         self.beats.bpm = self.bpm;
         self.beats.kick = kick;
     }
@@ -1784,6 +1826,55 @@ impl WebState {
                     .unwrap_or("seconds");
                 self.scenes.set_timing_unit(unit, self.bpm)
             }
+            "beats/SET_BPM_SOURCE" => {
+                let Some(source) = action.payload.get("source").and_then(Value::as_str) else {
+                    return false;
+                };
+                if !["beatdetektor", "midi", "tap", "manual"].contains(&source) {
+                    return false;
+                }
+                if self.bpm_source != source {
+                    self.unconfident_tempo_frames = 0;
+                    if source == "beatdetektor" {
+                        // The detector owns the tempo again; drop a stale
+                        // manual tempo until its next confident frame.
+                        self.bpm = 0.0;
+                        self.beats.bpm = 0.0;
+                    }
+                }
+                self.bpm_source = source.to_string();
+                true
+            }
+            "beats/setBpm" => {
+                let Some(source) = action.payload.get("source").and_then(Value::as_str) else {
+                    return false;
+                };
+                if source != self.bpm_source {
+                    return false;
+                }
+                let Some(bpm) = action.payload.get("bpm").and_then(Value::as_f64) else {
+                    return false;
+                };
+                if !bpm.is_finite() || bpm <= 0.0 {
+                    return false;
+                }
+                self.set_bpm(bpm);
+                true
+            }
+            "beats/SET_BPM_RANGE" => {
+                let (Some(min), Some(max)) = (
+                    action.payload.get("min").and_then(Value::as_f64),
+                    action.payload.get("max").and_then(Value::as_f64),
+                ) else {
+                    return false;
+                };
+                if !valid_bpm_range(min, max) {
+                    return false;
+                }
+                self.bpm_min = min;
+                self.bpm_max = max;
+                true
+            }
             // Selection-only, media, audio-device, NDI/OSC/MIDI and plugin
             // actions are outside the web shell's cut line.
             _ => false,
@@ -2033,6 +2124,8 @@ impl WebState {
             mid: self.audio.mid,
             treble: self.audio.treble,
             sample_rate: Some(self.audio.sample_rate.round() as u32),
+            bpm_min: self.bpm_min,
+            bpm_max: self.bpm_max,
         };
         let health = EngineHealth {
             adapter: self.adapter.clone(),
@@ -2349,6 +2442,142 @@ mod tests {
         state
             .add_module("Bands")
             .expect("the built-in registry knows Bands")
+    }
+
+    #[test]
+    fn an_unconfident_tempo_frame_keeps_the_last_confident_bpm() {
+        let mut state = WebState::new();
+        state.set_tempo(Some(128.0), true);
+        assert_eq!(state.bpm(), 128.0);
+
+        state.set_tempo(None, false);
+        assert_eq!(
+            state.bpm(),
+            128.0,
+            "a transient unconfident frame must not clear the tempo"
+        );
+
+        state.set_tempo(Some(0.0), false);
+        assert_eq!(
+            state.bpm(),
+            128.0,
+            "a zero tempo must not clear the last confident BPM"
+        );
+
+        state.set_tempo(Some(-128.0), false);
+        assert_eq!(
+            state.bpm(),
+            128.0,
+            "a negative tempo must not clear the last confident BPM"
+        );
+
+        state.set_tempo(Some(f32::NAN), false);
+        assert_eq!(
+            state.bpm(),
+            128.0,
+            "a non-finite tempo must not clear the last confident BPM"
+        );
+    }
+
+    #[test]
+    fn a_long_unconfident_stretch_clears_the_stale_bpm() {
+        let mut state = WebState::new();
+        state.set_tempo(Some(128.0), true);
+        assert_eq!(state.bpm(), 128.0);
+
+        // A short dip keeps the last tempo.
+        for _ in 0..8 {
+            state.set_tempo(None, false);
+        }
+        assert_eq!(
+            state.bpm(),
+            128.0,
+            "a short unconfident stretch must hold the tempo"
+        );
+
+        // A long dip (~600 output frames at 60 Hz) must clear it.
+        for _ in 0..600 {
+            state.set_tempo(None, false);
+        }
+        assert_eq!(
+            state.bpm(),
+            0.0,
+            "a stale detected tempo must not stick forever"
+        );
+    }
+
+    #[test]
+    fn beats_actions_apply_manual_tempo_in_the_browser_shell() {
+        let mut state = WebState::new();
+
+        assert!(state.apply_action(&UiAction::new(
+            "beats/SET_BPM_SOURCE",
+            json!({"source": "manual"})
+        )));
+        assert!(state.apply_action(&UiAction::new(
+            "beats/setBpm",
+            json!({"bpm": 128.0, "source": "manual"})
+        )));
+        assert_eq!(state.snapshot([640, 360], 60.0, 16.0).audio.bpm, 128.0);
+
+        state.set_tempo(Some(96.0), false);
+        assert_eq!(
+            state.bpm(),
+            128.0,
+            "the detector must not overwrite a manual tempo"
+        );
+
+        assert!(state.apply_action(&UiAction::new(
+            "beats/SET_BPM_SOURCE",
+            json!({"source": "beatdetektor"})
+        )));
+        state.set_tempo(Some(96.0), false);
+        assert_eq!(state.bpm(), 96.0);
+    }
+
+    #[test]
+    fn switching_to_beatdetektor_clears_a_manual_tempo() {
+        let mut state = WebState::new();
+        assert!(state.apply_action(&UiAction::new(
+            "beats/SET_BPM_SOURCE",
+            json!({"source": "manual"})
+        )));
+        assert!(state.apply_action(&UiAction::new(
+            "beats/setBpm",
+            json!({"bpm": 100.0, "source": "manual"})
+        )));
+        assert_eq!(state.bpm(), 100.0);
+
+        assert!(state.apply_action(&UiAction::new(
+            "beats/SET_BPM_SOURCE",
+            json!({"source": "beatdetektor"})
+        )));
+        assert_eq!(
+            state.bpm(),
+            0.0,
+            "selecting the detector must not keep a stale manual tempo"
+        );
+
+        state.set_tempo(Some(128.0), false);
+        assert_eq!(state.bpm(), 128.0);
+    }
+
+    #[test]
+    fn bpm_range_action_is_applied_in_the_browser_shell() {
+        let mut state = WebState::new();
+
+        assert!(state.apply_action(&UiAction::new(
+            "beats/SET_BPM_RANGE",
+            json!({"min": 90.0, "max": 180.0})
+        )));
+        assert!(!state.apply_action(&UiAction::new(
+            "beats/SET_BPM_RANGE",
+            json!({"min": 180.0, "max": 90.0})
+        )));
+        assert!(!state.apply_action(&UiAction::new(
+            "beats/SET_BPM_RANGE",
+            json!({"min": 10.0, "max": 180.0})
+        )));
     }
 
     #[test]

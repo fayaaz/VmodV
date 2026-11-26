@@ -160,6 +160,8 @@ fn demo_snapshot() -> EngineSnapshot {
             mid: 0.31,
             treble: 0.18,
             sample_rate: Some(48_000),
+            bpm_min: 70.0,
+            bpm_max: 200.0,
         },
         resolution: [960, 540],
         fps: 60.0,

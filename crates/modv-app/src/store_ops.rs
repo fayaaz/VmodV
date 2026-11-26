@@ -97,6 +97,7 @@ use modv_media::osc::{
     DEFAULT_MAX_VALUE_BYTES, OscServer, OscValue, apply_osc_message, fit_osc_arguments,
 };
 use modv_renderers::two_d::AudioFrame;
+use modv_ui::model::{DEFAULT_BPM_MAX, DEFAULT_BPM_MIN, valid_bpm_range};
 
 use crate::expressions::{ExpressionCache, ExpressionFailure, resolve_input_value};
 use crate::input_links::{
@@ -205,9 +206,16 @@ pub struct Store {
     /// The tempo/kick state the Input Link evaluator reads (`beats.bpm`,
     /// `beats.kick`).
     beats: BeatsState,
-    /// Which tempo source may write BPM (`beats.bpmSource`): the tap tempo
-    /// and MIDI clock are ignored unless they are the selected source.
+    /// Which tempo source may write BPM (`beats.bpmSource`): the tap tempo,
+    /// MIDI clock and typed/manual tempo are ignored unless selected.
     bpm_source: String,
+    /// Timestamp (`Store::set_engine_audio`'s `now`) of the last confident
+    /// detector tempo. Bounds how long a stale tempo is held
+    /// ([`BPM_HOLD_TIMEOUT`]).
+    last_detected_bpm_at: Option<Duration>,
+    /// The tempo detector's supported BPM range (`beats/SET_BPM_RANGE`).
+    bpm_min: f64,
+    bpm_max: f64,
     /// The renderer's local font list (`fonts.localFonts`) forwarded for the
     /// Text module and the mirror.
     local_fonts: Value,
@@ -326,6 +334,11 @@ struct EngineMeter {
     pending: Option<Value>,
 }
 
+/// How long a detector-sourced tempo survives a run of unconfident frames
+/// before [`Store::set_engine_audio`] clears it. A stale tempo must not stick
+/// forever when the detector stops reporting one.
+const BPM_HOLD_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl Default for Store {
     fn default() -> Self {
         Self::new()
@@ -412,6 +425,9 @@ impl Store {
             engine_meter: EngineMeter::default(),
             beats: BeatsState::default(),
             bpm_source: "beatdetektor".to_string(),
+            last_detected_bpm_at: None,
+            bpm_min: DEFAULT_BPM_MIN,
+            bpm_max: DEFAULT_BPM_MAX,
             local_fonts: json!([]),
             media_path: None,
             osc_servers: HashMap::new(),
@@ -906,6 +922,7 @@ impl Store {
             "beats/setBpm" => self.set_bpm_action(params),
             "beats/SET_KICK" => self.set_kick(params),
             "beats/SET_BPM_SOURCE" => self.set_bpm_source(params),
+            "beats/SET_BPM_RANGE" => self.set_bpm_range(params),
             "midi/ADD_DEVICE" => self.midi_add_device(params),
             "midi/UPDATE_DEVICE" => self.midi_update_device(params),
             "midi/WRITE_DATA" => self.midi_write_data(params),
@@ -2913,33 +2930,51 @@ impl Store {
         if self.reject_renderer_audio_write("beats/SET_BPM") {
             return Ok(Value::Null);
         }
-
-        let bpm = params
-            .get("bpm")
-            .and_then(Value::as_f64)
-            .filter(|bpm| bpm.is_finite() && *bpm > 0.0);
-        if let Some(bpm) = bpm {
-            self.store_bpm(bpm);
-        }
+        self.store_bpm_param(params);
         Ok(Value::Null)
     }
 
     /// `beats/setBpm` (`beats.js:9-19`): only the active source may set BPM.
+    ///
+    /// Unlike the renderer's [`Self::set_bpm`], this is a user/MIDI/tap/manual
+    /// action, so it applies even while the engine owns audio capture; once the
+    /// source matches, its parameters are still validated like any other tempo.
+    /// A detector-sourced action stays a no-op in that mode because
+    /// [`Self::set_engine_audio`] already publishes the analyser's tempo.
     fn set_bpm_action(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
         let source = params.get("source").and_then(Value::as_str);
         if source != Some(self.bpm_source.as_str()) {
             return Ok(Value::Null);
         }
-        self.set_bpm(params)
+        if self.engine_audio_active && source == Some("beatdetektor") {
+            return Ok(Value::Null);
+        }
+        self.store_bpm_param(params);
+        Ok(Value::Null)
+    }
+
+    /// Read a BPM parameter for either tempo action and store it when valid.
+    ///
+    /// Shared by the renderer's `beats/SET_BPM` and the source-checked
+    /// `beats/setBpm`; both reject non-finite/non-positive values the same way.
+    fn store_bpm_param(&mut self, params: &Map<String, Value>) {
+        if let Some(bpm) = params
+            .get("bpm")
+            .and_then(Value::as_f64)
+            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+        {
+            self.store_bpm(bpm);
+        }
     }
 
     /// `beats/SET_BPM_SOURCE` (`beats.js:35-44`): select the tempo source.
     ///
     /// Unknown sources are ignored with a warning, exactly like the JS
-    /// mutation. The default is `beatdetektor`, so tap/MIDI BPM only applies
-    /// once the picker selects it.
+    /// mutation. The default is `beatdetektor`; tap/manual/MIDI BPM only
+    /// applies once that source is selected (the UI selects it as you tap or
+    /// type a BPM).
     fn set_bpm_source(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
-        const SOURCES: [&str; 3] = ["beatdetektor", "midi", "tap"];
+        const SOURCES: [&str; 4] = ["beatdetektor", "midi", "tap", "manual"];
         let Some(source) = params.get("source").and_then(Value::as_str) else {
             return Ok(Value::Null);
         };
@@ -2952,9 +2987,38 @@ impl Store {
             );
             return Ok(Value::Null);
         }
+        if self.bpm_source != source {
+            self.last_detected_bpm_at = None;
+            if source == "beatdetektor" {
+                // The detector owns the tempo again; a stale manual tempo would
+                // otherwise stick until its next confident frame.
+                self.beats.bpm = 0.0;
+            }
+        }
         self.bpm_source = source.to_string();
         self.deltas
             .push("beats/SET_BPM_SOURCE", json!({ "source": source }));
+        Ok(Value::Null)
+    }
+
+    /// `beats/SET_BPM_RANGE`: set the tempo detector's supported BPM range.
+    ///
+    /// Accepts only finite bounds inside `30..=300` with `min < max`; anything
+    /// else is a silent no-op (no delta), like the other parameter validators.
+    fn set_bpm_range(&mut self, params: &Map<String, Value>) -> Result<Value, StoreError> {
+        let (Some(min), Some(max)) = (
+            params.get("min").and_then(Value::as_f64),
+            params.get("max").and_then(Value::as_f64),
+        ) else {
+            return Ok(Value::Null);
+        };
+        if !valid_bpm_range(min, max) {
+            return Ok(Value::Null);
+        }
+        self.bpm_min = min;
+        self.bpm_max = max;
+        self.deltas
+            .push("beats/SET_BPM_RANGE", json!({ "min": min, "max": max }));
         Ok(Value::Null)
     }
 
@@ -3033,8 +3097,9 @@ impl Store {
     ///    ([`crate::audio::snapshot_to_frame`]) and marks the engine as the
     ///    audio owner (renderer writes are dropped from then on);
     /// 2. publishes the analyser's confident tempo through
-    ///    [`Self::store_bpm`] (deltas only on change, so tween durations are
-    ///    rebuilt once per tempo change rather than per frame);
+    ///    [`Self::store_bpm`] while the `beatdetektor` source is selected
+    ///    (deltas only on change, so tween durations are rebuilt once per
+    ///    tempo change rather than per frame); a tap/manual/MIDI tempo is kept;
     /// 3. publishes the kick flag through [`Self::store_kick`] (delta only on
     ///    a flip);
     /// 4. throttles `meyda/SET_BANDS` to the mirror so the UI meters keep
@@ -3048,8 +3113,26 @@ impl Store {
         self.engine_audio_active = true;
         self.audio = crate::audio::snapshot_to_frame(snapshot);
 
-        if let Some(bpm) = snapshot.bpm {
-            self.store_bpm(f64::from(bpm));
+        // Only the detector source publishes the analyser's tempo. A selected
+        // tap/manual/MIDI tempo stays put while the detector keeps running; the
+        // kick flag still updates every frame either way. The confident tempo
+        // is timestamped so a run of unconfident frames holds it only for
+        // [`BPM_HOLD_TIMEOUT`], after which a stale value is cleared.
+        if self.bpm_source == "beatdetektor" {
+            if let Some(bpm) = snapshot.bpm {
+                self.store_bpm(f64::from(bpm));
+                self.last_detected_bpm_at = Some(now);
+            } else if self.beats.bpm > 0.0
+                && self
+                    .last_detected_bpm_at
+                    .is_some_and(|last| now.saturating_sub(last) >= BPM_HOLD_TIMEOUT)
+            {
+                // Clear directly rather than through `store_bpm`: zero is not
+                // a valid tempo to rebuild tween durations with, and the UI
+                // reads `bpm()` from the store, so no delta is needed.
+                self.beats.bpm = 0.0;
+                self.last_detected_bpm_at = None;
+            }
         }
         self.store_kick(kick);
         self.publish_engine_meter(now);
@@ -3057,15 +3140,23 @@ impl Store {
 
     /// Hand audio ownership back to the renderer's pump.
     ///
-    /// The window loop calls this when a capture feed errors out: the last
-    /// engine frame stays in [`Store::audio`] (renderers keep drawing) until
-    /// the renderer's next `meyda/SET_BANDS` replaces it.
+    /// The window loop calls this when a capture feed errors out. The last
+    /// engine frame is dropped so stale bands/kick cannot linger in the meters
+    /// or Input Links until the renderer's next `meyda/SET_BANDS` replaces it.
     pub fn disable_engine_audio(&mut self) {
         if !self.engine_audio_active {
             return;
         }
 
         self.engine_audio_active = false;
+        // A detected tempo must not outlive the capture that produced it; a
+        // manually typed/tapped tempo is the user's and stays.
+        if self.bpm_source == "beatdetektor" {
+            self.beats.bpm = 0.0;
+        }
+        self.beats.kick = false;
+        self.last_detected_bpm_at = None;
+        self.audio = AudioFrame::default();
         self.engine_meter.pending = None;
         eprintln!("engine: INFO audio ownership returned to the renderer's pump");
     }
@@ -3104,6 +3195,11 @@ impl Store {
     /// Current tempo in BPM (0 until the beat detector reports one).
     pub fn bpm(&self) -> f64 {
         self.beats.bpm
+    }
+
+    /// The tempo detector's supported BPM range `(min, max)`.
+    pub fn bpm_range(&self) -> (f64, f64) {
+        (self.bpm_min, self.bpm_max)
     }
 
     /// The Input Link view of the kick: the explicit `beats/SET_KICK` flag, or
@@ -7768,6 +7864,147 @@ mod tests {
     }
 
     #[test]
+    fn bpm_range_action_validates_and_echoes_the_detector_bounds() {
+        let mut store = Store::new();
+        store.drain_deltas();
+
+        store
+            .dispatch("beats/SET_BPM_RANGE", json!({"min": 90.0, "max": 180.0}))
+            .expect("a valid detector BPM range dispatches");
+
+        let deltas = store.drain_deltas();
+        let range = deltas
+            .iter()
+            .find(|delta| delta.r#type == "beats/SET_BPM_RANGE")
+            .unwrap_or_else(|| panic!("the accepted range must be echoed: {deltas:?}"));
+        assert_eq!(range.payload, json!({"min": 90.0, "max": 180.0}));
+
+        for payload in [
+            json!({"min": 180.0, "max": 90.0}),
+            json!({"min": 10.0, "max": 180.0}),
+            json!({"min": 90.0, "max": 400.0}),
+            json!({"min": f64::NAN, "max": 180.0}),
+        ] {
+            store
+                .dispatch("beats/SET_BPM_RANGE", payload.clone())
+                .expect("an invalid detector BPM range is ignored");
+            let deltas = store.drain_deltas();
+            assert!(
+                deltas
+                    .iter()
+                    .all(|delta| delta.r#type != "beats/SET_BPM_RANGE"),
+                "invalid range {payload:?} must not emit a delta: {deltas:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_tempo_actions_are_accepted_while_engine_audio_is_active() {
+        let mut store = Store::new();
+        let mut snapshot = engine_snapshot();
+        snapshot.bpm = Some(128.0);
+        store.set_engine_audio(&snapshot, false, Duration::ZERO);
+
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "tap" }))
+            .expect("tap source dispatches");
+        store
+            .dispatch("beats/setBpm", json!({"bpm": 140.0, "source": "tap"}))
+            .expect("tap BPM dispatches");
+
+        assert_eq!(
+            store.bpm(),
+            140.0,
+            "a user tap must apply even while engine audio capture is active"
+        );
+    }
+
+    #[test]
+    fn manual_tempo_source_is_accepted_and_not_overwritten_by_the_detector() {
+        let mut store = Store::new();
+        let mut snapshot = engine_snapshot();
+        snapshot.bpm = Some(128.0);
+        store.set_engine_audio(&snapshot, false, Duration::ZERO);
+
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "manual" }))
+            .expect("manual source dispatches");
+        assert_eq!(
+            store.bpm_source, "manual",
+            "manual must be a valid tempo source"
+        );
+        store
+            .dispatch("beats/setBpm", json!({"bpm": 100.0, "source": "manual"}))
+            .expect("manual BPM dispatches");
+        assert_eq!(store.bpm(), 100.0);
+
+        store.set_engine_audio(&snapshot, false, Duration::from_millis(100));
+        assert_eq!(
+            store.bpm(),
+            100.0,
+            "the detector must not overwrite a manually selected tempo"
+        );
+    }
+
+    #[test]
+    fn switching_to_beatdetektor_clears_a_manual_tempo_until_the_detector_reports() {
+        let mut store = Store::new();
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "manual" }))
+            .expect("manual source dispatches");
+        store
+            .dispatch("beats/setBpm", json!({"bpm": 100.0, "source": "manual"}))
+            .expect("manual BPM dispatches");
+        assert_eq!(store.bpm(), 100.0);
+
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "beatdetektor" }))
+            .expect("detector source dispatches");
+        assert_eq!(
+            store.bpm(),
+            0.0,
+            "selecting the detector must not keep a stale manual tempo"
+        );
+
+        let mut detected = engine_snapshot();
+        detected.bpm = Some(128.0);
+        store.set_engine_audio(&detected, false, Duration::ZERO);
+        assert_eq!(store.bpm(), 128.0);
+    }
+
+    #[test]
+    fn switching_back_to_beatdetektor_resumes_detected_tempo() {
+        let mut store = Store::new();
+        let mut detected = engine_snapshot();
+        detected.bpm = Some(120.0);
+        store.set_engine_audio(&detected, false, Duration::ZERO);
+
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "manual" }))
+            .expect("manual source dispatches");
+        store
+            .dispatch("beats/setBpm", json!({"bpm": 100.0, "source": "manual"}))
+            .expect("manual BPM dispatches");
+        assert_eq!(
+            store.bpm(),
+            100.0,
+            "the manual tempo must first take effect"
+        );
+
+        store
+            .dispatch("beats/SET_BPM_SOURCE", json!({ "source": "beatdetektor" }))
+            .expect("detector source dispatches");
+        detected.bpm = Some(128.0);
+        store.set_engine_audio(&detected, false, Duration::from_millis(100));
+
+        assert_eq!(
+            store.bpm(),
+            128.0,
+            "selecting beatdetektor must resume detector tempo publication"
+        );
+    }
+
+    #[test]
     fn engine_audio_frame_becomes_the_stored_audio_frame() {
         let mut store = Store::new();
         assert!(!store.engine_audio_active());
@@ -7874,6 +8111,29 @@ mod tests {
     }
 
     #[test]
+    fn engine_audio_clears_a_stale_bpm_after_the_hold_window() {
+        let mut store = Store::new();
+        let mut detected = engine_snapshot();
+        detected.bpm = Some(128.0);
+        store.set_engine_audio(&detected, false, Duration::ZERO);
+        assert_eq!(store.bpm(), 128.0);
+
+        store.set_engine_audio(&engine_snapshot(), false, Duration::from_secs(4));
+        assert_eq!(
+            store.bpm(),
+            128.0,
+            "a short unconfident stretch must hold the tempo"
+        );
+
+        store.set_engine_audio(&engine_snapshot(), false, Duration::from_secs(6));
+        assert_eq!(
+            store.bpm(),
+            0.0,
+            "a stale detected tempo must not stick forever"
+        );
+    }
+
+    #[test]
     fn engine_audio_meter_deltas_are_throttled_to_ten_hertz() {
         let mut store = Store::new();
         let mut snapshot = engine_snapshot();
@@ -7917,6 +8177,29 @@ mod tests {
         // `updateBpm` writes `calculatedBpm * data.length` for a per-row
         // duration: (3600 / 120) * 32 * 2.
         assert_eq!(store.state().tweens[0]["duration"], json!(1920));
+    }
+
+    #[test]
+    fn disabling_engine_audio_clears_a_detected_tempo_and_kick() {
+        let mut store = Store::new();
+        let mut detected = engine_snapshot();
+        detected.bpm = Some(128.0);
+        detected.beat = 0.8;
+        store.set_engine_audio(&detected, true, Duration::ZERO);
+        assert_eq!(store.bpm(), 128.0);
+        assert!(store.kick());
+
+        store.disable_engine_audio();
+
+        assert_eq!(
+            store.bpm(),
+            0.0,
+            "a stopped capture must not leave a detected tempo"
+        );
+        assert!(
+            !store.kick(),
+            "a stopped capture must not leave the kick latched"
+        );
     }
 
     #[test]

@@ -2625,8 +2625,27 @@ impl PerformanceView {
     }
 }
 
+/// Inclusive slider bounds of the Tempo window's detector range.
+pub const BPM_RANGE_MIN: f64 = 30.0;
+pub const BPM_RANGE_MAX: f64 = 300.0;
+/// Detector defaults, matching `modv_media::audio::tempo::{MIN_BPM, MAX_BPM}`.
+pub const DEFAULT_BPM_MIN: f64 = 70.0;
+pub const DEFAULT_BPM_MAX: f64 = 200.0;
+
+/// Whether a detector BPM range may be dispatched as `beats/SET_BPM_RANGE`.
+///
+/// Shared by the Tempo sliders, the desktop `Store` and the browser shell so
+/// all three accept exactly the same bounds.
+pub fn valid_bpm_range(min: f64, max: f64) -> bool {
+    min.is_finite()
+        && max.is_finite()
+        && (BPM_RANGE_MIN..=BPM_RANGE_MAX).contains(&min)
+        && (BPM_RANGE_MIN..=BPM_RANGE_MAX).contains(&max)
+        && min < max
+}
+
 /// Audio analysis values shown by the meters and BPM readout.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AudioView {
     pub bpm: f64,
     pub kick: bool,
@@ -2636,6 +2655,25 @@ pub struct AudioView {
     /// The live capture feed's negotiated rate in Hz (the rate the analyser,
     /// BPM detector and bands run at), `None` when capture is silent.
     pub sample_rate: Option<u32>,
+    /// Lower bound of the tempo detector's supported BPM range.
+    pub bpm_min: f64,
+    /// Upper bound of the tempo detector's supported BPM range.
+    pub bpm_max: f64,
+}
+
+impl Default for AudioView {
+    fn default() -> Self {
+        Self {
+            bpm: 0.0,
+            kick: false,
+            bass: 0.0,
+            mid: 0.0,
+            treble: 0.0,
+            sample_rate: None,
+            bpm_min: DEFAULT_BPM_MIN,
+            bpm_max: DEFAULT_BPM_MAX,
+        }
+    }
 }
 
 /// Status-bar health information.

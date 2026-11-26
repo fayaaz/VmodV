@@ -1254,6 +1254,13 @@ impl VmodvApp {
     }
 
     fn tick_engine(&mut self, dt: Duration) {
+        let range = self.store.bpm_range();
+        if let Some(feed) = self.audio_feed.as_mut() {
+            let analyser = feed.analyser_mut();
+            if analyser.tempo_range() != range {
+                analyser.set_tempo_range(range.0, range.1);
+            }
+        }
         let phrase_flipped = self.pump_audio(dt);
         self.store.drain_osc();
         // Complete any NDI discovery run / receiver status change on the UI
@@ -3486,12 +3493,17 @@ impl VmodvApp {
             .map(|(row, (scene_id, _group_id))| (row, scene_id))
             .collect();
 
-        let audio = audio_view(
-            self.store.bpm(),
-            self.store.kick(),
-            self.store.audio(),
-            self.audio_capture_rate.get(),
-        );
+        let (bpm_min, bpm_max) = self.store.bpm_range();
+        let audio = AudioView {
+            bpm_min,
+            bpm_max,
+            ..audio_view(
+                self.store.bpm(),
+                self.store.kick(),
+                self.store.audio(),
+                self.audio_capture_rate.get(),
+            )
+        };
         let mut texture_sources = state
             .groups
             .iter()
@@ -4233,6 +4245,7 @@ fn audio_view(bpm: f64, kick: bool, audio: &AudioFrame, capture_rate: Option<u32
         mid: audio.mid,
         treble: audio.treble,
         sample_rate: capture_rate,
+        ..AudioView::default()
     }
 }
 

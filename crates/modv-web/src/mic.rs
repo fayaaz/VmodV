@@ -156,6 +156,15 @@ pub fn frame(dt: f32) -> Option<MicFrame> {
     MIC.with(|mic| mic.borrow_mut().frame(dt))
 }
 
+/// Update the microphone analyser's tempo detector BPM range.
+pub fn set_tempo_range(min: f64, max: f64) {
+    MIC.with(|mic| {
+        if let Some(processor) = mic.borrow_mut().processor.as_mut() {
+            processor.set_tempo_range(min, max);
+        }
+    });
+}
+
 #[derive(Default)]
 struct MicCapture {
     context: Option<web_sys::AudioContext>,
