@@ -366,7 +366,7 @@ impl SceneLibrary {
             return false;
         };
         merge_scene_runtime(&scene, state, tweens, bpm);
-        remove_live_row(state, scene_id, row);
+        remove_live_row(state, row);
         let index = row.min(state.groups.len());
         for id in &materialized.group.modules {
             if let Some(module) = materialized.modules.get(id) {
@@ -1279,18 +1279,28 @@ fn materialize_group(
     Some(MaterializedGroup { group, modules })
 }
 
-fn remove_live_row(state: &mut EngineState, scene_id: &str, row: usize) {
+/// Remove the live Group currently rendering `row`, whichever Scene it came
+/// from. The incoming Scene id is deliberately not part of the match: a
+/// performance advance replaces the previous Scene's row, not a row of the
+/// same Scene.
+fn remove_live_row(state: &mut EngineState, row: usize) {
     let removed: Vec<String> = state
         .groups
         .iter()
-        .filter(|group| group.scene_id.as_deref() == Some(scene_id) && group.scene_row == Some(row))
+        .filter(|group| group.scene_row == Some(row) && group.transition_ghost != Some(true))
         .flat_map(|group| group.modules.clone())
         .collect();
-    state.groups.retain(|group| {
-        !(group.scene_id.as_deref() == Some(scene_id) && group.scene_row == Some(row))
-    });
+    state
+        .groups
+        .retain(|group| !(group.scene_row == Some(row) && group.transition_ghost != Some(true)));
     for id in removed {
-        state.modules.shift_remove(&id);
+        let still_used = state
+            .groups
+            .iter()
+            .any(|group| group.modules.iter().any(|module| module == &id));
+        if !still_used {
+            state.modules.shift_remove(&id);
+        }
     }
 }
 

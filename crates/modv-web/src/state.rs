@@ -3155,6 +3155,30 @@ mod tests {
     }
 
     #[test]
+    fn performance_advances_replace_the_row_group_instead_of_accumulating() {
+        let mut state = WebState::new();
+        enable_performance(&mut state);
+        for _ in 0..25 {
+            state.tick_performance(0.1, false);
+        }
+        tick_transition_seconds(&mut state, 3.0);
+
+        let mut per_row: BTreeMap<usize, usize> = BTreeMap::new();
+        for group in &state.state().groups {
+            if group.transition_ghost == Some(true) {
+                continue;
+            }
+            if let Some(row) = group.scene_row {
+                *per_row.entry(row).or_default() += 1;
+            }
+        }
+        assert!(
+            per_row.values().all(|count| *count == 1),
+            "each performance row must have exactly one live Group: {per_row:?}"
+        );
+    }
+
+    #[test]
     fn group_inherit_composition_round_trips_through_the_snapshot() {
         let mut state = WebState::new();
         let group = state.group_id().to_string();

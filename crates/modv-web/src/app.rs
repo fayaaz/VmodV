@@ -685,7 +685,7 @@ impl eframe::App for WebApp {
                     *row,
                     RowMonitorView {
                         group_id: entry.group_id.clone(),
-                        texture: entry.texture.clone(),
+                        texture: entry.texture,
                     },
                 )
             })
