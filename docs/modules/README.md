@@ -58,8 +58,9 @@ registry (shader, 2D and Point10 modules).
 
 Multi-pass and persistent-buffer ISF shaders are marked `simplified`: the
 catalogue draws pass 0 rather than replaying the full pass graph, which would
-need the compositor's ping-pong targets. The browser shell at `/app/` currently
-loads the built-in registry only (no ISF corpus).
+need the compositor's ping-pong targets. The browser shell at `/app/` embeds
+and registers the full bundled ISF corpus; MilkDrop presets and user ISF
+folders are not loaded there yet.
 
 ## Publishing
 

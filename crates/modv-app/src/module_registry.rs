@@ -784,6 +784,56 @@ impl ModuleRegistry {
         Self::build(None)
     }
 
+    /// Register an in-memory ISF corpus (browser build).
+    ///
+    /// Each tuple is `(module name, fragment source, optional vertex sidecar)`.
+    /// Names that collide with an existing shader/2D/Point10/ISF/MilkDrop
+    /// definition are ignored, matching the file scanner's corpus-wins rule.
+    /// Parsing is header-only, exactly like [`Self::build`]; the compositor
+    /// compiles the GLSL on first draw.
+    pub fn with_isf_sources(mut self, sources: &[(String, String, Option<String>)]) -> Self {
+        for (name, fragment, vertex) in sources {
+            if self.has_definition_name(name) {
+                continue;
+            }
+            match parse_isf(fragment, vertex.as_deref()) {
+                Ok(document) => {
+                    let meta = meta_from_document(&document);
+                    let props = synthesise_props(&document).into_iter().collect();
+                    self.isf.push(IsfDefinition {
+                        name: name.clone(),
+                        meta,
+                        props,
+                        document,
+                    });
+                }
+                Err(error) => eprintln!("engine: WARN skipping bundled ISF shader {name}: {error}"),
+            }
+        }
+        self.registered_cache = OnceLock::new();
+        self.kind_index = OnceLock::new();
+        self
+    }
+
+    fn has_definition_name(&self, name: &str) -> bool {
+        self.shader
+            .iter()
+            .any(|module| module.name.as_ref() == name)
+            || self
+                .two_d
+                .iter()
+                .any(|definition| definition.meta.name == name)
+            || self
+                .point10
+                .iter()
+                .any(|definition| definition.meta.name == name)
+            || self.isf.iter().any(|definition| definition.name == name)
+            || self
+                .milkdrop
+                .iter()
+                .any(|definition| definition.name == name)
+    }
+
     /// Build the registry, scanning `isf_dir` for the vendored ISF corpus.
     ///
     /// `None` (or a missing directory) registers no ISF module. Every `*.fs`

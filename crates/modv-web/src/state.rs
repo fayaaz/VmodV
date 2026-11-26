@@ -7,8 +7,10 @@
 //!
 //! The state is pure (no wgpu, no DOM), so it is unit-tested on the host.
 
-use std::sync::Arc;
+use std::ffi::OsStr;
+use std::sync::{Arc, OnceLock};
 
+use include_dir::{Dir, include_dir};
 use serde_json::{Map, Value, json};
 
 use modv_app::module_registry::ModuleRegistry;
@@ -44,7 +46,8 @@ impl Default for WebState {
 }
 
 impl WebState {
-    /// A fresh state with the built-in shader/2D/Point10 registry.
+    /// A fresh state with the built-in shader/2D/Point10 registry plus the
+    /// bundled ISF corpus.
     pub fn new() -> Self {
         let mut state = EngineState::new();
         let group_id = "web-group-1".to_string();
@@ -52,7 +55,7 @@ impl WebState {
             .groups
             .push(new_group(&group_id, "Group 1", GROUP_ENABLED));
         Self {
-            registry: Arc::new(ModuleRegistry::builtin()),
+            registry: bundled_registry(),
             state,
             group_id,
             next_id: 0,
@@ -61,7 +64,7 @@ impl WebState {
             frames: 0,
             adapter: "Browser adapter".to_string(),
             backend: "webgpu".to_string(),
-            bpm: 120.0,
+            bpm: 0.0,
         }
     }
 
@@ -555,6 +558,41 @@ impl WebState {
     }
 }
 
+/// The checked-in ISF corpus, compiled into the wasm binary.
+///
+/// The browser has no filesystem scanner, so the same `resources/isf` tree
+/// the desktop app ships is embedded here. Parsing is header-only.
+static ISF_CORPUS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../resources/isf");
+static BUNDLED_REGISTRY: OnceLock<Arc<ModuleRegistry>> = OnceLock::new();
+
+fn bundled_registry() -> Arc<ModuleRegistry> {
+    BUNDLED_REGISTRY
+        .get_or_init(|| {
+            let mut files: Vec<_> = ISF_CORPUS.files().collect();
+            files.sort_by(|left, right| left.path().cmp(right.path()));
+            let mut sources = Vec::with_capacity(files.len());
+            for file in files {
+                let path = file.path();
+                if path.extension() != Some(OsStr::new("fs")) {
+                    continue;
+                }
+                let Some(name) = path.file_stem().and_then(OsStr::to_str) else {
+                    continue;
+                };
+                let Some(fragment) = file.contents_utf8() else {
+                    continue;
+                };
+                let vertex = ISF_CORPUS
+                    .get_file(path.with_extension("vs"))
+                    .and_then(|file| file.contents_utf8())
+                    .map(str::to_string);
+                sources.push((name.to_string(), fragment.to_string(), vertex));
+            }
+            Arc::new(ModuleRegistry::builtin().with_isf_sources(&sources))
+        })
+        .clone()
+}
+
 fn new_group(id: &str, name: &str, enabled: i64) -> Group {
     Group {
         id: id.to_string(),
@@ -797,6 +835,40 @@ mod tests {
                 .iter()
                 .any(|module| module.name == "Bands"),
             "the Gallery must see the built-in registry"
+        );
+    }
+
+    #[test]
+    fn the_bundled_isf_corpus_is_registered() {
+        let state = WebState::new();
+        assert!(
+            state.registry().isf_definitions().len() > 300,
+            "the bundled ISF corpus must be available in the browser"
+        );
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert!(
+            snapshot
+                .registered
+                .iter()
+                .any(|module| module.name == "Angular"),
+            "a bundled ISF shader must appear in the Gallery"
+        );
+    }
+
+    #[test]
+    fn a_bundled_isf_shader_can_be_added() {
+        let mut state = WebState::new();
+        let id = state
+            .add_module("Angular")
+            .expect("the bundled ISF corpus knows Angular");
+        let module = &state.state().modules[&id];
+        assert_eq!(module.meta["type"], json!("isf"));
+        assert!(
+            !module
+                .props
+                .as_object()
+                .is_some_and(serde_json::Map::is_empty),
+            "an ISF shader exposes its input props"
         );
     }
 

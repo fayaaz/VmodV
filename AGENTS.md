@@ -127,10 +127,12 @@ history is in git, and the pre-cleanup Electron tree is on `legacy-electron`.
   read-only previews, video textures are typed paths with no transport
   controls, and there is no 2D vector pad.
 - **Browser shell (`crates/modv-web`):** built-in shader/2D/Point10 modules,
-  Groups/Gallery/Inspector, demo/microphone audio and WebGL2 fallback work.
-  Still missing: ISF corpus and MilkDrop, filesystem/preset/Scene persistence,
-  performance mode, OSC/NDI/MIDI/plugins and native output windows. Point10
-  compute scenes need WebGPU; the WebGL2 fallback logs and skips them.
+  Groups/Gallery/Inspector, microphone audio (silent until enabled) and WebGL2 fallback work.
+  The bundled ISF corpus is embedded in the wasm binary and registered at
+  startup. Still missing: MilkDrop, user ISF folders, filesystem/preset/Scene
+  persistence, performance mode, OSC/NDI/MIDI/plugins and native output
+  windows. Point10 compute scenes need WebGPU; the WebGL2 fallback logs and
+  skips them.
 - **Media (P6):** native file/screen pickers, media-manager file dialogs,
   project profiles and the full media-tree watch are missing. User ISF hot
   reload, the camera panel and preset load/save already work.
