@@ -1,0 +1,33 @@
+name: Nightly cleanup
+
+# Stale drafts left by failed or cancelled `release.yml` runs on `main`. That
+# workflow creates the GitHub release as a draft before validation and only
+# publishes it when lint/tests pass, so a red run can strand an invisible
+# draft. This job deletes only drafts that automation cut from `main` and that
+# are older than a day; it never creates or edits a release, touches a PR or
+# removes a git tag. The pruning rules live in tools/prune-draft-releases.sh.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-cleanup
+  cancel-in-progress: true
+
+jobs:
+  prune-draft-releases:
+    name: Prune stale automated draft releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Delete automated draft releases older than a day
+        run: bash tools/prune-draft-releases.sh

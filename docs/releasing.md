@@ -54,9 +54,18 @@ Merge commits are ignored.
    leaves an existing `vX.Y.Z` tag in place and re-pushes it, and leaves an
    existing release in place, so re-runs after a build failure do not die on
    the tag or release already existing.
+5. The release is created as a **draft**; `publish` makes it visible only after
+   `validate` passes. A failed or cancelled run can therefore strand an
+   invisible draft. `.github/workflows/nightly-cleanup.yml` runs at 03:00 UTC
+   and calls `tools/prune-draft-releases.sh` to delete drafts older than a day
+   that automation cut from `main`. It matches only `vX.Y.Z`-tagged releases
+   authored by a `[bot]` account whose notes carry the workflow's marker —
+   published releases, recent drafts, hand-written drafts, git tags and PRs
+   are untouched.
 
 This is the only release channel: the old rolling `nightly` prerelease was
-removed — download the latest `vX.Y.Z` release for current artifacts.
+removed (the nightly job only prunes stale drafts) — download the latest
+`vX.Y.Z` release for current artifacts.
 
 ## Version line and tags
 

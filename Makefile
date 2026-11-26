@@ -409,6 +409,7 @@ test-static-guards: docker-cargo-volume
 		--test ndi_readback \
 		--test notices \
 		--test pages_workflow \
+		--test release_cleanup \
 		--test release_resilience \
 		--test release_resume \
 		--test removed_content \
