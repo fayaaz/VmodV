@@ -4,7 +4,67 @@
 //! path. This deterministic 120 BPM source is kept for host tests and as an
 //! opt-in fixture for future browser demos.
 
-use modv_renderers::two_d::AudioFrame;
+use modv_media::audio::analyser::AudioSnapshot;
+use modv_renderers::two_d::{AudioFeatures, AudioFrame};
+
+/// Sample rate used when the analyser reports a non-finite/zero rate.
+pub const FALLBACK_SAMPLE_RATE: f32 = 44_100.0;
+
+/// Map the native analyser snapshot onto the renderer's `AudioFrame`.
+///
+/// Every payload field the compositor and the module props read is carried
+/// over verbatim, with non-finite values sanitised to silence so a broken
+/// input can never poison a shader uniform.
+pub fn snapshot_to_frame(snapshot: &AudioSnapshot) -> AudioFrame {
+    let wave = sanitize_array(&snapshot.wave);
+    let features = &snapshot.features;
+    let sample_rate = if snapshot.sample_rate.is_finite() && snapshot.sample_rate > 0.0 {
+        snapshot.sample_rate
+    } else {
+        FALLBACK_SAMPLE_RATE
+    };
+    AudioFrame {
+        bass: sanitize(snapshot.bands[0]),
+        mid: sanitize(snapshot.bands[1]),
+        treble: sanitize(snapshot.bands[2]),
+        beat: sanitize(snapshot.beat),
+        wave,
+        byte_frequency_data: snapshot.byte_frequency_data,
+        lanes: sanitize_array(&snapshot.lanes),
+        cells: sanitize_array(&snapshot.cells),
+        raw_lanes: sanitize_array(&snapshot.raw_lanes),
+        raw_cells: sanitize_array(&snapshot.raw_cells),
+        freq_mag: sanitize_array(&snapshot.freq_mag),
+        sample_rate,
+        features: AudioFeatures {
+            rms: sanitize(features.rms),
+            zcr: sanitize(features.zcr),
+            energy: sanitize(features.energy),
+            spectral_centroid: sanitize(features.spectral_centroid),
+            spectral_flatness: sanitize(features.spectral_flatness),
+            spectral_slope: sanitize(features.spectral_slope),
+            spectral_rolloff: sanitize(features.spectral_rolloff),
+            spectral_spread: sanitize(features.spectral_spread),
+            spectral_skewness: sanitize(features.spectral_skewness),
+            spectral_kurtosis: sanitize(features.spectral_kurtosis),
+            perceptual_spread: sanitize(features.perceptual_spread),
+            perceptual_sharpness: sanitize(features.perceptual_sharpness),
+            buffer: wave.to_vec(),
+        },
+    }
+}
+
+fn sanitize(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
+fn sanitize_array<const N: usize>(values: &[f32; N]) -> [f32; N] {
+    let mut sanitized = [0.0; N];
+    for (slot, value) in sanitized.iter_mut().zip(values) {
+        *slot = sanitize(*value);
+    }
+    sanitized
+}
 
 /// Convert WebAudio's dB spectrum to the three AGC-ish bands the visuals use.
 ///
@@ -190,5 +250,88 @@ mod tests {
             saw_kick |= audio.update(1.0 / 60.0).beat > 0.5;
         }
         assert!(saw_kick, "a 2 Hz beat must kick within two seconds");
+    }
+
+    /// A real analyser frame (silent), then overridden: the snapshot shape is
+    /// owned by `modv-media`, so building one through the analyser keeps this
+    /// test honest about new fields.
+    fn snapshot() -> AudioSnapshot {
+        modv_media::audio::analyser::AudioAnalyser::new(48_000.0).frame(0.0)
+    }
+
+    #[test]
+    fn analyser_snapshot_maps_every_payload_field() {
+        let mut source = snapshot();
+
+        source.bands = [0.6, 0.4, 0.3];
+        source.lanes = [0.11; 12];
+        source.raw_lanes = [1.11; 12];
+        source.cells = [0.25; 16];
+        source.raw_cells = [2.25; 16];
+        source.beat = 0.75;
+        source.wave = [0.5; 1024];
+        source.freq_mag = [7.0; 1024];
+        source.byte_frequency_data[0] = 255;
+        source.byte_frequency_data[512] = 0;
+        source.sample_rate = 48_000.0;
+        source.features.rms = 0.3;
+        source.features.zcr = 0.05;
+        source.features.spectral_centroid = 1200.0;
+
+        let frame = snapshot_to_frame(&source);
+
+        assert_eq!([frame.bass, frame.mid, frame.treble], [0.6, 0.4, 0.3]);
+        assert_eq!(frame.beat, 0.75);
+        assert_eq!(frame.lanes, [0.11; 12]);
+        assert_eq!(frame.raw_lanes, [1.11; 12]);
+        assert_eq!(frame.cells, [0.25; 16]);
+        assert_eq!(frame.raw_cells, [2.25; 16]);
+        assert_eq!(frame.wave, [0.5; 1024]);
+        assert_eq!(frame.freq_mag, [7.0; 1024]);
+        assert_eq!(frame.byte_frequency_data[0], 255);
+        assert_eq!(frame.byte_frequency_data[512], 0);
+        assert_eq!(frame.sample_rate, 48_000.0);
+        assert_eq!(frame.features.rms, 0.3);
+        assert_eq!(frame.features.zcr, 0.05);
+        assert_eq!(frame.features.spectral_centroid, 1200.0);
+        assert_eq!(
+            frame.features.buffer,
+            frame.wave.to_vec(),
+            "features.buffer mirrors the wave for Waveform.js"
+        );
+    }
+
+    #[test]
+    fn analyser_snapshot_sanitises_non_finite_values() {
+        let mut source = snapshot();
+
+        source.bands = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        source.lanes = [f32::NAN; 12];
+        source.cells = [f32::INFINITY; 16];
+        source.raw_lanes = [f32::NEG_INFINITY; 12];
+        source.raw_cells = [f32::NAN; 16];
+        source.beat = f32::NAN;
+        source.wave = [f32::NAN; 1024];
+        source.freq_mag = [f32::INFINITY; 1024];
+        source.sample_rate = f32::NAN;
+        source.features.rms = f32::NAN;
+        source.features.spectral_flatness = f32::NAN;
+        source.features.perceptual_sharpness = f32::INFINITY;
+
+        let frame = snapshot_to_frame(&source);
+
+        assert_eq!([frame.bass, frame.mid, frame.treble], [0.0; 3]);
+        assert_eq!(frame.lanes, [0.0; 12]);
+        assert_eq!(frame.cells, [0.0; 16]);
+        assert_eq!(frame.raw_lanes, [0.0; 12]);
+        assert_eq!(frame.raw_cells, [0.0; 16]);
+        assert_eq!(frame.beat, 0.0);
+        assert!(frame.wave.iter().all(|value| *value == 0.0));
+        assert!(frame.freq_mag.iter().all(|value| *value == 0.0));
+        assert_eq!(frame.sample_rate, FALLBACK_SAMPLE_RATE);
+        assert_eq!(frame.features.rms, 0.0);
+        assert_eq!(frame.features.spectral_flatness, 0.0);
+        assert_eq!(frame.features.perceptual_sharpness, 0.0);
+        assert!(frame.features.buffer.iter().all(|value| *value == 0.0));
     }
 }

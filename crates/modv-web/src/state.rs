@@ -105,6 +105,11 @@ impl WebState {
         &self.audio
     }
 
+    /// The current tempo estimate (0 when no confident BPM yet).
+    pub fn bpm(&self) -> f64 {
+        self.bpm
+    }
+
     /// Replace the audio frame.
     pub fn set_audio(&mut self, audio: AudioFrame) {
         self.audio = audio;
@@ -116,7 +121,7 @@ impl WebState {
     /// is the authoritative store, so writes land directly on the module
     /// props, module meta and group controls the compositor reads next.
     pub fn evaluate_links(&mut self) {
-        self.beats.kick = self.audio.beat >= 0.5;
+        self.beats.bpm = self.bpm;
         let mut writes = Vec::new();
         evaluate_input_links(
             &self.state,
@@ -316,7 +321,18 @@ impl WebState {
     pub fn set_bpm(&mut self, bpm: f64) {
         if bpm.is_finite() && bpm > 0.0 {
             self.bpm = bpm;
+            self.beats.bpm = bpm;
         }
+    }
+
+    /// Apply the analyser's tempo/beat result for this frame.
+    pub fn set_tempo(&mut self, bpm: Option<f32>, kick: bool) {
+        self.bpm = bpm
+            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+            .map(f64::from)
+            .unwrap_or(0.0);
+        self.beats.bpm = self.bpm;
+        self.beats.kick = kick;
     }
 
     fn next_input_id(&mut self) -> String {

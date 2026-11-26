@@ -3027,6 +3027,7 @@ dependencies = [
  "js-sys",
  "modv-app",
  "modv-engine",
+ "modv-media",
  "modv-render",
  "modv-renderers",
  "modv-ui",

@@ -4,13 +4,43 @@ const boot = document.getElementById("boot");
 const status = document.getElementById("boot-status");
 const error = document.getElementById("boot-error");
 const mic = document.getElementById("mic");
+const micDevice = document.getElementById("mic-device");
+
+async function refreshMicrophones() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (device) => device.kind === "audioinput",
+    );
+    const current = micDevice.value;
+    micDevice.replaceChildren();
+    const fallback = document.createElement("option");
+    fallback.value = "";
+    fallback.textContent = "Default microphone";
+    micDevice.append(fallback);
+    for (const device of devices) {
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.textContent = device.label || "Microphone";
+      micDevice.append(option);
+    }
+    if ([...micDevice.options].some((option) => option.value === current)) {
+      micDevice.value = current;
+    }
+  } catch (reason) {
+    console.warn("could not enumerate microphones", reason);
+  }
+}
+
+navigator.mediaDevices?.addEventListener("devicechange", refreshMicrophones);
 
 mic.addEventListener("click", async () => {
   mic.disabled = true;
   mic.textContent = "Requesting microphone…";
   try {
-    await enable_microphone();
+    await enable_microphone(micDevice.value || undefined);
     mic.textContent = "Microphone live";
+    await refreshMicrophones();
   } catch (reason) {
     console.error(reason);
     mic.textContent = "Microphone unavailable";

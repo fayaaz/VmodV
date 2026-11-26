@@ -11,6 +11,10 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 include_dir = "0.7"
 modv-engine = { path = "../modv-engine" }
+# The pure analysis modules (analyser/bands/tempo/beat/phrase/features) are
+# platform-neutral; only capture/video/MIDI/NDI/OSC are native-gated. The
+# browser's microphone frame maps the native `AudioSnapshot` onto `AudioFrame`.
+modv-media = { version = "0.1.0", path = "../modv-media" }
 modv-render = { version = "0.1.0", path = "../modv-render" }
 modv-renderers = { version = "0.1.0", path = "../modv-renderers" }
 modv-ui = { version = "0.1.0", path = "../modv-ui" }

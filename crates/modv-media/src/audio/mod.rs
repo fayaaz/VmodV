@@ -3,13 +3,16 @@
 pub mod analyser;
 pub mod bands;
 pub mod beat_detektor;
-pub mod capture;
-pub mod engine;
 pub mod features;
 pub mod meyda;
-pub mod midi_clock;
 pub mod phrase;
 pub mod tempo;
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_arch = "wasm32"))]
+pub mod capture;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod engine;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod midi_clock;
+#[cfg(all(not(target_arch = "wasm32"), target_os = "linux"))]
 pub mod pipewire;

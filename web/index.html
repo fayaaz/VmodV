@@ -65,11 +65,27 @@
         overflow: auto;
       }
       #boot code { color: var(--fg); }
-      #mic {
+      #audio-controls {
         position: fixed;
         right: 14px;
         bottom: 34px;
         z-index: 20;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+      }
+      #mic-device {
+        max-width: 230px;
+        padding: 5px 7px;
+        border: 1px solid rgba(69, 255, 154, 0.28);
+        border-radius: 3px;
+        background: rgba(7, 7, 11, 0.9);
+        color: var(--muted);
+        font: inherit;
+        font-size: 11px;
+      }
+      #mic {
         padding: 7px 12px;
         border: 1px solid rgba(69, 255, 154, 0.45);
         border-radius: 3px;
@@ -85,7 +101,12 @@
   </head>
   <body>
     <canvas id="modv-canvas" tabindex="0"></canvas>
-    <button id="mic" type="button">Use microphone</button>
+    <div id="audio-controls">
+      <select id="mic-device" title="Microphone input">
+        <option value="">Default microphone</option>
+      </select>
+      <button id="mic" type="button">Use microphone</button>
+    </div>
     <div id="boot">
       <div class="card">
         <h1>VMODV / WEB</h1>

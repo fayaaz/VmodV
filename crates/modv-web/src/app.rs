@@ -189,8 +189,9 @@ impl WebApp {
         let Some(window) = web_sys::window() else {
             return;
         };
+        let audio = self.state.audio();
         let stats = format!(
-            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{}}}",
+            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{},\"bass\":{:.3},\"mid\":{:.3},\"treble\":{:.3},\"bpm\":{:.1}}}",
             self.fps,
             self.frame_ms,
             self.frames,
@@ -198,7 +199,11 @@ impl WebApp {
             self.render_size[0],
             self.render_size[1],
             self.webgl_fallback,
-            self.preview_texture.is_some()
+            self.preview_texture.is_some(),
+            audio.bass,
+            audio.mid,
+            audio.treble,
+            self.state.bpm()
         );
         let _ = js_sys::Reflect::set(
             &window,
@@ -273,9 +278,14 @@ impl eframe::App for WebApp {
             };
 
             // Silence until the user explicitly enables the microphone.
-            // Nothing is captured or synthesized on open.
-            let audio = crate::mic::frame(dt as f32).unwrap_or_default();
+            // Nothing is captured or synthesized on open. Once enabled, the
+            // native analyser supplies the bands, tempo and BeatDetektor kick.
+            let (audio, bpm, kick) = match crate::mic::frame(dt as f32) {
+                Some(frame) => (frame.audio, frame.bpm, frame.kick),
+                None => (Default::default(), None, false),
+            };
             self.state.set_audio(audio.clone());
+            self.state.set_tempo(bpm, kick);
             // Audio/draw/tween links write into the props before the
             // compositor reads the state this frame.
             self.state.evaluate_links();
