@@ -8,20 +8,10 @@ name: GitHub Pages — VmodV browser
 on:
   # Every push to main republishes the browser shell. No path filter: a main
   # update is the deployment trigger, even when the change is docs-only.
+  # Pages is never deployed from a pull request or another branch.
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'crates/**'
-      - 'resources/isf/**'
-      - 'web/**'
-      - 'tools/build-web.sh'
-      - 'Dockerfile'
-      - 'Makefile'
-      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -38,6 +28,8 @@ env:
 jobs:
   build:
     name: Build and publish the browser shell
+    # Only `main` publishes. A manual dispatch from another branch is a no-op.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -80,14 +72,12 @@ jobs:
         run: make web-build
 
       - name: Checkout the gh-pages branch
-        if: ${{ github.event_name != 'pull_request' }}
         uses: actions/checkout@v4
         with:
           ref: gh-pages
           path: gh-pages
 
       - name: Replace the gallery with the browser shell
-        if: ${{ github.event_name != 'pull_request' }}
         run: |
           rm -rf gh-pages/modules gh-pages/app gh-pages/assets/wasm
           mkdir -p gh-pages/modules gh-pages/app
@@ -109,7 +99,6 @@ jobs:
           rm -f gh-pages/assets/catalog.js gh-pages/assets/preview.js
 
       - name: Commit and push to gh-pages
-        if: ${{ github.event_name != 'pull_request' }}
         run: |
           cd gh-pages
           git config user.name "github-actions[bot]"
