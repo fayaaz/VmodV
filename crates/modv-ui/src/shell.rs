@@ -52,8 +52,9 @@ const MIN_LIVE_HEIGHT: f32 = 120.0;
 const MIN_SCENES_HEIGHT: f32 = 140.0;
 /// The Gallery section's minimum height.
 const MIN_GALLERY_HEIGHT: f32 = 96.0;
-/// Space kept at the bottom of the Groups panel for the Help frame.
-const HELP_FRAME_HEIGHT: f32 = 150.0;
+/// Space kept at the bottom of the Groups panel for the Help frame. The frame
+/// itself grows into all of it; the Group list above only scrolls.
+const HELP_FRAME_MIN_HEIGHT: f32 = 240.0;
 
 /// Draw the complete VmodV UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -801,7 +802,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
             // scroll area would eat the whole panel and the frame would vanish.
             egui::ScrollArea::vertical()
                 .id_salt("groups-list")
-                .max_height((ui.available_height() - HELP_FRAME_HEIGHT).max(80.0))
+                .max_height((ui.available_height() - HELP_FRAME_MIN_HEIGHT).max(80.0))
                 .show(ui, |ui| {
                     if snapshot.groups.is_empty() {
                         ui.label(
@@ -1103,26 +1104,32 @@ fn help_frame(ui: &mut egui::Ui, state: &UiState) {
                     .size(13.0)
                     .color(theme::ACCENT),
             );
-            egui::ScrollArea::vertical()
-                .id_salt("help-body")
-                .max_height(96.0)
-                .show(ui, |ui| {
-                    // Module docs are more useful with the clicked module's
-                    // provenance up front, so it leads the scroll area.
-                    if topic == HelpTopic::Modules
-                        && let Some(meta) = state.help_module.as_ref()
-                    {
-                        ui.label(
-                            egui::RichText::new(format!("Module: {}", meta.name))
-                                .strong()
-                                .size(12.0),
-                        );
-                        ui.label(format!("Author: {}", meta.author));
-                        ui.label(format!("License: {}", module_license(meta)));
-                        ui.separator();
-                    }
-                    ui.label(egui::RichText::new(topic.body()).size(12.0));
+            // Module docs are more useful with the clicked module's
+            // provenance up front, so it leads the text.
+            if topic == HelpTopic::Modules
+                && let Some(meta) = state.help_module.as_ref()
+            {
+                ui.label(
+                    egui::RichText::new(format!("Module: {}", meta.name))
+                        .strong()
+                        .size(12.0),
+                );
+                ui.label(format!("Author: {}", meta.author));
+                ui.label(format!("License: {}", module_license(meta)));
+                ui.separator();
+            }
+            ui.label(egui::RichText::new(topic.body()).size(12.0));
+
+            // The frame owns all the space left below the Group list: reserve
+            // it instead of putting the documentation in a small scroll area.
+            let remaining = ui.available_height().max(0.0);
+            if remaining > 0.0 {
+                let (_, response) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), remaining), Sense::hover());
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Label, true, "Help frame")
                 });
+            }
         });
 }
 

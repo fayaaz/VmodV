@@ -93,6 +93,22 @@ fn the_help_frame_introduces_itself_before_anything_is_clicked() {
 }
 
 #[test]
+fn the_help_frame_fills_the_remaining_panel_height() {
+    let mut harness = harness(Vec::new());
+    harness.run();
+
+    let frame = harness.get_by_label("Help frame").rect();
+    assert!(
+        frame.height() > 200.0,
+        "the Help frame should stretch down the left panel, got {frame:?}"
+    );
+    assert!(
+        frame.bottom() > 700.0,
+        "the Help frame should reach the bottom of the panel, got {frame:?}"
+    );
+}
+
+#[test]
 fn clicking_a_group_shows_help_about_groups() {
     let mut harness = harness(vec![group("group-help", "Help Target")]);
     harness.run();
