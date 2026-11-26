@@ -20,8 +20,9 @@ make web-serve    # http://127.0.0.1:8000/
 
 A plain static server is enough. `web/index.html` and `web/main.js` are served
 next to the generated `web/pkg/` directory. `web/pkg` is gitignored; CI rebuilds
-it and publishes it at the GitHub Pages site root. The old `/modules/` and
-`/app/` links redirect to the root.
+it on every push to `main` and deploys it at the GitHub Pages site root through
+GitHub Actions (`actions/deploy-pages`). The old `/modules/` and `/app/` links
+redirect to the root.
 
 WebGPU is preferred. When the browser exposes no working WebGPU adapter (or
 the machine has none), eframe falls back to wgpu's WebGL2 backend and the shell

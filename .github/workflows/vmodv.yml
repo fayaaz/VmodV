@@ -172,7 +172,7 @@ jobs:
       # layouts and the REL-03 CI coverage guard itself. These do not launch
       # the app; the real-binary targets run via `make test-e2e-vmodv` below.
       - name: modv-app static and packaging guard tests (serial)
-        run: make engine-test ARGS="-p modv-app --test appimage_arm64 --test branding --test ci_docker_cache --test ci_test_coverage --test deb_package --test macos_portable_layout --test media_probe --test module_docs --test ndi_readback --test notices --test release_resilience --test release_resume --test removed_content --test undo_history -- --test-threads=1"
+        run: make engine-test ARGS="-p modv-app --test appimage_arm64 --test branding --test ci_docker_cache --test ci_test_coverage --test deb_package --test macos_portable_layout --test media_probe --test module_docs --test ndi_readback --test notices --test pages_workflow --test release_resilience --test release_resume --test removed_content --test undo_history -- --test-threads=1"
 
       # Launches the real `modv` binary under Xvfb; lavapipe provides the
       # Vulkan adapter. One worker only because a process owns a virtual

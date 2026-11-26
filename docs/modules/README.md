@@ -64,14 +64,13 @@ ISF folders are not loaded there yet.
 
 ## Publishing
 
-`.github/workflows/pages.yml` now builds the real browser shell and publishes
-it at the GitHub Pages site root (with `/modules/` and `/app/` redirecting
-there), replacing the module gallery. The generated catalogue JSON and preview
-runtime are still rebuilt locally with `make pages-data` for inspection, but
-are no longer deployed. Pages in this repository is served from `gh-pages`, and the
-`github-pages` environment only permits that branch — the workflow therefore
-does not use `actions/deploy-pages`. The generated catalogue is still checked
-in for `make pages-data`, but it is no longer what the site root serves.
+`.github/workflows/pages.yml` builds the real browser shell on every push to
+`main` and deploys it at the GitHub Pages site root through GitHub Actions
+(`actions/upload-pages-artifact` + `actions/deploy-pages`), with `/modules/`
+and `/app/` redirecting there. The generated catalogue JSON and preview runtime
+are still rebuilt locally with `make pages-data` for inspection, but are no
+longer deployed. The generated catalogue is still checked in for
+`make pages-data`, but it is no longer what the site root serves.
 
 Third-party licence information is in
 [`THIRD_PARTY_NOTICES.md`](https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md).

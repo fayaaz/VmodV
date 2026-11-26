@@ -1,9 +1,8 @@
 name: GitHub Pages — VmodV browser
 
-# Pages is served from the `gh-pages` branch (the `github-pages` environment
-# only permits that branch). The real browser shell is the site root; the old
-# /modules/ and /app/ links redirect there, and the catalogue assets are
-# removed from gh-pages.
+# Pages deploys from a GitHub Actions artifact on every push to `main`. The
+# real browser shell is the site root; the old /modules/ and /app/ links
+# redirect there.
 on:
   # Every push to main republishes the browser shell. No path filter: a main
   # update is the deployment trigger, even when the change is docs-only.
@@ -14,7 +13,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: pages
@@ -26,7 +27,7 @@ env:
 
 jobs:
   build:
-    name: Build and publish the browser shell
+    name: Build the browser shell
     # Only `main` publishes. A manual dispatch from another branch is a no-op.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -73,41 +74,42 @@ jobs:
         env:
           DOCKER_BUILD_ARGS: --cache-from type=gha,scope=wasm-toolchain
 
-      - name: Checkout the gh-pages branch
-        uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: gh-pages
-
-      - name: Publish the browser shell at the site root
+      - name: Stage the site
         run: |
-          rm -rf gh-pages/modules gh-pages/app gh-pages/assets/wasm
-          rm -f gh-pages/assets/catalog.js gh-pages/assets/preview.js
+          rm -rf _site
+          mkdir -p _site
 
           # The real app is the site root.
-          cp -R web/. gh-pages/
+          cp -R web/. _site/
 
           # Keep the earlier /modules/ and /app/ links working without
           # duplicating the 18 MB wasm payload.
-          mkdir -p gh-pages/modules gh-pages/app
-          cat > gh-pages/modules/index.html <<'EOF'
+          mkdir -p _site/modules _site/app
+          cat > _site/modules/index.html <<'EOF'
           <!doctype html>
           <meta charset="utf-8">
           <meta http-equiv="refresh" content="0; url=../">
           <title>VmodV — browser</title>
           <a href="../">Open the VmodV browser shell</a>
           EOF
-          cp gh-pages/modules/index.html gh-pages/app/index.html
+          cp _site/modules/index.html _site/app/index.html
 
-      - name: Commit and push to gh-pages
-        run: |
-          cd gh-pages
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "Browser shell unchanged; nothing to publish."
-          else
-            git commit -m "feat(site): publish the VmodV browser shell from ${GITHUB_SHA::7}"
-            git push origin HEAD:gh-pages
-          fi
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
