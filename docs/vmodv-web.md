@@ -72,11 +72,12 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
   saved to `localStorage` (`vmodv-web-state`) after structural edits and
   throttled prop edits, and restored on refresh. New default Scenes are seeded
   when the saved defaults version is older.
-- **Output popup**: `Open output` starts a chrome-less renderer on an
-  offscreen canvas in this page and opens `output.html`, which plays that
-  canvas as video. The hidden renderer receives the main shell's exact
-  `EngineState`, analyser frame, transition progress and clock, so it cannot
-  drift; it pauses while no output window is open.
+- **Output view**: `Open output` hides the UI and draws the compositor's main
+  texture over the whole canvas in the same tab. The output renders at the
+  real viewport resolution instead of the UI's 960px budget (capped at 4K),
+  with no `captureStream` encoding or pop-up window, so it is not softened. `F`
+  toggles the browser's fullscreen mode, `Escape` leaves it, and a cog
+  revealed by hovering the top-right corner returns to the UI.
 - **Status/health**: real adapter/backend (`webgpu` or `webgl2`), FPS, frame
   time, resolution and audio activity.
 
@@ -95,9 +96,9 @@ These are out of scope for this branch, not accidental omissions:
 - Performance playlists and the playlist editor. Per-row auto-advance,
   crossfades and the transition picker work; playlist sequencing is
   native-only.
-- Native output windows. `Open output` mirrors a hidden in-page renderer to a
-  popup; the main tab must render for the stream to advance, so a fully hidden
-  main tab pauses the output.
+- Native output windows. `Open output` uses the same tab and canvas; there is
+  no separate window, cross-tab texture sharing or capture stream. A fully
+  hidden tab still pauses the browser's rendering loop.
 - The JSONL control socket and the native e2e harness. Browser smoke tests use
   Playwright/CDP against the canvas.
 
@@ -107,14 +108,13 @@ These are out of scope for this branch, not accidental omissions:
 | --- | --- |
 | `crates/modv-app` `web` feature | Compiles only the platform-neutral core: compositor, module registry, previews, quality, scene transitions, texture sources. Native modules are `cfg`'d out; `modv-media`, `modv-ipc`, winit, MIDI, notify and the shell are desktop-only target dependencies. |
 | `crates/modv-web/src/state.rs` | Pure `WebState`: one or more Groups, active modules, prop/meta edits, `UiAction` dispatch and the `EngineSnapshot` read model. Unit-tested on the host. |
-| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, transition capture/pass wiring, GPU previews and row monitors, `modv_ui::shell::draw`, and action/command drain. |
-| `crates/modv-web/src/output.rs` | Offscreen chrome-less compositor that renders the main shell's published state for the output window. |
-| `crates/modv-web/src/shared.rs` | Thread-local render-frame + module-registry hand-off between the main shell and the output renderer. |
+| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, transition capture/pass wiring, GPU previews and row monitors, `modv_ui::shell::draw`, the same-tab output view and action/command drain. |
+| `crates/modv-web/src/output_view.rs` | Host-tested output-view state, full-viewport render-target policy, letterbox geometry and cog reveal zone. |
 | `crates/modv-web/src/scenes.rs` | Default Scene seeding, Scene apply/capture/editing, transitions and the performance read model. |
 | `crates/modv-web/src/storage.rs` | `localStorage` load/save for the persisted live stack. |
 | `crates/modv-web/src/audio.rs` | Demo audio and the native `AudioSnapshot` → `AudioFrame` mapping. |
 | `crates/modv-web/src/mic.rs` | `getUserMedia` → `AnalyserNode` → native `AudioAnalyser` → `AudioFrame`. |
-| `web/` | Canvas page, boot/error overlay, microphone controls, output tab. |
+| `web/` | Canvas page, boot/error overlay, microphone controls, same-tab output view. |
 
 The compositor still owns group targets, module textures, ISF/Point10/2D
 instances and the present pipeline. The only core change needed for WebGPU was

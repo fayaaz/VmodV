@@ -97,35 +97,10 @@
       }
       #mic:hover { background: rgba(69, 255, 154, 0.12); }
       #mic:disabled { color: var(--muted); cursor: default; }
-      #toast {
-        position: fixed;
-        left: 50%;
-        bottom: 34px;
-        z-index: 30;
-        transform: translateX(-50%);
-        padding: 8px 14px;
-        border: 1px solid rgba(69, 255, 154, 0.45);
-        border-radius: 3px;
-        background: rgba(7, 7, 11, 0.94);
-        color: var(--accent);
-        font-size: 12px;
-        white-space: nowrap;
-      }
-      #toast.hidden { display: none; }
-      #modv-output-canvas {
-        position: fixed;
-        left: 0;
-        top: 0;
-        width: 960px;
-        height: 540px;
-        opacity: 0.001;
-        pointer-events: none;
-        z-index: -1;
-      }
+      html[data-modv-output] #audio-controls { display: none; }
     </style>
   </head>
   <body>
-    <canvas id="modv-output-canvas" width="960" height="540" aria-hidden="true"></canvas>
     <canvas id="modv-canvas" tabindex="0"></canvas>
     <div id="audio-controls">
       <select id="mic-device" title="Microphone input">
@@ -133,7 +108,6 @@
       </select>
       <button id="mic" type="button">Use microphone</button>
     </div>
-    <div id="toast" class="hidden" role="status"></div>
     <div id="boot">
       <div class="card">
         <h1>VMODV / WEB</h1>

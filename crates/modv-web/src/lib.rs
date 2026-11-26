@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio;
+pub mod output_view;
 pub mod pacing;
 pub mod scenes;
 pub mod state;
@@ -15,15 +16,9 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod mic;
 #[cfg(target_arch = "wasm32")]
-mod output;
-#[cfg(target_arch = "wasm32")]
-mod shared;
-#[cfg(target_arch = "wasm32")]
 mod storage;
 
 #[cfg(target_arch = "wasm32")]
 pub use app::start;
 #[cfg(target_arch = "wasm32")]
 pub use mic::{enable_microphone, resume_microphone};
-#[cfg(target_arch = "wasm32")]
-pub use output::start_output;

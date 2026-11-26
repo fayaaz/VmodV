@@ -16,6 +16,7 @@ use modv_ui::model::{
 };
 use modv_ui::state::{UiCommand, UiState};
 
+use crate::output_view::{self, OutputView};
 use crate::pacing::{FramePacer, TARGET_FPS};
 use crate::state::WebState;
 
@@ -66,6 +67,8 @@ struct WebApp {
     scene_previews: HashMap<String, PreviewTexture>,
     preview_order: VecDeque<String>,
     row_monitors: HashMap<usize, RowMonitorEntry>,
+    output_view: OutputView,
+    document_output_mode: bool,
 }
 
 struct RowMonitorEntry {
@@ -108,7 +111,6 @@ impl WebApp {
         let mut state = WebState::new();
         let restored =
             crate::storage::load().is_some_and(|document| state.restore_persisted_json(&document));
-        crate::shared::set_registry(state.registry_arc());
         state.set_backend(
             format!("{} ({})", adapter_info.name, adapter_info.backend),
             backend,
@@ -165,6 +167,8 @@ impl WebApp {
             scene_previews: HashMap::new(),
             preview_order: VecDeque::new(),
             row_monitors: HashMap::new(),
+            output_view: OutputView::new(),
+            document_output_mode: false,
         })
     }
 
@@ -173,17 +177,10 @@ impl WebApp {
         let ppp = ctx.pixels_per_point();
         let width = (rect.width() * ppp).round().max(0.0) as u32;
         let height = (rect.height() * ppp).round().max(0.0) as u32;
-        // Keep the internal targets bounded at the native reference size
-        // (960x540). The browser canvas can be a 4K surface, and a couple of
-        // Point10 scenes at 4K would stall the tab; 960x540 keeps the 60 fps
-        // output budget reachable on ordinary GPUs.
-        let max_width = 960;
-        if width > max_width {
-            let height = (u64::from(height) * u64::from(max_width) / u64::from(width)) as u32;
-            [max_width, height.max(1)]
-        } else {
-            [width.max(1), height.max(1)]
-        }
+        // The UI view keeps the 960px reference budget so a 4K canvas stays
+        // affordable. The output view is the performance output, so it renders
+        // at the full viewport instead.
+        output_view::render_target_size(width, height, self.output_view.is_active())
     }
 
     fn update_preview_texture(&mut self, frame: &eframe::Frame) {
@@ -232,7 +229,7 @@ impl WebApp {
         let audio = self.state.audio();
         let audio_state = crate::mic::state().unwrap_or_else(|| "none".to_string());
         let stats = format!(
-            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{},\"bass\":{:.3},\"mid\":{:.3},\"treble\":{:.3},\"bpm\":{:.1},\"modules\":{},\"scenes\":{},\"rows\":{},\"audio_state\":\"{}\"}}",
+            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{},\"output_view\":{},\"bass\":{:.3},\"mid\":{:.3},\"treble\":{:.3},\"bpm\":{:.1},\"modules\":{},\"scenes\":{},\"rows\":{},\"audio_state\":\"{}\"}}",
             self.fps,
             self.frame_ms,
             self.frames,
@@ -241,6 +238,7 @@ impl WebApp {
             self.render_size[1],
             self.webgl_fallback,
             self.preview_texture.is_some(),
+            self.output_view.is_active(),
             audio.bass,
             audio.mid,
             audio.treble,
@@ -489,31 +487,149 @@ impl WebApp {
         };
     }
 
+    /// Mark the page so DOM chrome (the microphone controls) hides while the
+    /// output view owns the canvas.
+    fn sync_document_output_mode(&mut self) {
+        let active = self.output_view.is_active();
+        if self.document_output_mode == active {
+            return;
+        }
+        self.document_output_mode = active;
+        let Some(root) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.document_element())
+        else {
+            return;
+        };
+        if active {
+            let _ = root.set_attribute("data-modv-output", "");
+        } else {
+            let _ = root.remove_attribute("data-modv-output");
+        }
+    }
+
+    /// `F` toggles the browser's fullscreen mode and `Escape` leaves it while
+    /// the output view is up.
+    fn handle_output_shortcuts(&mut self, ctx: &egui::Context) {
+        let (toggle, escape) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::F)
+                    && !input.modifiers.ctrl
+                    && !input.modifiers.command
+                    && !input.modifiers.alt,
+                input.key_pressed(egui::Key::Escape),
+            )
+        });
+        if toggle {
+            let next = !browser_fullscreen();
+            self.output_view.set_fullscreen(next);
+            set_browser_fullscreen(next);
+        } else if escape && browser_fullscreen() {
+            self.output_view.set_fullscreen(false);
+            set_browser_fullscreen(false);
+        }
+    }
+
+    /// Draw the compositor texture over the whole canvas and reveal the cog
+    /// that returns to the UI from the top-right corner.
+    fn draw_output_view(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.max_rect();
+        let painter = ui.painter();
+        painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
+        if let Some(texture) = self.preview_texture
+            && (self.render_size[0] > 1 || self.render_size[1] > 1)
+        {
+            let size = output_view::fit_size([rect.width(), rect.height()], self.render_size);
+            let image_rect =
+                egui::Rect::from_center_size(rect.center(), egui::vec2(size[0], size[1]));
+            painter.image(
+                texture,
+                image_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+
+        let viewport = [rect.width(), rect.height()];
+        let pointer = ui
+            .ctx()
+            .input(|input| input.pointer.hover_pos())
+            .map(|pointer| [pointer.x - rect.min.x, pointer.y - rect.min.y]);
+        let revealed = output_view::cog_revealed(pointer, viewport);
+        let button_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                rect.right() - output_view::COG_INSET - output_view::COG_SIZE,
+                rect.top() + output_view::COG_INSET,
+            ),
+            egui::vec2(output_view::COG_SIZE, output_view::COG_SIZE),
+        );
+        let response = ui.interact(
+            button_rect,
+            egui::Id::unique("vmodv-output-return-cog"),
+            egui::Sense::click(),
+        );
+        let visible = revealed || response.hovered() || response.is_pointer_button_down_on();
+        if visible {
+            let center = button_rect.center();
+            painter.circle_filled(
+                center,
+                output_view::COG_SIZE * 0.5,
+                egui::Color32::from_black_alpha(180),
+            );
+            painter.circle_stroke(
+                center,
+                output_view::COG_SIZE * 0.5,
+                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)),
+            );
+            painter.text(
+                center,
+                egui::Align2::CENTER_CENTER,
+                "⚙",
+                egui::FontId::proportional(20.0),
+                egui::Color32::from_rgb(0xd8, 0xff, 0xe6),
+            );
+            response
+                .clone()
+                .on_hover_text("Back to the VmodV UI")
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            self.output_view.close();
+            set_browser_fullscreen(false);
+            ui.ctx().request_repaint();
+        }
+    }
+
     fn handle_command(&mut self, command: UiCommand, ctx: &egui::Context) {
         match command {
             UiCommand::Quit => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            // The browser's Output Window is a chrome-less second engine
-            // instance in a new tab. The browser may ask for pop-up
-            // permission the first time; the page shows a toast if it is
-            // blocked.
-            UiCommand::OpenOutputWindow | UiCommand::ToggleOutputFullscreen => {
-                if !call_window_function("openModvOutput") {
-                    open_output_tab();
-                }
+            // The browser has no second output window: `Open output` shows the
+            // compositor over the whole canvas in this tab and hides the UI.
+            // `main.js` is not involved, so pop-up blocking cannot break it.
+            UiCommand::OpenOutputWindow => {
+                self.output_view.open();
             }
             UiCommand::CloseOutputWindow => {
-                call_window_function("closeModvOutput");
+                self.output_view.close();
+                set_browser_fullscreen(false);
+            }
+            UiCommand::ToggleOutputFullscreen => {
+                if self.output_view.is_active() {
+                    let next = !browser_fullscreen();
+                    self.output_view.set_fullscreen(next);
+                    set_browser_fullscreen(next);
+                } else {
+                    self.output_view.open();
+                }
             }
             UiCommand::SetOutputFullscreen(on) => {
                 if on {
-                    if !call_window_function("openModvOutput") {
-                        open_output_tab();
-                    }
-                } else {
-                    call_window_function("closeModvOutput");
+                    self.output_view.open();
                 }
+                self.output_view.set_fullscreen(on);
+                set_browser_fullscreen(on);
             }
             UiCommand::SetRenderScale(scale) => {
                 self.compositor.set_render_scale(scale);
@@ -533,6 +649,7 @@ impl eframe::App for WebApp {
         if self.start_time == 0.0 {
             self.start_time = now;
         }
+        self.sync_document_output_mode();
 
         // The compositor advances on a fixed 60 Hz deadline grid. egui may
         // still call this method for input events; those frames draw the UI
@@ -585,13 +702,10 @@ impl eframe::App for WebApp {
             // A shader transition captures the outgoing frame while main
             // still holds it, then the compositor runs the effect over the
             // captured and incoming frames.
-            let mut capture_requested = false;
-            if self.state.take_pending_transition_capture().is_some() {
-                if self.compositor.capture_transition_source() {
-                    capture_requested = true;
-                } else {
-                    self.state.fall_back_transition_to_fade();
-                }
+            if self.state.take_pending_transition_capture().is_some()
+                && !self.compositor.capture_transition_source()
+            {
+                self.state.fall_back_transition_to_fade();
             }
             if let Some(info) = self.state.scene_transition_info()
                 && (!self.compositor.has_transition_capture()
@@ -609,27 +723,8 @@ impl eframe::App for WebApp {
                 row_fades: self.state.row_fade_infos(),
                 scene_transition,
             };
-            // The hidden output renderer mirrors this exact state. Publishing
-            // every other frame caps the copy at 30 Hz; the output pacer runs
-            // at the same rate.
-            if crate::shared::output_active() && self.frames.is_multiple_of(2) {
-                crate::shared::publish(crate::shared::SharedFrame {
-                    state: self.state.state().clone(),
-                    audio: info.audio.clone(),
-                    row_fades: info.row_fades.clone(),
-                    scene_transition: info.scene_transition.clone(),
-                    time_seconds: info.time_seconds,
-                    date: info.date,
-                    frame_index: info.frame_index,
-                    render_size: [self.compositor.size().0, self.compositor.size().1],
-                });
-            }
-            if capture_requested
-                && info.scene_transition.is_some()
-                && crate::shared::output_active()
-            {
-                crate::shared::request_capture();
-            }
+            // The same output view draws the compositor's main texture
+            // directly, so there is no second renderer to mirror.
             if let Err(error) = self.compositor.render_frame(self.state.state(), &info) {
                 if self.frames < 5 {
                     log(&format!("compositor error: {error}"));
@@ -642,43 +737,49 @@ impl eframe::App for WebApp {
             self.frames = self.frames.saturating_add(1);
             self.state.note_frame();
             self.update_preview_texture(frame);
-            self.refresh_row_monitors(frame);
+            if !self.output_view.is_active() {
+                self.refresh_row_monitors(frame);
+            }
             self.pacer.mark(now);
             self.publish_stats();
         }
 
-        let mut snapshot = self
-            .state
-            .snapshot(self.render_size, self.fps, self.frame_ms);
-        snapshot.gallery_previews = self.gallery_previews.clone();
-        snapshot.scene_previews = self.scene_previews.clone();
-        snapshot.row_monitors = self
-            .row_monitors
-            .iter()
-            .map(|(row, entry)| {
-                (
-                    *row,
-                    RowMonitorView {
-                        group_id: entry.group_id.clone(),
-                        texture: entry.texture,
-                    },
-                )
-            })
-            .collect();
-        let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
-        snapshot.health.output_open = fullscreen;
-        snapshot.health.output_fullscreen = fullscreen;
-        self.ui_state.ensure_default_group_focus(&snapshot);
-        self.ui_state.sync_status(&snapshot);
-        if self.ui_state.selected_module.is_none() {
-            self.ui_state.selected_module =
-                snapshot.modules.first().map(|module| module.id.clone());
-        }
+        if self.output_view.is_active() {
+            self.handle_output_shortcuts(&ctx);
+            self.draw_output_view(ui);
+        } else {
+            let mut snapshot = self
+                .state
+                .snapshot(self.render_size, self.fps, self.frame_ms);
+            snapshot.gallery_previews = self.gallery_previews.clone();
+            snapshot.scene_previews = self.scene_previews.clone();
+            snapshot.row_monitors = self
+                .row_monitors
+                .iter()
+                .map(|(row, entry)| {
+                    (
+                        *row,
+                        RowMonitorView {
+                            group_id: entry.group_id.clone(),
+                            texture: entry.texture,
+                        },
+                    )
+                })
+                .collect();
+            snapshot.health.output_open = false;
+            snapshot.health.output_fullscreen = false;
+            self.ui_state.ensure_default_group_focus(&snapshot);
+            self.ui_state.sync_status(&snapshot);
+            if self.ui_state.selected_module.is_none() {
+                self.ui_state.selected_module =
+                    snapshot.modules.first().map(|module| module.id.clone());
+            }
 
-        modv_ui::shell::draw(ui, &snapshot, &mut self.ui_state);
+            modv_ui::shell::draw(ui, &snapshot, &mut self.ui_state);
 
-        if let Some(request) = self.ui_state.take_preview_requests().into_iter().last() {
-            self.answer_preview(request, frame, now);
+            if let Some(request) = self.ui_state.take_preview_requests().into_iter().last() {
+                self.answer_preview(request, frame, now);
+            }
         }
 
         let actions = self.ui_state.take_actions();
@@ -725,23 +826,32 @@ impl eframe::App for WebApp {
     }
 }
 
-/// Call a function installed on `window` by `web/main.js`.
-fn call_window_function(name: &str) -> bool {
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-    let Ok(function) = js_sys::Reflect::get(&window, &JsValue::from_str(name)) else {
-        return false;
-    };
-    function
-        .dyn_ref::<js_sys::Function>()
-        .is_some_and(|function| function.call0(&window).is_ok())
+/// The browser's real fullscreen state.
+///
+/// eframe's web backend does not implement `ViewportCommand::Fullscreen`, so
+/// the output view drives the Fullscreen API directly.
+fn browser_fullscreen() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| document.fullscreen_element().is_some())
 }
 
-/// Fallback when `main.js` has not installed its output helpers yet.
-fn open_output_tab() {
-    if let Some(window) = web_sys::window() {
-        let _ = window.open_with_url_and_target("./output.html", "vmodv-output");
+/// Enter or leave the browser's fullscreen mode.
+fn set_browser_fullscreen(on: bool) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(document) = window.document() else {
+        return;
+    };
+    if on {
+        if document.fullscreen_element().is_none()
+            && let Some(element) = document.document_element()
+        {
+            let _ = element.request_fullscreen();
+        }
+    } else if document.fullscreen_element().is_some() {
+        let _ = document.exit_fullscreen();
     }
 }
 
