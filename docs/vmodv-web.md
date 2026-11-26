@@ -105,8 +105,8 @@ These are out of scope for this branch, not accidental omissions:
 | --- | --- |
 | `crates/modv-app` `web` feature | Compiles only the platform-neutral core: compositor, module registry, previews, quality, scene transitions, texture sources. Native modules are `cfg`'d out; `modv-media`, `modv-ipc`, winit, MIDI, notify and the shell are desktop-only target dependencies. |
 | `crates/modv-web/src/state.rs` | Pure `WebState`: one or more Groups, active modules, prop/meta edits, `UiAction` dispatch and the `EngineSnapshot` read model. Unit-tested on the host. |
-| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, egui texture registration, `modv_ui::shell::draw`, action/command drain, and the chrome-less output view. |
-| `crates/modv-web/src/scenes.rs` | Default Scene seeding, Scene apply/capture and the performance read model. |
+| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, transition capture/pass wiring, GPU previews and row monitors, `modv_ui::shell::draw`, action/command drain, and the chrome-less output view. |
+| `crates/modv-web/src/scenes.rs` | Default Scene seeding, Scene apply/capture/editing, transitions and the performance read model. |
 | `crates/modv-web/src/storage.rs` | `localStorage` load/save for the persisted live stack. |
 | `crates/modv-web/src/audio.rs` | Demo audio and the native `AudioSnapshot` → `AudioFrame` mapping. |
 | `crates/modv-web/src/mic.rs` | `getUserMedia` → `AnalyserNode` → native `AudioAnalyser` → `AudioFrame`. |
