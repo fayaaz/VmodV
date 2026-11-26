@@ -42,6 +42,7 @@ const WORKSPACE_CRATES: &[&str] = &[
     "modv-engine",
     "modv-ipc",
     "modv-media",
+    "modv-preview-wasm",
     "modv-render",
     "modv-renderers",
     "modv-ui",
