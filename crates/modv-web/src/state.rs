@@ -3117,6 +3117,44 @@ mod tests {
     }
 
     #[test]
+    fn phrase_flips_can_advance_a_row_before_its_deadline() {
+        let mut state = WebState::new();
+        enable_performance(&mut state);
+        for row in &mut state.performance_runtime.rows {
+            row.dwell = 2.0;
+            row.target = 100.0;
+        }
+        let before = state.performance_runtime.active.clone();
+        state.tick_performance(0.1, true);
+        assert_ne!(
+            state.performance_runtime.active, before,
+            "a phrase flip advances once the musical chance reaches 1"
+        );
+    }
+
+    #[test]
+    fn stopping_performance_finishes_in_flight_row_fades() {
+        let mut state = WebState::new();
+        enable_performance(&mut state);
+        for _ in 0..25 {
+            state.tick_performance(0.1, false);
+        }
+        assert!(!state.row_transitions.is_empty());
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/setPerformanceEnabled",
+            json!({ "enabled": false })
+        )));
+        assert!(state.row_transitions.is_empty());
+        assert!(
+            state
+                .state()
+                .groups
+                .iter()
+                .all(|group| group.transition_ghost != Some(true))
+        );
+    }
+
+    #[test]
     fn group_inherit_composition_round_trips_through_the_snapshot() {
         let mut state = WebState::new();
         let group = state.group_id().to_string();
