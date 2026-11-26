@@ -1,10 +1,9 @@
 name: GitHub Pages — VmodV browser
 
 # Pages is served from the `gh-pages` branch (the `github-pages` environment
-# only permits that branch). The module gallery has been replaced by the real
-# browser shell: /modules/ and /app/ now serve the wasm client, and the old
-# catalogue assets are removed from gh-pages. The hand-maintained root page is
-# left intact.
+# only permits that branch). The real browser shell is the site root; the old
+# /modules/ and /app/ links redirect there, and the catalogue assets are
+# removed from gh-pages.
 on:
   # Every push to main republishes the browser shell. No path filter: a main
   # update is the deployment trigger, even when the change is docs-only.
@@ -77,26 +76,25 @@ jobs:
           ref: gh-pages
           path: gh-pages
 
-      - name: Replace the gallery with the browser shell
+      - name: Publish the browser shell at the site root
         run: |
           rm -rf gh-pages/modules gh-pages/app gh-pages/assets/wasm
+          rm -f gh-pages/assets/catalog.js gh-pages/assets/preview.js
+
+          # The real app is the site root.
+          cp -R web/. gh-pages/
+
+          # Keep the earlier /modules/ and /app/ links working without
+          # duplicating the 18 MB wasm payload.
           mkdir -p gh-pages/modules gh-pages/app
-
-          # Primary URL: the old gallery location now boots the real app.
-          cp -R web/. gh-pages/modules/
-
-          # Keep the earlier /app/ link working without duplicating the
-          # 18 MB wasm payload.
-          cat > gh-pages/app/index.html <<'EOF'
+          cat > gh-pages/modules/index.html <<'EOF'
           <!doctype html>
           <meta charset="utf-8">
-          <meta http-equiv="refresh" content="0; url=../modules/">
+          <meta http-equiv="refresh" content="0; url=../">
           <title>VmodV — browser</title>
-          <a href="../modules/">Open the VmodV browser shell</a>
+          <a href="../">Open the VmodV browser shell</a>
           EOF
-
-          # Catalogue-only runtime files are no longer referenced.
-          rm -f gh-pages/assets/catalog.js gh-pages/assets/preview.js
+          cp gh-pages/modules/index.html gh-pages/app/index.html
 
       - name: Commit and push to gh-pages
         run: |

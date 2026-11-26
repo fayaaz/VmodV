@@ -53,25 +53,25 @@ uses a split runtime:
 The catalogue's preview shim only draws a single fragment pass, so 438 of 481
 modules get a live preview. The 16 2D canvas modules and 27 Point10 scenes are
 catalogued with full metadata but are not drawn by this shim; they render in
-the browser shell at `/modules/`, which runs the real compositor and registry
+the browser shell at the site root, which runs the real compositor and registry
 (shader, 2D and Point10 modules).
 
 Multi-pass and persistent-buffer ISF shaders are marked `simplified`: the
 catalogue draws pass 0 rather than replaying the full pass graph, which would
-need the compositor's ping-pong targets. The browser shell at `/modules/`
+need the compositor's ping-pong targets. The browser shell at the root
 embeds and registers the full bundled ISF corpus; MilkDrop presets and user
 ISF folders are not loaded there yet.
 
 ## Publishing
 
 `.github/workflows/pages.yml` now builds the real browser shell and publishes
-it into the `gh-pages` branch at `/modules/` (with `/app/` redirecting there),
-replacing the module gallery. The generated catalogue JSON and preview runtime
-are still rebuilt locally with `make pages-data` for inspection, but are no
-longer deployed. Pages in this repository is served from `gh-pages`, and the
+it at the GitHub Pages site root (with `/modules/` and `/app/` redirecting
+there), replacing the module gallery. The generated catalogue JSON and preview
+runtime are still rebuilt locally with `make pages-data` for inspection, but
+are no longer deployed. Pages in this repository is served from `gh-pages`, and the
 `github-pages` environment only permits that branch — the workflow therefore
 does not use `actions/deploy-pages`. The generated catalogue is still checked
-in for `make pages-data`, but it is no longer what `/modules/` serves.
+in for `make pages-data`, but it is no longer what the site root serves.
 
 Third-party licence information is in
 [`THIRD_PARTY_NOTICES.md`](https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md).

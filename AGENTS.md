@@ -170,7 +170,7 @@ history is in git, and the pre-cleanup Electron tree is on `legacy-electron`.
 
 - This file (`AGENTS.md`) is the source of truth for what works and what is left.
 - `docs/vmodv-e2e.md` — control socket and real-binary harness.
-- `docs/modules/README.md` — generated GitHub Pages module catalogue and its WebAssembly/WebGPU previews (`make pages-data`).
+- `docs/modules/README.md` — generated module catalogue data and its WebAssembly/WebGPU previews (`make pages-data`; no longer deployed).
 - `docs/vmodv-web.md` — browser/wasm shell, build commands, cut lines and architecture.
 - `docs/vmodv-2.0-release.md` — release artifacts and userData layout.
 - `docs/releasing.md` — automated semantic-version releases.
