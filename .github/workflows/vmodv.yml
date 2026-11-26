@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - main
-      - rust-hybrid
     paths:
       - 'crates/**'
       - 'resources/**'
@@ -23,7 +22,6 @@ on:
   pull_request:
     branches:
       - main
-      - rust-hybrid
     paths:
       - 'crates/**'
       - 'resources/**'

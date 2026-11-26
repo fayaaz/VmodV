@@ -2,8 +2,9 @@ name: macOS Portable App
 
 # Build portable VmodV.app bundles for both macOS architectures (Intel
 # x86_64 and Apple Silicon arm64) and upload them as CI artifacts. Runs on
-# every push so feature branches (e.g. feat/macos-build) can be verified by
-# pushing without opening a PR.
+# PRs to main, pushes to main and manual dispatch.
+# An earlier unfiltered `push:` trigger also built every PR-branch push,
+# so the same commit ran twice (once on push, once on pull_request).
 #
 # Both architectures use explicitly pinned runner labels:
 #   * x86_64 -> macos-15-intel
@@ -22,10 +23,11 @@ name: macOS Portable App
 # is bundled only as a build dependency here, not shipped in the ZIP.
 on:
   push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
-      - rust-hybrid
   workflow_dispatch:
 
 permissions:

@@ -181,6 +181,78 @@ fn dry_run_stages_the_portable_macos_app_bundle() {
 }
 
 #[test]
+fn ci_macos_push_trigger_is_branch_filtered_to_avoid_double_pr_builds() {
+    // macos.yml fired on every push *and* on pull_request to main. A push to
+    // a PR branch therefore triggered both events for the same commit,
+    // paying for two macOS build matrices. Branch-filter `push` to `main`
+    // and keep `pull_request` so fork PRs are still covered.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = root.canonicalize().unwrap_or(root);
+    let text =
+        fs::read_to_string(root.join(".github/workflows/macos.yml")).expect("read macos.yml");
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| *line == "  push:")
+        .expect("macos.yml has no push trigger");
+    let push_block = lines
+        .iter()
+        .skip(start + 1)
+        .take_while(|line| {
+            let indented = line.starts_with("  ") && !line.starts_with("   ");
+            !(indented && line.contains(':'))
+        })
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        push_block.contains("branches:"),
+        "macos.yml's `push:` trigger is unfiltered, so a push to a PR branch \
+         fires both `push` and `pull_request` for the same commit and builds \
+         the macOS matrices twice; branch-filter it like vmodv.yml"
+    );
+    let branches: Vec<&str> = push_block
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- "))
+        .collect();
+    assert_eq!(
+        branches,
+        vec!["main"],
+        "macos.yml's push trigger must build only `main` now that \
+         rust-hybrid is retired; got {branches:?}"
+    );
+    assert!(
+        text.contains("  pull_request:"),
+        "macos.yml must keep the `pull_request` trigger so PRs from forks \
+         still build the portable bundles"
+    );
+}
+
+#[test]
+fn workflows_do_not_reference_the_retired_rust_hybrid_branch() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = root.canonicalize().unwrap_or(root);
+    let dir = root.join(".github/workflows");
+    for entry in fs::read_dir(&dir).expect("read .github/workflows") {
+        let path = entry.expect("read workflow entry").path();
+        let is_workflow = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "yml" || ext == "yaml");
+        if !path.is_file() || !is_workflow {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !text.contains("rust-hybrid"),
+            "{} still references the retired `rust-hybrid` branch",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn ci_workflow_builds_and_uploads_macos_bundle() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
