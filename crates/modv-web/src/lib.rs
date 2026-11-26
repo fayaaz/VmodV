@@ -7,14 +7,17 @@
 
 pub mod audio;
 pub mod pacing;
+pub mod scenes;
 pub mod state;
 
 #[cfg(target_arch = "wasm32")]
 mod app;
 #[cfg(target_arch = "wasm32")]
 mod mic;
+#[cfg(target_arch = "wasm32")]
+mod storage;
 
 #[cfg(target_arch = "wasm32")]
-pub use app::start;
+pub use app::{start, start_output};
 #[cfg(target_arch = "wasm32")]
 pub use mic::enable_microphone;

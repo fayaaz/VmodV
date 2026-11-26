@@ -7,7 +7,7 @@
 //!
 //! The state is pure (no wgpu, no DOM), so it is unit-tested on the host.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::sync::{Arc, OnceLock};
 
@@ -25,9 +25,11 @@ use modv_engine::tweens::{TweenDescriptor, TweenSet};
 use modv_renderers::two_d::AudioFrame;
 use modv_ui::model::{
     AudioView, EngineHealth, EngineSnapshot, GroupView, InheritTarget, InputLinkView,
-    ModuleMetaView, ModuleView, PerformanceView, PropEnumMember, PropView, TweenView,
+    ModuleMetaView, ModuleView, PropEnumMember, PropView, TweenView,
 };
 use modv_ui::state::UiAction;
+
+use crate::scenes::SceneLibrary;
 
 /// The browser's live engine document.
 pub struct WebState {
@@ -44,6 +46,8 @@ pub struct WebState {
     tweens: TweenSet,
     smoothing: HashMap<String, f64>,
     beats: BeatsState,
+    scenes: SceneLibrary,
+    dirty: bool,
 }
 
 impl Default for WebState {
@@ -61,8 +65,10 @@ impl WebState {
         state
             .groups
             .push(new_group(&group_id, "Group 1", GROUP_ENABLED));
+        let registry = bundled_registry();
+        let scenes = SceneLibrary::seed(&registry);
         let mut this = Self {
-            registry: bundled_registry(),
+            registry,
             state,
             group_id,
             next_id: 0,
@@ -75,9 +81,102 @@ impl WebState {
             tweens: TweenSet::new(),
             smoothing: HashMap::new(),
             beats: BeatsState::default(),
+            scenes,
+            dirty: false,
         };
         this.install_group_inputs("web-group-1");
         this
+    }
+
+    /// The seeded Scene library (defaults plus edits).
+    pub fn scene_library(&self) -> &SceneLibrary {
+        &self.scenes
+    }
+
+    /// Whether live state or Scenes changed since the last browser save.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Clear the dirty flag after a successful save.
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
+    }
+
+    /// Serialise the live stack, Scenes and tweens for local storage.
+    pub fn to_persisted_json(&self) -> Value {
+        let tweens: Vec<Value> = self
+            .tweens
+            .iter()
+            .filter_map(|(_, runtime)| serde_json::to_value(runtime.descriptor()).ok())
+            .collect();
+        json!({
+            "version": 1,
+            "engine": serde_json::to_value(&self.state).unwrap_or(Value::Null),
+            "tweens": tweens,
+            "scenes": self.scenes.to_json(),
+            "groupId": self.group_id,
+            "nextId": self.next_id,
+        })
+    }
+
+    /// Restore a saved document. Invalid or incompatible documents leave the
+    /// current (fresh) state untouched.
+    pub fn restore_persisted_json(&mut self, value: &Value) -> bool {
+        if value.get("version").and_then(Value::as_u64) != Some(1) {
+            return false;
+        }
+        let Some(engine) = value.get("engine") else {
+            return false;
+        };
+        let Ok(mut state) = serde_json::from_value::<EngineState>(engine.clone()) else {
+            return false;
+        };
+        let Some(mut scenes) = value.get("scenes").and_then(SceneLibrary::from_json) else {
+            return false;
+        };
+        scenes.seed_missing(&self.registry);
+
+        // Drop instances whose renderer is no longer registered, then remove
+        // their dangling Group references.
+        let known: HashSet<String> = state
+            .modules
+            .iter()
+            .filter(|(_, module)| self.registry.meta_fields(&module.module_name).is_some())
+            .map(|(id, _)| id.clone())
+            .collect();
+        state.modules.retain(|id, _| known.contains(id));
+        for group in &mut state.groups {
+            group.modules.retain(|id| state.modules.contains_key(id));
+        }
+
+        let mut tweens = TweenSet::new();
+        if let Some(values) = value.get("tweens").and_then(Value::as_array) {
+            for value in values {
+                if let Ok(descriptor) = serde_json::from_value::<TweenDescriptor>(value.clone()) {
+                    tweens.insert_descriptor(descriptor, 60.0, self.bpm);
+                }
+            }
+            state.tweens = Value::Array(values.clone());
+        }
+
+        let group_id = value
+            .get("groupId")
+            .and_then(Value::as_str)
+            .filter(|id| state.find_group(id).is_some())
+            .map(str::to_string)
+            .or_else(|| state.groups.first().map(|group| group.id.clone()))
+            .unwrap_or_default();
+        let next_id = value.get("nextId").and_then(Value::as_u64).unwrap_or(0);
+
+        self.state = state;
+        self.scenes = scenes;
+        self.tweens = tweens;
+        self.group_id = group_id;
+        self.next_id = next_id;
+        self.smoothing.clear();
+        self.dirty = false;
+        true
     }
 
     /// The authoritative engine state handed to the compositor.
@@ -485,6 +584,7 @@ impl WebState {
             group.modules.push(id.clone());
         }
         self.error = None;
+        self.dirty = true;
         Some(id)
     }
 
@@ -494,6 +594,7 @@ impl WebState {
         if !removed {
             return false;
         }
+        self.dirty = true;
         let input_ids: Vec<String> = self
             .state
             .inputs
@@ -556,6 +657,14 @@ impl WebState {
 
     /// Dispatch one UI action. Returns whether the shell understood it.
     pub fn apply_action(&mut self, action: &UiAction) -> bool {
+        let changed = self.apply_action_inner(action);
+        if changed {
+            self.dirty = true;
+        }
+        changed
+    }
+
+    fn apply_action_inner(&mut self, action: &UiAction) -> bool {
         match action.action.as_str() {
             "ui/addModuleToGroup" => {
                 let module = action.payload.get("moduleName").and_then(Value::as_str);
@@ -727,9 +836,259 @@ impl WebState {
                 });
                 true
             }
-            // Selection-only, Scene, media, audio-device, NDI/OSC/MIDI and
-            // plugin actions are outside the web shell's cut line.
+            "scenes/applyScene" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(group_id) = self.scenes.apply(
+                    scene_id,
+                    &self.registry,
+                    &mut self.state,
+                    &mut self.tweens,
+                    self.bpm,
+                ) else {
+                    return false;
+                };
+                self.group_id = group_id;
+                true
+            }
+            "scenes/applySceneRow" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                self.scenes.apply_row(
+                    scene_id,
+                    row as usize,
+                    &self.registry,
+                    &mut self.state,
+                    &mut self.tweens,
+                    self.bpm,
+                )
+            }
+            "scenes/addEmptyScene" => {
+                let name = action.payload.get("name").and_then(Value::as_str);
+                self.scenes.add_empty(name);
+                true
+            }
+            "scenes/updateSceneName" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(name) = action.payload.get("name").and_then(Value::as_str) else {
+                    return false;
+                };
+                self.scenes.rename(scene_id, name)
+            }
+            "scenes/removeScene" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let removed = self.scenes.remove(scene_id);
+                if removed {
+                    self.drop_scene_groups(scene_id);
+                }
+                removed
+            }
+            "scenes/moveScene" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(to_index) = action.payload.get("toIndex").and_then(Value::as_i64) else {
+                    return false;
+                };
+                self.scenes.move_to(scene_id, to_index)
+            }
+            "scenes/setSceneEnabled" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(enabled) = action.payload.get("enabled").and_then(Value::as_bool) else {
+                    return false;
+                };
+                self.scenes.set_enabled(scene_id, enabled)
+            }
+            "scenes/updateSceneTiming" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(min) = action.payload.get("minSeconds").and_then(Value::as_f64) else {
+                    return false;
+                };
+                let Some(max) = action.payload.get("maxSeconds").and_then(Value::as_f64) else {
+                    return false;
+                };
+                self.scenes.set_timing(scene_id, min, max)
+            }
+            "scenes/resetSceneTiming" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                self.scenes.reset_timing(scene_id)
+            }
+            "scenes/setCellEnabled" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                let enabled = action
+                    .payload
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                self.scenes
+                    .set_cell_enabled(scene_id, row as usize, enabled)
+            }
+            "scenes/clearSceneCell" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                self.scenes.clear_cell(scene_id, row as usize)
+            }
+            "scenes/copySceneCellToScene" => {
+                let Some(from_scene) = action.payload.get("fromSceneId").and_then(Value::as_str)
+                else {
+                    return false;
+                };
+                let Some(from_row) = action.payload.get("fromRowIndex").and_then(Value::as_u64)
+                else {
+                    return false;
+                };
+                let Some(to_scene) = action.payload.get("toSceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(to_row) = action.payload.get("toRowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                self.scenes
+                    .copy_cell(from_scene, from_row as usize, to_scene, to_row as usize)
+            }
+            "scenes/createSceneCellGroup" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                self.scenes.create_cell_group(scene_id, row as usize)
+            }
+            "scenes/addModuleToCell" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                let Some(module_name) = action.payload.get("moduleName").and_then(Value::as_str)
+                else {
+                    return false;
+                };
+                self.scenes
+                    .add_module_to_cell(&self.registry, scene_id, row as usize, module_name)
+            }
+            "scenes/setSceneCellGroup" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                let Some(group_id) = action.payload.get("groupId").and_then(Value::as_str) else {
+                    return false;
+                };
+                self.scenes.set_cell_group(
+                    scene_id,
+                    row as usize,
+                    &self.state,
+                    group_id,
+                    &self.tweens,
+                )
+            }
+            "scenes/captureLiveStateToScene" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                self.scenes
+                    .capture_live_state(scene_id, &self.state, &self.tweens)
+            }
+            "scenes/captureSceneRowToScene" => {
+                let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
+                    return false;
+                };
+                self.scenes
+                    .capture_live_row(scene_id, row as usize, &self.state, &self.tweens)
+            }
+            "scenes/updatePerformance" => {
+                let config = action
+                    .payload
+                    .get("config")
+                    .and_then(Value::as_object)
+                    .or_else(|| action.payload.as_object());
+                let Some(config) = config else {
+                    return false;
+                };
+                self.scenes.update_performance(config)
+            }
+            "scenes/setRowNames" => {
+                let Some(names) = action.payload.get("rowNames") else {
+                    return false;
+                };
+                self.scenes.set_row_names(names)
+            }
+            "scenes/setPerformanceEnabled" => {
+                let Some(enabled) = action.payload.get("enabled").and_then(Value::as_bool) else {
+                    return false;
+                };
+                self.scenes.set_performance_enabled(enabled)
+            }
+            "scenes/setTimingUnit" => {
+                let unit = action
+                    .payload
+                    .get("unit")
+                    .or_else(|| action.payload.get("timingUnit"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("seconds");
+                self.scenes.set_timing_unit(unit)
+            }
+            // Selection-only, media, audio-device, NDI/OSC/MIDI and plugin
+            // actions are outside the web shell's cut line.
             _ => false,
+        }
+    }
+
+    /// Remove the live Groups a deleted Scene owned.
+    fn drop_scene_groups(&mut self, scene_id: &str) {
+        let removed: Vec<String> = self
+            .state
+            .groups
+            .iter()
+            .filter(|group| group.scene_id.as_deref() == Some(scene_id))
+            .flat_map(|group| group.modules.clone())
+            .collect();
+        self.state
+            .groups
+            .retain(|group| group.scene_id.as_deref() != Some(scene_id));
+        for module_id in removed {
+            self.state.modules.shift_remove(&module_id);
+            self.smoothing.remove(&module_id);
+        }
+        if self.state.find_group(&self.group_id).is_none() {
+            self.group_id = self
+                .state
+                .groups
+                .first()
+                .map(|group| group.id.clone())
+                .unwrap_or_default();
         }
     }
 
@@ -923,12 +1282,8 @@ impl WebState {
             })
             .collect();
         let registered = registered_modules(&self.registry);
-        let performance = PerformanceView {
-            enabled: false,
-            current_scene_id: None,
-            row_names: Vec::new(),
-            ..PerformanceView::default()
-        };
+        let performance = self.scenes.performance_view();
+        let scenes = self.scenes.views();
         let audio = AudioView {
             bpm: self.bpm,
             kick: self.audio.beat >= 0.5,
@@ -951,6 +1306,7 @@ impl WebState {
             modules,
             registered,
             performance,
+            scenes,
             audio,
             resolution,
             fps,
@@ -1522,6 +1878,204 @@ mod tests {
             json!({ "groupId": group, "key": "alpha", "value": 0.5 })
         )));
         assert_eq!(state.state().groups[0].alpha, 0.5);
+    }
+
+    fn scene_id(state: &WebState, name: &str) -> String {
+        state
+            .scene_library()
+            .scenes()
+            .iter()
+            .find(|scene| scene.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|scene| scene.get("id"))
+            .and_then(Value::as_str)
+            .expect("the default Scene set knows this name")
+            .to_string()
+    }
+
+    #[test]
+    fn the_default_scene_set_is_seeded() {
+        let state = WebState::new();
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+
+        assert_eq!(snapshot.scenes.len(), 56, "every default Scene is present");
+        assert!(
+            snapshot
+                .scenes
+                .iter()
+                .any(|scene| scene.name == "Mycelium Bloom"),
+            "the seeded Scene list exposes the default names"
+        );
+        assert_eq!(
+            snapshot.performance.min_value, 8.0,
+            "the performance timing defaults are exposed to the grid"
+        );
+        let mycelium = snapshot
+            .scenes
+            .iter()
+            .find(|scene| scene.name == "Mycelium Bloom")
+            .expect("Mycelium Bloom");
+        assert_eq!(mycelium.cells.len(), 3);
+        assert_eq!(mycelium.cells[0].module_names, vec!["Point10 Mycelium"]);
+        assert_eq!(mycelium.cells[2].module_names, vec!["Bloom"]);
+    }
+
+    #[test]
+    fn applying_a_default_scene_replaces_the_live_stack_with_its_links() {
+        let mut state = WebState::new();
+        let id = scene_id(&state, "Circuits");
+
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/applyScene",
+            json!({ "sceneId": id })
+        )));
+
+        assert_eq!(
+            state
+                .state()
+                .groups
+                .iter()
+                .map(|group| group.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "Foreground", "Effects"]
+        );
+        let module_names: Vec<&str> = state
+            .state()
+            .modules
+            .values()
+            .map(|module| module.module_name.as_str())
+            .collect();
+        assert!(module_names.contains(&"Circuits"), "{module_names:?}");
+        assert!(module_names.contains(&"film-grain"), "{module_names:?}");
+        assert!(
+            state
+                .state()
+                .input_links
+                .values()
+                .any(|link| link.source.as_deref() == Some("meyda")),
+            "the Scene's explicit bass link is restored"
+        );
+        assert!(
+            !state.tweens.is_empty(),
+            "the automatic BPM tween is restored"
+        );
+        assert_eq!(
+            state.group_id(),
+            state.state().groups[0].id,
+            "the first scene Group becomes the default group"
+        );
+    }
+
+    #[test]
+    fn scene_rename_remove_and_timing_actions_update_the_grid() {
+        let mut state = WebState::new();
+        let id = scene_id(&state, "Circuits");
+
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/updateSceneName",
+            json!({ "sceneId": id, "name": "  Circuits Renamed  " })
+        )));
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/updateSceneTiming",
+            json!({ "sceneId": id, "minSeconds": 4.0, "maxSeconds": 12.0 })
+        )));
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/setCellEnabled",
+            json!({ "sceneId": id, "rowIndex": 2, "enabled": false })
+        )));
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        let scene = snapshot
+            .scenes
+            .iter()
+            .find(|scene| scene.id == id)
+            .expect("renamed Scene");
+        assert_eq!(scene.name, "Circuits Renamed");
+        assert_eq!(scene.timing, Some((4.0, 12.0)));
+        assert!(scene.cells[2].disabled);
+
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/removeScene",
+            json!({ "sceneId": id })
+        )));
+        assert!(
+            state
+                .snapshot([640, 360], 60.0, 16.0)
+                .scenes
+                .iter()
+                .all(|scene| scene.id != id)
+        );
+    }
+
+    #[test]
+    fn captured_scene_cells_survive_a_snapshot() {
+        let mut state = WebState::new();
+        assert!(state.add_module("Bands").is_some());
+        let id = state.scenes.add_empty(Some("Captured"));
+
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/setSceneCellGroup",
+            json!({ "sceneId": id, "rowIndex": 1, "groupId": state.group_id() })
+        )));
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        let scene = snapshot
+            .scenes
+            .iter()
+            .find(|scene| scene.id == id)
+            .expect("captured Scene");
+        assert!(!scene.cells[1].is_empty());
+    }
+
+    #[test]
+    fn the_live_stack_and_scenes_round_trip_through_persistence() {
+        let mut state = WebState::new();
+        let id = scene_id(&state, "Circuits");
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/applyScene",
+            json!({ "sceneId": id })
+        )));
+        assert!(state.add_module("Bands").is_some());
+        let module_ids: Vec<String> = state.state().modules.keys().cloned().collect();
+        let scene_names: Vec<String> = state
+            .scene_library()
+            .scenes()
+            .iter()
+            .filter_map(|scene| scene.get("name").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+
+        let document = state.to_persisted_json();
+        let mut restored = WebState::new();
+        assert!(restored.restore_persisted_json(&document));
+
+        assert_eq!(
+            restored.state().modules.keys().collect::<Vec<_>>(),
+            module_ids.iter().collect::<Vec<_>>(),
+            "active modules and their order survive a refresh"
+        );
+        assert_eq!(
+            restored
+                .scene_library()
+                .scenes()
+                .iter()
+                .filter_map(|scene| scene.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            scene_names,
+            "edits to the Scene list survive a refresh"
+        );
+        assert_eq!(restored.group_id(), state.group_id());
+        assert!(!restored.is_dirty(), "a restore is not a new edit");
+    }
+
+    #[test]
+    fn persistence_rejects_incompatible_documents() {
+        let mut state = WebState::new();
+        let before = state.state().modules.len();
+
+        assert!(!state.restore_persisted_json(&json!({
+            "version": 999,
+            "engine": {},
+        })));
+        assert_eq!(state.state().modules.len(), before);
     }
 
     #[test]

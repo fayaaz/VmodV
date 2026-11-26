@@ -55,5 +55,7 @@ web-sys = { version = "0.3", features = [
     "MediaStreamAudioSourceNode",
     "MediaStreamConstraints",
     "Navigator",
+    "Storage",
+    "VisibilityState",
     "Window",
 ] }

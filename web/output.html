@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VmodV — output</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      #output-canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: #000;
+        color: #8b8b96;
+        font: 13px/1.4 system-ui, sans-serif;
+      }
+      #boot .card {
+        max-width: 34rem;
+        padding: 1.2rem 1.4rem;
+        border: 1px solid #1f2a24;
+        background: #07070b;
+      }
+      #boot h1 {
+        margin: 0 0 0.7rem;
+        color: #45ff9a;
+        font-size: 14px;
+        letter-spacing: 0.14em;
+      }
+      #boot .err { color: #ff6b6b; white-space: pre-wrap; }
+      #mic {
+        position: fixed;
+        right: 14px;
+        bottom: 14px;
+        z-index: 10;
+        padding: 7px 12px;
+        border: 1px solid rgba(69, 255, 154, 0.45);
+        border-radius: 3px;
+        background: rgba(7, 7, 11, 0.86);
+        color: #45ff9a;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #mic:hover { background: rgba(69, 255, 154, 0.12); }
+      #mic:disabled { color: #8b8b96; cursor: default; }
+    </style>
+  </head>
+  <body>
+    <canvas id="output-canvas" tabindex="0"></canvas>
+    <button id="mic" type="button">Enable microphone</button>
+    <div id="boot">
+      <div class="card">
+        <h1>VMODV / OUTPUT</h1>
+        <p id="boot-status">Starting the compositor…</p>
+        <p class="err" id="boot-error"></p>
+      </div>
+    </div>
+    <script type="module" src="./output.js"></script>
+  </body>
+</html>

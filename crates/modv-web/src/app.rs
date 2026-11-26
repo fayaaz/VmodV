@@ -20,8 +20,26 @@ use crate::state::WebState;
 /// module is initialised.
 #[wasm_bindgen]
 pub async fn start(canvas_id: &str) -> Result<(), JsValue> {
+    run(canvas_id, false).await
+}
+
+/// Start the full-window output view on `canvas_id`.
+///
+/// `web/output.js` opens this in the output tab. It restores the persisted
+/// live stack and Scenes but never writes them back, so the main tab remains
+/// the only author of the saved state.
+#[wasm_bindgen]
+pub async fn start_output(canvas_id: &str) -> Result<(), JsValue> {
+    run(canvas_id, true).await
+}
+
+async fn run(canvas_id: &str, output_only: bool) -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
-    log("start: entered");
+    log(if output_only {
+        "start_output: entered"
+    } else {
+        "start: entered"
+    });
 
     let document = web_sys::window()
         .and_then(|window| window.document())
@@ -36,7 +54,7 @@ pub async fn start(canvas_id: &str) -> Result<(), JsValue> {
         .start(
             canvas,
             eframe::WebOptions::default(),
-            Box::new(|cc| Ok(Box::new(WebApp::new(cc)?))),
+            Box::new(move |cc| Ok(Box::new(WebApp::new(cc, output_only)?))),
         )
         .await
 }
@@ -55,11 +73,20 @@ struct WebApp {
     fps: f32,
     frame_ms: f32,
     resizes: u64,
+    last_persist: f64,
+    output_only: bool,
 }
 
 impl WebApp {
-    fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        log("WebApp::new: entering");
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        output_only: bool,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        log(if output_only {
+            "WebApp::new (output): entering"
+        } else {
+            "WebApp::new: entering"
+        });
         let render_state = cc
             .wgpu_render_state
             .as_ref()
@@ -88,16 +115,30 @@ impl WebApp {
             other => other,
         };
         let mut state = WebState::new();
+        let restored =
+            crate::storage::load().is_some_and(|document| state.restore_persisted_json(&document));
         state.set_backend(
             format!("{} ({})", adapter_info.name, adapter_info.backend),
             backend,
         );
         // A shader rings module over a browser-native Point10 scene: both
-        // paths go through the real compositor and registry.
-        let bands = state.add_module("Bands").ok_or_else(|| {
-            std::io::Error::other("the built-in registry is missing the Bands module")
-        })?;
-        let _ = state.add_module("Point10 Chromatic Wave");
+        // paths go through the real compositor and registry. A restored
+        // session keeps exactly the modules the user left active.
+        let selected_module = if restored {
+            state
+                .state()
+                .groups
+                .iter()
+                .flat_map(|group| group.modules.iter())
+                .next()
+                .cloned()
+        } else {
+            let bands = state.add_module("Bands").ok_or_else(|| {
+                std::io::Error::other("the built-in registry is missing the Bands module")
+            })?;
+            let _ = state.add_module("Point10 Chromatic Wave");
+            Some(bands)
+        };
 
         let compositor = Compositor::with_registry(
             &render_state.device,
@@ -109,7 +150,7 @@ impl WebApp {
         let mut ui_state = UiState::new();
         ui_state.show_p0 = false;
         ui_state.selected_group = Some(state.group_id().to_string());
-        ui_state.selected_module = Some(bands);
+        ui_state.selected_module = selected_module;
 
         Ok(Self {
             state,
@@ -118,13 +159,17 @@ impl WebApp {
             preview_texture: None,
             render_size: [1, 1],
             webgl_fallback: backend == "webgl2",
-            pacer: FramePacer::new(TARGET_FPS),
+            // Two compositors are expensive; the output tab is a visual
+            // monitor, so 30 fps halves its GPU cost without visible judder.
+            pacer: FramePacer::new(if output_only { 30.0 } else { TARGET_FPS }),
             last_render_time: 0.0,
             start_time: 0.0,
             frames: 0,
             fps: 0.0,
             frame_ms: 0.0,
             resizes: 0,
+            last_persist: 0.0,
+            output_only,
         })
     }
 
@@ -191,7 +236,7 @@ impl WebApp {
         };
         let audio = self.state.audio();
         let stats = format!(
-            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{},\"bass\":{:.3},\"mid\":{:.3},\"treble\":{:.3},\"bpm\":{:.1}}}",
+            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{},\"bass\":{:.3},\"mid\":{:.3},\"treble\":{:.3},\"bpm\":{:.1},\"modules\":{},\"scenes\":{}}}",
             self.fps,
             self.frame_ms,
             self.frames,
@@ -203,7 +248,9 @@ impl WebApp {
             audio.bass,
             audio.mid,
             audio.treble,
-            self.state.bpm()
+            self.state.bpm(),
+            self.state.state().modules.len(),
+            self.state.scene_library().scenes().len()
         );
         let _ = js_sys::Reflect::set(
             &window,
@@ -217,20 +264,26 @@ impl WebApp {
             UiCommand::Quit => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            // The browser's substitute for an Output Window is the tab's
-            // fullscreen mode. `Open output` and fullscreen both map there.
-            UiCommand::OpenOutputWindow => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            // The browser's Output Window is a chrome-less second engine
+            // instance in a new tab. The browser may ask for pop-up
+            // permission the first time; the page shows a toast if it is
+            // blocked.
+            UiCommand::OpenOutputWindow | UiCommand::ToggleOutputFullscreen => {
+                if !call_window_function("openModvOutput") {
+                    open_output_tab();
+                }
             }
             UiCommand::CloseOutputWindow => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-            }
-            UiCommand::ToggleOutputFullscreen => {
-                let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+                call_window_function("closeModvOutput");
             }
             UiCommand::SetOutputFullscreen(on) => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
+                if on {
+                    if !call_window_function("openModvOutput") {
+                        open_output_tab();
+                    }
+                } else {
+                    call_window_function("closeModvOutput");
+                }
             }
             UiCommand::SetRenderScale(scale) => {
                 self.compositor.set_render_scale(scale);
@@ -319,6 +372,24 @@ impl eframe::App for WebApp {
             self.publish_stats();
         }
 
+        // The output tab is a second engine instance: no panels, just the
+        // compositor's main texture filling the window.
+        if self.output_only {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+            if let Some(texture) = self.preview_texture {
+                ui.painter().image(
+                    texture,
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+            ctx.request_repaint_after(self.pacer.delay(now));
+            return;
+        }
+
         let mut snapshot = self
             .state
             .snapshot(self.render_size, self.fps, self.frame_ms);
@@ -334,20 +405,67 @@ impl eframe::App for WebApp {
 
         modv_ui::shell::draw(ui, &snapshot, &mut self.ui_state);
 
-        for action in self.ui_state.take_actions() {
+        let actions = self.ui_state.take_actions();
+        // Scene/Group/Module edits are structural and saved immediately;
+        // slider drags are throttled below.
+        let structural = actions.iter().any(|action| {
+            let name = action.action.as_str();
+            name.starts_with("scenes/")
+                || name.starts_with("groups/")
+                || name.starts_with("modules/")
+                || name.starts_with("inputs/")
+                || name.starts_with("tweens/")
+        });
+        for action in actions {
             if !self.state.apply_action(&action) {
                 // The UI emits actions for panels the browser shell has cut
-                // (Scenes, Media, NDI/OSC/MIDI, plugins). Ignore those rather
-                // than turning every click into a status-bar error.
+                // (Media, NDI/OSC/MIDI, plugins). Ignore those rather than
+                // turning every click into a status-bar error.
             }
         }
         for command in self.ui_state.take_commands() {
             self.handle_command(command, &ctx);
         }
 
+        // Persist the live stack and Scenes. A tab hide/unload flushes
+        // immediately; ordinary prop edits are throttled so dragging a slider
+        // does not serialise the whole document every frame.
+        if self.state.is_dirty() {
+            let hidden = web_sys::window()
+                .and_then(|window| window.document())
+                .is_some_and(|document| {
+                    document.visibility_state() == web_sys::VisibilityState::Hidden
+                });
+            if hidden || structural || now - self.last_persist >= 0.4 {
+                crate::storage::save(&self.state.to_persisted_json());
+                self.state.clear_dirty();
+                self.last_persist = now;
+            }
+        }
+
         // Wake at the next 60 Hz deadline. UI-only input frames before it
         // simply redraw over the current output texture.
         ctx.request_repaint_after(self.pacer.delay(now));
+    }
+}
+
+/// Call a function installed on `window` by `web/main.js`.
+fn call_window_function(name: &str) -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Ok(function) = js_sys::Reflect::get(&window, &JsValue::from_str(name)) else {
+        return false;
+    };
+    function
+        .dyn_ref::<js_sys::Function>()
+        .is_some_and(|function| function.call0(&window).is_ok())
+}
+
+/// Fallback when `main.js` has not installed its output helpers yet.
+fn open_output_tab() {
+    if let Some(window) = web_sys::window() {
+        let _ = window.open_with_url_and_target("./output.html", "vmodv-output");
     }
 }
 
