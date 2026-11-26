@@ -18,6 +18,7 @@ pub enum HelpTopic {
     Welcome,
     Groups,
     Modules,
+    InputLinks,
     Gallery,
     Scenes,
     LiveOutput,
@@ -40,6 +41,7 @@ impl HelpTopic {
         Self::Welcome,
         Self::Groups,
         Self::Modules,
+        Self::InputLinks,
         Self::Gallery,
         Self::Scenes,
         Self::LiveOutput,
@@ -62,6 +64,7 @@ impl HelpTopic {
             Self::Welcome => "Welcome",
             Self::Groups => "Groups",
             Self::Modules => "Modules",
+            Self::InputLinks => "Input Links",
             Self::Gallery => "Module Gallery",
             Self::Scenes => "Scenes",
             Self::LiveOutput => "Live Output",
@@ -96,6 +99,12 @@ impl HelpTopic {
                 Module Gallery onto a Group to add one, or double-click the tile to add it to the \
                 focused Group. Select a Module to edit its properties in the Inspector, link its \
                 controls to audio, MIDI or tweens, reorder it with its drag handle, or remove it with x."
+            }
+            Self::InputLinks => {
+                "Input Links automate a Module control. Select a Module in the Inspector, then \
+                click + link on one of its controls to drive it from an audio feature, the \
+                detected BPM, Draw, a Tween, MIDI or OSC. Use the editor to set the source, its \
+                range and an optional expression, then click x to remove the link."
             }
             Self::Gallery => {
                 "The Module Gallery displays all available Modules. A module can be dragged \

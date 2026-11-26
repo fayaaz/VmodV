@@ -10,6 +10,7 @@
 //! builders live in [`LinkEditor`] so the JS action shapes are unit-testable
 //! without egui.
 
+use crate::help::HelpTopic;
 use crate::layout::WINDOW_INPUT_LINK;
 use crate::model::{EngineSnapshot, InputLinkView};
 use crate::state::{
@@ -135,6 +136,7 @@ fn open_link_editor_for(
 ) {
     let title = focused_input_title(input_id, prop_name, snapshot);
     state.open_link_editor(LinkEditor::for_input(input_id, title, snapshot));
+    state.focus_help_topic(HelpTopic::InputLinks);
 }
 
 fn link_summary(link: &InputLinkView) -> String {

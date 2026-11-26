@@ -8,8 +8,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::model::{GROUP_ENABLED, InheritTarget, module_license};
 use modv_ui::{
-    EngineSnapshot, GroupView, ModuleMetaView, ModuleView, PerformanceView, SceneCellView,
-    SceneView, UiState,
+    EngineSnapshot, GroupView, ModuleMetaView, ModuleView, PerformanceView, PropView,
+    SceneCellView, SceneView, UiState,
 };
 
 fn group(id: &str, name: &str) -> GroupView {
@@ -34,6 +34,11 @@ const MODULES_HELP: &str = "Modules are the visuals that render inside a Group. 
     the Module Gallery onto a Group to add one, or double-click the tile to add it to the focused \
     Group. Select a Module to edit its properties in the Inspector, link its controls to audio, \
     MIDI or tweens, reorder it with its drag handle, or remove it with x.";
+
+const INPUT_LINKS_HELP: &str = "Input Links automate a Module control. Select a Module in the \
+    Inspector, then click + link on one of its controls to drive it from an audio feature, the \
+    detected BPM, Draw, a Tween, MIDI or OSC. Use the editor to set the source, its range and an \
+    optional expression, then click x to remove the link.";
 
 fn module_meta() -> ModuleMetaView {
     ModuleMetaView {
@@ -70,6 +75,10 @@ fn harness(groups: Vec<GroupView>) -> Harness<'static, UiState> {
 }
 
 fn harness_with_snapshot(snapshot: EngineSnapshot) -> Harness<'static, UiState> {
+    harness_with_state(snapshot, UiState::new())
+}
+
+fn harness_with_state(snapshot: EngineSnapshot, state: UiState) -> Harness<'static, UiState> {
     Harness::builder()
         .with_size([1280.0, 800.0])
         .with_accessibility_check(false)
@@ -77,7 +86,7 @@ fn harness_with_snapshot(snapshot: EngineSnapshot) -> Harness<'static, UiState> 
             move |ui, state| {
                 modv_ui::shell::draw(ui, &snapshot, state);
             },
-            UiState::new(),
+            state,
         )
 }
 
@@ -188,6 +197,45 @@ fn assert_module_licence(harness: &mut Harness<'_, UiState>, meta: &ModuleMetaVi
     harness.get_by_label(&format!("Module: {}", meta.name));
     harness.get_by_label(&format!("Author: {}", meta.author));
     harness.get_by_label(&format!("License: {}", module_license(meta)));
+}
+
+#[test]
+fn clicking_a_link_shows_input_link_help() {
+    let mut group = group("group-1", "Effects");
+    group.module_ids = vec!["module-1".to_string()];
+    let mut module = module_view("module-1", "group-1");
+    module.props = vec![PropView {
+        name: "Amount".to_string(),
+        prop_type: "float".to_string(),
+        value: serde_json::json!(1.0),
+        min: Some(0.0),
+        max: Some(10.0),
+        step: Some(0.001),
+        default: None,
+        input_id: Some("in-amount".to_string()),
+        components: Vec::new(),
+        tween: None,
+        enum_members: Vec::new(),
+    }];
+    let snapshot = EngineSnapshot {
+        groups: vec![group],
+        modules: vec![module],
+        ..Default::default()
+    };
+    let mut state = UiState::new();
+    state.selected_group = Some("group-1".to_string());
+    state.selected_module = Some("module-1".to_string());
+    let mut harness = harness_with_state(snapshot, state);
+    harness.run();
+
+    harness
+        .get_all_by_label("+ link")
+        .next()
+        .expect("a link control in the Inspector")
+        .click();
+    harness.run();
+
+    harness.get_by_label(INPUT_LINKS_HELP);
 }
 
 #[test]
