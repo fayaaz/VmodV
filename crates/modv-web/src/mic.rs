@@ -37,7 +37,7 @@ pub struct MicFrame {
 /// The returned promise resolves once the AudioContext is running. A denied
 /// permission rejects with the browser's error; the caller keeps silence.
 #[wasm_bindgen]
-pub fn enable_microphone(device_id: Option<String>) -> js_sys::Promise {
+pub fn enable_microphone(device_id: Option<String>, gain: f32) -> js_sys::Promise {
     future_to_promise(async move {
         let navigator = web_sys::window()
             .ok_or_else(|| JsValue::from_str("no window"))?
@@ -73,15 +73,27 @@ pub fn enable_microphone(device_id: Option<String>) -> js_sys::Promise {
         let analyser = context.create_analyser()?;
         analyser.set_fft_size(2_048);
         analyser.set_smoothing_time_constant(0.0);
-        let gain = context.create_gain()?;
-        gain.gain().set_value(0.0);
+        // Quiet microphones often sit under the analyser's near-silence gate.
+        // This node is analysis-only (the destination gain stays at zero).
+        let input_gain = context.create_gain()?;
+        input_gain.gain().set_value(if gain.is_finite() {
+            gain.clamp(0.1, 16.0)
+        } else {
+            2.0
+        });
+        let output_gain = context.create_gain()?;
+        output_gain.gain().set_value(0.0);
         source
-            .connect_with_audio_node(&analyser)
+            .connect_with_audio_node(&input_gain)
             .map_err(|_| JsValue::from_str("could not connect the microphone"))?;
+        input_gain
+            .connect_with_audio_node(&analyser)
+            .map_err(|_| JsValue::from_str("could not connect the microphone gain"))?;
         analyser
-            .connect_with_audio_node(&gain)
+            .connect_with_audio_node(&output_gain)
             .map_err(|_| JsValue::from_str("could not connect the analyser"))?;
-        gain.connect_with_audio_node(&context.destination())
+        output_gain
+            .connect_with_audio_node(&context.destination())
             .map_err(|_| JsValue::from_str("could not reach the audio destination"))?;
         JsFuture::from(context.resume()?).await?;
 
@@ -91,7 +103,8 @@ pub fn enable_microphone(device_id: Option<String>) -> js_sys::Promise {
             mic.context = Some(context);
             mic.source = Some(source);
             mic.analyser = Some(analyser);
-            mic.gain = Some(gain);
+            mic.input_gain = Some(input_gain);
+            mic.gain = Some(output_gain);
             mic.stream = Some(stream);
             mic.processor = Some(AudioAnalyser::new(sample_rate));
             mic.sample_rate = sample_rate;
@@ -100,6 +113,38 @@ pub fn enable_microphone(device_id: Option<String>) -> js_sys::Promise {
             mic.active = true;
         });
         Ok(JsValue::from_str("microphone live"))
+    })
+}
+
+/// Update the analysis-only input boost while the microphone is live.
+#[wasm_bindgen]
+pub fn set_microphone_gain(gain: f32) {
+    if !gain.is_finite() {
+        return;
+    }
+    let gain = gain.clamp(0.1, 16.0);
+    MIC.with(|mic| {
+        if let Some(node) = mic.borrow().input_gain.as_ref() {
+            node.gain().set_value(gain);
+        }
+    });
+}
+
+/// Resume the microphone `AudioContext` after the page regains focus.
+///
+/// Chrome and Firefox suspend audio contexts in background tabs; the analyser
+/// then has no new samples until the context is resumed. Calling this on
+/// visibility/focus keeps the engine running across window switches.
+#[wasm_bindgen]
+pub fn resume_microphone() -> js_sys::Promise {
+    MIC.with(|mic| {
+        let mic = mic.borrow();
+        if let Some(context) = mic.context.as_ref()
+            && let Ok(promise) = context.resume()
+        {
+            return promise;
+        }
+        js_sys::Promise::resolve(&JsValue::UNDEFINED)
     })
 }
 
@@ -113,6 +158,7 @@ struct MicCapture {
     context: Option<web_sys::AudioContext>,
     source: Option<web_sys::MediaStreamAudioSourceNode>,
     analyser: Option<web_sys::AnalyserNode>,
+    input_gain: Option<web_sys::GainNode>,
     gain: Option<web_sys::GainNode>,
     stream: Option<web_sys::MediaStream>,
     processor: Option<AudioAnalyser>,

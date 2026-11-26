@@ -15,9 +15,15 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod mic;
 #[cfg(target_arch = "wasm32")]
+mod output;
+#[cfg(target_arch = "wasm32")]
+mod shared;
+#[cfg(target_arch = "wasm32")]
 mod storage;
 
 #[cfg(target_arch = "wasm32")]
-pub use app::{start, start_output};
+pub use app::start;
 #[cfg(target_arch = "wasm32")]
-pub use mic::enable_microphone;
+pub use mic::{enable_microphone, resume_microphone, set_microphone_gain};
+#[cfg(target_arch = "wasm32")]
+pub use output::start_output;

@@ -25,26 +25,8 @@ use crate::state::WebState;
 /// module is initialised.
 #[wasm_bindgen]
 pub async fn start(canvas_id: &str) -> Result<(), JsValue> {
-    run(canvas_id, false).await
-}
-
-/// Start the full-window output view on `canvas_id`.
-///
-/// `web/output.js` opens this in the output tab. It restores the persisted
-/// live stack and Scenes but never writes them back, so the main tab remains
-/// the only author of the saved state.
-#[wasm_bindgen]
-pub async fn start_output(canvas_id: &str) -> Result<(), JsValue> {
-    run(canvas_id, true).await
-}
-
-async fn run(canvas_id: &str, output_only: bool) -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
-    log(if output_only {
-        "start_output: entered"
-    } else {
-        "start: entered"
-    });
+    log("start: entered");
 
     let document = web_sys::window()
         .and_then(|window| window.document())
@@ -59,7 +41,7 @@ async fn run(canvas_id: &str, output_only: bool) -> Result<(), JsValue> {
         .start(
             canvas,
             eframe::WebOptions::default(),
-            Box::new(move |cc| Ok(Box::new(WebApp::new(cc, output_only)?))),
+            Box::new(|cc| Ok(Box::new(WebApp::new(cc)?))),
         )
         .await
 }
@@ -79,7 +61,6 @@ struct WebApp {
     frame_ms: f32,
     resizes: u64,
     last_persist: f64,
-    output_only: bool,
     previews: ModulePreviews,
     gallery_previews: HashMap<String, PreviewTexture>,
     scene_previews: HashMap<String, PreviewTexture>,
@@ -95,15 +76,8 @@ struct RowMonitorEntry {
 }
 
 impl WebApp {
-    fn new(
-        cc: &eframe::CreationContext<'_>,
-        output_only: bool,
-    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        log(if output_only {
-            "WebApp::new (output): entering"
-        } else {
-            "WebApp::new: entering"
-        });
+    fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        log("WebApp::new: entering");
         let render_state = cc
             .wgpu_render_state
             .as_ref()
@@ -134,6 +108,7 @@ impl WebApp {
         let mut state = WebState::new();
         let restored =
             crate::storage::load().is_some_and(|document| state.restore_persisted_json(&document));
+        crate::shared::set_registry(state.registry_arc());
         state.set_backend(
             format!("{} ({})", adapter_info.name, adapter_info.backend),
             backend,
@@ -177,9 +152,7 @@ impl WebApp {
             preview_texture: None,
             render_size: [1, 1],
             webgl_fallback: backend == "webgl2",
-            // Two compositors are expensive; the output tab is a visual
-            // monitor, so 30 fps halves its GPU cost without visible judder.
-            pacer: FramePacer::new(if output_only { 30.0 } else { TARGET_FPS }),
+            pacer: FramePacer::new(TARGET_FPS),
             last_render_time: 0.0,
             start_time: 0.0,
             frames: 0,
@@ -187,7 +160,6 @@ impl WebApp {
             frame_ms: 0.0,
             resizes: 0,
             last_persist: 0.0,
-            output_only,
             previews,
             gallery_previews: HashMap::new(),
             scene_previews: HashMap::new(),
@@ -611,10 +583,13 @@ impl eframe::App for WebApp {
             // A shader transition captures the outgoing frame while main
             // still holds it, then the compositor runs the effect over the
             // captured and incoming frames.
-            if self.state.take_pending_transition_capture().is_some()
-                && !self.compositor.capture_transition_source()
-            {
-                self.state.fall_back_transition_to_fade();
+            let mut capture_requested = false;
+            if self.state.take_pending_transition_capture().is_some() {
+                if self.compositor.capture_transition_source() {
+                    capture_requested = true;
+                } else {
+                    self.state.fall_back_transition_to_fade();
+                }
             }
             if let Some(info) = self.state.scene_transition_info()
                 && (!self.compositor.has_transition_capture()
@@ -632,6 +607,27 @@ impl eframe::App for WebApp {
                 row_fades: self.state.row_fade_infos(),
                 scene_transition,
             };
+            // The hidden output renderer mirrors this exact state. Publishing
+            // every other frame caps the copy at 30 Hz; the output pacer runs
+            // at the same rate.
+            if crate::shared::output_active() && self.frames.is_multiple_of(2) {
+                crate::shared::publish(crate::shared::SharedFrame {
+                    state: self.state.state().clone(),
+                    audio: info.audio.clone(),
+                    row_fades: info.row_fades.clone(),
+                    scene_transition: info.scene_transition.clone(),
+                    time_seconds: info.time_seconds,
+                    date: info.date,
+                    frame_index: info.frame_index,
+                    render_size: [self.compositor.size().0, self.compositor.size().1],
+                });
+            }
+            if capture_requested
+                && info.scene_transition.is_some()
+                && crate::shared::output_active()
+            {
+                crate::shared::request_capture();
+            }
             if let Err(error) = self.compositor.render_frame(self.state.state(), &info) {
                 if self.frames < 5 {
                     log(&format!("compositor error: {error}"));
@@ -644,32 +640,9 @@ impl eframe::App for WebApp {
             self.frames = self.frames.saturating_add(1);
             self.state.note_frame();
             self.update_preview_texture(frame);
-            if !self.output_only {
-                self.refresh_row_monitors(frame);
-            }
+            self.refresh_row_monitors(frame);
             self.pacer.mark(now);
             self.publish_stats();
-        }
-
-        // The output tab is a second engine instance: no panels, just the
-        // compositor's main texture filling the window.
-        if self.output_only {
-            ctx.set_cursor_icon(egui::CursorIcon::None);
-            let rect = ui.max_rect();
-            ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
-            if let Some(texture) = self.preview_texture {
-                ui.painter().image(
-                    texture,
-                    rect,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-            }
-            // The output window has no widgets asking for animation, so keep
-            // the frame loop alive explicitly; the pacer still caps the
-            // compositor at 30 fps.
-            ctx.request_repaint();
-            return;
         }
 
         let mut snapshot = self

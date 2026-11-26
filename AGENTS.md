@@ -132,13 +132,14 @@ history is in git, and the pre-cleanup Electron tree is on `legacy-electron`.
   Groups/Gallery/Inspector, microphone audio (silent until enabled), the 56
   default Scenes, per-row performance auto-advance with Fade/shader
   transitions, Scene-cell and Gallery hover previews, live row monitors,
-  `localStorage` persistence of the live stack/Scenes/tweens, a full-screen
+  `localStorage` persistence of the live stack/Scenes/tweens, a mirrored
   output popup and WebGL2 fallback work. The bundled ISF corpus is embedded in
   the wasm binary and registered at startup. Still missing: MilkDrop, user ISF
   folders, filesystem presets/project profiles, performance playlists,
-  OSC/NDI/MIDI/plugins and native output windows (the browser output is an
-  independent popup instance). Input Links support audio features, Draw and
-  Tween sources; link expressions and MIDI/OSC sources are still missing.
+  OSC/NDI/MIDI/plugins and native output windows (the browser output is a
+  hidden in-page renderer mirrored to a popup). Input Links support audio
+  features, Draw and Tween sources; link expressions and MIDI/OSC sources are
+  still missing.
   Point10 compute scenes need WebGPU; the WebGL2 fallback logs and skips them.
 - **Media (P6):** native file/screen pickers, media-manager file dialogs,
   project profiles and the full media-tree watch are missing. User ISF hot

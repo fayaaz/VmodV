@@ -48,7 +48,9 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
   The microphone selector and button request WebAudio capture, then feed the
   samples through the native `AudioAnalyser` (FFT, bands, Meyda features,
   BeatDetektor and TempoDetector), so B-M-T, kicks and BPM match the desktop
-  pipeline.
+  pipeline. An analysis-only input boost (1×–8×, default 2×) lifts quiet
+  microphones above the analyser's near-silence gate; the context resumes on
+  focus/visibility so backgrounding does not stall the engine.
 - **Default Scenes**: the 56 versioned default Scenes are seeded into the
   Scenes tab. A cell/whole-Scene apply rebuilds the live stack with its module
   props, input links and tweens; capture, rename, reorder, enable, timing,
@@ -71,10 +73,11 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
   saved to `localStorage` (`vmodv-web-state`) after structural edits and
   throttled prop edits, and restored on refresh. New default Scenes are seeded
   when the saved defaults version is older.
-- **Output popup**: `Open output` opens `output.html`, a chrome-less second
-  engine instance that restores the saved stack and renders it full-window. It
-  has its own optional microphone button and never writes the saved state. It
-  is an independent engine, so it can pause while its window is occluded.
+- **Output popup**: `Open output` starts a chrome-less renderer on an
+  offscreen canvas in this page and opens `output.html`, which plays that
+  canvas as video. The hidden renderer receives the main shell's exact
+  `EngineState`, analyser frame, transition progress and clock, so it cannot
+  drift; it pauses while no output window is open.
 - **Status/health**: real adapter/backend (`webgpu` or `webgl2`), FPS, frame
   time, resolution and audio activity.
 
@@ -93,9 +96,9 @@ These are out of scope for this branch, not accidental omissions:
 - Performance playlists and the playlist editor. Per-row auto-advance,
   crossfades and the transition picker work; playlist sequencing is
   native-only.
-- Native output windows. `Open output` opens an independent popup instance;
-  there is no cross-tab GPU texture sharing, so a fully occluded output window
-  can be throttled by the browser.
+- Native output windows. `Open output` mirrors a hidden in-page renderer to a
+  popup; the main tab must render for the stream to advance, so a fully hidden
+  main tab pauses the output.
 - The JSONL control socket and the native e2e harness. Browser smoke tests use
   Playwright/CDP against the canvas.
 
@@ -105,7 +108,9 @@ These are out of scope for this branch, not accidental omissions:
 | --- | --- |
 | `crates/modv-app` `web` feature | Compiles only the platform-neutral core: compositor, module registry, previews, quality, scene transitions, texture sources. Native modules are `cfg`'d out; `modv-media`, `modv-ipc`, winit, MIDI, notify and the shell are desktop-only target dependencies. |
 | `crates/modv-web/src/state.rs` | Pure `WebState`: one or more Groups, active modules, prop/meta edits, `UiAction` dispatch and the `EngineSnapshot` read model. Unit-tested on the host. |
-| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, transition capture/pass wiring, GPU previews and row monitors, `modv_ui::shell::draw`, action/command drain, and the chrome-less output view. |
+| `crates/modv-web/src/app.rs` | eframe app: real `Compositor::render_frame`, transition capture/pass wiring, GPU previews and row monitors, `modv_ui::shell::draw`, and action/command drain. |
+| `crates/modv-web/src/output.rs` | Offscreen chrome-less compositor that renders the main shell's published state for the output window. |
+| `crates/modv-web/src/shared.rs` | Thread-local render-frame + module-registry hand-off between the main shell and the output renderer. |
 | `crates/modv-web/src/scenes.rs` | Default Scene seeding, Scene apply/capture/editing, transitions and the performance read model. |
 | `crates/modv-web/src/storage.rs` | `localStorage` load/save for the persisted live stack. |
 | `crates/modv-web/src/audio.rs` | Demo audio and the native `AudioSnapshot` → `AudioFrame` mapping. |
