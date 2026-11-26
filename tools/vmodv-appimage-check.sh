@@ -8,7 +8,7 @@
 #   exactly like an AppDir).
 #
 # This is the gate that CI (vmodv.yml / release.yml) and the canonical local
-# build (make build -> make appimage-vmodv) run on the bundle they produce. It
+# build (make build -> make appimage) run on the bundle they produce. It
 # is deliberately content-based: it fails on the FIRST broken assertion, naming
 # the missing behaviour, and prints a readable size/content summary. No size
 # budget is asserted — a fat bundle is expected to be large.

@@ -5,7 +5,7 @@
 #
 # Common targets:
 #   make build            VmodV AppImage + .deb into dist/ (clean first)
-#   make appimage-vmodv  VmodV AppImage only (runs vmodv-appimage-check.sh)
+#   make appimage       VmodV AppImage only (runs vmodv-appimage-check.sh)
 #   make vmodv-deb       VmodV .deb (runs vmodv-deb-check.sh)
 #   make vmodv-deb-check re-check an existing .deb
 #   make vmodv-appimage-check re-check an existing AppImage's fat bundle
@@ -114,7 +114,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
+.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -163,7 +163,7 @@ version:
 # point; there is no Electron fallback build. The `.deb` is amd64-only, so a
 # non-amd64 host builds just its native AppImage (an explicit `make vmodv-deb`
 # still reaches the script, which fails fast with the detected host arch).
-BUILD_TARGETS := appimage-vmodv
+BUILD_TARGETS := appimage
 ifneq ($(filter $(shell uname -m),x86_64 amd64),)
 BUILD_TARGETS += vmodv-deb
 endif
@@ -174,7 +174,7 @@ build: clean $(BUILD_TARGETS)
 # tools/vmodv-appimage.sh verifies the fat bundle with
 # tools/vmodv-appimage-check.sh on the image it just produced, so `make build`
 # (and this target) fails on a thin bundle just like `vmodv-deb` does.
-appimage-vmodv: disk-guard docker-cargo-volume
+appimage: disk-guard docker-cargo-volume
 	mkdir -p "$(DIST_DIR)"
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
@@ -188,9 +188,6 @@ appimage-vmodv: disk-guard docker-cargo-volume
 		-w /app \
 		$(RUST_IMAGE) \
 		bash /app/tools/vmodv-appimage.sh
-
-# Backwards-compatible alias for the only AppImage build that exists.
-appimage: appimage-vmodv
 
 # Re-run the fat-bundle content checks on an already-built AppImage. Mirrors
 # vmodv-deb-check: the checker runs in the toolchain container because it uses

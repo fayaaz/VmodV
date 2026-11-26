@@ -357,7 +357,7 @@ fn release_workflow_builds_the_arm64_appimage_on_the_arm64_runner() {
         "build-appimage must upload each leg's dist/VmodV-*.AppImage as \
          ${{{{ matrix.artifact }}}}:\n{build}"
     );
-    for command in ["make appimage-vmodv", "make vmodv-appimage-check"] {
+    for command in ["make appimage", "make vmodv-appimage-check"] {
         assert_eq!(
             release.matches(command).count(),
             1,
@@ -525,11 +525,8 @@ fn ci_package_workflow_builds_the_arm64_appimage() {
     );
     let arm_build = steps
         .iter()
-        .find(|step| {
-            step.lines()
-                .any(|line| line.trim() == "run: make appimage-vmodv")
-        })
-        .expect("the aarch64 package leg must run `make appimage-vmodv` natively");
+        .find(|step| step.lines().any(|line| line.trim() == "run: make appimage"))
+        .expect("the aarch64 package leg must run `make appimage` natively");
     assert!(
         has_arch_condition(arm_build, "aarch64"),
         "the AppImage-only arm64 build must be gated to the aarch64 matrix leg:\n{arm_build}"

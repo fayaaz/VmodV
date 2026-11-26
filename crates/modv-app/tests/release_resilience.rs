@@ -380,7 +380,7 @@ fn each_artifact_is_built_only_once_in_the_release_workflow() {
     // download and upload it. A second build step would waste a full Rust
     // toolchain/Windows GStreamer/macOS runner pass for the same bytes.
     for (artifact, command) in [
-        ("AppImage", "make appimage-vmodv"),
+        ("AppImage", "make appimage"),
         ("AppImage bundle check", "make vmodv-appimage-check"),
         ("Windows ZIP", "bash tools/windows-portable.sh"),
         ("macOS bundle", "bash tools/macos-portable.sh"),

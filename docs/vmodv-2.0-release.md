@@ -108,7 +108,7 @@ as with any major upgrade.
 
 ```bash
 make build                 # VmodV AppImage + .deb in dist/
-make appimage-vmodv       # VmodV AppImage only
+make appimage             # VmodV AppImage only
 make vmodv-deb            # VmodV .deb (runs vmodv-deb-check.sh)
 make vmodv-deb-check      # re-check an existing .deb
 make docker-package        # same artifacts via the Dockerfile `artifacts` target

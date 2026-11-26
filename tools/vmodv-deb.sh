@@ -81,7 +81,7 @@ case "$HOST_ARCH" in
     x86_64 | amd64) ;;
     *)
         echo "error: .deb packages are amd64-only, but this host is $HOST_ARCH." >&2
-        echo "       Use the native AppImage (make appimage-vmodv) or run this in an x86_64 container." >&2
+        echo "       Use the native AppImage (make appimage) or run this in an x86_64 container." >&2
         exit 1
         ;;
 esac

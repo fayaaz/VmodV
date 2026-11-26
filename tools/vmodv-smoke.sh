@@ -44,7 +44,7 @@
 #      a crash. A clean "starting empty" report is accepted on a fresh tree.
 #
 # The script never builds anything. When no VmodV AppImage is present it
-# assembles the same AppDir layout the `appimage-vmodv` target produces
+# assembles the same AppDir layout the `appimage` target produces
 # (AppRun + log-run.sh + the release binary + the ISF/texture trees) around
 # crates/target/release/modv. Build that binary with `make vmodv`/`make
 # vmodv-debug` first, or pass --appimage.

@@ -114,7 +114,7 @@ dependencies live in the Docker toolchain image.
 
 ```bash
 make build            # VmodV AppImage (native arch) + amd64 .deb in dist/
-make appimage-vmodv  # AppImage only (native x86_64 or aarch64)
+make appimage        # AppImage only (native x86_64 or aarch64)
 make vmodv-deb       # .deb only (runs vmodv-deb-check.sh)
 make vmodv-deb-check # re-check an existing .deb
 ```

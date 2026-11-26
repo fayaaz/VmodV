@@ -215,7 +215,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=rust-toolchain-${{ matrix.arch }}
 
       - name: Build VmodV AppImage
-        run: make appimage-vmodv
+        run: make appimage
         env:
           VMODV_VERSION: ${{ env.VERSION }}
 

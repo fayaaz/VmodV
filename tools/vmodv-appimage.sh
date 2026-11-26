@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the VmodV "fat" AppImage.
 #
-# Runs inside the Dockerised Rust toolchain (`make appimage-vmodv`), with the
+# Runs inside the Dockerised Rust toolchain (`make appimage`), with the
 # repository at /app and the cargo registry volume at /cargo. The AppImage
 # bundles the `modv` binary, the ISF corpus and the Point10 textures, plus the
 # GStreamer runtime installed in the build container: the plugin *.so files
@@ -55,7 +55,7 @@
 #
 # Modes
 #   real (default)  cargo build + stage the container's GStreamer runtime +
-#                   RUNPATHs + appimagetool (`make appimage-vmodv`).
+#                   RUNPATHs + appimagetool (`make appimage`).
 #   --dry-run       stage the identical AppDir layout from explicit fake
 #                   inputs (guarded by crates/modv-app/tests/appimage_bundle.rs):
 #                   no cargo build, no appimagetool, no network. APP_VERSION
@@ -581,7 +581,7 @@ patch_bundle_rpaths
 if [ "$DRY_RUN" -eq 0 ]; then
     build_appimage
     # Gate the canonical build on the artifact it just produced: a thin bundle
-    # fails `make appimage-vmodv` (and therefore `make build`) here, exactly as
+    # fails `make appimage` (and therefore `make build`) here, exactly as
     # vmodv-deb checks the .deb after packaging. The dry run is exercised by the
     # appimage_bundle tests with text stubs that have no RUNPATH, so it is not
     # checked here.

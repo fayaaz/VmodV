@@ -822,12 +822,12 @@ fn release_workflow_builds_and_publishes_four_ubuntu_debs() {
     assert!(
         appimage.lines().any(|line| {
             let line = line.trim();
-            line.starts_with("run:") && line.contains("make appimage-vmodv")
+            line.starts_with("run:") && line.contains("make appimage")
         }),
-        "the `build-appimage` job must run `make appimage-vmodv` in a step:\n{appimage}"
+        "the `build-appimage` job must run `make appimage` in a step:\n{appimage}"
     );
     assert!(
-        !release_job.contains("make appimage-vmodv"),
+        !release_job.contains("make appimage"),
         "the `release` job must not build the AppImage: `build-appimage` does \
          that once and uploads it for `attach-appimage`"
     );

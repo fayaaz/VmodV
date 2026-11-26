@@ -1,6 +1,6 @@
 //! RED guard for the "fat" VmodV AppImage (slug: `fat-appimage`).
 //!
-//! Requirement: `make appimage-vmodv` must ship the GStreamer runtime that the
+//! Requirement: `make appimage` must ship the GStreamer runtime that the
 //! build container already has (see the `rust` stage of the `Dockerfile`), so a
 //! user does not have to apt-install GStreamer for the AppImage to open a
 //! camera, a file or the PipeWire screen source. The finished AppDir must look
@@ -176,7 +176,7 @@
 //!   `patchelf --set-rpath <rpath> <file>` (`patchelf` has no `--` separator), a
 //!   non-zero patchelf status is fatal, and the script only uses `realpath`
 //!   options the build container's coreutils actually has (`-f` is not one, and
-//!   it killed the first real `make appimage-vmodv` run)
+//!   it killed the first real `make appimage` run)
 //!
 //! `--dry-run` and the real build share one staging pipeline: the same
 //! `collect_plugins` / staging / licence / RUNPATH code runs in both modes, and
@@ -1556,7 +1556,7 @@ fn apprun_blanks_the_host_gstreamer_plugin_path_at_launch() {
 /// Container-tool compatibility guard. `realpath` in the build container is GNU
 /// coreutils': it canonicalises by default and has **no `-f`**. An unsupported
 /// flag exits 1, and under `set -euo pipefail` that aborted the whole real
-/// `make appimage-vmodv` build at `tools/vmodv-appimage.sh:216` — right after a
+/// `make appimage` build at `tools/vmodv-appimage.sh:216` — right after a
 /// 3-minute `cargo build`, with no artifact and no bundle to inspect.
 #[test]
 fn appimage_script_only_uses_realpath_options_the_build_container_has() {
@@ -2349,7 +2349,7 @@ fn canonical_build_invokes_the_bundle_checker() {
     assert!(
         script.contains(CHECKER_SCRIPT),
         "tools/vmodv-appimage.sh never invokes {CHECKER_SCRIPT} on the AppImage it produced: \
-         `make appimage-vmodv` (and therefore `make build`) would ship a thin bundle unchecked"
+         `make appimage` (and therefore `make build`) would ship a thin bundle unchecked"
     );
 }
 

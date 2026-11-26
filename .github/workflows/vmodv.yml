@@ -254,7 +254,7 @@ jobs:
       # arm64 builds only the native AppImage; there is no arm64 .deb.
       - name: Build VmodV AppImage
         if: matrix.arch == 'aarch64'
-        run: make appimage-vmodv
+        run: make appimage
 
       - name: Verify the fat AppImage bundle
         run: make vmodv-appimage-check
