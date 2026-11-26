@@ -35,6 +35,10 @@ VMODV_VERSION ?= $(shell "$(CURDIR)/tools/version.sh")
 # Dev-only asset tooling: the wordcodec is a small Node script run in a
 # throwaway container (no Node is needed for the app build/tests).
 NODE_IMAGE ?= node:24-slim
+# Extra Buildx flags for the image builds. CI passes the GitHub Actions cache
+# here: `--cache-from type=gha,scope=...` (and `--cache-to` where it owns the
+# export), so a fresh runner imports the apt/rustup layers instead of redoing
+# them.
 DOCKER_BUILD_ARGS ?=
 DIST_DIR ?= dist
 # Build image base and .deb artifact suffix. The release workflow overrides
@@ -50,6 +54,15 @@ APPIMAGE_ARCH ?= $(shell uname -m | sed -e 's/^amd64$$/x86_64/' -e 's/^arm64$$/a
 DOCKER ?= docker
 RUST_IMAGE ?= modv-rust:local
 WASM_IMAGE ?= modv-wasm:local
+# Image builds go through Buildx so CI can pass the GitHub Actions cache via
+# DOCKER_BUILD_ARGS (`--cache-from/--cache-to type=gha,scope=...`). The source
+# label records the Dockerfile hash and base image the image was built from:
+# when CI has already loaded the image (docker/build-push-action), repeated
+# `make` invocations reuse it instead of rebuilding the apt/rustup layers.
+DOCKERFILE_HASH ?= $(shell git hash-object Dockerfile 2>/dev/null || sha256sum Dockerfile 2>/dev/null | cut -d' ' -f1)
+IMAGE_SOURCE_LABEL ?= org.vmodv.source
+IMAGE_SOURCE_VALUE = $(DOCKERFILE_HASH)|$(BASE_IMAGE)
+image-is-current = $(DOCKER) image inspect -f '{{index .Config.Labels "$(IMAGE_SOURCE_LABEL)"}}' "$(1)" 2>/dev/null | grep -qxF '$(IMAGE_SOURCE_VALUE)'
 CARGO_VOLUME ?= modv-cargo
 HOST_UID ?= $(shell id -u)
 HOST_GID ?= $(shell id -g)
@@ -101,7 +114,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
+.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -238,15 +251,34 @@ docker-package: disk-guard
 		$(DOCKER_BUILD_ARGS) .
 
 docker-rust: disk-guard
-	$(DOCKER) build --target rust -t "$(RUST_IMAGE)" \
-		--build-arg "BASE_IMAGE=$(BASE_IMAGE)" .
+	@if $(call image-is-current,$(RUST_IMAGE)); then \
+		echo "docker-rust: $(RUST_IMAGE) already built from this Dockerfile and base image"; \
+	else \
+		$(DOCKER) buildx build --load --target rust -t "$(RUST_IMAGE)" \
+			--build-arg "BASE_IMAGE=$(BASE_IMAGE)" \
+			--label "$(IMAGE_SOURCE_LABEL)=$(IMAGE_SOURCE_VALUE)" \
+			$(DOCKER_BUILD_ARGS) . ; \
+	fi
 
 docker-cargo-volume: docker-rust
 	@case "$(CARGO_VOLUME)" in \
 		/*) mkdir -p "$(CARGO_VOLUME)" ;; \
 		*) $(DOCKER) volume inspect "$(CARGO_VOLUME)" >/dev/null 2>&1 || $(DOCKER) volume create "$(CARGO_VOLUME)" >/dev/null ;; \
 	esac
-	$(DOCKER) run --rm -v "$(CARGO_VOLUME)":/cargo "$(RUST_IMAGE)" chown -R "$(HOST_UID):$(HOST_GID)" /cargo
+	@# Recursive chown over a warm registry/target tree is slow; every make
+	@# target would otherwise redo it. The root directory ownership is enough
+	@# to know a previous invocation already fixed the volume up.
+	@$(DOCKER) run --rm -v "$(CARGO_VOLUME)":/cargo "$(RUST_IMAGE)" sh -c \
+		'[ "$$(stat -c %u:%g /cargo)" = "$(HOST_UID):$(HOST_GID)" ] || chown -R "$(HOST_UID):$(HOST_GID)" /cargo'
+
+docker-wasm: docker-cargo-volume
+	@if $(call image-is-current,$(WASM_IMAGE)); then \
+		echo "docker-wasm: $(WASM_IMAGE) already built from this Dockerfile and base image"; \
+	else \
+		$(DOCKER) buildx build --load --target wasm -t "$(WASM_IMAGE)" \
+			--label "$(IMAGE_SOURCE_LABEL)=$(IMAGE_SOURCE_VALUE)" \
+			$(DOCKER_BUILD_ARGS) . ; \
+	fi
 
 docker-reset:
 	-$(DOCKER) volume rm "$(CARGO_VOLUME)"
@@ -299,8 +331,7 @@ engine-lint: docker-cargo-volume
 module-docs: docker-cargo-volume
 	$(call run-cargo,run --quiet -p modv-app --bin gen-module-docs)
 
-preview-wasm: docker-cargo-volume
-	$(DOCKER) build --target wasm -t "$(WASM_IMAGE)" .
+preview-wasm: docker-wasm
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \
@@ -317,8 +348,7 @@ pages-data: module-docs preview-wasm
 
 # Browser shell (wasm32 + WebGPU). `web-build` writes web/pkg; `web-serve`
 # serves the static page locally for a browser smoke test.
-web-check: docker-cargo-volume
-	$(DOCKER) build --target wasm -t "$(WASM_IMAGE)" .
+web-check: docker-wasm
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \
@@ -332,8 +362,7 @@ web-check: docker-cargo-volume
 		cargo check --manifest-path /app/crates/Cargo.toml --lib \
 			--target wasm32-unknown-unknown -p modv-web
 
-web-build: docker-cargo-volume
-	$(DOCKER) build --target wasm -t "$(WASM_IMAGE)" .
+web-build: docker-wasm
 	$(DOCKER) run --rm \
 		--ulimit core=0 \
 		--user "$(HOST_UID):$(HOST_GID)" \

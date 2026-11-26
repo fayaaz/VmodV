@@ -763,9 +763,17 @@ fn release_workflow_builds_and_publishes_four_ubuntu_debs() {
         "the linux-debs job",
     );
     assert_contains(&linux, "BASE_IMAGE", "the linux-debs job");
-    assert_contains(&linux, "--build-arg", "the linux-debs job");
+    assert_contains(&linux, "make vmodv-deb", "the linux-debs job");
     assert_contains(&linux, "DEB_SUFFIX", "the linux-debs job");
     assert_contains(&needs_line(&linux), "version", "the linux-debs job's needs");
+    // The job no longer runs a bare `docker build`: `make vmodv-deb` builds the
+    // toolchain image through `docker-rust`, which is the cached Buildx path.
+    let makefile = read(&repo_root().join("Makefile"));
+    assert_contains(
+        &makefile,
+        "--build-arg \"BASE_IMAGE=$(BASE_IMAGE)\"",
+        "the Makefile docker-rust target",
+    );
 
     let publish = job_block(&text, "publish-debs");
     assert!(

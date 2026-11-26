@@ -84,6 +84,8 @@ jobs:
     needs: version
     if: ${{ needs.version.outputs.should_release == 'true' }}
     timeout-minutes: 120
+    env:
+      DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -119,6 +121,7 @@ jobs:
           tags: modv-rust:local
           load: true
           cache-from: type=gha,scope=rust-toolchain
+          cache-to: type=gha,mode=max,scope=rust-toolchain
 
       - name: Clippy and rustfmt
         run: make engine-lint
@@ -154,6 +157,8 @@ jobs:
     timeout-minutes: 90
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      # Per-architecture toolchain cache, shared with build-push-action above.
+      DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain-${{ matrix.arch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -191,6 +196,7 @@ jobs:
           tags: modv-rust:local
           load: true
           cache-from: type=gha,scope=rust-toolchain-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=rust-toolchain-${{ matrix.arch }}
 
       - name: Build VmodV AppImage
         run: make appimage-vmodv
@@ -449,18 +455,25 @@ jobs:
         include:
           - image: ubuntu:24.04
             suffix: -ubuntu24.04
+            cache_scope: ubuntu-24-04
             name: vmodv-deb-ubuntu24.04
           - image: ubuntu:26.04
             suffix: -ubuntu26.04
+            cache_scope: ubuntu-26-04
             name: vmodv-deb-ubuntu26.04
           - image: ubuntu:26.10
             suffix: -ubuntu26.10
+            cache_scope: ubuntu-26-10
             name: vmodv-deb-ubuntu26.10
           - image: ubuntu:devel
             suffix: -ubuntudevel
+            cache_scope: ubuntu-devel
             name: vmodv-deb-ubuntudevel
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      # Each Ubuntu base has its own layer stack, so scope its toolchain cache
+      # separately; `make vmodv-deb` builds the image through `docker-rust`.
+      DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain-${{ matrix.cache_scope }} --cache-to type=gha,mode=max,scope=rust-toolchain-${{ matrix.cache_scope }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -490,11 +503,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Rust toolchain image for this base
-        run: |
-          docker build --target rust -t modv-rust:local \
-            --build-arg "BASE_IMAGE=${{ matrix.image }}" .
-
+      # `make vmodv-deb` builds the toolchain image itself (docker-rust) with
+      # the GHA cache args from DOCKER_BUILD_ARGS above; no separate uncached
+      # `docker build` step is needed.
       - name: Build Ubuntu .deb
         run: make vmodv-deb BASE_IMAGE="${{ matrix.image }}"
         env:

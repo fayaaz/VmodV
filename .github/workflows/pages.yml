@@ -66,9 +66,12 @@ jobs:
           tags: modv-wasm:local
           load: true
           cache-from: type=gha,scope=wasm-toolchain
+          cache-to: type=gha,mode=max,scope=wasm-toolchain
 
       - name: Build the browser shell
         run: make web-build
+        env:
+          DOCKER_BUILD_ARGS: --cache-from type=gha,scope=wasm-toolchain
 
       - name: Checkout the gh-pages branch
         uses: actions/checkout@v4

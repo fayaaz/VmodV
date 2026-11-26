@@ -58,6 +58,10 @@ jobs:
     name: Rust lint
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Feed the GHA cache into make's Buildx image build (`docker-rust`) so
+      # the image built above is reused instead of rebuilt from apt.
+      DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -102,6 +106,8 @@ jobs:
     name: Rust tests
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -137,6 +143,7 @@ jobs:
           tags: modv-rust:local
           load: true
           cache-from: type=gha,scope=rust-toolchain
+          cache-to: type=gha,mode=max,scope=rust-toolchain
 
       # modv-app's GPU tests share one lavapipe device and race when run in
       # parallel (`cargo test -p modv-app -- --test-threads=1`). The rest of
@@ -165,7 +172,7 @@ jobs:
       # layouts and the REL-03 CI coverage guard itself. These do not launch
       # the app; the real-binary targets run via `make test-e2e-vmodv` below.
       - name: modv-app static and packaging guard tests (serial)
-        run: make engine-test ARGS="-p modv-app --test appimage_arm64 --test branding --test ci_test_coverage --test deb_package --test macos_portable_layout --test media_probe --test module_docs --test ndi_readback --test notices --test release_resilience --test release_resume --test removed_content --test undo_history -- --test-threads=1"
+        run: make engine-test ARGS="-p modv-app --test appimage_arm64 --test branding --test ci_docker_cache --test ci_test_coverage --test deb_package --test macos_portable_layout --test media_probe --test module_docs --test ndi_readback --test notices --test release_resilience --test release_resume --test removed_content --test undo_history -- --test-threads=1"
 
       # Launches the real `modv` binary under Xvfb; lavapipe provides the
       # Vulkan adapter. One worker only because a process owns a virtual
@@ -189,6 +196,9 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      # Per-architecture toolchain cache, shared with build-push-action above.
+      DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain-${{ matrix.arch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
