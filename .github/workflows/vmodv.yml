@@ -58,6 +58,10 @@ jobs:
     name: Rust lint
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # release.yml's `validate` job lints main and gates publication on it.
+    # Stand down for that ref (including manual runs) so the same commit is
+    # never linted twice; PRs and other branches still use this job.
+    if: ${{ github.ref != 'refs/heads/main' }}
     env:
       # Feed the GHA cache into make's Buildx image build (`docker-rust`) so
       # the image built above is reused instead of rebuilt from apt.
@@ -106,6 +110,10 @@ jobs:
     name: Rust tests
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # release.yml's `validate` job runs the same full suite on main and gates
+    # publication on it. Skip that ref here (including manual runs) so tests
+    # run once per commit; PRs and other branches still use this job.
+    if: ${{ github.ref != 'refs/heads/main' }}
     env:
       DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain
     steps:

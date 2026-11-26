@@ -73,16 +73,17 @@ jobs:
           echo "should_release=true" >> "$GITHUB_OUTPUT"
           echo "Next release: v$VERSION (previous tag: ${PREV:-none})"
 
-  # Lints and tests the tagged commit before the draft release is made
-  # visible. This job gates `publish` only: the draft is created first, so a
-  # failure here leaves an unpublished draft instead of exposing a stable
-  # release. No build job is involved, so publication never waits for an
-  # artifact.
+  # The single owner of lint and the full test suite on main pushes:
+  # vmodv.yml's lint/test jobs stand down for that ref so the same commit is
+  # checked exactly once. This job gates `publish` only — the draft is created
+  # first, so a failure here leaves an unpublished draft instead of exposing a
+  # stable release. It runs on every main push, including those that do not cut
+  # a release, so those commits are still validated once. No build job is
+  # involved, so publication never waits for an artifact.
   validate:
     name: Lint and test before publishing
     runs-on: ubuntu-latest
     needs: version
-    if: ${{ needs.version.outputs.should_release == 'true' }}
     timeout-minutes: 120
     env:
       DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain
@@ -133,6 +134,21 @@ jobs:
 
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
+
+      # The remaining integration/e2e coverage vmodv.yml runs on PRs. Kept in
+      # the same job so main pushes run the full suite once and `publish` waits
+      # for all of it, not just the unit tests.
+      - name: VmodV AppImage bundle check tests (serial)
+        run: make engine-test ARGS="-p modv-app --test appimage_bundle -- --test-threads=1"
+
+      - name: Portable Windows ZIP layout test (Linux dry-run)
+        run: make engine-test ARGS="-p modv-app --test windows_portable_layout -- --test-threads=1"
+
+      - name: modv-app static and packaging guard tests (serial)
+        run: make engine-test ARGS="-p modv-app --test appimage_arm64 --test branding --test ci_docker_cache --test ci_test_coverage --test deb_package --test macos_portable_layout --test media_probe --test module_docs --test ndi_readback --test notices --test pages_workflow --test release_resilience --test release_resume --test removed_content --test undo_history -- --test-threads=1"
+
+      - name: VmodV e2e harness and parity tests (serial)
+        run: make test-e2e-vmodv
 
   # Builds the AppImages separately from the `release` job so a Docker/toolchain
   # failure cannot stop the release from being tagged and published. Each

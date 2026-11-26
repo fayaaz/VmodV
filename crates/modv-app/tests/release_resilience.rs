@@ -400,7 +400,9 @@ fn main_pushes_do_not_rebuild_release_artifacts_in_ci_workflows() {
     // release.yml triggers on every push to main and owns all release builds.
     // vmodv.yml and macos.yml also trigger on main, so without a guard the very
     // same AppImage / Windows ZIP / macOS bundle is compiled twice for one
-    // commit. Lint and tests still run on main; only the duplicate builds go.
+    // commit. Lint and tests are deduplicated separately: vmodv.yml's lint and
+    // test jobs stand down for main pushes while release.yml's `validate` runs
+    // the full suite once and gates publication.
     let ci = fs::read_to_string(repo_root().join(".github/workflows/vmodv.yml"))
         .expect("read vmodv.yml");
     let macos = fs::read_to_string(repo_root().join(".github/workflows/macos.yml"))
@@ -421,6 +423,64 @@ fn main_pushes_do_not_rebuild_release_artifacts_in_ci_workflows() {
             "{name}'s `{job}` job still builds on main pushes; release.yml builds \
              the same artifact for that commit — guard the CI job with an `if:` \
              that skips main pushes"
+        );
+    }
+}
+
+#[test]
+fn main_push_lints_and_tests_once_before_publishing() {
+    // Both workflows trigger on pushes to main. release.yml's `validate` gates
+    // `publish`, so it must be the single place that lints and runs the full
+    // suite on that ref; vmodv.yml stands down for main pushes (it still owns
+    // the same coverage on PRs and manual runs).
+    let ci = fs::read_to_string(repo_root().join(".github/workflows/vmodv.yml"))
+        .expect("read vmodv.yml");
+    let release = release_workflow();
+    let main_ref_guard = "github.ref != 'refs/heads/main'";
+
+    for job in ["lint", "test"] {
+        let block = job_block(&ci, job).unwrap_or_default();
+        let condition = block
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix("if:"))
+            .map(str::trim);
+        assert!(
+            condition.is_some_and(|condition| {
+                condition.contains(main_ref_guard) && !condition.contains("github.event_name")
+            }),
+            "vmodv.yml's `{job}` job still runs on main, where release.yml validates \
+             the same commit; guard it with a ref-based `if:` so manual runs skip \
+             that ref too (got if: {condition:?})"
+        );
+    }
+
+    let validate = job_block(&release, "validate").expect("release.yml has no `validate` job");
+    let condition = validate
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("if:"))
+        .map(str::trim);
+    assert!(
+        condition.is_none_or(|condition| !condition.contains("should_release")),
+        "release.yml's `validate` job is gated on `should_release`, so a main push \
+         with no qualifying commits runs no lint or tests at all; it must gate on \
+         the push alone (got if: {condition:?})"
+    );
+    assert!(
+        validate.contains("make engine-lint"),
+        "release.yml's `validate` must run `make engine-lint`"
+    );
+    for command in [
+        "make engine-test ARGS=\"--workspace --exclude modv-app",
+        "make engine-test ARGS=\"-p modv-app --lib",
+        "make engine-test ARGS=\"-p modv-app --test appimage_bundle",
+        "make test-e2e-vmodv",
+    ] {
+        assert!(
+            validate.contains(command),
+            "release.yml's `validate` must run `{command}` so main pushes keep \
+             the same coverage CI gives PRs, exactly once"
         );
     }
 }
