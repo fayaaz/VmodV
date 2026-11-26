@@ -276,6 +276,9 @@ impl eframe::App for WebApp {
             // Nothing is captured or synthesized on open.
             let audio = crate::mic::frame(dt as f32).unwrap_or_default();
             self.state.set_audio(audio.clone());
+            // Audio/draw/tween links write into the props before the
+            // compositor reads the state this frame.
+            self.state.evaluate_links();
 
             let target = self.render_target_size(&ctx);
             if target != [self.compositor.size().0, self.compositor.size().1] {

@@ -36,7 +36,6 @@ pub mod fixtures;
 pub mod headless;
 #[cfg(not(feature = "web"))]
 pub mod ids;
-#[cfg(not(feature = "web"))]
 pub mod input_links;
 #[cfg(not(feature = "web"))]
 pub mod logging;

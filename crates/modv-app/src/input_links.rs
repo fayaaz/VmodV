@@ -105,6 +105,7 @@ pub enum LinkTarget {
 /// rebuild and lets the store re-target such an action onto the control the
 /// Scene just re-created instead of dropping the link.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "web", allow(dead_code))]
 pub(crate) enum InputIdentity {
     /// A Module prop (`data = { moduleId, prop, path? }`).
     ModuleProp {
@@ -140,6 +141,7 @@ pub(crate) enum InputIdentity {
 /// row transition may move the same Module to a different row, and the
 /// module/prop pair is still the control the stale action meant. Duplicate
 /// module names are rejected by [`find_input_by_identity`] instead.
+#[cfg_attr(feature = "web", allow(dead_code))]
 pub(crate) fn input_identity(state: &EngineState, input_id: &str) -> Option<InputIdentity> {
     let input = state.inputs.get(input_id)?;
     let data = input.data.as_object()?;
@@ -191,6 +193,7 @@ pub(crate) fn input_identity(state: &EngineState, input_id: &str) -> Option<Inpu
 /// A Scene may contain two Modules with the same name; the match is then
 /// ambiguous and no retarget happens (the link is dropped, so a stale action
 /// can never bind the wrong control).
+#[cfg_attr(feature = "web", allow(dead_code))]
 pub(crate) fn find_input_by_identity(
     state: &EngineState,
     identity: &InputIdentity,

@@ -131,8 +131,9 @@ history is in git, and the pre-cleanup Electron tree is on `legacy-electron`.
   The bundled ISF corpus is embedded in the wasm binary and registered at
   startup. Still missing: MilkDrop, user ISF folders, filesystem/preset/Scene
   persistence, performance mode, OSC/NDI/MIDI/plugins and native output
-  windows. Point10 compute scenes need WebGPU; the WebGL2 fallback logs and
-  skips them.
+  windows. Input Links support audio features, Draw and Tween sources; link
+  expressions and MIDI/OSC sources are still missing. Point10 compute scenes
+  need WebGPU; the WebGL2 fallback logs and skips them.
 - **Media (P6):** native file/screen pickers, media-manager file dialogs,
   project profiles and the full media-tree watch are missing. User ISF hot
   reload, the camera panel and preset load/save already work.

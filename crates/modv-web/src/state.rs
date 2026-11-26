@@ -7,21 +7,25 @@
 //!
 //! The state is pure (no wgpu, no DOM), so it is unit-tested on the host.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::{Arc, OnceLock};
 
 use include_dir::{Dir, include_dir};
 use serde_json::{Map, Value, json};
 
+use modv_app::input_links::{BeatsState, LinkTarget, LinkWrite, evaluate_input_links};
 use modv_app::module_registry::ModuleRegistry;
 use modv_engine::engine_state::{
     EngineState, GROUP_DISABLED, GROUP_ENABLED, Group, InheritFrom, ModuleInstance,
 };
+use modv_engine::inputs::{Input, InputLink};
 use modv_engine::props::coerce_prop_value;
+use modv_engine::tweens::{TweenDescriptor, TweenSet};
 use modv_renderers::two_d::AudioFrame;
 use modv_ui::model::{
-    AudioView, EngineHealth, EngineSnapshot, GroupView, InheritTarget, ModuleMetaView, ModuleView,
-    PerformanceView, PropEnumMember, PropView,
+    AudioView, EngineHealth, EngineSnapshot, GroupView, InheritTarget, InputLinkView,
+    ModuleMetaView, ModuleView, PerformanceView, PropEnumMember, PropView, TweenView,
 };
 use modv_ui::state::UiAction;
 
@@ -37,6 +41,9 @@ pub struct WebState {
     adapter: String,
     backend: String,
     bpm: f64,
+    tweens: TweenSet,
+    smoothing: HashMap<String, f64>,
+    beats: BeatsState,
 }
 
 impl Default for WebState {
@@ -54,7 +61,7 @@ impl WebState {
         state
             .groups
             .push(new_group(&group_id, "Group 1", GROUP_ENABLED));
-        Self {
+        let mut this = Self {
             registry: bundled_registry(),
             state,
             group_id,
@@ -65,7 +72,12 @@ impl WebState {
             adapter: "Browser adapter".to_string(),
             backend: "webgpu".to_string(),
             bpm: 0.0,
-        }
+            tweens: TweenSet::new(),
+            smoothing: HashMap::new(),
+            beats: BeatsState::default(),
+        };
+        this.install_group_inputs("web-group-1");
+        this
     }
 
     /// The authoritative engine state handed to the compositor.
@@ -98,6 +110,186 @@ impl WebState {
         self.audio = audio;
     }
 
+    /// Evaluate every audio/draw/tween Input Link against the latest frame.
+    ///
+    /// This mirrors the native Store's per-frame link pass; the browser state
+    /// is the authoritative store, so writes land directly on the module
+    /// props, module meta and group controls the compositor reads next.
+    pub fn evaluate_links(&mut self) {
+        self.beats.kick = self.audio.beat >= 0.5;
+        let mut writes = Vec::new();
+        evaluate_input_links(
+            &self.state,
+            &self.audio,
+            &self.beats,
+            &mut self.tweens,
+            &mut self.smoothing,
+            &mut writes,
+        );
+        for write in writes {
+            self.apply_link_write(&write);
+        }
+    }
+
+    fn apply_link_write(&mut self, write: &LinkWrite) {
+        match &write.target {
+            LinkTarget::Module {
+                module_id,
+                prop,
+                path,
+            } => {
+                if path.is_some() {
+                    return;
+                }
+                let Some(module) = self.state.modules.get(module_id) else {
+                    return;
+                };
+                let schema = self.registry.prop_schema(&module.module_name, prop);
+                let value = schema
+                    .as_ref()
+                    .map(|schema| coerce_prop_value(schema, &json!(write.value)))
+                    .unwrap_or_else(|| json!(write.value));
+                let Some(module) = self.state.modules.get_mut(module_id) else {
+                    return;
+                };
+                if let Some(props) = module.props.as_object_mut() {
+                    props.insert(prop.clone(), value);
+                }
+            }
+            LinkTarget::ModuleMeta {
+                module_id,
+                meta_key,
+            } => {
+                let value = match meta_key.as_str() {
+                    "enabled" => json!(write.value != 0.0),
+                    "alpha" => json!(write.value),
+                    "compositeOperation" => return,
+                    _ => return,
+                };
+                let Some(module) = self.state.modules.get_mut(module_id) else {
+                    return;
+                };
+                if let Some(meta) = module.meta.as_object_mut() {
+                    meta.insert(meta_key.clone(), value);
+                }
+            }
+            LinkTarget::Group { group_id, key } => {
+                let Some(group) = self.state.find_group_mut(group_id) else {
+                    return;
+                };
+                match key.as_str() {
+                    "alpha" => group.alpha = write.value,
+                    "enabled" => group.enabled = write.value as i64,
+                    "hidden" => group.hidden = write.value != 0.0,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn upsert_input_link(&mut self, payload: &Value) -> bool {
+        let Some(input_id) = payload.get("inputId").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(mut object) = payload.as_object().cloned() else {
+            return false;
+        };
+        object.insert("id".to_string(), json!(input_id));
+        let Ok(link) = serde_json::from_value::<InputLink>(Value::Object(object)) else {
+            return false;
+        };
+        self.state.input_links.insert(input_id.to_string(), link);
+        true
+    }
+
+    fn update_input_link(&mut self, payload: &Value) -> bool {
+        let Some(input_id) = payload.get("inputId").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(key) = payload.get("key").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(value) = payload.get("value") else {
+            return false;
+        };
+        let Some(link) = self.state.input_links.get_mut(input_id) else {
+            return false;
+        };
+        match key {
+            "args" => link.args = serde_json::from_value(value.clone()).ok(),
+            "location" => link.location = value.as_str().map(str::to_string),
+            "source" => link.source = value.as_str().map(str::to_string),
+            "min" => link.min = value.as_f64(),
+            "max" => link.max = value.as_f64(),
+            "match" => link.matcher = Some(value.clone()),
+            "type" => {
+                let Ok(kind) = serde_json::from_value(value.clone()) else {
+                    return false;
+                };
+                link.kind = kind;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn create_tween(&mut self, payload: &Value) -> bool {
+        let payload = payload.get("tween").unwrap_or(payload);
+        let id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| self.next_input_id());
+        let data = payload
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_else(|| vec![json!([0.0]), json!([1.0])]);
+        let mut descriptor = TweenDescriptor::new(&id, value_to_rows(&data));
+        if let Some(duration) = payload.get("duration").and_then(Value::as_f64) {
+            descriptor.duration = duration;
+        }
+        if let Some(direction) = payload.get("direction").and_then(Value::as_str) {
+            descriptor.direction = direction.to_string();
+        }
+        if let Some(easing) = payload.get("easing").and_then(Value::as_str) {
+            descriptor.easing = easing.to_string();
+        }
+        if let Some(looping) = payload.get("loop").and_then(Value::as_bool) {
+            descriptor.looping = looping;
+        }
+        if let Some(loop_mode) = payload.get("loopMode").and_then(Value::as_str) {
+            descriptor.loop_mode = Some(loop_mode.to_string());
+        }
+        if let Some(use_bpm) = payload.get("useBpm").and_then(Value::as_bool) {
+            descriptor.use_bpm = use_bpm;
+        }
+        if let Some(division) = payload.get("bpmDivision").and_then(Value::as_f64) {
+            descriptor.bpm_division = division;
+        }
+        if let Some(total) = payload.get("durationAsTotalTime").and_then(Value::as_bool) {
+            descriptor.duration_as_total_time = total;
+        }
+        if let Some(steps) = payload.get("steps").and_then(Value::as_f64) {
+            descriptor.steps = steps;
+        }
+        if let Some(times) = payload.get("keyframeTimes") {
+            descriptor.keyframe_times = serde_json::from_value(times.clone()).ok();
+        }
+        if let Some(is_gallery) = payload.get("isGallery").and_then(Value::as_bool) {
+            descriptor.is_gallery = Some(is_gallery);
+        }
+        let value = descriptor.to_json();
+        push_tween_json(&mut self.state.tweens, value);
+        self.tweens.insert_descriptor(descriptor, 60.0, self.bpm);
+        true
+    }
+
+    fn remove_tween(&mut self, id: &str) -> bool {
+        self.tweens.remove(id);
+        remove_tween_json(&mut self.state.tweens, id)
+    }
+
     /// Count a presented frame (the status bar's frame counter).
     pub fn note_frame(&mut self) {
         self.frames = self.frames.saturating_add(1);
@@ -124,6 +316,108 @@ impl WebState {
     pub fn set_bpm(&mut self, bpm: f64) {
         if bpm.is_finite() && bpm > 0.0 {
             self.bpm = bpm;
+        }
+    }
+
+    fn next_input_id(&mut self) -> String {
+        self.next_id = self.next_id.saturating_add(1);
+        format!("web-input-{}", self.next_id)
+    }
+
+    /// Give a Group the control inputs its Inspector link rows read.
+    fn install_group_inputs(&mut self, group_id: &str) {
+        let mut alpha = None;
+        let mut enabled = None;
+        for (key, slot) in [("alpha", &mut alpha), ("enabled", &mut enabled)] {
+            let input_id = self.next_input_id();
+            self.state.inputs.insert(
+                input_id.clone(),
+                Input {
+                    id: input_id.clone(),
+                    type_: "commit".to_string(),
+                    data: json!({ "groupId": group_id, "key": key }),
+                    get_location: None,
+                    location: Some("groups/UPDATE_GROUP_BY_KEY".to_string()),
+                },
+            );
+            *slot = Some(input_id);
+        }
+        if let Some(group) = self.state.find_group_mut(group_id) {
+            group.alpha_input_id = alpha;
+            group.enabled_input_id = enabled;
+        }
+    }
+
+    /// Create the prop and meta Input records behind a Module's link rows.
+    fn install_module_inputs(&mut self, module_id: &str, module_name: &str) {
+        let Some(module) = self.state.modules.get(module_id) else {
+            return;
+        };
+        let Some(props) = module.props.as_object() else {
+            return;
+        };
+        let prop_values: Vec<(String, Value)> = props
+            .iter()
+            .map(|(prop, value)| (prop.clone(), value.clone()))
+            .collect();
+        let mut descriptors = Map::new();
+        for (prop, value) in prop_values {
+            let input_id = self.next_input_id();
+            let schema = self.registry.prop_schema(module_name, &prop);
+            let mut descriptor = Map::new();
+            descriptor.insert("id".to_string(), json!(input_id));
+            if let Some(schema) = &schema {
+                descriptor.insert("type".to_string(), json!(schema.type_));
+                if let Some(min) = schema.min {
+                    descriptor.insert("min".to_string(), json!(min));
+                }
+                if let Some(max) = schema.max {
+                    descriptor.insert("max".to_string(), json!(max));
+                }
+            }
+            descriptor.insert("default".to_string(), value);
+            descriptors.insert(prop.clone(), Value::Object(descriptor));
+            self.state.inputs.insert(
+                input_id.clone(),
+                Input {
+                    id: input_id,
+                    type_: "action".to_string(),
+                    data: json!({ "moduleId": module_id, "prop": prop }),
+                    get_location: Some(format!(
+                        "modules.active[\"{module_id}\"].props[\"{prop}\"]"
+                    )),
+                    location: Some("modules/updateProp".to_string()),
+                },
+            );
+        }
+
+        let mut meta_ids = Vec::new();
+        for (key, field) in [
+            ("alpha", "alphaInputId"),
+            ("enabled", "enabledInputId"),
+            ("compositeOperation", "compositeOperationInputId"),
+        ] {
+            let input_id = self.next_input_id();
+            self.state.inputs.insert(
+                input_id.clone(),
+                Input {
+                    id: input_id.clone(),
+                    type_: "action".to_string(),
+                    data: json!({ "moduleId": module_id, "metaKey": key }),
+                    get_location: None,
+                    location: Some("modules/updateMeta".to_string()),
+                },
+            );
+            meta_ids.push((field, input_id));
+        }
+
+        if let Some(module) = self.state.modules.get_mut(module_id) {
+            module.dollar_props = Value::Object(descriptors);
+            if let Some(meta) = module.meta.as_object_mut() {
+                for (field, input_id) in meta_ids {
+                    meta.insert(field.to_string(), json!(input_id));
+                }
+            }
         }
     }
 
@@ -164,6 +458,7 @@ impl WebState {
             extra: Map::new(),
         };
         self.state.modules.insert(id.clone(), module);
+        self.install_module_inputs(&id, module_name);
 
         let target = if self.state.find_group(group_id).is_some() {
             group_id.to_string()
@@ -177,11 +472,30 @@ impl WebState {
         Some(id)
     }
 
-    /// Remove an active module from every Group.
+    /// Remove an active module from every Group, with its links and tweens.
     pub fn remove_module(&mut self, module_id: &str) -> bool {
         let removed = self.state.modules.shift_remove(module_id).is_some();
         if !removed {
             return false;
+        }
+        let input_ids: Vec<String> = self
+            .state
+            .inputs
+            .iter()
+            .filter(|(_, input)| {
+                input
+                    .data
+                    .get("moduleId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id == module_id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for input_id in input_ids {
+            self.state.inputs.shift_remove(&input_id);
+            self.state.input_links.shift_remove(&input_id);
+            self.tweens.remove(&input_id);
+            remove_tween_json(&mut self.state.tweens, &input_id);
         }
         for group in &mut self.state.groups {
             group.modules.retain(|id| id != module_id);
@@ -303,6 +617,7 @@ impl WebState {
                 self.state
                     .groups
                     .push(new_group(&id, name, enabled.clamp(0, 2)));
+                self.install_group_inputs(&id);
                 true
             }
             "groups/removeGroup" => {
@@ -366,6 +681,23 @@ impl WebState {
             "groups/duplicateModule" | "modules/duplicateModule" => {
                 self.duplicate_module(&action.payload)
             }
+            "inputs/createInputLink" => self.upsert_input_link(&action.payload),
+            "inputs/updateInputLink" => self.update_input_link(&action.payload),
+            "inputs/removeInputLink" => action
+                .payload
+                .get("inputId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| self.state.input_links.shift_remove(id).is_some()),
+            "meyda/removeSmoothingId" => action
+                .payload
+                .as_str()
+                .is_some_and(|id| self.smoothing.remove(id).is_some()),
+            "tweens/createTween" | "tweens/ADD_TWEEN" => self.create_tween(&action.payload),
+            "tweens/REMOVE_TWEEN" => action
+                .payload
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| self.remove_tween(id)),
             "groups/orderByIds" => {
                 let Some(ids) = action.payload.get("ids").and_then(Value::as_array) else {
                     return false;
@@ -488,7 +820,15 @@ impl WebState {
         if let Some(meta) = copy.meta.as_object_mut() {
             meta.insert("name".to_string(), json!(format!("{name} (copy)")));
         }
+        copy.dollar_props = json!({});
+        if let Some(meta) = copy.meta.as_object_mut() {
+            meta.remove("alphaInputId");
+            meta.remove("enabledInputId");
+            meta.remove("compositeOperationInputId");
+        }
+        let module_name = copy.module_name.clone();
         self.state.modules.insert(id.clone(), copy);
+        self.install_module_inputs(&id, &module_name);
         if let Some(group) = self.state.find_group_mut(&group_id) {
             let index = group
                 .modules
@@ -504,6 +844,31 @@ impl WebState {
     /// Build the read model the existing `modv-ui` shell draws.
     pub fn snapshot(&self, resolution: [u32; 2], fps: f32, frame_ms: f32) -> EngineSnapshot {
         let groups = self.state.groups.iter().map(group_view).collect();
+        let tween_by_id: HashMap<String, TweenView> = self
+            .tweens
+            .iter()
+            .map(|(id, runtime)| {
+                let descriptor = runtime.descriptor();
+                (
+                    id.to_string(),
+                    TweenView {
+                        id: id.to_string(),
+                        data: descriptor.data.clone(),
+                        keyframe_times: descriptor.effective_keyframe_times().map(<[f64]>::to_vec),
+                        duration: descriptor.duration,
+                        direction: descriptor.direction.clone(),
+                        easing: descriptor.easing.clone(),
+                        looping: descriptor.looping,
+                        use_bpm: descriptor.use_bpm,
+                        bpm_division: descriptor.bpm_division,
+                        duration_as_total_time: descriptor.duration_as_total_time,
+                        steps: descriptor.steps,
+                        frames: runtime.frames().len() as u64,
+                        cycle_seconds: descriptor.effective_duration(self.bpm) / 1000.0,
+                    },
+                )
+            })
+            .collect();
         let modules = self
             .state
             .modules
@@ -516,7 +881,30 @@ impl WebState {
                     .find(|group| group.modules.iter().any(|id| id == &module.id))
                     .map(|group| group.id.clone())
                     .unwrap_or_default();
-                module_view(module, group_id, &self.registry)
+                module_view(module, group_id, &self.registry, &tween_by_id)
+            })
+            .collect();
+        let input_links = self
+            .state
+            .input_links
+            .iter()
+            .map(|(input_id, link)| {
+                (
+                    input_id.clone(),
+                    InputLinkView {
+                        input_id: input_id.clone(),
+                        kind: format!("{:?}", link.kind).to_ascii_lowercase(),
+                        location: link.location.clone(),
+                        args: link
+                            .args
+                            .as_ref()
+                            .map(|args| serde_json::to_value(args).unwrap_or(Value::Null)),
+                        source: link.source.clone(),
+                        min: link.min,
+                        max: link.max,
+                        matcher: link.matcher.clone(),
+                    },
+                )
             })
             .collect();
         let registered = registered_modules(&self.registry);
@@ -553,6 +941,8 @@ impl WebState {
             fps,
             frame_ms,
             health,
+            input_links,
+            tweens: tween_by_id,
             ..EngineSnapshot::default()
         }
     }
@@ -641,7 +1031,12 @@ fn group_view(group: &Group) -> GroupView {
     }
 }
 
-fn module_view(module: &ModuleInstance, group_id: String, registry: &ModuleRegistry) -> ModuleView {
+fn module_view(
+    module: &ModuleInstance,
+    group_id: String,
+    registry: &ModuleRegistry,
+    tween_by_id: &HashMap<String, TweenView>,
+) -> ModuleView {
     let meta = module.meta.as_object();
     let module_type = registry
         .meta_fields(&module.module_name)
@@ -671,6 +1066,13 @@ fn module_view(module: &ModuleInstance, group_id: String, registry: &ModuleRegis
                         .as_ref()
                         .map(|schema| schema.type_.clone())
                         .unwrap_or_else(|| "text".to_string());
+                    let input_id = module
+                        .dollar_props
+                        .as_object()
+                        .and_then(|props| props.get(name))
+                        .and_then(|entry| entry.get("id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
                     PropView {
                         name: name.clone(),
                         step: Some(if prop_type == "int" { 1.0 } else { 0.001 }),
@@ -679,9 +1081,12 @@ fn module_view(module: &ModuleInstance, group_id: String, registry: &ModuleRegis
                         min: schema.as_ref().and_then(|schema| schema.min),
                         max: schema.as_ref().and_then(|schema| schema.max),
                         default: schema.as_ref().and_then(|schema| schema.default.clone()),
-                        input_id: None,
+                        input_id: input_id.clone(),
                         components: Vec::new(),
-                        tween: None,
+                        tween: input_id
+                            .as_ref()
+                            .and_then(|id| tween_by_id.get(id))
+                            .cloned(),
                         enum_members: schema
                             .as_ref()
                             .and_then(|schema| schema.enum_members.as_ref())
@@ -749,6 +1154,64 @@ fn registered_modules(registry: &ModuleRegistry) -> Vec<ModuleMetaView> {
             })
         })
         .collect()
+}
+
+fn value_to_rows(data: &[Value]) -> Vec<Vec<f64>> {
+    data.iter()
+        .map(|row| {
+            row.as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_f64)
+                        .collect::<Vec<f64>>()
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+fn push_tween_json(tweens: &mut Value, tween: Value) {
+    let id = tween.get("id").and_then(Value::as_str).map(str::to_string);
+    match tweens {
+        Value::Array(entries) => {
+            if let Some(id) = &id
+                && let Some(existing) = entries
+                    .iter_mut()
+                    .find(|entry| entry.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            {
+                *existing = tween;
+                return;
+            }
+            entries.push(tween);
+        }
+        Value::Object(map) => {
+            if let Some(entries) = map.get_mut("tweens") {
+                push_tween_json(entries, tween);
+            } else if let Some(id) = id {
+                map.insert(id, tween);
+            }
+        }
+        _ => *tweens = Value::Array(vec![tween]),
+    }
+}
+
+fn remove_tween_json(tweens: &mut Value, id: &str) -> bool {
+    match tweens {
+        Value::Array(entries) => {
+            let before = entries.len();
+            entries.retain(|entry| entry.get("id").and_then(Value::as_str) != Some(id));
+            entries.len() != before
+        }
+        Value::Object(map) => {
+            if let Some(entries) = map.get_mut("tweens") {
+                remove_tween_json(entries, id)
+            } else {
+                map.shift_remove(id).is_some()
+            }
+        }
+        _ => false,
+    }
 }
 
 fn js_truthy(value: &Value) -> bool {
@@ -836,6 +1299,129 @@ mod tests {
                 .any(|module| module.name == "Bands"),
             "the Gallery must see the built-in registry"
         );
+    }
+
+    fn prop_input_id(state: &WebState, module_id: &str, prop: &str) -> String {
+        state.state().modules[module_id]
+            .dollar_props
+            .get(prop)
+            .and_then(|descriptor| descriptor.get("id"))
+            .and_then(Value::as_str)
+            .expect("the module prop has an input id")
+            .to_string()
+    }
+
+    #[test]
+    fn an_audio_link_writes_the_linked_prop() {
+        let mut state = WebState::new();
+        let module = add_bands(&mut state);
+        let input = prop_input_id(&state, &module, "u_ringWidth");
+
+        assert!(state.apply_action(&UiAction::new(
+            "inputs/createInputLink",
+            json!({
+                "inputId": input,
+                "type": "getter",
+                "source": "meyda",
+                "location": "meyda/getFeature",
+                "args": ["bass"],
+                "min": 0.0,
+                "max": 1.0,
+            })
+        )));
+        state.set_audio(AudioFrame {
+            bass: 1.0,
+            ..AudioFrame::default()
+        });
+        state.evaluate_links();
+
+        assert_ne!(
+            state.state().modules[&module].props["u_ringWidth"],
+            json!(0.05)
+        );
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert!(snapshot.input_links.contains_key(&input));
+    }
+
+    #[test]
+    fn a_tween_link_advances_and_writes_each_frame() {
+        let mut state = WebState::new();
+        let module = add_bands(&mut state);
+        let input = prop_input_id(&state, &module, "u_ringWidth");
+
+        assert!(state.apply_action(&UiAction::new(
+            "tweens/createTween",
+            json!({
+                "id": input,
+                "data": [[0.0], [1.0]],
+                "duration": 1000.0,
+                "direction": "normal",
+                "easing": "linear",
+                "loop": false,
+                "useBpm": false,
+                "durationAsTotalTime": true,
+            })
+        )));
+        assert!(state.apply_action(&UiAction::new(
+            "inputs/createInputLink",
+            json!({
+                "inputId": input,
+                "type": "state",
+                "source": "tween",
+                "location": format!("tweens.tweens['{input}'].value[0]"),
+                "min": 0.0,
+                "max": 1.0,
+            })
+        )));
+
+        state.evaluate_links();
+        let first = state.state().modules[&module].props["u_ringWidth"]
+            .as_f64()
+            .expect("numeric prop");
+        state.evaluate_links();
+        let second = state.state().modules[&module].props["u_ringWidth"]
+            .as_f64()
+            .expect("numeric prop");
+        assert!(second > first, "first={first} second={second}");
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert!(snapshot.tweens.contains_key(&input));
+    }
+
+    #[test]
+    fn a_draw_link_reads_the_same_tween_descriptor() {
+        let mut state = WebState::new();
+        let module = add_bands(&mut state);
+        let input = prop_input_id(&state, &module, "u_ringWidth");
+
+        assert!(state.apply_action(&UiAction::new(
+            "tweens/createTween",
+            json!({
+                "id": input,
+                "data": [[0.0], [0.5], [1.0]],
+                "keyframeTimes": [0.0, 0.5, 1.0],
+                "duration": 1000.0,
+                "direction": "normal",
+                "easing": "linear",
+                "loop": false,
+                "useBpm": false,
+                "durationAsTotalTime": true,
+            })
+        )));
+        assert!(state.apply_action(&UiAction::new(
+            "inputs/createInputLink",
+            json!({
+                "inputId": input,
+                "type": "state",
+                "source": "draw",
+                "location": format!("tweens.tweens['{input}'].value[0]"),
+                "min": 0.0,
+                "max": 1.0,
+            })
+        )));
+        state.evaluate_links();
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert_eq!(snapshot.input_links[&input].source.as_deref(), Some("draw"));
+        assert!(snapshot.tweens[&input].keyframe_times.is_some());
     }
 
     #[test]
