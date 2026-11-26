@@ -7,7 +7,7 @@
  * The returned promise resolves once the AudioContext is running. A denied
  * permission rejects with the browser's error; the caller keeps silence.
  */
-export function enable_microphone(device_id: string | null | undefined, gain: number): Promise<any>;
+export function enable_microphone(device_id?: string | null): Promise<any>;
 
 /**
  * Resume the microphone `AudioContext` after the page regains focus.
@@ -17,11 +17,6 @@ export function enable_microphone(device_id: string | null | undefined, gain: nu
  * visibility/focus keeps the engine running across window switches.
  */
 export function resume_microphone(): Promise<any>;
-
-/**
- * Update the analysis-only input boost while the microphone is live.
- */
-export function set_microphone_gain(gain: number): void;
 
 /**
  * Start the browser shell on `canvas_id`.
@@ -43,19 +38,18 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly enable_microphone: (a: number, b: number, c: number) => any;
+    readonly enable_microphone: (a: number, b: number) => any;
     readonly resume_microphone: () => any;
-    readonly set_microphone_gain: (a: number) => void;
     readonly start: (a: number, b: number) => any;
     readonly start_output: (a: number, b: number) => any;
     readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Function_fn_wasm_bindgen_d97efba495851cf7___JsValue_____wasm_bindgen_d97efba495851cf7___sys__Undefined___js_sys_ed9f4ceb25613094___Function_fn_wasm_bindgen_d97efba495851cf7___JsValue_____wasm_bindgen_d97efba495851cf7___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
     readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___JsValue__core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true_: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true__10: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true__11: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true__12: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsValue___true_: (a: number, b: number) => [number, number];
     readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Array______true_: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Array______true__8: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Array______true__7: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuDeviceLostInfo__GpuDeviceLostInfo______true_: (a: number, b: number, c: any) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

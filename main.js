@@ -1,7 +1,6 @@
 import init, {
   enable_microphone,
   resume_microphone,
-  set_microphone_gain,
   start,
   start_output,
 } from "./pkg/modv_web.js";
@@ -11,8 +10,6 @@ const status = document.getElementById("boot-status");
 const error = document.getElementById("boot-error");
 const mic = document.getElementById("mic");
 const micDevice = document.getElementById("mic-device");
-const micGain = document.getElementById("mic-gain");
-const micGainValue = document.getElementById("mic-gain-value");
 const toast = document.getElementById("toast");
 
 let toastTimer = 0;
@@ -104,20 +101,6 @@ async function refreshMicrophones() {
 
 navigator.mediaDevices?.addEventListener("devicechange", refreshMicrophones);
 
-function currentGain() {
-  const value = Number(micGain.value);
-  return Number.isFinite(value) ? Math.max(1, value) : 2;
-}
-
-function updateGainLabel() {
-  micGainValue.textContent = `${currentGain()}×`;
-}
-
-micGain.addEventListener("input", () => {
-  updateGainLabel();
-  set_microphone_gain(currentGain());
-});
-updateGainLabel();
 
 function resumeAudio() {
   resume_microphone().catch((reason) => {
@@ -136,7 +119,7 @@ mic.addEventListener("click", async () => {
   mic.disabled = true;
   mic.textContent = "Requesting microphone…";
   try {
-    await enable_microphone(micDevice.value || undefined, currentGain());
+    await enable_microphone(micDevice.value || undefined);
     await resumeAudio();
     mic.textContent = "Microphone live";
     await refreshMicrophones();
