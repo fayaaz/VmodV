@@ -62,7 +62,7 @@ fn snapshot() -> EngineSnapshot {
         }],
         scene_rows: vec!["Row A".to_string(), "Row B".to_string()],
         performance: PerformanceView {
-            // Keep the accessible cell label plain: "Alpha row 1" / "Alpha row 2".
+            // Keep the accessible cell label plain: "Alpha Group 1" / "Alpha Group 2".
             enabled: false,
             ..Default::default()
         },
@@ -127,7 +127,7 @@ fn dragging_a_group_onto_an_occupied_cell_asks_before_overwriting() {
     harness.run();
 
     let from = group_header(&harness);
-    let to = harness.get_by_label("Alpha row 1").rect().center();
+    let to = harness.get_by_label("Alpha Group 1").rect().center();
     drag(&mut harness, from, to);
 
     // The drop alone must not overwrite, but must surface a confirmation with
@@ -158,7 +158,7 @@ fn confirming_overwrites_the_cell() {
     harness.run();
 
     let from = group_header(&harness);
-    let to = harness.get_by_label("Alpha row 1").rect().center();
+    let to = harness.get_by_label("Alpha Group 1").rect().center();
     drag(&mut harness, from, to);
 
     assert!(
@@ -183,7 +183,7 @@ fn dragging_a_group_onto_an_empty_cell_overwrites_without_confirmation() {
     harness.run();
 
     let from = group_header(&harness);
-    let to = harness.get_by_label("Alpha row 2").rect().center();
+    let to = harness.get_by_label("Alpha Group 2").rect().center();
     drag(&mut harness, from, to);
 
     assert_eq!(

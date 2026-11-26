@@ -11,6 +11,7 @@ use serde_json::Value;
 use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::file_dialog::{FileDialogAction, FileDialogState};
+use crate::help::HelpTopic;
 use crate::library_drag;
 use crate::model::{
     EngineSnapshot, LibraryKind, MediaAction, MediaAssetView, ModuleMetaView, PreviewRequest,
@@ -236,6 +237,13 @@ pub struct UiState {
     pub selected_module: Option<String>,
     pub selected_scene: Option<String>,
     pub selected_gallery_module: Option<String>,
+    /// The feature whose documentation the Help frame below Groups shows.
+    /// Updated by clicks; never persisted, so a fresh session starts at the
+    /// Help introduction.
+    pub help_topic: HelpTopic,
+    /// The module clicked most recently, whose name/author/licence the Help
+    /// frame shows alongside the Modules documentation.
+    pub help_module: Option<ModuleMetaView>,
     /// Whether the startup Group focus has run. It runs once, so clearing the
     /// selection later (e.g. after removing the focused Group) stays cleared.
     initial_focus_done: bool,
@@ -1243,6 +1251,8 @@ impl UiState {
             selected_module: None,
             selected_scene: None,
             selected_gallery_module: None,
+            help_topic: HelpTopic::Welcome,
+            help_module: None,
             initial_focus_done: false,
             group_name_draft: String::new(),
             group_name_draft_id: None,
@@ -1408,6 +1418,16 @@ impl UiState {
     /// Push one engine action.
     pub fn push_action(&mut self, action: impl Into<String>, payload: Value) {
         self.actions.push(UiAction::new(action, payload));
+    }
+
+    /// Show documentation for the feature the user just clicked.
+    pub fn focus_help_topic(&mut self, topic: HelpTopic) {
+        self.help_topic = topic;
+    }
+
+    /// Remember the module whose licence the Help frame should show.
+    pub fn focus_help_module(&mut self, module: ModuleMetaView) {
+        self.help_module = Some(module);
     }
 
     /// Show the info/licence window for a registered module.

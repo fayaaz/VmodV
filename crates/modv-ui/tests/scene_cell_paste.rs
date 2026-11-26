@@ -92,7 +92,7 @@ fn copying_a_cell_from_the_menu_allows_pasting_it_into_another_cell() {
     let mut harness = harness();
 
     // Copy `scene-a` row 0 through the source cell's right-click menu.
-    let source = harness.get_by_label("Alpha row 1").rect().center();
+    let source = harness.get_by_label("Alpha Group 1").rect().center();
     secondary_click(&mut harness, source);
     assert!(
         harness.query_all_by_label("Copy cell (Ctrl+drag)").count() > 0,
@@ -103,7 +103,7 @@ fn copying_a_cell_from_the_menu_allows_pasting_it_into_another_cell() {
     harness.state_mut().take_actions();
 
     // Open a different cell's right-click menu and paste there.
-    let target = harness.get_by_label("Beta row 2").rect().center();
+    let target = harness.get_by_label("Beta Group 2").rect().center();
     secondary_click(&mut harness, target);
     assert!(
         harness.query_all_by_label("Paste cell").count() > 0,

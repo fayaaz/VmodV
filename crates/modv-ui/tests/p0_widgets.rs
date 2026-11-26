@@ -187,6 +187,7 @@ fn shell_scene_grid_renders_scene_columns_and_cells() {
     harness.run();
     harness.get_by_label("Lone Chrome");
     harness.get_by_label("+ Column");
-    harness.get_by_label("+ Row");
-    harness.get_by_label("Row names");
+    // Both the Groups panel and the Scenes grid now add a Group.
+    assert_eq!(harness.query_all_by_label("+ Group").count(), 2);
+    harness.get_by_label("Group names");
 }

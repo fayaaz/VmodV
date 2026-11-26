@@ -378,7 +378,7 @@ fn grid_content_height(row_count: usize) -> f32 {
 /// Draw the row's layer monitor in the gutter's bottom-right corner: a small
 /// aspect-correct letterboxed snapshot of the row's live Group (the same
 /// [`crate::shell::fit_preview_rect`] letterboxing the Gallery/output use),
-/// dimmed while performance mode is off, or a subtle "no layer" placeholder
+/// dimmed while performance mode is off, or a subtle "no Group" placeholder
 /// when the row has no active Group.
 ///
 /// The pixels come from the shell's slow-cadence GPU snapshot of the Group's
@@ -411,7 +411,7 @@ fn draw_row_monitor(ui: &mut egui::Ui, snapshot: &EngineSnapshot, row: usize, ce
             painter.text(
                 thumb.center(),
                 Align2::CENTER_CENTER,
-                "no layer",
+                "no Group",
                 FontId::proportional(9.0),
                 theme::MUTED,
             );
@@ -451,12 +451,12 @@ fn row_display_name(snapshot: &EngineSnapshot, row: usize) -> String {
         .get(row)
         .map(|name| {
             if name.trim().is_empty() {
-                format!("Row {}", row + 1)
+                format!("Group {}", row + 1)
             } else {
                 name.clone()
             }
         })
-        .unwrap_or_else(|| format!("Row {}", row + 1))
+        .unwrap_or_else(|| format!("Group {}", row + 1))
 }
 
 /// The name of the Scene currently live in `row`, if the snapshot names one.
@@ -716,7 +716,7 @@ fn draw_scene_column(
                 grid.scene_drop_target = Some(scene.id.clone());
             }
             let header = header.on_hover_text(if per_row {
-                "Apply this Scene. In performance mode each row advances independently; APPLIED does not mean the whole column is live."
+                "Apply this Scene. In performance mode each Group advances independently; APPLIED does not mean the whole column is live."
             } else {
                 "Apply this Scene. Drag to reorder columns; double-click to rename."
             });
@@ -819,11 +819,11 @@ fn row_label_column(
     ui.spacing_mut().item_spacing.y = 0.0;
     let (header, header_response) =
         ui.allocate_exact_size(Vec2::new(ROW_LABEL_WIDTH, HEADER_HEIGHT), Sense::hover());
-    header_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Layers"));
+    header_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Groups"));
     ui.painter().text(
         header.left_center() + egui::vec2(4.0, 0.0),
         Align2::LEFT_CENTER,
-        "Layers",
+        "Groups",
         FontId::proportional(12.0),
         theme::MUTED,
     );
@@ -884,7 +884,7 @@ fn row_label_cell(
         painter.text(
             rect.left_top() + egui::vec2(6.0, 4.0),
             Align2::LEFT_TOP,
-            format!("Row {}", row + 1),
+            format!("Group {}", row + 1),
             FontId::monospace(11.0),
             theme::MUTED,
         );
@@ -896,7 +896,7 @@ fn row_label_cell(
             edit_rect,
             egui::TextEdit::singleline(&mut draft)
                 .font(egui::TextStyle::Small)
-                .hint_text("Row name"),
+                .hint_text("Group name"),
         );
         if grid.row_rename_focus {
             edit.request_focus();
@@ -924,7 +924,7 @@ fn row_label_cell(
     painter.text(
         rect.left_top() + egui::vec2(6.0, 4.0),
         Align2::LEFT_TOP,
-        format!("Row {}", row + 1),
+        format!("Group {}", row + 1),
         FontId::monospace(11.0),
         theme::MUTED,
     );
@@ -971,8 +971,8 @@ fn row_label_cell(
     draw_row_monitor(ui, snapshot, row, rect);
 
     let accessible_label = match live_scene_name(snapshot, row) {
-        Some(scene_name) => format!("Layer row {}: {label} (live {scene_name})", row + 1),
-        None => format!("Layer row {}: {label}", row + 1),
+        Some(scene_name) => format!("Group {}: {label} (live {scene_name})", row + 1),
+        None => format!("Group {}: {label}", row + 1),
     };
     let row_enabled = ui.is_enabled();
     response.widget_info(move || {
@@ -988,7 +988,7 @@ fn row_label_cell(
     if grid.row_drag.is_some() && grid.row_drag != Some(row) && response.contains_pointer() {
         grid.row_drop_target = Some(row);
     }
-    let response = response.on_hover_text("Double-click to rename. Drag to reorder rows.");
+    let response = response.on_hover_text("Double-click to rename. Drag to reorder Groups.");
     response.context_menu(|ui| row_label_menu(ui, names, row, grid, actions));
 }
 
@@ -1041,7 +1041,7 @@ fn row_label_menu(
     grid: &mut SceneGridState,
     actions: &mut Vec<UiAction>,
 ) {
-    if ui.button("Rename row").clicked() {
+    if ui.button("Rename Group").clicked() {
         grid.begin_row_rename(row, names.get(row).cloned().unwrap_or_default());
         ui.close();
     }
@@ -1050,7 +1050,7 @@ fn row_label_menu(
         if row < next.len() {
             let name = next.remove(row);
             next.insert(row - 1, name);
-            if ui.button("Move row up").clicked() {
+            if ui.button("Move Group up").clicked() {
                 actions.push(set_row_names_action(next));
                 ui.close();
             }
@@ -1061,7 +1061,7 @@ fn row_label_menu(
         if row < next.len() {
             let name = next.remove(row);
             next.insert(row + 1, name);
-            if ui.button("Move row down").clicked() {
+            if ui.button("Move Group down").clicked() {
                 actions.push(set_row_names_action(next));
                 ui.close();
             }
@@ -1071,7 +1071,7 @@ fn row_label_menu(
     if ui
         .add_enabled(
             row < names.len(),
-            egui::Button::new(egui::RichText::new("Delete row").color(theme::DANGER)),
+            egui::Button::new(egui::RichText::new("Delete Group").color(theme::DANGER)),
         )
         .clicked()
     {
@@ -1279,7 +1279,7 @@ fn grid_controls(
         if !snapshot.scene_rows.is_empty() {
             ui.label(
                 egui::RichText::new(format!(
-                    "rows: {}",
+                    "groups: {}",
                     snapshot
                         .scene_rows
                         .iter()
@@ -1326,7 +1326,7 @@ fn grid_controls(
             }
         }
         ui.separator();
-        if ui.button("Row names").clicked() {
+        if ui.button("Group names").clicked() {
             grid.row_names_edit = Some(grid_row_names(snapshot, row_count));
         }
         if ui.button("+ Column").clicked() {
@@ -1335,7 +1335,7 @@ fn grid_controls(
             actions.push(UiAction::new("scenes/addEmptyScene", serde_json::json!({})));
             grid.scroll_to_last_scene = true;
         }
-        if ui.button("+ Row").clicked() {
+        if ui.button("+ Group").clicked() {
             let names = grid_row_names(snapshot, row_count);
             actions.push(add_row_action(&names));
             grid.begin_row_rename(names.len(), String::new());
@@ -1439,7 +1439,7 @@ fn scene_dialogs(
         let mut open = true;
         let mut save = false;
         let window = layout.apply_window(
-            egui::Window::new("Performance row names")
+            egui::Window::new("Performance Group names")
                 .id(egui::Id::unique("modv-window:performance_row_names"))
                 .open(&mut open)
                 .collapsible(false)
@@ -1451,18 +1451,16 @@ fn scene_dialogs(
         );
         let response = window.show(ui.ctx(), |ui| {
             ui.label(
-                egui::RichText::new(
-                    "A named row matches its Group by name; empty names use position.",
-                )
-                .size(12.0)
-                .color(theme::MUTED),
+                egui::RichText::new("A named Group matches its name; empty names use position.")
+                    .size(12.0)
+                    .color(theme::MUTED),
             );
             let mut remove: Option<usize> = None;
             let mut swap: Option<(usize, usize)> = None;
             for index in 0..names.len() {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(format!("Row {index}"))
+                        egui::RichText::new(format!("Group {index}"))
                             .monospace()
                             .size(12.0)
                             .color(theme::MUTED),
@@ -1470,14 +1468,14 @@ fn scene_dialogs(
                     ui.text_edit_singleline(&mut names[index]);
                     if ui
                         .add_enabled(index > 0, egui::Button::new("↑").small())
-                        .on_hover_text("Move row up")
+                        .on_hover_text("Move Group up")
                         .clicked()
                     {
                         swap = Some((index, index - 1));
                     }
                     if ui
                         .add_enabled(index + 1 < names.len(), egui::Button::new("↓").small())
-                        .on_hover_text("Move row down")
+                        .on_hover_text("Move Group down")
                         .clicked()
                     {
                         swap = Some((index, index + 1));
@@ -1487,7 +1485,7 @@ fn scene_dialogs(
                             egui::Button::new(egui::RichText::new("×").color(theme::DANGER))
                                 .small(),
                         )
-                        .on_hover_text("Delete row")
+                        .on_hover_text("Delete Group")
                         .clicked()
                     {
                         remove = Some(index);
@@ -1500,7 +1498,7 @@ fn scene_dialogs(
             if let Some(index) = remove {
                 names.remove(index);
             }
-            if ui.button("Add row").clicked() {
+            if ui.button("Add Group").clicked() {
                 names.push(String::new());
             }
             if ui.button("Save").clicked() {
@@ -1532,7 +1530,7 @@ fn scene_dialogs(
             .unwrap_or_else(|| format!("Row {}", edit.row + 1));
         let window = layout.apply_window(
             egui::Window::new(format!(
-                "Clear cell: {} row {}",
+                "Clear cell: {} Group {}",
                 edit.scene_name,
                 edit.row + 1
             ))
@@ -1587,7 +1585,7 @@ fn scene_dialogs(
             .unwrap_or_else(|| format!("Row {}", edit.row + 1));
         let window = layout.apply_window(
             egui::Window::new(format!(
-                "Overwrite cell: {} row {}",
+                "Overwrite cell: {} Group {}",
                 edit.scene_name,
                 edit.row + 1
             ))
@@ -1815,7 +1813,7 @@ fn draw_scene_cell(
         .scene_rows
         .get(row)
         .map(String::as_str)
-        .unwrap_or("Row");
+        .unwrap_or("Group");
     painter.text(
         rect.left_top() + egui::vec2(6.0, 3.0),
         Align2::LEFT_TOP,
@@ -2004,9 +2002,9 @@ fn draw_scene_cell(
     }
 
     let cell_label = if live {
-        format!("LIVE {} row {}", scene.name, row + 1)
+        format!("LIVE {} Group {}", scene.name, row + 1)
     } else {
-        format!("{} row {}", scene.name, row + 1)
+        format!("{} Group {}", scene.name, row + 1)
     };
     let cell_enabled = ui.is_enabled();
     response.widget_info(move || {
@@ -2031,7 +2029,7 @@ fn scene_cell_menu(
     actions: &mut Vec<UiAction>,
 ) {
     if ui
-        .add_enabled(!cell.is_empty(), egui::Button::new("Apply this row"))
+        .add_enabled(!cell.is_empty(), egui::Button::new("Apply this Group"))
         .clicked()
     {
         actions.push(apply_scene_row_action(&scene.id, row));
@@ -2044,7 +2042,7 @@ fn scene_cell_menu(
     if ui
         .add_enabled(
             !cell.is_empty(),
-            egui::Button::new("Capture live row into this cell"),
+            egui::Button::new("Capture live Group into this cell"),
         )
         .clicked()
     {

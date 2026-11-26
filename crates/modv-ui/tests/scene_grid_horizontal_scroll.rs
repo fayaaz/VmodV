@@ -80,13 +80,13 @@ fn harness() -> Harness<'static, UiState> {
 }
 
 fn cell_rect(harness: &Harness<'_, UiState>, scene: &str, row: usize) -> egui::Rect {
-    harness.get_by_label(&format!("{scene} row {row}")).rect()
+    harness.get_by_label(&format!("{scene} Group {row}")).rect()
 }
 
 fn layer_rect(harness: &Harness<'_, UiState>, row: usize) -> egui::Rect {
     harness
         .get_by_label(&format!(
-            "Layer row {row}: {}",
+            "Group {row}: {}",
             ROW_NAMES[row.saturating_sub(1)]
         ))
         .rect()

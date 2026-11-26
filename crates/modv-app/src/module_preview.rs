@@ -278,7 +278,7 @@ impl PreviewError {
             Self::Render(detail) => detail.clone(),
             Self::SceneNotFound(id) => format!("no Scene with id \"{id}\" is in the engine store"),
             Self::SceneRowEmpty { scene_id, row } => {
-                format!("Scene \"{scene_id}\" has no renderable Group at row {row}")
+                format!("Scene \"{scene_id}\" has no renderable Group at index {row}")
             }
         }
     }
@@ -293,7 +293,7 @@ impl std::fmt::Display for PreviewError {
             Self::SceneRowEmpty { scene_id, row } => {
                 write!(
                     f,
-                    "Scene \"{scene_id}\" has no renderable Group at row {row}"
+                    "Scene \"{scene_id}\" has no renderable Group at index {row}"
                 )
             }
         }

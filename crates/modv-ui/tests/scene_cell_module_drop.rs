@@ -100,7 +100,7 @@ fn a_gallery_module_dropped_on_a_populated_cell_queues_add_module_to_cell() {
     let mut harness = build();
     harness.run();
 
-    let cell = harness.get_by_label("Alpha row 1").rect().center();
+    let cell = harness.get_by_label("Alpha Group 1").rect().center();
     drop_module_on(&mut harness, "Bands", cell);
 
     let actions = harness.state_mut().take_actions();
@@ -126,7 +126,7 @@ fn a_gallery_module_dropped_on_an_empty_cell_queues_add_module_to_cell() {
 
     // Row 2 has no modules (`empty(1)` in the fixture); the drag must still be
     // accepted — this is the reported bug.
-    let cell = harness.get_by_label("Alpha row 2").rect().center();
+    let cell = harness.get_by_label("Alpha Group 2").rect().center();
     drop_module_on(&mut harness, "Ball", cell);
 
     let actions = harness.state_mut().take_actions();
@@ -150,7 +150,7 @@ fn releasing_over_a_cell_without_a_module_payload_queues_nothing() {
     let mut harness = build();
     harness.run();
 
-    let cell = harness.get_by_label("Alpha row 1").rect().center();
+    let cell = harness.get_by_label("Alpha Group 1").rect().center();
     harness.hover_at(cell);
     harness.run();
     harness.event(egui::Event::PointerButton {

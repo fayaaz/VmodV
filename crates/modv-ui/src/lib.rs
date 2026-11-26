@@ -10,6 +10,7 @@
 //! layout is:
 //!
 //! - [`model`] — engine read models shared with `modv-app`
+//! - [`help`] — short feature documentation shown under the Groups panel
 //! - [`state`] — UI-local state and the action/command queues
 //! - [`shell`] — window chrome, menus, status bar and panel composition
 //! - [`widgets`] — the prop-driven control set
@@ -23,6 +24,7 @@ pub mod file_dialog;
 pub mod fonts;
 pub mod gallery_drag;
 pub mod group_drag;
+pub mod help;
 pub mod layout;
 pub mod library_drag;
 pub mod model;
@@ -36,6 +38,7 @@ pub mod theme;
 pub mod widgets;
 
 pub use file_dialog::{FileDialogAction, FileDialogMode, FileDialogState};
+pub use help::HelpTopic;
 pub use layout::{LayoutState, TabLayout, TabPlacement, WindowBounds};
 pub use library_drag::{
     MediaLibraryDrag, USE_FROM_LIBRARY_LABEL, texture_value_for_asset, texture_value_for_control,

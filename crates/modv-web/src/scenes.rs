@@ -621,7 +621,7 @@ impl SceneLibrary {
             .get(row)
             .filter(|name| !name.is_empty())
             .cloned()
-            .unwrap_or_else(|| format!("Row {}", row + 1));
+            .unwrap_or_else(|| format!("Group {}", row + 1));
         let group_id = self.mint("group");
         let mut group = new_group_value(&group_id, &name, GROUP_ENABLED);
         // Group control inputs are installed lazily when the cell is applied;

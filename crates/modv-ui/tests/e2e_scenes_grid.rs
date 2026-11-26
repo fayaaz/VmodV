@@ -202,7 +202,7 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
     let first_cell = CellRef::new("scene-a", 0);
     let second_cell = CellRef::new("scene-a", 1);
 
-    let first = harness.get_by_label("Alpha row 1").rect();
+    let first = harness.get_by_label("Alpha Group 1").rect();
     harness.hover_at(first.center());
     harness.run();
 
@@ -229,7 +229,7 @@ fn hovering_a_cell_previews_the_saved_group_and_keeps_the_still() {
     // Hovering another cell asks for that row's preview. Both cells keep
     // painting: the legacy grid leaves a still per rendered cell, not just
     // the most recently hovered one.
-    let second = harness.get_by_label("Alpha row 2").rect();
+    let second = harness.get_by_label("Alpha Group 2").rect();
     harness.hover_at(second.center());
     harness.run();
     let requests = std::mem::take(&mut harness.state_mut().scene_grid.preview_requests);
@@ -372,7 +372,7 @@ fn the_grid_adds_a_new_empty_scene_column() {
 fn clearing_a_cell_asks_for_confirmation_first() {
     let (mut harness, snapshot) = build();
 
-    let cell = harness.get_by_label("Alpha row 1").rect();
+    let cell = harness.get_by_label("Alpha Group 1").rect();
     secondary_click(&mut harness, cell.center());
     harness.get_by_label("Clear cell").click();
     harness.run();
@@ -402,8 +402,11 @@ fn clearing_a_cell_asks_for_confirmation_first() {
     );
     assert!(harness.state().scene_grid.clear_cell_edit.is_none());
     assert_eq!(
-        harness.get_by_label("Alpha row 1").accesskit_node().label(),
-        Some("Alpha row 1".to_string()),
+        harness
+            .get_by_label("Alpha Group 1")
+            .accesskit_node()
+            .label(),
+        Some("Alpha Group 1".to_string()),
         "the cell keeps its modules"
     );
 
@@ -427,8 +430,11 @@ fn clearing_a_cell_asks_for_confirmation_first() {
         "the saved cell no longer lists Ball/Bands"
     );
     assert_eq!(
-        harness.get_by_label("Alpha row 1").accesskit_node().label(),
-        Some("Alpha row 1".to_string()),
+        harness
+            .get_by_label("Alpha Group 1")
+            .accesskit_node()
+            .label(),
+        Some("Alpha Group 1".to_string()),
         "the cell stays, now empty"
     );
 }
@@ -445,10 +451,10 @@ fn capturing_the_live_row_saves_the_added_modules_into_the_cell() {
     // scene_ops.rs:scene_cell_actions_create_capture_and_clear_rows.
     let (mut harness, _snapshot) = build();
 
-    let cell = harness.get_by_label("Alpha row 1").rect();
+    let cell = harness.get_by_label("Alpha Group 1").rect();
     secondary_click(&mut harness, cell.center());
     harness
-        .get_by_label("Capture live row into this cell")
+        .get_by_label("Capture live Group into this cell")
         .click();
     harness.run();
 
@@ -500,7 +506,7 @@ fn editing_an_empty_cell_creates_a_group() {
     snapshot.lock().unwrap().scenes[0].cells[1] = empty(1);
     harness.run();
 
-    let cell = harness.get_by_label("Alpha row 2").rect();
+    let cell = harness.get_by_label("Alpha Group 2").rect();
     double_click(&mut harness, cell.center());
     let actions = run_and_apply(&mut harness, &snapshot);
 

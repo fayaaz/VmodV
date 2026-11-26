@@ -2751,6 +2751,24 @@ mod tests {
     }
 
     #[test]
+    fn creating_a_cell_group_names_it_after_its_group_slot() {
+        let mut state = WebState::new();
+        let id = state.scenes.add_empty(Some("Fresh"));
+
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/createSceneCellGroup",
+            json!({ "sceneId": id, "rowIndex": 1 })
+        )));
+        let scene = state.scenes.find(&id).expect("the new Scene");
+        let name = scene["groups"][1]["name"].as_str();
+        assert_eq!(
+            name,
+            Some("Group 2"),
+            "an unnamed Scene slot must mint a Group called Group 2, not Row 2"
+        );
+    }
+
+    #[test]
     fn captured_scene_cells_survive_a_snapshot() {
         let mut state = WebState::new();
         assert!(state.add_module("Bands").is_some());

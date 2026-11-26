@@ -126,24 +126,24 @@ fn only_each_rows_live_cell_is_marked() {
     let harness = harness([700.0, 480.0]);
 
     // Row 0's live Scene is Aurora and row 1's is Basalt.
-    harness.get_by_label("LIVE Aurora row 1");
-    harness.get_by_label("LIVE Basalt row 2");
+    harness.get_by_label("LIVE Aurora Group 1");
+    harness.get_by_label("LIVE Basalt Group 2");
 
     // Scene A is the applied Scene, but only its row 0 cell is live.
     assert!(
-        harness.query_by_label("LIVE Aurora row 2").is_none(),
+        harness.query_by_label("LIVE Aurora Group 2").is_none(),
         "the applied Scene's other rows must not be marked live"
     );
     assert!(
-        harness.query_by_label("LIVE Aurora row 3").is_none(),
+        harness.query_by_label("LIVE Aurora Group 3").is_none(),
         "the applied Scene's other rows must not be marked live"
     );
     assert!(
-        harness.query_by_label("LIVE Basalt row 1").is_none(),
-        "Basalt is live only in row 1"
+        harness.query_by_label("LIVE Basalt Group 1").is_none(),
+        "Basalt is live only in Group 1"
     );
     assert!(
-        harness.query_by_label("LIVE Cinder row 3").is_none(),
+        harness.query_by_label("LIVE Cinder Group 3").is_none(),
         "row 2 has no live entry"
     );
 
@@ -158,11 +158,11 @@ fn only_each_rows_live_cell_is_marked() {
 fn the_gutter_names_each_rows_live_scene() {
     let harness = harness([700.0, 480.0]);
 
-    harness.get_by_label("Layer row 1: Background (live Aurora)");
-    harness.get_by_label("Layer row 2: Foreground (live Basalt)");
+    harness.get_by_label("Group 1: Background (live Aurora)");
+    harness.get_by_label("Group 2: Foreground (live Basalt)");
     assert!(
         harness
-            .query_by_label("Layer row 3: Effects (live Cinder)")
+            .query_by_label("Group 3: Effects (live Cinder)")
             .is_none(),
         "row 2 has no live Scene to name"
     );
@@ -266,25 +266,25 @@ fn performance_off_marks_only_the_rows_live_scenes_in_the_grid() {
     let harness = harness_with_performance([700.0, 480.0], false);
 
     assert!(
-        harness.query_by_label("LIVE Aurora row 1").is_some(),
+        harness.query_by_label("LIVE Aurora Group 1").is_some(),
         "row 0's live Scene must be marked in the grid with performance off"
     );
     assert!(
-        harness.query_by_label("LIVE Basalt row 2").is_some(),
+        harness.query_by_label("LIVE Basalt Group 2").is_some(),
         "row 1's live Scene must be marked in the grid with performance off"
     );
 
     assert!(
-        harness.query_by_label("LIVE Aurora row 2").is_none(),
+        harness.query_by_label("LIVE Aurora Group 2").is_none(),
         "the applied Scene must not light a whole column while other rows are live"
     );
     assert!(
-        harness.query_by_label("LIVE Aurora row 3").is_none(),
+        harness.query_by_label("LIVE Aurora Group 3").is_none(),
         "the applied Scene must not light a row with no live Scene"
     );
     assert!(
-        harness.query_by_label("LIVE Basalt row 1").is_none(),
-        "Basalt is live only in row 1"
+        harness.query_by_label("LIVE Basalt Group 1").is_none(),
+        "Basalt is live only in Group 1"
     );
     assert_eq!(
         harness.get_all_by_label_contains("LIVE ").count(),

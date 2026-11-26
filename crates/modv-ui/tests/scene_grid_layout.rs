@@ -143,13 +143,13 @@ fn harness(size: [f32; 2]) -> Harness<'static, UiState> {
 }
 
 fn cell_rect(harness: &Harness<'_, UiState>, scene: &str, row: usize) -> Rect {
-    harness.get_by_label(&format!("{scene} row {row}")).rect()
+    harness.get_by_label(&format!("{scene} Group {row}")).rect()
 }
 
 fn layer_rect(harness: &Harness<'_, UiState>, row: usize) -> Rect {
     harness
         .get_by_label(&format!(
-            "Layer row {row}: {}",
+            "Group {row}: {}",
             ROW_NAMES[row.saturating_sub(1)]
         ))
         .rect()
@@ -183,7 +183,7 @@ fn every_row_has_one_fixed_pitch_in_the_gutter_and_every_scene_column() {
     // in the accessibility tree, but keeping them visible makes failures read
     // as layout errors rather than culling.
     let harness = harness([640.0, 620.0]);
-    let layers_header = harness.get_by_label("Layers").rect();
+    let layers_header = harness.get_by_label("Groups").rect();
 
     let mut previous: Option<(f32, Vec<f32>)> = None;
     let mut column_lefts: Vec<f32> = Vec::new();
@@ -214,7 +214,7 @@ fn every_row_has_one_fixed_pitch_in_the_gutter_and_every_scene_column() {
             assert_close(
                 cell.height(),
                 CELL_HEIGHT,
-                &format!("{scene} row {row} height (row name {row_name})"),
+                &format!("{scene} Group {row} height (Group name {row_name})"),
             );
             assert_close(
                 cell.top(),

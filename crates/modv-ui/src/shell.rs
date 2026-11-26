@@ -13,6 +13,7 @@ use web_time::Instant;
 use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_window};
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
 use crate::group_drag::GroupDrag;
+use crate::help::HelpTopic;
 use crate::layout::{
     LayoutState, MIN_DOCK_WIDTH, TabPlacement, WINDOW_ABOUT, WINDOW_MODULE_INFO, WINDOW_PALETTE,
     WINDOW_SHORTCUTS, WINDOW_TEMPO,
@@ -50,6 +51,8 @@ const MIN_LIVE_HEIGHT: f32 = 120.0;
 const MIN_SCENES_HEIGHT: f32 = 140.0;
 /// The Gallery section's minimum height.
 const MIN_GALLERY_HEIGHT: f32 = 96.0;
+/// Space kept at the bottom of the Groups panel for the Help frame.
+const HELP_FRAME_HEIGHT: f32 = 150.0;
 
 /// Draw the complete VmodV UI for one frame.
 pub fn draw(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState) {
@@ -722,8 +725,8 @@ fn group_inherit_from_selector(
                 if ui
                     .selectable_label(group.inherit_from.is_composition(), "Composed Output")
                     .on_hover_text(
-                        "Inherit everything composited above this row this frame, regardless \
-                         of each row's own Inherit setting",
+                        "Inherit everything composited above this Group this frame, regardless \
+                         of each Group's own Inherit setting",
                     )
                     .clicked()
                 {
@@ -784,8 +787,11 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
             });
             ui.separator();
 
+            // Leave room for the Help frame below the list; without a cap the
+            // scroll area would eat the whole panel and the frame would vanish.
             egui::ScrollArea::vertical()
                 .id_salt("groups-list")
+                .max_height((ui.available_height() - HELP_FRAME_HEIGHT).max(80.0))
                 .show(ui, |ui| {
                     if snapshot.groups.is_empty() {
                         ui.label(
@@ -836,6 +842,7 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                             if response.clicked() {
                                 state.selected_group = Some(group.id.clone());
                                 state.selected_module = None;
+                                state.focus_help_topic(HelpTopic::Groups);
                             }
                             if response.double_clicked() {
                                 state.group_name_draft = group.name.clone();
@@ -1047,10 +1054,65 @@ fn groups_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiStat
                         "scenes/applyScene",
                         serde_json::json!({"sceneId": scene.id}),
                     );
+                    state.focus_help_topic(HelpTopic::Scenes);
                 }
-            });
+            ui.separator();
+            help_frame(ui, state);
         });
     state.layout.groups_width = response.response.rect.width();
+}
+
+/// The in-app documentation frame below the Group list.
+///
+/// This is the Rust replacement for the legacy Electron *Info View*: instead
+/// of reacting to hover, it shows the docs for the most recently clicked
+/// feature. The topic lives in [`UiState`] and is set from the Group list, the
+/// right-panel tabs, the Gallery, the Scene grid and the Live Output. A Module
+/// click also records that module so its licence can be shown here.
+fn help_frame(ui: &mut egui::Ui, state: &UiState) {
+    let topic = state.help_topic;
+    egui::Frame::new()
+        .fill(theme::PANEL_ALT)
+        .inner_margin(Margin::same(6))
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("HELP").strong().size(12.0));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new("Last clicked")
+                            .size(10.0)
+                            .color(theme::MUTED),
+                    );
+                });
+            });
+            ui.label(
+                egui::RichText::new(topic.title())
+                    .strong()
+                    .size(13.0)
+                    .color(theme::ACCENT),
+            );
+            egui::ScrollArea::vertical()
+                .id_salt("help-body")
+                .max_height(96.0)
+                .show(ui, |ui| {
+                    // Module docs are more useful with the clicked module's
+                    // provenance up front, so it leads the scroll area.
+                    if topic == HelpTopic::Modules
+                        && let Some(meta) = state.help_module.as_ref()
+                    {
+                        ui.label(
+                            egui::RichText::new(format!("Module: {}", meta.name))
+                                .strong()
+                                .size(12.0),
+                        );
+                        ui.label(format!("Author: {}", meta.author));
+                        ui.label(format!("License: {}", module_license(meta)));
+                        ui.separator();
+                    }
+                    ui.label(egui::RichText::new(topic.body()).size(12.0));
+                });
+        });
 }
 
 /// Make a Group block a Gallery drop target: while a Gallery payload hovers
@@ -1182,6 +1244,14 @@ fn group_module_list(
             ));
             if response.clicked() {
                 state.selected_module = Some(module.id.clone());
+                state.focus_help_topic(HelpTopic::Modules);
+                if let Some(meta) = snapshot
+                    .registered
+                    .iter()
+                    .find(|meta| meta.name == module.module_name)
+                {
+                    state.focus_help_module(meta.clone());
+                }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -1551,6 +1621,7 @@ fn tab_entry(ui: &mut egui::Ui, tab: SidePanelTab, state: &mut UiState) {
 
     if response.clicked() && !icon_response.clicked() {
         state.side_panel_tab = tab;
+        state.focus_help_topic(HelpTopic::from_side_panel_tab(tab));
     }
     if response.hovered() || icon_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -2259,7 +2330,7 @@ fn info_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot) {
             ui.end_row();
             ui.label(egui::RichText::new("Scenes").color(theme::MUTED));
             ui.label(format!(
-                "{} saved  /  {} rows",
+                "{} saved  /  {} groups",
                 snapshot.scenes.len(),
                 snapshot.scene_rows.len()
             ));
@@ -4561,6 +4632,7 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
             ui.separator();
 
             let live_preview = state.preview_texture;
+            let scenes_rect = ui.available_rect_before_wrap();
             draw_scene_grid(
                 ui,
                 snapshot,
@@ -4569,6 +4641,14 @@ fn central_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
                 &mut state.actions,
                 &mut state.layout,
             );
+            // The Scene grid owns its own widgets, so observing the pointer
+            // here keeps the help topic in sync without threading state through
+            // every cell and header.
+            if ui.input(|input| input.pointer.button_clicked(egui::PointerButton::Primary))
+                && ui.rect_contains_pointer(scenes_rect)
+            {
+                state.focus_help_topic(HelpTopic::Scenes);
+            }
             state
                 .preview_requests
                 .append(&mut state.scene_grid.preview_requests);
@@ -4619,7 +4699,10 @@ fn preview_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
     // the resizable section grow by one text row on every frame).
     let width = ui.available_width().max(120.0);
     let height = ui.available_height().max(80.0);
-    let (container, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let (container, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if response.clicked() {
+        state.focus_help_topic(HelpTopic::LiveOutput);
+    }
     // The container spans the full central width; the output is fitted inside
     // it and the leftover panel background forms the letterbox bars.
     let image_rect =
@@ -4854,6 +4937,8 @@ fn gallery_tile(
     }
     if response.clicked() {
         state.selected_gallery_module = Some(module.name.clone());
+        state.focus_help_topic(HelpTopic::Modules);
+        state.focus_help_module(module.clone());
     }
     if response.double_clicked() {
         if let Some(group_id) = state.selected_group.clone() {
