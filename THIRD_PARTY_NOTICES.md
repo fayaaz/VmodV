@@ -345,6 +345,7 @@ Licences with obligations beyond permissive attribution:
 | `colored` | MPL-2.0 | https://github.com/mackwic/colored |
 | `combine` | MIT | https://github.com/Marwes/combine |
 | `concurrent-queue` | Apache-2.0 OR MIT | https://github.com/smol-rs/concurrent-queue |
+| `console_error_panic_hook` | MIT OR Apache-2.0 | https://github.com/rustwasm/console_error_panic_hook |
 | `cookie-factory` | MIT | https://github.com/rust-bakery/cookie-factory |
 | `core-foundation` | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
 | `core-foundation-sys` | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
@@ -413,6 +414,7 @@ Licences with obligations beyond permissive attribution:
 | `foreign-types` | MIT OR Apache-2.0 | https://github.com/sfackler/foreign-types |
 | `foreign-types-macros` | MIT OR Apache-2.0 | https://github.com/sfackler/foreign-types |
 | `foreign-types-shared` | MIT OR Apache-2.0 | https://github.com/sfackler/foreign-types |
+| `form_urlencoded` | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | `futures-channel` | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs |
 | `futures-concurrency` | MIT OR Apache-2.0 | https://github.com/yoshuawuyts/futures-concurrency |
 | `futures-core` | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs |
@@ -461,9 +463,13 @@ Licences with obligations beyond permissive attribution:
 | `icu_properties` | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | `icu_properties_data` | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | `icu_provider` | Unicode-3.0 | https://github.com/unicode-org/icu4x |
+| `idna` | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
+| `idna_adapter` | Apache-2.0 OR MIT | https://github.com/hsivonen/idna_adapter |
 | `image` | MIT OR Apache-2.0 | https://github.com/image-rs/image |
 | `image-webp` | MIT OR Apache-2.0 | https://github.com/image-rs/image-webp |
 | `imgref` | CC0-1.0 OR Apache-2.0 | https://github.com/kornelski/imgref |
+| `include_dir` | MIT | https://github.com/Michael-F-Bryan/include_dir |
+| `include_dir_macros` | MIT | https://github.com/Michael-F-Bryan/include_dir |
 | `indexmap` | Apache-2.0 OR MIT | https://github.com/indexmap-rs/indexmap |
 | `inotify` | ISC | https://github.com/hannobraun/inotify-rs |
 | `inotify-sys` | ISC | https://github.com/hannobraun/inotify-sys |
@@ -673,6 +679,7 @@ Licences with obligations beyond permissive attribution:
 | `small_btree` | Unlicense OR MIT | https://github.com/boa-dev/boa |
 | `smallvec` | MIT OR Apache-2.0 | https://github.com/servo/rust-smallvec |
 | `smithay-client-toolkit` | MIT | https://github.com/smithay/client-toolkit |
+| `smithay-clipboard` | MIT | https://github.com/Smithay/smithay-clipboard |
 | `smol_str` | MIT OR Apache-2.0 | https://github.com/rust-analyzer/smol_str |
 | `socket2` | MIT OR Apache-2.0 | https://github.com/rust-lang/socket2 |
 | `spirv` | Apache-2.0 | https://github.com/gfx-rs/rspirv |
@@ -727,6 +734,7 @@ Licences with obligations beyond permissive attribution:
 | `unicode-segmentation` | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-segmentation |
 | `unicode-width` | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-width |
 | `unicode-xid` | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-xid |
+| `url` | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | `utf_types` | Apache-2.0 OR MIT | https://github.com/hsivonen/utf_types |
 | `utf16_iter` | Apache-2.0 OR MIT | https://github.com/hsivonen/utf16_iter |
 | `utf8_iter` | Apache-2.0 OR MIT | https://github.com/hsivonen/utf8_iter |
@@ -752,12 +760,15 @@ Licences with obligations beyond permissive attribution:
 | `wayland-csd-frame` | MIT | https://github.com/rust-windowing/wayland-csd-frame |
 | `wayland-cursor` | MIT | https://github.com/smithay/wayland-rs |
 | `wayland-protocols` | MIT | https://github.com/smithay/wayland-rs |
+| `wayland-protocols-experimental` | MIT | https://github.com/smithay/wayland-rs |
+| `wayland-protocols-misc` | MIT | https://github.com/smithay/wayland-rs |
 | `wayland-protocols-plasma` | MIT | https://github.com/smithay/wayland-rs |
 | `wayland-protocols-wlr` | MIT | https://github.com/smithay/wayland-rs |
 | `wayland-scanner` | MIT | https://github.com/smithay/wayland-rs |
 | `wayland-sys` | MIT | https://github.com/smithay/wayland-rs |
 | `web-sys` | MIT OR Apache-2.0 | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys |
 | `web-time` | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time |
+| `webbrowser` | MIT OR Apache-2.0 | https://github.com/amodm/webbrowser-rs |
 | `weezl` | MIT OR Apache-2.0 | https://github.com/image-rs/weezl |
 | `wgpu` | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu |
 | `wgpu-core` | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu |

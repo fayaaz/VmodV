@@ -46,6 +46,7 @@ const WORKSPACE_CRATES: &[&str] = &[
     "modv-render",
     "modv-renderers",
     "modv-ui",
+    "modv-web",
 ];
 
 /// SPDX identifiers used by the workspace's dependency graph (plus the common
