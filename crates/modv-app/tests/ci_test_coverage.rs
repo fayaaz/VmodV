@@ -3,9 +3,11 @@
 //! Clippy compiles integration test targets, but compilation is not execution:
 //! licence, removed-content, release and packaging guards can rot unnoticed if
 //! CI never runs them. This fast text/filesystem check derives the target stems
-//! from `crates/modv-app/tests/*.rs` and requires each one to be selected by an
-//! explicit `--test` argument in `.github/workflows/vmodv.yml` or by a recipe
-//! line in the Makefile's `test-e2e-vmodv` target, which the workflow invokes.
+//! from `crates/modv-app/tests/*.rs` and requires each one to be selected by
+//! an explicit `--test` argument in a Makefile recipe (`test-static-guards` or
+//! `test-e2e-vmodv`). Both `.github/workflows/vmodv.yml` and `release.yml`
+//! must invoke those recipes so the list has a single source of truth and PR
+//! CI and release validation cannot drift apart.
 //!
 //! Run with:
 //!
@@ -85,6 +87,20 @@ fn every_top_level_integration_target_runs_in_ci() {
         "REL-03: .github/workflows/vmodv.yml must invoke `make test-e2e-vmodv`; \
          otherwise integration targets listed only in that Makefile recipe never run in CI"
     );
+    let release = read_text(&root.join(".github/workflows/release.yml"));
+    for (name, text) in [("vmodv.yml", &workflow), ("release.yml", &release)] {
+        assert!(
+            active_lines(text, false).any(|line| line.contains("make test-static-guards")),
+            "REL-03: {name} must invoke `make test-static-guards`; the static \
+             guard `--test` list lives in that Makefile recipe so PR CI and \
+             release validation cannot drift apart"
+        );
+        assert!(
+            active_lines(text, false).any(|line| line.contains("make test-e2e-vmodv")),
+            "REL-03: {name} must invoke `make test-e2e-vmodv` so the real-binary \
+             suites run on that ref"
+        );
+    }
     let workflow_targets = selected_targets(&workflow, false);
 
     let makefile = read_text(&root.join("Makefile"));
@@ -98,9 +114,9 @@ fn every_top_level_integration_target_runs_in_ci() {
     assert!(
         missing.is_empty(),
         "REL-03: top-level crates/modv-app/tests/*.rs targets not executed by CI: \
-         {missing:?}. Add `--test <name>` to the modv-app integration step in \
-         .github/workflows/vmodv.yml, or to the `test-e2e-vmodv` recipe in the \
-         Makefile for real-binary tests. Clippy compiling a test does not run it."
+         {missing:?}. Add `--test <name>` to the Makefile's `test-static-guards` \
+         recipe (or `test-e2e-vmodv` for real-binary tests) — both workflows \
+         invoke those recipes. Clippy compiling a test does not run it."
     );
 
     let unknown = covered.difference(&targets).cloned().collect::<Vec<_>>();

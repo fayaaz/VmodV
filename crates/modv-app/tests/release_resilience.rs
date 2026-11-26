@@ -474,7 +474,7 @@ fn main_push_lints_and_tests_once_before_publishing() {
     for command in [
         "make engine-test ARGS=\"--workspace --exclude modv-app",
         "make engine-test ARGS=\"-p modv-app --lib",
-        "make engine-test ARGS=\"-p modv-app --test appimage_bundle",
+        "make test-static-guards",
         "make test-e2e-vmodv",
     ] {
         assert!(

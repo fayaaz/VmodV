@@ -391,6 +391,31 @@ lint: engine-lint
 format: docker-cargo-volume
 	$(call run-cargo,fmt --all)
 
+# Static/packaging/CI guards: pure text and filesystem tests that never launch
+# the app. This is the single source of truth for the `--test` list — CI and
+# release validation both call this recipe, so adding a guard test only needs
+# one edit (ci_test_coverage.rs fails if a target is left out).
+test-static-guards: docker-cargo-volume
+	$(call run-cargo,test -p modv-app \
+		--test appimage_arm64 \
+		--test appimage_bundle \
+		--test branding \
+		--test ci_docker_cache \
+		--test ci_test_coverage \
+		--test deb_package \
+		--test macos_portable_layout \
+		--test media_probe \
+		--test module_docs \
+		--test ndi_readback \
+		--test notices \
+		--test pages_workflow \
+		--test release_resilience \
+		--test release_resume \
+		--test removed_content \
+		--test undo_history \
+		--test windows_portable_layout \
+		-- --test-threads=1)
+
 # Real-binary e2e: the process harness, the Scene/defaults/manifest parity
 # tests, the control-set colour picker/Colour Key coverage and the regression
 # scenarios. One worker at a time because a process owns a virtual display and

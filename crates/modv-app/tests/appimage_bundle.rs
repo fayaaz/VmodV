@@ -2359,17 +2359,29 @@ fn ci_and_release_workflows_run_the_bundle_check() {
     let root = repo_root();
     let ci = fs::read_to_string(root.join(".github/workflows/vmodv.yml"))
         .unwrap_or_else(|error| panic!("cannot read vmodv.yml: {error}"));
+    let release = fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .unwrap_or_else(|error| panic!("cannot read release.yml: {error}"));
+    let makefile = fs::read_to_string(root.join("Makefile"))
+        .unwrap_or_else(|error| panic!("cannot read Makefile: {error}"));
     assert!(
-        ci.contains("--test appimage_bundle"),
-        "vmodv.yml has no step running `make engine-test ARGS=\"-p modv-app --test \
-         appimage_bundle -- --test-threads=1\"`: CI never exercises the bundle tests"
+        makefile.contains("--test appimage_bundle"),
+        "the Makefile's `test-static-guards` recipe does not select \
+         `--test appimage_bundle`: CI never exercises the bundle tests"
     );
+    for (name, text) in [
+        ("vmodv.yml", ci.as_str()),
+        ("release.yml", release.as_str()),
+    ] {
+        assert!(
+            text.contains("make test-static-guards"),
+            "{name} does not invoke `make test-static-guards`, so the shared \
+             static-guard list (including the bundle tests) never runs there"
+        );
+    }
     assert!(
         ci.contains("vmodv-appimage-check"),
         "vmodv.yml's package job does not run the bundle check on the AppImage it built"
     );
-    let release = fs::read_to_string(root.join(".github/workflows/release.yml"))
-        .unwrap_or_else(|error| panic!("cannot read release.yml: {error}"));
     assert!(
         release.contains("vmodv-appimage-check"),
         "release.yml's publish job does not run the bundle check before publishing the AppImage"
