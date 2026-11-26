@@ -112,44 +112,14 @@
         white-space: nowrap;
       }
       #toast.hidden { display: none; }
-      #mic-gain-row {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        width: 230px;
-        padding: 4px 7px;
-        border: 1px solid rgba(69, 255, 154, 0.2);
-        border-radius: 3px;
-        background: rgba(7, 7, 11, 0.9);
-        color: var(--muted);
-        font-size: 11px;
-      }
-      #mic-gain { flex: 1; accent-color: var(--accent); }
-      #mic-gain-value { min-width: 24px; text-align: right; color: var(--accent); }
-      #modv-output-canvas {
-        position: fixed;
-        left: 0;
-        top: 0;
-        width: 960px;
-        height: 540px;
-        opacity: 0.001;
-        pointer-events: none;
-        z-index: -1;
-      }
     </style>
   </head>
   <body>
-    <canvas id="modv-output-canvas" width="960" height="540" aria-hidden="true"></canvas>
     <canvas id="modv-canvas" tabindex="0"></canvas>
     <div id="audio-controls">
       <select id="mic-device" title="Microphone input">
         <option value="">Default microphone</option>
       </select>
-      <label id="mic-gain-row" title="Analysis-only microphone boost">
-        Input
-        <input id="mic-gain" type="range" min="1" max="8" step="0.5" value="2">
-        <span id="mic-gain-value">2×</span>
-      </label>
       <button id="mic" type="button">Use microphone</button>
     </div>
     <div id="toast" class="hidden" role="status"></div>

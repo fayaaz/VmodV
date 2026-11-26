@@ -12,12 +12,10 @@
         background: #000;
         overflow: hidden;
       }
-      #output-video {
+      #output-canvas {
         display: block;
         width: 100vw;
         height: 100vh;
-        object-fit: contain;
-        background: #000;
       }
       #boot {
         position: fixed;
@@ -41,14 +39,31 @@
         letter-spacing: 0.14em;
       }
       #boot .err { color: #ff6b6b; white-space: pre-wrap; }
+      #mic {
+        position: fixed;
+        right: 14px;
+        bottom: 14px;
+        z-index: 10;
+        padding: 7px 12px;
+        border: 1px solid rgba(69, 255, 154, 0.45);
+        border-radius: 3px;
+        background: rgba(7, 7, 11, 0.86);
+        color: #45ff9a;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #mic:hover { background: rgba(69, 255, 154, 0.12); }
+      #mic:disabled { color: #8b8b96; cursor: default; }
     </style>
   </head>
   <body>
-    <video id="output-video" autoplay muted playsinline></video>
+    <canvas id="output-canvas" tabindex="0"></canvas>
+    <button id="mic" type="button">Enable microphone</button>
     <div id="boot">
       <div class="card">
         <h1>VMODV / OUTPUT</h1>
-        <p id="boot-status">Waiting for the main VmodV window…</p>
+        <p id="boot-status">Starting the compositor…</p>
         <p class="err" id="boot-error"></p>
       </div>
     </div>

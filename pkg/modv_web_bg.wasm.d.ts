@@ -1,19 +1,17 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
-export const enable_microphone: (a: number, b: number, c: number) => any;
-export const resume_microphone: () => any;
-export const set_microphone_gain: (a: number) => void;
+export const enable_microphone: (a: number, b: number) => any;
 export const start: (a: number, b: number) => any;
 export const start_output: (a: number, b: number) => any;
 export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Function_fn_wasm_bindgen_d97efba495851cf7___JsValue_____wasm_bindgen_d97efba495851cf7___sys__Undefined___js_sys_ed9f4ceb25613094___Function_fn_wasm_bindgen_d97efba495851cf7___JsValue_____wasm_bindgen_d97efba495851cf7___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
 export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___JsValue__core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true_: (a: number, b: number, c: any) => [number, number];
 export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true_: (a: number, b: number, c: any) => [number, number];
-export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true__11: (a: number, b: number, c: any) => [number, number];
-export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true__12: (a: number, b: number, c: any) => [number, number];
+export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true__10: (a: number, b: number, c: any) => [number, number];
+export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wasm_bindgen_d97efba495851cf7___sys__JsNullable_wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuError__GpuError___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsError___true__9: (a: number, b: number, c: any) => [number, number];
 export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___core_d941ad8722425d2e___result__Result_____wasm_bindgen_d97efba495851cf7___JsValue___true_: (a: number, b: number) => [number, number];
 export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Array______true_: (a: number, b: number, c: any) => void;
-export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Array______true__8: (a: number, b: number, c: any) => void;
+export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___js_sys_ed9f4ceb25613094___Array______true__6: (a: number, b: number, c: any) => void;
 export const wasm_bindgen_d97efba495851cf7___convert__closures_____invoke___wgpu_983e465604d6a32f___backend__webgpu__webgpu_sys__gen_GpuDeviceLostInfo__GpuDeviceLostInfo______true_: (a: number, b: number, c: any) => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
