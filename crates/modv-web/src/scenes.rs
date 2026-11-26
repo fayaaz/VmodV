@@ -28,6 +28,10 @@ use modv_engine::scene_rows::{
     assign_scene_row_indexes, normalize_disabled_cells, normalize_disabled_cells_for_scenes,
     normalize_row_names,
 };
+use modv_engine::scene_timing::{
+    TimingUnit as EngineTimingUnit, normalize_scene_timing_values, normalize_timing_config,
+    seconds_to_unit, unit_to_seconds,
+};
 use modv_engine::tweens::{TweenDescriptor, TweenSet};
 use modv_ui::TimingUnit;
 use modv_ui::model::{PerformanceView, SceneCellView, SceneView, normalize_performance_order};
@@ -245,6 +249,49 @@ impl SceneLibrary {
     /// Row names from the performance config.
     pub fn row_names(&self) -> Vec<String> {
         normalize_row_names(self.performance.get("rowNames"))
+    }
+
+    /// Number of grid rows: named rows plus the deepest Scene stack.
+    pub fn row_count(&self) -> usize {
+        let named = self.row_names().len();
+        let deepest = self
+            .scenes
+            .iter()
+            .map(|scene| {
+                scene
+                    .get("groups")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len)
+            })
+            .max()
+            .unwrap_or(0);
+        named.max(deepest)
+    }
+
+    /// Performance-disabled cells, pruned against the current Scene list.
+    pub fn disabled_cells(&self) -> std::collections::BTreeMap<String, Vec<usize>> {
+        normalize_disabled_cells_for_scenes(
+            self.performance.get("disabledCells"),
+            &self.scenes,
+            &self.row_names(),
+        )
+    }
+
+    /// The runtime Scene id shown by the grid (never persisted as state).
+    pub fn current_scene_id(&self) -> Option<String> {
+        self.performance
+            .get("currentSceneId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
+    /// Set the runtime Scene id shown by the grid.
+    pub fn set_current_scene(&mut self, scene_id: Option<&str>) {
+        set_performance_value(
+            &mut self.performance,
+            "currentSceneId",
+            scene_id.map_or(Value::Null, |id| json!(id)),
+        );
     }
 
     /// The read model the Scenes grid draws.
@@ -480,13 +527,45 @@ impl SceneLibrary {
         let Some(scene) = self.find_mut(scene_id) else {
             return false;
         };
-        let Some(groups) = scene.get_mut("groups").and_then(Value::as_array_mut) else {
+        let Some(object) = scene.as_object_mut() else {
+            return false;
+        };
+        let Some(groups) = object.get_mut("groups").and_then(Value::as_array_mut) else {
             return false;
         };
         if row >= groups.len() {
             return false;
         }
+        let removed = groups[row].clone();
         groups[row] = Value::Null;
+        let Some(group) = removed.as_object() else {
+            return true;
+        };
+        let removed_ids: Vec<String> = group
+            .get("modules")
+            .and_then(Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if removed_ids.is_empty() {
+            return true;
+        }
+        let still_used: HashSet<String> = groups
+            .iter()
+            .filter_map(|group| group.get("modules").and_then(Value::as_array))
+            .flat_map(|ids| ids.iter().filter_map(Value::as_str).map(str::to_string))
+            .collect();
+        if let Some(modules) = object.get_mut("modules").and_then(Value::as_object_mut) {
+            for id in removed_ids {
+                if !still_used.contains(&id) {
+                    modules.remove(&id);
+                }
+            }
+        }
         true
     }
 
@@ -513,6 +592,7 @@ impl SceneLibrary {
             return false;
         };
         let copied_modules = module_values_for_group(&source, &group);
+        let ids = referenced_input_ids(&group, &copied_modules);
         let Some(target) = self.find_mut(to_scene_id) else {
             return false;
         };
@@ -530,6 +610,7 @@ impl SceneLibrary {
                 modules.insert(id, module);
             }
         }
+        merge_scene_io(object, &source, &ids);
         true
     }
 
@@ -654,6 +735,8 @@ impl SceneLibrary {
             return false;
         };
         let (group, modules) = capture_group(live, state);
+        let runtime_group = group.clone();
+        let runtime_modules = modules.clone();
         let Some(object) = scene.as_object_mut() else {
             return false;
         };
@@ -666,6 +749,7 @@ impl SceneLibrary {
         if let Some(map) = object.get_mut("modules").and_then(Value::as_object_mut) {
             map.extend(modules);
         }
+        merge_captured_runtime(object, &runtime_group, &runtime_modules, state);
         merge_captured_tweens(object, tweens);
         true
     }
@@ -779,10 +863,41 @@ impl SceneLibrary {
         true
     }
 
-    /// `scenes/setTimingUnit`.
-    pub fn set_timing_unit(&mut self, unit: &str) -> bool {
-        let unit = TimingUnit::parse(unit);
-        set_performance_value(&mut self.performance, "timingUnit", json!(unit.as_str()));
+    /// `scenes/setTimingUnit`: convert the global and per-Scene overrides
+    /// through seconds at the current tempo.
+    pub fn set_timing_unit(&mut self, unit: &str, bpm: f64) -> bool {
+        let requested = EngineTimingUnit::parse(Some(&json!(unit)));
+        let old = self.performance.clone();
+        let current = normalize_timing_config(Some(&old));
+        let min_seconds = unit_to_seconds(current.min, current.unit, bpm);
+        let max_seconds = unit_to_seconds(current.max, current.unit, bpm);
+        let min = seconds_to_unit(min_seconds, requested, bpm);
+        let max = seconds_to_unit(max_seconds, requested, bpm);
+        for scene in &mut self.scenes {
+            let values = normalize_scene_timing_values(Some(scene), Some(&old));
+            if !values.timing_override {
+                continue;
+            }
+            let scene_min = unit_to_seconds(values.min, values.unit, bpm);
+            let scene_max = unit_to_seconds(values.max, values.unit, bpm);
+            if let Some(object) = scene.as_object_mut() {
+                object.insert(
+                    "minSeconds".to_string(),
+                    json_number(seconds_to_unit(scene_min, requested, bpm)),
+                );
+                object.insert(
+                    "maxSeconds".to_string(),
+                    json_number(seconds_to_unit(scene_max, requested, bpm)),
+                );
+            }
+        }
+        set_performance_value(
+            &mut self.performance,
+            "timingUnit",
+            json!(requested.as_str()),
+        );
+        set_performance_value(&mut self.performance, "minSeconds", json_number(min));
+        set_performance_value(&mut self.performance, "maxSeconds", json_number(max));
         true
     }
 
@@ -1089,15 +1204,41 @@ fn apply_scene(
     // from the previous Scene must go too.
     *tweens = TweenSet::new();
     merge_scene_runtime(scene, state, tweens, bpm);
+    // Hand-built Groups that belong to no Scene survive a Scene apply, like
+    // the native replacement rule.
+    let retained: Vec<Group> = state
+        .groups
+        .iter()
+        .filter(|group| {
+            group.scene_id.is_none()
+                && !group.modules.is_empty()
+                && group.transition_ghost != Some(true)
+        })
+        .cloned()
+        .collect();
+    let mut retained_modules = HashMap::new();
+    for group in &retained {
+        for module_id in &group.modules {
+            if let Some(module) = state.modules.get(module_id) {
+                retained_modules.insert(module_id.clone(), module.clone());
+            }
+        }
+    }
+    let first = live_groups.first()?.id.clone();
     state.modules.clear();
+    for (id, module) in retained_modules {
+        state.modules.insert(id, module);
+    }
     for (id, module) in modules {
         state.modules.insert(id, module);
     }
-    state.groups = live_groups;
-    let first = state.groups.first()?.id.clone();
+    state.groups = retained;
+    state.groups.extend(live_groups);
     // Keep the Scene stamp in sync even when the document omitted it.
     for group in &mut state.groups {
-        group.scene_id = Some(scene_id.clone());
+        if group.scene_id.is_some() {
+            group.scene_id = Some(scene_id.clone());
+        }
     }
     Some(first)
 }
@@ -1219,6 +1360,136 @@ fn capture_group(group: &Group, state: &EngineState) -> (Value, Map<String, Valu
     (group_value, modules)
 }
 
+/// Every input id a Group/Module document references.
+fn referenced_input_ids(group: &Value, modules: &Map<String, Value>) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    for (_, key) in GROUP_CONTROL_INPUTS {
+        if let Some(id) = group.get(*key).and_then(Value::as_str) {
+            ids.insert(id.to_string());
+        }
+    }
+    for module in modules.values() {
+        if let Some(meta) = module.get("meta").and_then(Value::as_object) {
+            for key in MODULE_META_INPUTS {
+                if let Some(id) = meta
+                    .get(format!("{key}InputId").as_str())
+                    .and_then(Value::as_str)
+                {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+        if let Some(props) = module.get("$props").and_then(Value::as_object) {
+            for descriptor in props.values() {
+                if let Some(id) = descriptor.get("id").and_then(Value::as_str) {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Copy the live input and link definitions a captured Group/Module set
+/// references into the Scene document, so applying the cell later restores
+/// its Group controls and prop links.
+fn merge_captured_runtime(
+    document: &mut Map<String, Value>,
+    group: &Value,
+    modules: &Map<String, Value>,
+    state: &EngineState,
+) {
+    let ids = referenced_input_ids(group, modules);
+    if !document.get("inputs").is_some_and(Value::is_object) {
+        document.insert(
+            "inputs".to_string(),
+            json!({
+                "focusedInput": { "id": Value::Null, "title": Value::Null },
+                "inputs": {},
+                "inputLinks": {},
+            }),
+        );
+    }
+    let Some(inputs) = document.get_mut("inputs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if let Some(scene_inputs) = inputs.get_mut("inputs").and_then(Value::as_object_mut) {
+        for id in &ids {
+            if let Some(input) = state.inputs.get(id)
+                && let Ok(value) = serde_json::to_value(input)
+            {
+                scene_inputs.insert(id.clone(), value);
+            }
+        }
+    }
+    if let Some(links) = inputs.get_mut("inputLinks").and_then(Value::as_object_mut) {
+        for id in &ids {
+            if let Some(link) = state.input_links.get(id)
+                && let Ok(value) = serde_json::to_value(link)
+            {
+                links.insert(id.clone(), value);
+            }
+        }
+    }
+}
+
+/// Copy inputs/links/tweens for `ids` from another Scene document.
+fn merge_scene_io(document: &mut Map<String, Value>, source: &Value, ids: &HashSet<String>) {
+    if !document.get("inputs").is_some_and(Value::is_object) {
+        document.insert(
+            "inputs".to_string(),
+            json!({
+                "focusedInput": { "id": Value::Null, "title": Value::Null },
+                "inputs": {},
+                "inputLinks": {},
+            }),
+        );
+    }
+    let source_inputs = source.pointer("/inputs/inputs").and_then(Value::as_object);
+    let source_links = source
+        .pointer("/inputs/inputLinks")
+        .and_then(Value::as_object);
+    let Some(inputs) = document.get_mut("inputs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if let Some(scene_inputs) = inputs.get_mut("inputs").and_then(Value::as_object_mut) {
+        for id in ids {
+            if let Some(input) = source_inputs.and_then(|inputs| inputs.get(id)) {
+                scene_inputs.insert(id.clone(), input.clone());
+            }
+        }
+    }
+    if let Some(links) = inputs.get_mut("inputLinks").and_then(Value::as_object_mut) {
+        for id in ids {
+            if let Some(link) = source_links.and_then(|links| links.get(id)) {
+                links.insert(id.clone(), link.clone());
+            }
+        }
+    }
+    let source_tweens = source.get("tweens").and_then(Value::as_array);
+    if let Some(source_tweens) = source_tweens {
+        let target_tweens = document
+            .entry("tweens".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(target_tweens) = target_tweens.as_array_mut() {
+            for tween in source_tweens {
+                let Some(id) = tween.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !ids.contains(id) {
+                    continue;
+                }
+                let exists = target_tweens
+                    .iter()
+                    .any(|existing| existing.get("id").and_then(Value::as_str) == Some(id));
+                if !exists {
+                    target_tweens.push(tween.clone());
+                }
+            }
+        }
+    }
+}
+
 fn merge_captured_tweens(document: &mut Map<String, Value>, tweens: &TweenSet) {
     let values: Vec<Value> = tweens
         .iter()
@@ -1270,6 +1541,7 @@ fn performance_view(config: &Value) -> PerformanceView {
                 .unwrap_or("in-order"),
         )
         .to_string(),
+        available_transitions: Vec::new(),
     }
 }
 

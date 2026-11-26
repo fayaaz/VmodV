@@ -2591,6 +2591,9 @@ pub struct PerformanceView {
     pub allowed_transitions: Vec<String>,
     /// Scene order used for the next-Scene pick (`"in-order"` / `"random"`).
     pub order: String,
+    /// Transition names the engine can run (Fade, None, natives and
+    /// registered ISF transitions), for the Scenes picker.
+    pub available_transitions: Vec<String>,
 }
 
 impl Default for PerformanceView {
@@ -2605,6 +2608,7 @@ impl Default for PerformanceView {
             transition_seconds: 0.0,
             allowed_transitions: Vec::new(),
             order: PERFORMANCE_ORDER_IN_ORDER.to_string(),
+            available_transitions: Vec::new(),
         }
     }
 }

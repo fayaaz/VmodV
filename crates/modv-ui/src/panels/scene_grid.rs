@@ -1292,6 +1292,39 @@ fn grid_controls(
                 .color(theme::MUTED),
             );
         }
+        if !snapshot.performance.available_transitions.is_empty() {
+            ui.separator();
+            ui.label("Transition");
+            let current = snapshot
+                .performance
+                .allowed_transitions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Fade".to_string());
+            let mut selected = current.clone();
+            let shown = if snapshot.performance.enabled {
+                "Fade (performance)".to_string()
+            } else {
+                current.clone()
+            };
+            egui::ComboBox::from_id_salt("scene-transition")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for name in &snapshot.performance.available_transitions {
+                        if ui.selectable_label(selected == *name, name).clicked() {
+                            selected = name.clone();
+                        }
+                    }
+                });
+            if selected != current {
+                actions.push(UiAction::new(
+                    "scenes/updatePerformance",
+                    serde_json::json!({
+                        "config": { "allowedTransitions": [selected] },
+                    }),
+                ));
+            }
+        }
         ui.separator();
         if ui.button("Row names").clicked() {
             grid.row_names_edit = Some(grid_row_names(snapshot, row_count));

@@ -7,20 +7,32 @@
 //!
 //! The state is pure (no wgpu, no DOM), so it is unit-tested on the host.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::sync::{Arc, OnceLock};
 
 use include_dir::{Dir, include_dir};
 use serde_json::{Map, Value, json};
 
+use modv_app::compositor::RowFadeInfo;
 use modv_app::input_links::{BeatsState, LinkTarget, LinkWrite, evaluate_input_links};
 use modv_app::module_registry::ModuleRegistry;
+use modv_app::scene_transition::{SceneTransitionInfo, TransitionEffect};
 use modv_engine::engine_state::{
     EngineState, GROUP_DISABLED, GROUP_ENABLED, Group, InheritFrom, ModuleInstance,
 };
 use modv_engine::inputs::{Input, InputLink};
 use modv_engine::props::coerce_prop_value;
+use modv_engine::scene_rows::{
+    PickNextRowScene, ShouldAdvanceRow, pick_next_row_scene_with_disabled, should_advance_row,
+};
+use modv_engine::scene_timing::{
+    normalize_transition_duration, pick_cell_dwell_numeric, resolve_scene_timing_at,
+};
+use modv_engine::scene_transition_pick::{
+    FADE_TRANSITION, NATIVE_TRANSITION_NAMES, NONE_TRANSITION, pick_transition_name,
+};
+use modv_engine::scenes_playlist::normalize_transition_list;
 use modv_engine::tweens::{TweenDescriptor, TweenSet};
 use modv_renderers::two_d::AudioFrame;
 use modv_ui::model::{
@@ -47,7 +59,93 @@ pub struct WebState {
     smoothing: HashMap<String, f64>,
     beats: BeatsState,
     scenes: SceneLibrary,
+    performance_runtime: PerformanceRuntime,
+    transition: Option<WholeTransition>,
+    row_transitions: BTreeMap<usize, RowTransition>,
+    pending_transition_capture: Option<TransitionEffect>,
     dirty: bool,
+}
+
+/// One performance row's dwell state (the native `rowRuntime`).
+#[derive(Clone, Debug, Default)]
+struct PerformanceRow {
+    scene_id: Option<String>,
+    dwell: f64,
+    target: f64,
+}
+
+/// Browser port of the native performance runtime's per-row dwell loop.
+#[derive(Clone, Debug, Default)]
+struct PerformanceRuntime {
+    rows: Vec<PerformanceRow>,
+    active: BTreeMap<usize, String>,
+    rng: u64,
+}
+
+impl PerformanceRuntime {
+    /// xorshift64* — the same shape as the native runtime's RNG.
+    fn next_random(&mut self) -> f64 {
+        let mut state = self.rng;
+        if state == 0 {
+            state = 0x9E37_79B9_7F4A_7C15;
+        }
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        self.rng = state;
+        ((state.wrapping_mul(0x2545_F491_4F6C_DD1D)) >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// An in-flight whole-Scene transition (the native `transition` slot).
+#[derive(Clone, Debug)]
+struct WholeTransition {
+    from: Vec<(String, f64)>,
+    to: Vec<(String, f64)>,
+    effect: Option<TransitionEffect>,
+    elapsed: f64,
+    duration: f64,
+}
+
+impl WholeTransition {
+    fn progress(&self) -> f64 {
+        if self.duration.is_finite() && self.duration > 0.0 {
+            (self.elapsed / self.duration).min(1.0)
+        } else {
+            1.0
+        }
+    }
+}
+
+/// An in-flight per-row crossfade (`rowTransitions`).
+#[derive(Clone, Debug)]
+struct RowTransition {
+    row: usize,
+    group_id: String,
+    ghost_group_id: String,
+    from_alpha: f64,
+    target_alpha: f64,
+    elapsed: f64,
+    duration: f64,
+}
+
+impl RowTransition {
+    fn progress(&self) -> f64 {
+        if self.duration.is_finite() && self.duration > 0.0 {
+            (self.elapsed / self.duration).min(1.0)
+        } else {
+            1.0
+        }
+    }
+}
+
+fn smoothstep(progress: f64) -> f64 {
+    let t = if progress.is_finite() {
+        progress.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    t * t * (3.0 - 2.0 * t)
 }
 
 impl Default for WebState {
@@ -82,6 +180,10 @@ impl WebState {
             smoothing: HashMap::new(),
             beats: BeatsState::default(),
             scenes,
+            performance_runtime: PerformanceRuntime::default(),
+            transition: None,
+            row_transitions: BTreeMap::new(),
+            pending_transition_capture: None,
             dirty: false,
         };
         this.install_group_inputs("web-group-1");
@@ -176,6 +278,9 @@ impl WebState {
         self.next_id = next_id;
         self.smoothing.clear();
         self.dirty = false;
+        if self.performance_enabled() {
+            self.start_performance();
+        }
         true
     }
 
@@ -656,6 +761,605 @@ impl WebState {
     }
 
     /// Dispatch one UI action. Returns whether the shell understood it.
+    /// Start performance mode: give every row its first Scene and dwell.
+    fn start_performance(&mut self) {
+        let row_count = self.scenes.row_count();
+        let row_names = self.scenes.row_names();
+        let disabled = self.scenes.disabled_cells();
+        let order = self
+            .scenes
+            .performance()
+            .get("order")
+            .and_then(Value::as_str)
+            .unwrap_or("in-order")
+            .to_string();
+        let mut runtime = PerformanceRuntime::default();
+        for row in 0..row_count {
+            let picked = {
+                let args = PickNextRowScene {
+                    scenes: self.scenes.scenes(),
+                    row_index: row,
+                    current_scene_id: None,
+                    order: &order,
+                    row_names: &row_names,
+                };
+                pick_next_row_scene_with_disabled(&args, &disabled, || runtime.next_random())
+                    .cloned()
+            };
+            let Some(scene) = picked else {
+                runtime.rows.push(PerformanceRow::default());
+                continue;
+            };
+            let Some(scene_id) = scene.get("id").and_then(Value::as_str).map(str::to_string) else {
+                runtime.rows.push(PerformanceRow::default());
+                continue;
+            };
+            if !self.scenes.apply_row(
+                &scene_id,
+                row,
+                &self.registry,
+                &mut self.state,
+                &mut self.tweens,
+                self.bpm,
+            ) {
+                runtime.rows.push(PerformanceRow::default());
+                continue;
+            }
+            let target = {
+                let timing = resolve_scene_timing_at(
+                    Some(&scene),
+                    Some(self.scenes.performance()),
+                    self.bpm,
+                );
+                let roll = runtime.next_random();
+                pick_cell_dwell_numeric(
+                    Some(timing.min_seconds),
+                    Some(timing.max_seconds),
+                    Some(roll),
+                )
+            };
+            runtime.rows.push(PerformanceRow {
+                scene_id: Some(scene_id.clone()),
+                dwell: 0.0,
+                target,
+            });
+            runtime.active.insert(row, scene_id);
+        }
+        self.performance_runtime = runtime;
+        if let Some(scene_id) = self.performance_runtime.active.values().next().cloned() {
+            self.scenes.set_current_scene(Some(&scene_id));
+        }
+        self.dirty = true;
+    }
+
+    fn stop_performance(&mut self) {
+        self.finish_whole_transition(true);
+        self.finish_all_row_transitions();
+        self.performance_runtime = PerformanceRuntime::default();
+    }
+
+    fn performance_enabled(&self) -> bool {
+        self.scenes
+            .performance()
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// Advance every row whose dwell deadline has elapsed.
+    pub fn tick_performance(&mut self, dt: f32, phrase_flipped: bool) {
+        if !self.performance_enabled() || self.performance_runtime.rows.is_empty() {
+            return;
+        }
+        let dt = f64::from(dt).clamp(0.0, 0.1);
+        if dt <= 0.0 {
+            return;
+        }
+        let row_names = self.scenes.row_names();
+        let disabled = self.scenes.disabled_cells();
+        let order = self
+            .scenes
+            .performance()
+            .get("order")
+            .and_then(Value::as_str)
+            .unwrap_or("in-order")
+            .to_string();
+        let mut changed = false;
+        for row in 0..self.performance_runtime.rows.len() {
+            let (dwell, target, scene_id) = {
+                let runtime = &mut self.performance_runtime.rows[row];
+                runtime.dwell += dt;
+                (runtime.dwell, runtime.target, runtime.scene_id.clone())
+            };
+            let timing = scene_id
+                .as_deref()
+                .and_then(|id| self.scenes.find(id))
+                .map(|scene| {
+                    resolve_scene_timing_at(Some(scene), Some(self.scenes.performance()), self.bpm)
+                });
+            let decision = {
+                let runtime = &mut self.performance_runtime;
+                should_advance_row(
+                    &ShouldAdvanceRow {
+                        dwell,
+                        min_seconds: timing.as_ref().map(|timing| timing.min_seconds),
+                        max_seconds: timing.as_ref().map(|timing| timing.max_seconds),
+                        target_seconds: Some(target),
+                        phrase_flipped,
+                    },
+                    || runtime.next_random(),
+                )
+            };
+            if !decision.advance {
+                continue;
+            }
+            let current = self.performance_runtime.rows[row].scene_id.clone();
+            let picked = {
+                let args = PickNextRowScene {
+                    scenes: self.scenes.scenes(),
+                    row_index: row,
+                    current_scene_id: current.as_deref(),
+                    order: &order,
+                    row_names: &row_names,
+                };
+                pick_next_row_scene_with_disabled(&args, &disabled, || {
+                    self.performance_runtime.next_random()
+                })
+                .cloned()
+            };
+            let Some(scene) = picked else {
+                continue;
+            };
+            let Some(scene_id) = scene.get("id").and_then(Value::as_str).map(str::to_string) else {
+                continue;
+            };
+            let old_row = self.capture_row_group(row);
+            if !self.scenes.apply_row(
+                &scene_id,
+                row,
+                &self.registry,
+                &mut self.state,
+                &mut self.tweens,
+                self.bpm,
+            ) {
+                continue;
+            }
+            if let Some((old_group, old_modules)) = old_row {
+                self.begin_row_transition(row, old_group, old_modules);
+            }
+            self.reset_performance_row(row, &scene);
+            self.performance_runtime
+                .active
+                .insert(row, scene_id.clone());
+            self.scenes.set_current_scene(Some(&scene_id));
+            changed = true;
+        }
+        if changed {
+            self.dirty = true;
+        }
+    }
+
+    fn reset_performance_row(&mut self, row: usize, scene: &Value) {
+        while self.performance_runtime.rows.len() <= row {
+            self.performance_runtime
+                .rows
+                .push(PerformanceRow::default());
+        }
+        let timing =
+            resolve_scene_timing_at(Some(scene), Some(self.scenes.performance()), self.bpm);
+        let roll = self.performance_runtime.next_random();
+        let target = pick_cell_dwell_numeric(
+            Some(timing.min_seconds),
+            Some(timing.max_seconds),
+            Some(roll),
+        );
+        let runtime = &mut self.performance_runtime.rows[row];
+        runtime.scene_id = scene.get("id").and_then(Value::as_str).map(str::to_string);
+        runtime.dwell = 0.0;
+        runtime.target = target;
+    }
+
+    /// A whole-Scene apply marks every row that Scene covers as live.
+    fn sync_performance_scene(&mut self, scene_id: &str) {
+        self.scenes.set_current_scene(Some(scene_id));
+        if !self.performance_enabled() {
+            return;
+        }
+        let row_count = self.scenes.row_count();
+        let scene = self.scenes.find(scene_id).cloned();
+        self.performance_runtime.active.clear();
+        let Some(scene) = scene else {
+            return;
+        };
+        for row in 0..row_count {
+            let has_group = scene
+                .get("groups")
+                .and_then(Value::as_array)
+                .and_then(|groups| groups.get(row))
+                .is_some_and(|group| !group.is_null());
+            if has_group {
+                self.performance_runtime
+                    .active
+                    .insert(row, scene_id.to_string());
+                self.reset_performance_row(row, &scene);
+            }
+        }
+    }
+
+    /// One row applied manually becomes that row's live Scene.
+    fn sync_performance_row(&mut self, scene_id: &str, row: usize) {
+        self.scenes.set_current_scene(Some(scene_id));
+        if !self.performance_enabled() {
+            return;
+        }
+        if let Some(scene) = self.scenes.find(scene_id).cloned() {
+            self.reset_performance_row(row, &scene);
+            self.performance_runtime
+                .active
+                .insert(row, scene_id.to_string());
+        }
+    }
+
+    /// Pick the transition name the native shell would use for this change.
+    fn available_transition_names(&self) -> Vec<String> {
+        let mut names = vec![FADE_TRANSITION.to_string(), NONE_TRANSITION.to_string()];
+        names.extend(NATIVE_TRANSITION_NAMES.iter().map(|name| name.to_string()));
+        names.extend(
+            self.registry
+                .isf_definitions()
+                .iter()
+                .filter(|definition| definition.document.filter_type() == "transition")
+                .map(|definition| definition.name.clone()),
+        );
+        names
+    }
+
+    fn pick_scene_transition_name(&mut self) -> String {
+        let enabled = self.performance_enabled();
+        let allowed =
+            normalize_transition_list(self.scenes.performance().get("allowedTransitions"));
+        let available = self.available_transition_names();
+        let roll = self.performance_runtime.next_random();
+        pick_transition_name(enabled, &allowed, &available, || roll)
+    }
+
+    /// Keep the outgoing Groups alive for a whole-Scene Fade or shader
+    /// transition. Called after the incoming Scene has been applied.
+    fn begin_whole_scene_transition(
+        &mut self,
+        old_groups: Vec<Group>,
+        old_modules: HashMap<String, ModuleInstance>,
+    ) {
+        self.finish_whole_transition(true);
+        self.finish_all_row_transitions();
+        if old_groups.is_empty() {
+            return;
+        }
+        let mut name = self.pick_scene_transition_name();
+        let effect = TransitionEffect::from_name(&name, &self.registry);
+        if effect.is_none() && name != FADE_TRANSITION && name != NONE_TRANSITION {
+            name = FADE_TRANSITION.to_string();
+        }
+        if name == NONE_TRANSITION {
+            return;
+        }
+        let incoming: HashSet<String> = self.state.groups.iter().map(|g| g.id.clone()).collect();
+        if old_groups.iter().any(|group| incoming.contains(&group.id)) {
+            // Re-applying the same Scene reuses document ids; a ghost would
+            // collide with its replacement, so switch instantly.
+            return;
+        }
+        let from: Vec<(String, f64)> = old_groups
+            .iter()
+            .map(|group| (group.id.clone(), group.alpha))
+            .collect();
+        let to: Vec<(String, f64)> = self
+            .state
+            .groups
+            .iter()
+            .map(|group| (group.id.clone(), group.alpha))
+            .collect();
+        for (id, module) in old_modules {
+            self.state.modules.entry(id).or_insert(module);
+        }
+        let mut ghosts = old_groups;
+        if effect.is_some() {
+            for group in &mut ghosts {
+                group.hidden = true;
+                group.transition_ghost = None;
+            }
+        }
+        self.state.groups.splice(0..0, ghosts);
+        if effect.is_none() {
+            for (id, _) in &to {
+                if let Some(group) = self.state.find_group_mut(id) {
+                    group.alpha = 0.0;
+                }
+            }
+        } else {
+            self.pending_transition_capture = effect.clone();
+        }
+        let duration =
+            normalize_transition_duration(self.scenes.performance().get("transitionSeconds"));
+        self.transition = Some(WholeTransition {
+            from,
+            to,
+            effect,
+            elapsed: 0.0,
+            duration,
+        });
+    }
+
+    /// Keep one outgoing row Group as a `transitionGhost` for a crossfade.
+    fn begin_row_transition(
+        &mut self,
+        row: usize,
+        old_group: Group,
+        old_modules: HashMap<String, ModuleInstance>,
+    ) {
+        self.finish_row_transition(row, true);
+        let Some(new_group_id) = self
+            .state
+            .groups
+            .iter()
+            .find(|group| group.scene_row == Some(row) && group.transition_ghost != Some(true))
+            .map(|group| group.id.clone())
+        else {
+            return;
+        };
+        if old_group.id == new_group_id {
+            return;
+        }
+        let target_alpha = self
+            .state
+            .find_group(&new_group_id)
+            .map(|group| group.alpha)
+            .unwrap_or(1.0);
+        let from_alpha = old_group.alpha;
+        for (id, module) in old_modules {
+            self.state.modules.entry(id).or_insert(module);
+        }
+        let mut ghost = old_group;
+        ghost.transition_ghost = Some(true);
+        ghost.hidden = false;
+        let insert_at = self
+            .state
+            .groups
+            .iter()
+            .position(|group| group.id == new_group_id)
+            .unwrap_or(self.state.groups.len());
+        let ghost_id = ghost.id.clone();
+        self.state.groups.insert(insert_at, ghost);
+        if let Some(group) = self.state.find_group_mut(&new_group_id) {
+            group.alpha = 0.0;
+        }
+        let duration =
+            normalize_transition_duration(self.scenes.performance().get("transitionSeconds"));
+        self.row_transitions.insert(
+            row,
+            RowTransition {
+                row,
+                group_id: new_group_id,
+                ghost_group_id: ghost_id,
+                from_alpha,
+                target_alpha,
+                elapsed: 0.0,
+                duration,
+            },
+        );
+    }
+
+    /// Advance every in-flight transition. Called once per rendered frame.
+    pub fn tick_transitions(&mut self, dt: f32) {
+        let dt = f64::from(dt).clamp(0.0, 0.1);
+        if dt <= 0.0 {
+            return;
+        }
+        if let Some(transition) = self.transition.as_mut() {
+            transition.elapsed += dt;
+            if transition.effect.is_none() {
+                let eased = smoothstep(transition.progress());
+                for (id, from) in &transition.from {
+                    if let Some(group) = self.state.find_group_mut(id) {
+                        group.alpha = from * (1.0 - eased);
+                    }
+                }
+                for (id, target) in &transition.to {
+                    if let Some(group) = self.state.find_group_mut(id) {
+                        group.alpha = target * eased;
+                    }
+                }
+            }
+            if transition.progress() >= 1.0 {
+                self.finish_whole_transition(true);
+            }
+        }
+        let rows: Vec<usize> = self.row_transitions.keys().copied().collect();
+        for row in rows {
+            let finished = if let Some(transition) = self.row_transitions.get_mut(&row) {
+                transition.elapsed += dt;
+                let eased = smoothstep(transition.progress());
+                if let Some(group) = self.state.find_group_mut(&transition.ghost_group_id) {
+                    group.alpha = transition.from_alpha * (1.0 - eased);
+                }
+                if let Some(group) = self.state.find_group_mut(&transition.group_id) {
+                    group.alpha = transition.target_alpha * eased;
+                }
+                transition.progress() >= 1.0
+            } else {
+                false
+            };
+            if finished {
+                self.finish_row_transition(row, true);
+            }
+        }
+    }
+
+    fn finish_whole_transition(&mut self, remove_outgoing: bool) {
+        let Some(transition) = self.transition.take() else {
+            return;
+        };
+        if remove_outgoing {
+            for (id, _) in &transition.from {
+                self.remove_group_and_modules(id);
+            }
+        }
+        for (id, target) in &transition.to {
+            if let Some(group) = self.state.find_group_mut(id) {
+                group.alpha = *target;
+            }
+        }
+        self.pending_transition_capture = None;
+    }
+
+    fn finish_row_transition(&mut self, row: usize, remove_ghost: bool) {
+        let Some(transition) = self.row_transitions.remove(&row) else {
+            return;
+        };
+        if remove_ghost {
+            self.remove_group_and_modules(&transition.ghost_group_id);
+        }
+        if let Some(group) = self.state.find_group_mut(&transition.group_id) {
+            group.alpha = transition.target_alpha;
+        }
+    }
+
+    fn finish_all_row_transitions(&mut self) {
+        let rows: Vec<usize> = self.row_transitions.keys().copied().collect();
+        for row in rows {
+            self.finish_row_transition(row, true);
+        }
+    }
+
+    fn remove_group_and_modules(&mut self, group_id: &str) {
+        let Some(position) = self
+            .state
+            .groups
+            .iter()
+            .position(|group| group.id == group_id)
+        else {
+            return;
+        };
+        let group = self.state.groups.remove(position);
+        for module_id in group.modules {
+            let still_used = self
+                .state
+                .groups
+                .iter()
+                .any(|group| group.modules.iter().any(|id| id == &module_id));
+            if !still_used {
+                self.state.modules.shift_remove(&module_id);
+            }
+        }
+    }
+
+    /// The shader transition to hand to the compositor this frame.
+    pub fn scene_transition_info(&self) -> Option<SceneTransitionInfo> {
+        let transition = self.transition.as_ref()?;
+        let effect = transition.effect.clone()?;
+        Some(SceneTransitionInfo {
+            effect,
+            progress: transition.progress(),
+            from_groups: transition
+                .from
+                .iter()
+                .map(|(group_id, _)| group_id.clone())
+                .collect(),
+        })
+    }
+
+    /// Per-row crossfade descriptions for `FrameInfo::row_fades`.
+    pub fn row_fade_infos(&self) -> Vec<RowFadeInfo> {
+        self.row_transitions
+            .values()
+            .map(|transition| RowFadeInfo {
+                row: transition.row,
+                group_id: transition.group_id.clone(),
+                ghost_group_id: transition.ghost_group_id.clone(),
+                from_alpha: transition.from_alpha,
+                target_alpha: transition.target_alpha,
+                progress: transition.progress(),
+            })
+            .collect()
+    }
+
+    /// Take the capture request a shader transition left for the app.
+    pub fn take_pending_transition_capture(&mut self) -> Option<TransitionEffect> {
+        self.pending_transition_capture.take()
+    }
+
+    /// Downgrade a shader transition to the Fade alpha path when the outgoing
+    /// frame or its pipeline is unavailable.
+    pub fn fall_back_transition_to_fade(&mut self) -> bool {
+        let Some(transition) = self.transition.as_mut() else {
+            return false;
+        };
+        if transition.effect.is_none() {
+            return false;
+        }
+        transition.effect = None;
+        self.pending_transition_capture = None;
+        for (id, from) in &transition.from {
+            if let Some(group) = self.state.find_group_mut(id) {
+                group.hidden = false;
+                group.alpha = *from;
+            }
+        }
+        for (id, _) in &transition.to {
+            if let Some(group) = self.state.find_group_mut(id) {
+                group.alpha = 0.0;
+            }
+        }
+        true
+    }
+
+    fn capture_live_groups(&self) -> (Vec<Group>, HashMap<String, ModuleInstance>) {
+        let groups: Vec<Group> = self
+            .state
+            .groups
+            .iter()
+            .filter(|group| group.scene_id.is_some() && group.transition_ghost != Some(true))
+            .cloned()
+            .collect();
+        let mut modules = HashMap::new();
+        for group in &groups {
+            for module_id in &group.modules {
+                if let Some(module) = self.state.modules.get(module_id) {
+                    modules.insert(module_id.clone(), module.clone());
+                }
+            }
+        }
+        (groups, modules)
+    }
+
+    fn capture_row_group(&self, row: usize) -> Option<(Group, HashMap<String, ModuleInstance>)> {
+        let group = self
+            .state
+            .groups
+            .iter()
+            .filter(|group| group.transition_ghost != Some(true))
+            .find(|group| group.scene_row == Some(row))
+            .or_else(|| {
+                self.state
+                    .groups
+                    .iter()
+                    .filter(|group| group.transition_ghost != Some(true))
+                    .nth(row)
+            })?
+            .clone();
+        let modules = group
+            .modules
+            .iter()
+            .filter_map(|module_id| {
+                self.state
+                    .modules
+                    .get(module_id)
+                    .map(|module| (module_id.clone(), module.clone()))
+            })
+            .collect();
+        Some((group, modules))
+    }
+
     pub fn apply_action(&mut self, action: &UiAction) -> bool {
         let changed = self.apply_action_inner(action);
         if changed {
@@ -840,6 +1544,7 @@ impl WebState {
                 let Some(scene_id) = action.payload.get("sceneId").and_then(Value::as_str) else {
                     return false;
                 };
+                let (old_groups, old_modules) = self.capture_live_groups();
                 let Some(group_id) = self.scenes.apply(
                     scene_id,
                     &self.registry,
@@ -850,6 +1555,8 @@ impl WebState {
                     return false;
                 };
                 self.group_id = group_id;
+                self.begin_whole_scene_transition(old_groups, old_modules);
+                self.sync_performance_scene(scene_id);
                 true
             }
             "scenes/applySceneRow" => {
@@ -859,14 +1566,22 @@ impl WebState {
                 let Some(row) = action.payload.get("rowIndex").and_then(Value::as_u64) else {
                     return false;
                 };
-                self.scenes.apply_row(
+                let old_row = self.capture_row_group(row as usize);
+                let changed = self.scenes.apply_row(
                     scene_id,
                     row as usize,
                     &self.registry,
                     &mut self.state,
                     &mut self.tweens,
                     self.bpm,
-                )
+                );
+                if changed {
+                    if let Some((old_group, old_modules)) = old_row {
+                        self.begin_row_transition(row as usize, old_group, old_modules);
+                    }
+                    self.sync_performance_row(scene_id, row as usize);
+                }
+                changed
             }
             "scenes/addEmptyScene" => {
                 let name = action.payload.get("name").and_then(Value::as_str);
@@ -889,6 +1604,9 @@ impl WebState {
                 let removed = self.scenes.remove(scene_id);
                 if removed {
                     self.drop_scene_groups(scene_id);
+                    self.performance_runtime
+                        .active
+                        .retain(|_, id| id != scene_id);
                 }
                 removed
             }
@@ -1049,7 +1767,13 @@ impl WebState {
                 let Some(enabled) = action.payload.get("enabled").and_then(Value::as_bool) else {
                     return false;
                 };
-                self.scenes.set_performance_enabled(enabled)
+                let changed = self.scenes.set_performance_enabled(enabled);
+                if enabled {
+                    self.start_performance();
+                } else {
+                    self.stop_performance();
+                }
+                changed
             }
             "scenes/setTimingUnit" => {
                 let unit = action
@@ -1058,7 +1782,7 @@ impl WebState {
                     .or_else(|| action.payload.get("timingUnit"))
                     .and_then(Value::as_str)
                     .unwrap_or("seconds");
-                self.scenes.set_timing_unit(unit)
+                self.scenes.set_timing_unit(unit, self.bpm)
             }
             // Selection-only, media, audio-device, NDI/OSC/MIDI and plugin
             // actions are outside the web shell's cut line.
@@ -1217,7 +1941,13 @@ impl WebState {
 
     /// Build the read model the existing `modv-ui` shell draws.
     pub fn snapshot(&self, resolution: [u32; 2], fps: f32, frame_ms: f32) -> EngineSnapshot {
-        let groups = self.state.groups.iter().map(group_view).collect();
+        let groups = self
+            .state
+            .groups
+            .iter()
+            .filter(|group| group.transition_ghost != Some(true))
+            .map(group_view)
+            .collect();
         let tween_by_id: HashMap<String, TweenView> = self
             .tweens
             .iter()
@@ -1243,10 +1973,18 @@ impl WebState {
                 )
             })
             .collect();
+        let visible_modules: HashSet<&str> = self
+            .state
+            .groups
+            .iter()
+            .filter(|group| group.transition_ghost != Some(true))
+            .flat_map(|group| group.modules.iter().map(String::as_str))
+            .collect();
         let modules = self
             .state
             .modules
             .values()
+            .filter(|module| visible_modules.contains(module.id.as_str()))
             .map(|module| {
                 let group_id = self
                     .state
@@ -1282,8 +2020,12 @@ impl WebState {
             })
             .collect();
         let registered = registered_modules(&self.registry);
-        let performance = self.scenes.performance_view();
+        let mut performance = self.scenes.performance_view();
+        performance.available_transitions = self.available_transition_names();
         let scenes = self.scenes.views();
+        let scene_rows = self.scenes.row_names();
+        let applied_scene_id = self.scenes.current_scene_id();
+        let active_scene_rows = self.performance_runtime.active.clone();
         let audio = AudioView {
             bpm: self.bpm,
             kick: self.audio.beat >= 0.5,
@@ -1307,6 +2049,9 @@ impl WebState {
             registered,
             performance,
             scenes,
+            scene_rows,
+            applied_scene_id,
+            active_scene_rows,
             audio,
             resolution,
             fps,
@@ -2076,6 +2821,299 @@ mod tests {
             "engine": {},
         })));
         assert_eq!(state.state().modules.len(), before);
+    }
+
+    fn enable_performance(state: &mut WebState) {
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/updatePerformance",
+            json!({ "config": { "minSeconds": 1.0, "maxSeconds": 2.0 } })
+        )));
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/setPerformanceEnabled",
+            json!({ "enabled": true })
+        )));
+    }
+
+    #[test]
+    fn performance_mode_populates_rows_and_advances_them() {
+        let mut state = WebState::new();
+        enable_performance(&mut state);
+        let first = state.snapshot([640, 360], 60.0, 16.0);
+        assert!(
+            !first.active_scene_rows.is_empty(),
+            "starting performance applies a Scene per non-empty row"
+        );
+        assert!(first.performance.enabled);
+        assert!(first.applied_scene_id.is_some());
+        let before = first.active_scene_rows.clone();
+
+        for _ in 0..25 {
+            state.tick_performance(0.1, false);
+        }
+        let after = state.snapshot([640, 360], 60.0, 16.0);
+        assert_ne!(
+            after.active_scene_rows, before,
+            "rows advance once their dwell deadline passes"
+        );
+        assert_ne!(
+            after
+                .modules
+                .iter()
+                .map(|m| &m.module_name)
+                .collect::<Vec<_>>(),
+            first
+                .modules
+                .iter()
+                .map(|m| &m.module_name)
+                .collect::<Vec<_>>(),
+            "the live modules follow the advanced rows"
+        );
+    }
+
+    #[test]
+    fn stopping_performance_clears_the_live_rows() {
+        let mut state = WebState::new();
+        enable_performance(&mut state);
+        assert!(
+            !state
+                .snapshot([640, 360], 60.0, 16.0)
+                .active_scene_rows
+                .is_empty()
+        );
+
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/setPerformanceEnabled",
+            json!({ "enabled": false })
+        )));
+        assert!(
+            state
+                .snapshot([640, 360], 60.0, 16.0)
+                .active_scene_rows
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_manual_scene_apply_marks_every_covered_row_live() {
+        let mut state = WebState::new();
+        enable_performance(&mut state);
+        let id = scene_id(&state, "Circuits");
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/applyScene",
+            json!({ "sceneId": id })
+        )));
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert_eq!(snapshot.applied_scene_id.as_deref(), Some(id.as_str()));
+        assert_eq!(
+            snapshot.active_scene_rows.get(&0).map(String::as_str),
+            Some(id.as_str())
+        );
+    }
+
+    fn tick_transition_seconds(state: &mut WebState, seconds: f64) {
+        for _ in 0..(seconds / 0.1).ceil() as usize {
+            state.tick_transitions(0.1);
+        }
+    }
+
+    fn apply_named(state: &mut WebState, name: &str) {
+        let id = scene_id(state, name);
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/applyScene",
+            json!({ "sceneId": id })
+        )));
+    }
+
+    #[test]
+    fn whole_scene_changes_crossfade_and_clean_up_the_ghosts() {
+        let mut state = WebState::new();
+        apply_named(&mut state, "Mycelium Bloom");
+        apply_named(&mut state, "Circuits");
+
+        let transition = state.transition.as_ref().expect("a whole-Scene fade");
+        assert!(transition.effect.is_none(), "the default is the Fade path");
+        assert!(
+            state
+                .state()
+                .groups
+                .iter()
+                .any(|group| group.name == "Background" && group.alpha == 0.0),
+            "incoming Groups start transparent"
+        );
+        assert!(
+            state
+                .state()
+                .groups
+                .iter()
+                .any(|group| group.name == "Background" && group.alpha > 0.0),
+            "outgoing Groups stay visible"
+        );
+
+        tick_transition_seconds(&mut state, 1.0);
+        let halfway = state
+            .state()
+            .groups
+            .iter()
+            .filter(|group| group.name == "Background")
+            .map(|group| group.alpha)
+            .collect::<Vec<_>>();
+        assert!(
+            halfway.iter().any(|alpha| *alpha > 0.0 && *alpha < 1.0),
+            "the fade is in flight: {halfway:?}"
+        );
+
+        tick_transition_seconds(&mut state, 1.5);
+        assert!(state.transition.is_none(), "the fade completes");
+        let old = state
+            .state()
+            .groups
+            .iter()
+            .filter(|group| group.name == "Background")
+            .count();
+        assert_eq!(old, 1, "only the incoming Background survives");
+    }
+
+    #[test]
+    fn shader_transitions_are_selected_from_allowed_transitions() {
+        let mut state = WebState::new();
+        apply_named(&mut state, "Mycelium Bloom");
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/updatePerformance",
+            json!({ "config": { "allowedTransitions": ["Three Crossfade"] } })
+        )));
+        apply_named(&mut state, "Circuits");
+
+        let info = state
+            .scene_transition_info()
+            .expect("a shader transition is active");
+        assert!(matches!(info.effect, TransitionEffect::Crossfade));
+        assert!(
+            state.take_pending_transition_capture().is_some(),
+            "the app is told to capture the outgoing frame"
+        );
+        assert_eq!(info.from_groups.len(), 3);
+        tick_transition_seconds(&mut state, 3.0);
+        assert!(state.transition.is_none());
+    }
+
+    #[test]
+    fn none_transitions_switch_immediately() {
+        let mut state = WebState::new();
+        apply_named(&mut state, "Mycelium Bloom");
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/updatePerformance",
+            json!({ "config": { "allowedTransitions": ["None"] } })
+        )));
+        apply_named(&mut state, "Circuits");
+        assert!(state.transition.is_none());
+        assert!(state.row_transitions.is_empty());
+    }
+
+    #[test]
+    fn performance_row_advances_leave_a_crossfade_ghost() {
+        let mut state = WebState::new();
+        enable_performance(&mut state);
+        for _ in 0..25 {
+            state.tick_performance(0.1, false);
+        }
+        assert!(
+            !state.row_transitions.is_empty(),
+            "an advance starts a row crossfade"
+        );
+        let fades = state.row_fade_infos();
+        assert!(!fades.is_empty());
+        assert_eq!(fades[0].progress, 0.0);
+        assert!(
+            state
+                .state()
+                .groups
+                .iter()
+                .any(|group| group.transition_ghost == Some(true)),
+            "the outgoing row Group is kept as a ghost"
+        );
+        let visible = state.snapshot([640, 360], 60.0, 16.0);
+        assert!(
+            visible
+                .groups
+                .iter()
+                .all(|group| group.name != "Gallery" && !group.id.is_empty()),
+            "the snapshot is still coherent while a ghost exists"
+        );
+        tick_transition_seconds(&mut state, 3.0);
+        assert!(state.row_transitions.is_empty());
+        assert!(
+            state
+                .state()
+                .groups
+                .iter()
+                .all(|group| group.transition_ghost != Some(true)),
+            "the ghost is removed after the fade"
+        );
+    }
+
+    #[test]
+    fn switching_the_timing_unit_converts_seconds_and_overrides() {
+        let mut state = WebState::new();
+        let id = scene_id(&state, "Circuits");
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/updateSceneTiming",
+            json!({ "sceneId": id, "minSeconds": 4.0, "maxSeconds": 12.0 })
+        )));
+        state.set_bpm(120.0);
+        assert!(state.apply_action(&UiAction::new(
+            "scenes/setTimingUnit",
+            json!({ "unit": "bars" })
+        )));
+
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert_eq!(snapshot.performance.timing_unit, modv_ui::TimingUnit::Bars);
+        assert_eq!(snapshot.performance.min_value, 4.0);
+        assert_eq!(snapshot.performance.max_value, 12.0);
+        let scene = snapshot
+            .scenes
+            .iter()
+            .find(|scene| scene.id == id)
+            .expect("Scene");
+        assert_eq!(scene.timing, Some((2.0, 6.0)));
+    }
+
+    #[test]
+    fn copy_cell_carries_its_inputs_and_clear_removes_its_modules() {
+        let mut state = WebState::new();
+        let source = scene_id(&state, "Circuits");
+        let target = state.scenes.add_empty(Some("Copied cell"));
+        assert!(state.scenes.copy_cell(&source, 0, &target, 1));
+
+        let copied = state.scenes.find(&target).expect("copied Scene").clone();
+        let modules = copied
+            .get("modules")
+            .and_then(Value::as_object)
+            .expect("modules");
+        assert!(!modules.is_empty());
+        let inputs = copied
+            .pointer("/inputs/inputs")
+            .and_then(Value::as_object)
+            .expect("inputs");
+        assert!(
+            !inputs.is_empty(),
+            "the copied Group brings its control inputs"
+        );
+        let links = copied
+            .pointer("/inputs/inputLinks")
+            .and_then(Value::as_object)
+            .expect("links");
+        assert!(!links.is_empty(), "the copied module keeps its links");
+
+        let module_id = modules.keys().next().expect("module id").clone();
+        assert!(state.scenes.clear_cell(&target, 1));
+        let cleared = state.scenes.find(&target).expect("cleared Scene").clone();
+        assert!(
+            cleared
+                .get("modules")
+                .and_then(Value::as_object)
+                .is_none_or(|modules| !modules.contains_key(&module_id)),
+            "clearing the cell removes its orphaned module document"
+        );
     }
 
     #[test]

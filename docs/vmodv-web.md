@@ -51,15 +51,30 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
   pipeline.
 - **Default Scenes**: the 56 versioned default Scenes are seeded into the
   Scenes tab. A cell/whole-Scene apply rebuilds the live stack with its module
-  props, input links and tweens; capture, rename, reorder, enable, timing and
-  cell actions update the Scene documents in place.
+  props, input links and tweens; capture, rename, reorder, enable, timing,
+  timing-unit conversion, cell create/clear/copy/paste and row names update the
+  Scene documents in place.
+- **Performance mode**: per-row dwell timers independently advance enabled,
+  non-empty, non-disabled Scene cells in `in-order` or `random` order. Each
+  advance crossfades the outgoing row Group over `transitionSeconds`; Stop
+  completes in-flight fades. The Scenes grid marks the live Scene per row.
+- **Transitions**: whole-Scene changes default to the Fade alpha path, with a
+  picker for `None`, the six native shader transitions and registered ISF
+  transition shaders. Shader transitions capture the outgoing frame once and
+  run through the compositor's `scene_transition` pass; unavailable captures
+  or pipelines fall back to Fade.
+- **Previews and monitors**: Gallery hover previews and Scene-cell hover
+  previews render through isolated GPU preview slots registered with
+  egui-wgpu; the Scenes gutter refreshes live row-monitor thumbnails from the
+  compositor's Group textures without readback.
 - **Persistence**: the live stack, Tweens, Scenes and performance config are
   saved to `localStorage` (`vmodv-web-state`) after structural edits and
   throttled prop edits, and restored on refresh. New default Scenes are seeded
   when the saved defaults version is older.
-- **Output tab**: `Open output` opens `output.html`, a chrome-less second
+- **Output popup**: `Open output` opens `output.html`, a chrome-less second
   engine instance that restores the saved stack and renders it full-window. It
-  has its own optional microphone button and never writes the saved state.
+  has its own optional microphone button and never writes the saved state. It
+  is an independent engine, so it can pause while its window is occluded.
 - **Status/health**: real adapter/backend (`webgpu` or `webgl2`), FPS, frame
   time, resolution and audio activity.
 
@@ -75,11 +90,12 @@ These are out of scope for this branch, not accidental omissions:
 - Input-link expressions, MIDI/OSC link sources and plugin-provided features
   are not wired in the browser shell.
 - OSC, NDI, MIDI and the local JavaScript plugin host.
-- Automatic performance-mode Scene advancing and playlists. The Scenes grid,
-  manual apply and capture work; the performance tick/playlist runtime is
+- Performance playlists and the playlist editor. Per-row auto-advance,
+  crossfades and the transition picker work; playlist sequencing is
   native-only.
-- Native output windows. `Open output` opens a browser tab running a second
-  chrome-less instance; there is no cross-tab GPU texture sharing.
+- Native output windows. `Open output` opens an independent popup instance;
+  there is no cross-tab GPU texture sharing, so a fully occluded output window
+  can be throttled by the browser.
 - The JSONL control socket and the native e2e harness. Browser smoke tests use
   Playwright/CDP against the canvas.
 

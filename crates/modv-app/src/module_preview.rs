@@ -612,6 +612,52 @@ impl ModulePreviews {
             .wait()
     }
 
+    /// Render one frame into the slot's GPU texture and return its view.
+    ///
+    /// The browser shell registers this view with egui-wgpu instead of
+    /// reading the pixels back: the native read-back path polls the device
+    /// and stalls the browser's GL backend.
+    pub fn render_view(
+        &mut self,
+        registry: &ModuleRegistry,
+        module_name: &str,
+        width: u32,
+        height: u32,
+        frame: &FrameInfo,
+        base: Option<&wgpu::TextureView>,
+    ) -> Result<wgpu::TextureView, PreviewError> {
+        let width = clamp_preview_dimension(width);
+        let height = clamp_preview_dimension(height);
+
+        if registry.kind(module_name).is_none() {
+            return Err(PreviewError::ModuleNotFound(module_name.to_string()));
+        }
+        if matches!(registry.kind(module_name), Some(ModuleKind::Point10))
+            && Point10SceneKind::is_volumetric_name(module_name)
+        {
+            return Err(PreviewError::Render(
+                "volumetric Point10 previews need the native read-back path".to_string(),
+            ));
+        }
+
+        let index = match self
+            .slots
+            .iter()
+            .position(|slot| slot.matches(module_name, width, height))
+        {
+            Some(index) => {
+                if index > 0 {
+                    let slot = self.slots.remove(index);
+                    self.slots.insert(0, slot);
+                }
+                0
+            }
+            None => self.create_slot(registry, module_name, width, height)?,
+        };
+        self.draw_slot(registry, index, frame, base)?;
+        Ok(self.slots[index].target.view.clone())
+    }
+
     /// Render one frame and start its read-back without waiting for the map.
     pub fn render_pending(
         &mut self,

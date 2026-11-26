@@ -28,6 +28,8 @@ pub struct MicFrame {
     pub bpm: Option<f32>,
     /// BeatDetektor's BassKick flag for this frame.
     pub kick: bool,
+    /// The analyser's phrase/drop pulse for this frame.
+    pub phrase_drop: bool,
 }
 
 /// Ask for microphone permission and route the stream into an analyser.
@@ -153,6 +155,7 @@ impl MicCapture {
             audio: snapshot_to_frame(&snapshot),
             bpm: snapshot.bpm,
             kick,
+            phrase_drop: snapshot.phrase_drop,
         })
     }
 }

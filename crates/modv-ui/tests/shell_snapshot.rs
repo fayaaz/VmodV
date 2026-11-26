@@ -151,6 +151,7 @@ fn demo_snapshot() -> EngineSnapshot {
             transition_seconds: 2.0,
             allowed_transitions: vec!["Fade".to_string()],
             order: "in-order".to_string(),
+            available_transitions: vec!["Fade".to_string(), "None".to_string()],
         },
         audio: AudioView {
             bpm: 128.0,

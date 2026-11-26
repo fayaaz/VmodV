@@ -27,7 +27,11 @@ window.openModvOutput = () => {
     outputWindow.focus();
     return true;
   }
-  outputWindow = window.open("./output.html", "vmodv-output");
+  outputWindow = window.open(
+    "./output.html",
+    "vmodv-output",
+    "popup=yes,width=1280,height=720",
+  );
   if (!outputWindow) {
     showToast("Allow pop-ups for this site to open the output window.");
     return false;

@@ -4683,6 +4683,7 @@ fn performance_view(config: &Value, enabled: bool, row_names: &[String]) -> Perf
                 .unwrap_or("in-order"),
         )
         .to_string(),
+        available_transitions: Vec::new(),
     }
 }
 
