@@ -367,6 +367,11 @@ impl fmt::Debug for TextureSurfaces {
 struct BlendUniform {
     mode: u32,
     src_alpha_scale: f32,
+    /// WebGPU requires a uniform binding's size to be a multiple of 16 bytes
+    /// when `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED` is unavailable (the browser
+    /// baseline). The native backend accepts 8 bytes, but the shader/pipeline
+    /// is shared, so both sides carry the padding.
+    _pad: [u32; 2],
 }
 
 /// Fixed-function premultiplied source-over (`co = cs + cb·(1-αs)`), matching
@@ -1008,6 +1013,7 @@ impl Executor {
         let uniform = BlendUniform {
             mode: mode.mode_index(),
             src_alpha_scale,
+            _pad: [0; 2],
         };
         self.queue
             .write_buffer(&self.blend_uniform_buffer, 0, bytemuck::bytes_of(&uniform));
@@ -1183,5 +1189,17 @@ fn clamp_unit(value: f64, fallback: f64) -> f64 {
         value.clamp(0.0, 1.0)
     } else {
         fallback
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlendUniform;
+
+    #[test]
+    fn blend_uniform_is_webgpu_aligned() {
+        // The browser baseline lacks BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED, so
+        // the uniform binding must be a multiple of 16 bytes.
+        assert_eq!(std::mem::size_of::<BlendUniform>(), 16);
     }
 }
