@@ -18,6 +18,7 @@ Everything runs in Docker. The host only needs Docker (with Buildx) and make —
 - `make engine-test` — `cargo test` (pass ARGS to narrow, e.g. `make engine-test ARGS="-p modv-engine scene_timing"`). CI runs the workspace excluding `modv-app`, then `modv-app --lib`, all serial (`--test-threads=1`) because the GPU/kittest suites share one lavapipe device.
 - `make engine-lint` — `cargo clippy --all-targets -- -D warnings` + `cargo fmt --check`. `make lint` is an alias (kept for muscle memory). `make format` — `cargo fmt --all`.
 - `make test-e2e-vmodv` — the real-binary e2e harness and parity tests (`e2e_harness`, `e2e_process`, `e2e_scenes`, `e2e_defaults`, `e2e_manifest`, `e2e_colour`, `e2e_regressions`), serial. Wayland preferred, X11/Xvfb fallback; with no display at all the harness starts Xvfb. `make test-e2e` is an alias. See `docs/vmodv-e2e.md`.
+- `make web-check` — wasm32 compile gate for `crates/modv-web` (the browser shell). `make web-build` writes `web/pkg/modv_web.{js,wasm}`; `make web-serve` serves `web/` on port 8000. See `docs/vmodv-web.md`.
 - `make rave-reencode` — the one remaining Node usage: a throwaway `node:24-slim` container re-encodes `resources/isf/rave.exe.fs` from `tools/rave-words.txt`. Nothing else in the tree needs Node.
 - `make shell` — interactive shell in the Rust toolchain container with the repo bind-mounted at `/app` and a cargo cache volume.
 - `make docker-reset` — delete the `modv-cargo` cargo volume; the next cargo target reseeds it.
@@ -57,7 +58,7 @@ Workflow for every change:
 
 ## Architecture (single process)
 
-The `modv` binary (`crates/modv-app/src/bin/modv.rs` → `src/vmodv.rs`) owns `Store` + `Compositor` + `MediaHub` in-process. There is no IPC boundary, no Vuex mirror and no web view. The headless `modv-engine` binary (`crates/modv-app/src/main.rs`) shares the engine crates for CLI/engine-only use (`--headless`, `--screenshot`, `--state`, `--isf-dir`, `--socket`).
+The `modv` binary (`crates/modv-app/src/bin/modv.rs` → `src/vmodv.rs`) owns `Store` + `Compositor` + `MediaHub` in-process. There is no IPC boundary, no Vuex mirror and no web view. The headless `modv-engine` binary (`crates/modv-app/src/main.rs`) shares the engine crates for CLI/engine-only use (`--headless`, `--screenshot`, `--state`, `--isf-dir`, `--socket`). The additive browser shell (`crates/modv-web`, wasm32) composes the same `Compositor`, module registry and `modv-ui` shell through the `modv-app` `web` feature; it is not the desktop `Store` path (no filesystem, Scenes persistence, OSC/NDI/MIDI or plugins).
 
 Crates (`crates/Cargo.toml`):
 
@@ -125,6 +126,11 @@ history is in git, and the pre-cleanup Electron tree is on `legacy-electron`.
   daily logger (`Open logs` is a stub) or splash. Palette and font values are
   read-only previews, video textures are typed paths with no transport
   controls, and there is no 2D vector pad.
+- **Browser shell (`crates/modv-web`):** built-in shader/2D/Point10 modules,
+  Groups/Gallery/Inspector, demo/microphone audio and WebGL2 fallback work.
+  Still missing: ISF corpus and MilkDrop, filesystem/preset/Scene persistence,
+  performance mode, OSC/NDI/MIDI/plugins and native output windows. Point10
+  compute scenes need WebGPU; the WebGL2 fallback logs and skips them.
 - **Media (P6):** native file/screen pickers, media-manager file dialogs,
   project profiles and the full media-tree watch are missing. User ISF hot
   reload, the camera panel and preset load/save already work.
@@ -158,6 +164,7 @@ history is in git, and the pre-cleanup Electron tree is on `legacy-electron`.
 - This file (`AGENTS.md`) is the source of truth for what works and what is left.
 - `docs/vmodv-e2e.md` — control socket and real-binary harness.
 - `docs/modules/README.md` — generated GitHub Pages module catalogue and its WebAssembly/WebGPU previews (`make pages-data`).
+- `docs/vmodv-web.md` — browser/wasm shell, build commands, cut lines and architecture.
 - `docs/vmodv-2.0-release.md` — release artifacts and userData layout.
 - `docs/releasing.md` — automated semantic-version releases.
 - `docs/legacy-electron.md` — how to retrieve the archived 1.x tree.

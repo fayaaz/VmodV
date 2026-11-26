@@ -1,0 +1,54 @@
+[package]
+name = "modv-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser shell for the VmodV Rust engine"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+modv-engine = { path = "../modv-engine" }
+modv-render = { version = "0.1.0", path = "../modv-render" }
+modv-renderers = { version = "0.1.0", path = "../modv-renderers" }
+modv-ui = { version = "0.1.0", path = "../modv-ui" }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+
+# The host test build uses the native core (the registry is platform-neutral).
+# Only the wasm target opts into the web feature, so a workspace build never
+# unifies `modv-app/web` into the desktop binaries.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+modv-app = { path = "../modv-app" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+modv-app = { path = "../modv-app", features = ["web"] }
+console_error_panic_hook = "0.1"
+eframe = { version = "0.37.0", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    "clipboard",
+    "links",
+] }
+egui = { version = "0.37.0", features = ["default_fonts"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "AnalyserNode",
+    "AudioContext",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioParam",
+    "console",
+    "Document",
+    "Element",
+    "GainNode",
+    "HtmlCanvasElement",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamAudioSourceNode",
+    "MediaStreamConstraints",
+    "Navigator",
+    "Window",
+] }

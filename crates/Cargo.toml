@@ -9,6 +9,7 @@ members = [
     "modv-render",
     "modv-renderers",
     "modv-preview-wasm",
+    "modv-web",
 ]
 
 [workspace.package]

@@ -12,7 +12,9 @@ on:
       - 'crates/**'
       - 'resources/isf/**'
       - 'docs/**'
+      - 'web/**'
       - 'tools/build-preview-wasm.sh'
+      - 'tools/build-web.sh'
       - 'Dockerfile'
       - 'Makefile'
       - '.github/workflows/pages.yml'
@@ -23,7 +25,9 @@ on:
       - 'crates/**'
       - 'resources/isf/**'
       - 'docs/**'
+      - 'web/**'
       - 'tools/build-preview-wasm.sh'
+      - 'tools/build-web.sh'
       - 'Dockerfile'
       - 'Makefile'
       - '.github/workflows/pages.yml'
@@ -90,6 +94,9 @@ jobs:
       - name: Rebuild the WebAssembly preview runtime
         run: make preview-wasm
 
+      - name: Build the browser shell
+        run: make web-build
+
       # The JSON is deterministic; if it changes in CI, the committed copy is
       # stale. The .wasm blob can vary with the Rust toolchain patch version,
       # so it is rebuilt but not diffed here.
@@ -103,13 +110,16 @@ jobs:
           ref: gh-pages
           path: gh-pages
 
-      - name: Stage the catalogue into gh-pages
+      - name: Stage the catalogue and browser shell into gh-pages
         if: ${{ github.event_name != 'pull_request' }}
         run: |
-          mkdir -p gh-pages/modules gh-pages/assets/wasm
+          mkdir -p gh-pages/modules gh-pages/assets/wasm gh-pages/app
           cp -R docs/modules/. gh-pages/modules/
           cp docs/assets/site.css docs/assets/catalog.js docs/assets/preview.js docs/assets/icon.png gh-pages/assets/
           cp docs/assets/wasm/*.js docs/assets/wasm/*.wasm gh-pages/assets/wasm/
+          rm -rf gh-pages/app
+          mkdir -p gh-pages/app
+          cp -R web/. gh-pages/app/
 
       - name: Commit and push to gh-pages
         if: ${{ github.event_name != 'pull_request' }}

@@ -101,7 +101,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version
+.PHONY: build appimage appimage-vmodv vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -314,6 +314,43 @@ preview-wasm: docker-cargo-volume
 		bash /app/tools/build-preview-wasm.sh
 
 pages-data: module-docs preview-wasm
+
+# Browser shell (wasm32 + WebGPU). `web-build` writes web/pkg; `web-serve`
+# serves the static page locally for a browser smoke test.
+web-check: docker-cargo-volume
+	$(DOCKER) build --target wasm -t "$(WASM_IMAGE)" .
+	$(DOCKER) run --rm \
+		--ulimit core=0 \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		-e HOME=/tmp \
+		-e CARGO_HOME=/cargo \
+		-e CARGO_TARGET_DIR=/cargo/target \
+		-v "$(CURDIR)":/app \
+		-v "$(CARGO_VOLUME)":/cargo \
+		-w /app \
+		"$(WASM_IMAGE)" \
+		cargo check --manifest-path /app/crates/Cargo.toml --lib \
+			--target wasm32-unknown-unknown -p modv-web
+
+web-build: docker-cargo-volume
+	$(DOCKER) build --target wasm -t "$(WASM_IMAGE)" .
+	$(DOCKER) run --rm \
+		--ulimit core=0 \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		-e HOME=/tmp \
+		-e CARGO_HOME=/cargo \
+		-e CARGO_TARGET_DIR=/cargo/target \
+		-v "$(CURDIR)":/app \
+		-v "$(CARGO_VOLUME)":/cargo \
+		-w /app \
+		"$(WASM_IMAGE)" \
+		bash /app/tools/build-web.sh
+
+web-serve:
+	$(DOCKER) run --rm -p 8000:8000 \
+		-v "$(CURDIR)/web":/web -w /web \
+		python:3.12-slim python -m http.server 8000
+
 
 # Re-encode resources/isf/rave.exe.fs from tools/rave-words.txt.
 # Uses a throwaway Node container; the app build/tests stay Node-free.

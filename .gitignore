@@ -26,3 +26,6 @@ tmp
 # Crash dumps
 core
 core.*
+
+# Browser shell build output (make web-build)
+web/pkg

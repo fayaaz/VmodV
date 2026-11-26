@@ -50,14 +50,16 @@ uses a split runtime:
   draws it with dummy input/FFT textures. Browsers without WebGPU get a
   metadata card instead of a canvas.
 
-Only shader and ISF modules have portable WGSL, so 432 of 475 modules get a
-live preview. The 16 2D canvas modules and 27 Point10 scenes are catalogued
-with full metadata, but rendering them would require porting the 2D canvas
-facade and the Point10 compute/post chains to the browser.
+The catalogue's preview shim only draws a single fragment pass, so 432 of 475
+modules get a live preview. The 16 2D canvas modules and 27 Point10 scenes are
+catalogued with full metadata but are not drawn by this shim; they render in
+the separate browser shell at `/app/`, which runs the real compositor and
+registry (shader, 2D and Point10 modules).
 
 Multi-pass and persistent-buffer ISF shaders are marked `simplified`: the
-site draws pass 0 rather than replaying the full pass graph, which would need
-the native compositor's ping-pong targets.
+catalogue draws pass 0 rather than replaying the full pass graph, which would
+need the compositor's ping-pong targets. The browser shell at `/app/` currently
+loads the built-in registry only (no ISF corpus).
 
 ## Publishing
 
