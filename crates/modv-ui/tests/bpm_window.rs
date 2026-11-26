@@ -9,11 +9,14 @@
 //! Run `cargo test -p modv-ui --test bpm_window`; the first run writes
 //! `tests/snapshots/bpm_window.png` and the next compares against it.
 
+use std::time::Duration;
+
 use accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use modv_ui::state::SidePanelTab;
 use modv_ui::{AudioSelectionView, AudioView, EngineHealth, EngineSnapshot, UiState};
+use web_time::Instant;
 
 fn snapshot(bpm: f64, capture_rate: Option<u32>) -> EngineSnapshot {
     EngineSnapshot {
@@ -48,6 +51,16 @@ fn harness(snapshot: EngineSnapshot, state: UiState) -> Harness<'static, UiState
         );
     modv_ui::theme::apply(&harness.ctx);
     harness
+}
+
+/// A tempo window with its clock frozen and one tap 500 ms in the past, so
+/// pressing Space dispatches exactly 120 BPM no matter how slow the frame is.
+fn tapped_state() -> UiState {
+    let now = Instant::now();
+    let mut state = UiState::new().with_tap_clock(move || now);
+    state.show_bpm = true;
+    state.register_tap(now - Duration::from_millis(500));
+    state
 }
 
 #[test]
@@ -109,12 +122,7 @@ fn bpm_window_snapshot() {
 
 #[test]
 fn space_bar_taps_tempo_and_dispatches_the_tap_actions() {
-    let mut harness = harness(snapshot(0.0, Some(48_000)), UiState::new());
-    harness.state_mut().show_bpm = true;
-    harness
-        .state_mut()
-        .tap_times
-        .push(web_time::Instant::now() - std::time::Duration::from_millis(500));
+    let mut harness = harness(snapshot(0.0, Some(48_000)), tapped_state());
     harness.run();
 
     harness.key_press(egui::Key::Space);
@@ -139,20 +147,12 @@ fn space_bar_taps_tempo_and_dispatches_the_tap_actions() {
     let bpm = actions[bpm_index].payload["bpm"]
         .as_f64()
         .expect("the tapped BPM is numeric");
-    assert!(
-        bpm.is_finite() && (90.0..=150.0).contains(&bpm),
-        "a 500 ms tap interval should be near 120 BPM, got {bpm}"
-    );
+    assert_eq!(bpm, 120.0, "a 500 ms tap interval should be 120 BPM");
 }
 
 #[test]
 fn space_bar_taps_tempo_even_when_a_button_has_focus() {
-    let mut harness = harness(snapshot(0.0, Some(48_000)), UiState::new());
-    harness.state_mut().show_bpm = true;
-    harness
-        .state_mut()
-        .tap_times
-        .push(web_time::Instant::now() - std::time::Duration::from_millis(500));
+    let mut harness = harness(snapshot(0.0, Some(48_000)), tapped_state());
     harness.run();
 
     // Tap itself activates on Space, which would mask the global-shortcut bug.
@@ -187,9 +187,34 @@ fn space_bar_taps_tempo_even_when_a_button_has_focus() {
     let bpm = actions[bpm_index].payload["bpm"]
         .as_f64()
         .expect("the tapped BPM is numeric");
-    assert!(
-        bpm.is_finite() && (90.0..=150.0).contains(&bpm),
-        "a 500 ms tap interval should be near 120 BPM, got {bpm}"
+    assert_eq!(bpm, 120.0, "a 500 ms tap interval should be 120 BPM");
+}
+
+/// Tapping must read the clock supplied to `UiState`, not the wall clock: a
+/// slow runner (or a long frame) between seeding a tap and pressing Space must
+/// not change the tempo that gets dispatched.
+#[test]
+fn tap_tempo_does_not_depend_on_wall_clock_time_between_frames() {
+    let mut harness = harness(snapshot(0.0, Some(48_000)), tapped_state());
+    harness.run();
+
+    // CI runners routinely spend hundreds of milliseconds between frames.
+    std::thread::sleep(Duration::from_millis(300));
+
+    harness.key_press(egui::Key::Space);
+    harness.run();
+    let actions = harness.state_mut().take_actions();
+    let bpm = actions
+        .iter()
+        .rev()
+        .find(|action| action.action == "beats/setBpm")
+        .unwrap_or_else(|| panic!("Space must dispatch the tapped tempo: {actions:?}"))
+        .payload["bpm"]
+        .as_f64()
+        .expect("the tapped BPM is numeric");
+    assert_eq!(
+        bpm, 120.0,
+        "a 500 ms tap must stay 120 BPM regardless of wall-clock delay"
     );
 }
 

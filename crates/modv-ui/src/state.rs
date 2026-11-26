@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde_json::Value;
 use web_time::{Instant, SystemTime, UNIX_EPOCH};
@@ -232,6 +233,10 @@ impl P0State {
     }
 }
 
+/// The clock tempo taps read. Production uses the wall clock; UI tests inject
+/// a fixed instant so a slow frame cannot change the tapped BPM.
+pub type TapClock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
 /// The durable VmodV UI state.
 pub struct UiState {
     pub selected_group: Option<String>,
@@ -303,6 +308,9 @@ pub struct UiState {
     /// The last snapshot BPM range adopted into the drafts.
     pub bpm_range_seen: (f64, f64),
     pub tap_times: Vec<Instant>,
+    /// Source of "now" for tempo taps, shared by the Space shortcut and the
+    /// Tempo window's Tap button.
+    pub tap_clock: TapClock,
     pub side_panel_tab: SidePanelTab,
     /// The tab an in-flight right-panel drag is carrying, refreshed at the
     /// start of every frame from egui's drag-and-drop payload.
@@ -1298,6 +1306,7 @@ impl UiState {
             bpm_max: DEFAULT_BPM_MAX,
             bpm_range_seen: (DEFAULT_BPM_MIN, DEFAULT_BPM_MAX),
             tap_times: Vec::new(),
+            tap_clock: Arc::new(Instant::now),
             side_panel_tab: SidePanelTab::Inspector,
             tab_drag: None,
             tab_float_target: None,
@@ -1431,6 +1440,26 @@ impl UiState {
     /// Push one engine action.
     pub fn push_action(&mut self, action: impl Into<String>, payload: Value) {
         self.actions.push(UiAction::new(action, payload));
+    }
+
+    /// The current instant according to the tempo clock.
+    pub fn tap_now(&self) -> Instant {
+        (self.tap_clock)()
+    }
+
+    /// Inject a tempo clock. UI tests freeze it so frames taken by the harness
+    /// cannot stretch the interval between two taps.
+    pub fn with_tap_clock(mut self, clock: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
+        self.tap_clock = Arc::new(clock);
+        self
+    }
+
+    /// Register a tap at the current tempo-clock instant. Both the Space
+    /// shortcut and the Tempo window's Tap button go through this, so neither
+    /// reads the wall clock directly.
+    pub fn tap(&mut self) {
+        let now = self.tap_now();
+        self.register_tap(now);
     }
 
     /// Register one tempo tap (the Tap button and the space bar share this).

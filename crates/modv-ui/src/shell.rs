@@ -8,7 +8,6 @@
 use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Margin, Sense, Stroke, StrokeKind, Vec2, vec2,
 };
-use web_time::Instant;
 
 use crate::file_dialog::{FileDialogAction, file_dialog_window, profile_dialog_window};
 use crate::gallery_drag::{GalleryDrag, gallery_drop_action};
@@ -117,7 +116,7 @@ fn handle_shortcuts(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut Ui
         && !modal
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
     {
-        state.register_tap(Instant::now());
+        state.tap();
     }
     // Backspace removes the focused Group (`Group.vue`'s `keydown.self`), but
     // only outside a text field and while no dialog owns the keyboard.
@@ -5269,7 +5268,7 @@ fn bpm_window(ctx: &egui::Context, snapshot: &EngineSnapshot, state: &mut UiStat
             )
             .on_hover_text("The rate the analyser and BPM detector run at");
             if ui.button("Tap").clicked() {
-                state.register_tap(Instant::now());
+                state.tap();
             }
             if ui.button("Reset taps").clicked() {
                 state.tap_times.clear();
