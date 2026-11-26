@@ -45,12 +45,15 @@ pub const DEFAULT_BLOCK_FRAMES: usize = 480;
 /// Chunks queued before the oldest is dropped.
 pub const QUEUE_CAPACITY: usize = 64;
 
-/// Capture request. `device` is either a [`InputDeviceInfo::id`] (cpal/ALSA)
-/// or a PipeWire `pw:` node target (see [`PIPEWIRE_SOURCE_PREFIX`]);
-/// `None` selects the host default input device.
+/// Capture request. For [`AudioCapture::start`], `device` is an
+/// [`InputDeviceInfo`] id or `None` for the host default input. For
+/// [`AudioCapture::start_loopback`] it is an output endpoint id (or `None` for
+/// the default output). The app layer additionally accepts a PipeWire `pw:`
+/// node target (see [`PIPEWIRE_SOURCE_PREFIX`]) for Linux source capture.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureConfig {
-    /// Device id, or `None` for the host default input device.
+    /// Device id, or `None` for the host default input (or the default output
+    /// for [`AudioCapture::start_loopback`]).
     pub device: Option<String>,
     /// Requested sample rate in Hz.
     pub sample_rate: u32,
@@ -60,7 +63,7 @@ pub struct CaptureConfig {
     pub block_frames: usize,
     /// Whether the PipeWire stream captures the default sink's monitor
     /// (`stream.capture.sink=true`, the system-audio loopback) or a `Source`
-    /// node. Ignored by the cpal/ALSA path. Defaults to `true`.
+    /// node. Ignored by the cpal paths. Defaults to `true`.
     pub capture_sink: bool,
 }
 
@@ -657,6 +660,18 @@ pub struct AudioCapture {
     block_frames: usize,
 }
 
+/// The index of the output endpoint `wanted` names.
+///
+/// Matches the stable cpal id first, then an exact case-insensitive device
+/// name. Pure so the target resolution is testable without a sound server.
+fn output_device_index(devices: &[(String, String)], wanted: &str) -> Option<usize> {
+    devices.iter().position(|(id, _)| id == wanted).or_else(|| {
+        devices
+            .iter()
+            .position(|(_, name)| name.eq_ignore_ascii_case(wanted))
+    })
+}
+
 impl AudioCapture {
     /// Start capturing from `config`.
     ///
@@ -711,6 +726,78 @@ impl AudioCapture {
                 }
             };
 
+        Self::start_stream(device, config, channels, sample_rate, sample_format)
+    }
+
+    /// Start capturing the system output — the loopback of an output endpoint.
+    ///
+    /// This is the cross-platform system-audio path: WASAPI turns an input
+    /// stream on a render endpoint into `AUDCLNT_STREAMFLAGS_LOOPBACK` capture,
+    /// and CoreAudio builds a loopback aggregate for an output-only device
+    /// (macOS 14.6+). Linux reaches system audio through the native PipeWire
+    /// monitor instead (the Linux-only `pipewire` module; see
+    /// [`super::engine::AudioFeed::with_system_audio`]).
+    ///
+    /// `config.device` optionally names an output endpoint (stable cpal id or
+    /// exact name); `None` captures the host's default output. The stream uses
+    /// the endpoint's **output** default format because WASAPI exposes no input
+    /// configs for a render endpoint and a loopback stream must match the
+    /// endpoint mix format.
+    pub fn start_loopback(config: CaptureConfig) -> Result<Self, CaptureError> {
+        let host = cpal::default_host();
+        let device = match config.device.as_deref() {
+            Some(wanted) => {
+                let mut devices: Vec<cpal::Device> = host
+                    .output_devices()
+                    .map_err(|error| CaptureError::BackendUnavailable(error.to_string()))?
+                    .collect();
+                let descriptors: Vec<(String, String)> = devices
+                    .iter()
+                    .map(|device| {
+                        let name = device
+                            .description()
+                            .map(|description| description.name().to_string())
+                            .unwrap_or_default();
+                        let id = device
+                            .id()
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|_| name.clone());
+                        (id, name)
+                    })
+                    .collect();
+                let index = output_device_index(&descriptors, wanted)
+                    .ok_or_else(|| CaptureError::DeviceNotFound(wanted.to_string()))?;
+
+                devices.swap_remove(index)
+            }
+            None => host
+                .default_output_device()
+                .ok_or_else(|| CaptureError::DeviceNotFound("default output".to_string()))?,
+        };
+
+        let default = device.default_output_config().map_err(|error| {
+            CaptureError::ConfigUnsupported(format!(
+                "the output device has no usable loopback format: {error}"
+            ))
+        })?;
+
+        Self::start_stream(
+            device,
+            config,
+            default.channels(),
+            default.sample_rate(),
+            default.sample_format(),
+        )
+    }
+
+    /// Build the capture stream for an already-resolved device and format.
+    fn start_stream(
+        device: cpal::Device,
+        config: CaptureConfig,
+        channels: u16,
+        sample_rate: u32,
+        sample_format: SampleFormat,
+    ) -> Result<Self, CaptureError> {
         let stream_config = StreamConfig {
             channels,
             sample_rate,
@@ -840,6 +927,56 @@ mod tests {
 
         assert!(matches!(error, CaptureError::ConfigUnsupported(_)));
         assert!(error.to_string().contains("Invalid argument"), "{error}");
+    }
+
+    #[test]
+    fn output_targets_resolve_by_id_then_case_insensitive_name() {
+        let outputs = [
+            (
+                "wasapi:speakers".to_string(),
+                "Speakers (Realtek Audio)".to_string(),
+            ),
+            ("wasapi:hdmi".to_string(), "HDMI Output".to_string()),
+        ];
+
+        assert_eq!(
+            output_device_index(&outputs, "wasapi:hdmi"),
+            Some(1),
+            "the stable cpal id wins"
+        );
+        assert_eq!(
+            output_device_index(&outputs, "speakers (realtek audio)"),
+            Some(0),
+            "an exact name is accepted case-insensitively"
+        );
+        assert_eq!(
+            output_device_index(&outputs, "Realtek"),
+            None,
+            "a substring is not an output target"
+        );
+        assert_eq!(output_device_index(&outputs, ""), None);
+        assert_eq!(output_device_index(&[], "anything"), None);
+    }
+
+    #[test]
+    fn loopback_capture_targets_an_output_endpoint_and_reports_a_missing_one() {
+        // Linux uses the PipeWire monitor instead, but this host still
+        // exercises the resolver: a bogus output target must report the output
+        // device as missing, never silently fall back to an input device.
+        let wanted = "definitely-not-an-output-device";
+        let result = AudioCapture::start_loopback(CaptureConfig {
+            device: Some(wanted.to_string()),
+            ..CaptureConfig::default()
+        });
+
+        match result {
+            Err(CaptureError::DeviceNotFound(name)) => assert_eq!(name, wanted),
+            Err(CaptureError::BackendUnavailable(error)) => {
+                println!("skipping loopback output-device test (no backend): {error}");
+            }
+            Err(error) => panic!("unexpected loopback error: {error}"),
+            Ok(_) => panic!("a bogus output target must not start a capture"),
+        }
     }
 
     #[test]

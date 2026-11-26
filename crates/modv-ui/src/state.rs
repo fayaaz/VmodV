@@ -146,8 +146,9 @@ pub enum UiCommand {
     OpenMediaFolder,
     /// Open `<userData>/logs` in the platform file manager.
     OpenLogsFolder,
-    /// Switch VmodV audio capture live. `source` is `pipewire` or `input`;
-    /// an `input` with no `device` selects the host default input.
+    /// Switch VmodV audio capture live. `source` is `system` (the platform's
+    /// output monitor) or `input`; an `input` with no `device` selects the
+    /// host default input. `pipewire` remains a legacy alias for `system`.
     SetAudioSource {
         source: String,
         device: Option<String>,

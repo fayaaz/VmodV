@@ -42,6 +42,7 @@ const WORKSPACE_CRATES: &[&str] = &[
     "modv-engine",
     "modv-ipc",
     "modv-media",
+    "modv-preview-wasm",
     "modv-render",
     "modv-renderers",
     "modv-ui",
@@ -345,8 +346,16 @@ fn scan_source_files(dir: &Path, root: &Path, found: &mut Vec<(String, String)>)
             scan_source_files(&path, root, found);
             continue;
         }
-        // This guard names the markers it searches for.
-        if path.ends_with("crates/modv-app/tests/notices.rs") {
+        // These packaging guards name the markers they search for in their
+        // doc comments and fixtures; none of them is an NC-SA source.
+        if [
+            "crates/modv-app/tests/notices.rs",
+            "crates/modv-app/tests/appimage_bundle.rs",
+            "crates/modv-app/tests/deb_package.rs",
+        ]
+        .iter()
+        .any(|guard| path.ends_with(guard))
+        {
             continue;
         }
         let text_extension = path
@@ -570,6 +579,17 @@ fn nc_sa_sources_are_scanned_and_named_in_the_notices() {
         "the NC-SA scan found only {} files",
         sources.len()
     );
+    // The packaging tests describe the markers they check for in the notices
+    // payload; they are not themselves NC-SA-licensed sources.
+    for described in [
+        "crates/modv-app/tests/appimage_bundle.rs",
+        "crates/modv-app/tests/deb_package.rs",
+    ] {
+        assert!(
+            !paths.contains(&described),
+            "{described} only describes the markers; it must not be scanned as an NC-SA source"
+        );
+    }
     for expected in [
         "resources/isf/UltimateFlame.fs",
         "crates/modv-renderers/src/point10/scenes/boxy.rs",

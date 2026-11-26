@@ -6,8 +6,14 @@
 //! `worker/group-inherit.js` and the inherit handling in `worker/loop.js`.
 //!
 
-use serde::{Deserialize, Serialize};
+use serde::de::{self, Deserializer, Visitor};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
+
+/// Reserved `inheritFrom` string sentinel: inherit the accumulation of every
+/// earlier contributing Group as composited onto `main` this frame, regardless
+/// of those Groups' own `inherit` flags.
+pub const INHERIT_COMPOSITION: &str = "vmodv:composition";
 
 /// Serialize an `f64` the way JS `JSON.stringify` writes a number:
 /// integral values within the safe-integer range become integers, everything
@@ -206,17 +212,20 @@ impl Group {
 /// The `inheritFrom` target of a Group.
 ///
 /// JSON carries either a number (`-1` for "the previous Group in
-/// `groupIndexRenderOrder`") or a string (the UUID of another Group).
+/// `groupIndexRenderOrder`") or a string (the UUID of another Group, or the
+/// reserved [`INHERIT_COMPOSITION`] sentinel).
 /// Any other number is accepted as `Previous(n)` and behaves like `Previous`
 /// with the given index offset — the JS only distinguishes `-1` from other
 /// values by accident of its `=== -1` comparison in `group-inherit.js`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InheritFrom {
     /// Numeric inherit target. `-1` means the previous Group in render order.
     Previous(i64),
     /// UUID of a specific Group in the state.
     Group(String),
+    /// Everything composited onto `main` so far this frame
+    /// ([`INHERIT_COMPOSITION`]).
+    Composition,
 }
 
 impl Default for InheritFrom {
@@ -229,6 +238,92 @@ impl InheritFrom {
     /// `true` iff this is the `-1` ("previous in render order") sentinel.
     pub fn is_previous(&self) -> bool {
         matches!(self, InheritFrom::Previous(-1))
+    }
+
+    /// `true` iff this is the [`INHERIT_COMPOSITION`] sentinel.
+    pub fn is_composition(&self) -> bool {
+        matches!(self, InheritFrom::Composition)
+    }
+
+    /// Parse a legacy `inheritFrom` wire value: a number becomes
+    /// [`Self::Previous`], a Group UUID becomes [`Self::Group`], and the
+    /// reserved sentinel becomes [`Self::Composition`]. Missing or invalid
+    /// values default to `Previous(-1)`.
+    pub fn from_wire(value: Option<&Value>) -> Self {
+        match value {
+            Some(Value::String(id)) if id == INHERIT_COMPOSITION => Self::Composition,
+            Some(Value::String(id)) => Self::Group(id.clone()),
+            Some(other) => other
+                .as_i64()
+                .or_else(|| other.as_f64().map(|number| number as i64))
+                .map(Self::Previous)
+                .unwrap_or_default(),
+            None => Self::default(),
+        }
+    }
+}
+
+impl Serialize for InheritFrom {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            InheritFrom::Previous(index) => serializer.serialize_i64(*index),
+            InheritFrom::Group(id) => serializer.serialize_str(id),
+            InheritFrom::Composition => serializer.serialize_str(INHERIT_COMPOSITION),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InheritFrom {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct InheritFromVisitor;
+
+        impl<'de> Visitor<'de> for InheritFromVisitor {
+            type Value = InheritFrom;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a number or string inheritFrom target")
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(InheritFrom::Previous(value))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(InheritFrom::Previous(value as i64))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(InheritFrom::Previous(value as i64))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value == INHERIT_COMPOSITION {
+                    Ok(InheritFrom::Composition)
+                } else {
+                    Ok(InheritFrom::Group(value.to_string()))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(InheritFromVisitor)
     }
 }
 
@@ -472,6 +567,9 @@ impl EngineState {
                 None
             }
             InheritFrom::Group(id) => self.find_group(id),
+            // The compositor replays the accumulated main contributions into
+            // the Group itself; there is no single source Group.
+            InheritFrom::Composition => None,
         }
     }
 }
@@ -526,9 +624,28 @@ mod tests {
                 .unwrap(),
             uuid
         );
+        let offset = InheritFrom::Previous(3);
+        let composed = InheritFrom::Composition;
+        assert_eq!(serde_json::to_value(&offset).unwrap(), json!(3));
+        assert_eq!(
+            serde_json::to_value(&composed).unwrap(),
+            json!(INHERIT_COMPOSITION)
+        );
+        assert_eq!(
+            serde_json::from_value::<InheritFrom>(json!(3)).unwrap(),
+            offset
+        );
+        assert_eq!(
+            serde_json::from_value::<InheritFrom>(json!(INHERIT_COMPOSITION)).unwrap(),
+            composed
+        );
+
         assert_eq!(InheritFrom::default(), InheritFrom::Previous(-1));
         assert!(InheritFrom::Previous(-1).is_previous());
         assert!(!InheritFrom::Group("x".to_string()).is_previous());
+        assert!(composed.is_composition());
+        assert!(!previous.is_composition());
+        assert!(!uuid.is_composition());
     }
 
     #[test]

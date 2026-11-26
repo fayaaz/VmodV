@@ -705,12 +705,29 @@ fn group_inherit_from_selector(
         egui::ComboBox::from_id_salt(("group-inherit-from", &group.id))
             .selected_text(group.inherit_from.label(&snapshot.groups))
             .width(150.0)
+            // The "Composed Output" option is wider than the button; tighten
+            // the popup's margins so the menu does not grow past the Group
+            // pane's width.
+            .popup_style(egui::style::StyleModifier::new(|style| {
+                style.spacing.menu_margin = egui::Margin::same(0);
+                style.spacing.button_padding.x = 2.0;
+            }))
             .show_ui(ui, |ui| {
                 if ui
                     .selectable_label(group.inherit_from.is_previous(), "Previous Group")
                     .clicked()
                 {
                     chosen = Some(InheritTarget::Previous);
+                }
+                if ui
+                    .selectable_label(group.inherit_from.is_composition(), "Composed Output")
+                    .on_hover_text(
+                        "Inherit everything composited above this row this frame, regardless \
+                         of each row's own Inherit setting",
+                    )
+                    .clicked()
+                {
+                    chosen = Some(InheritTarget::Composition);
                 }
                 for other in snapshot
                     .groups
@@ -3525,21 +3542,19 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
     ui.separator();
     ui.label(egui::RichText::new("OUTPUT MONITOR").strong().size(11.0));
     ui.label(
-        egui::RichText::new(
-            "Capture what this machine is playing (PipeWire system audio loopback).",
-        )
-        .size(11.0)
-        .color(theme::MUTED),
+        egui::RichText::new("Capture what this machine is playing (system audio loopback).")
+            .size(11.0)
+            .color(theme::MUTED),
     );
     if audio_choice_row(
         ui,
-        selection.is_pipewire(),
-        "System audio (PipeWire monitor)",
-        "PipeWire monitor · captures everything your speakers play",
-        "System audio loopback (pipewire)",
+        selection.is_system(),
+        "System audio (loopback)",
+        "Captures everything your speakers play",
+        "Capture the default output device (system audio loopback)",
     ) {
         state.queue(UiCommand::SetAudioSource {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
         });
     }
@@ -3607,7 +3622,7 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
             state.queue(UiCommand::RefreshAudioDevices);
         }
         ui.label(
-            egui::RichText::new("Re-scans ALSA/PipeWire inputs")
+            egui::RichText::new("Re-scans audio input devices")
                 .size(11.0)
                 .color(theme::MUTED),
         );

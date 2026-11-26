@@ -4,8 +4,9 @@
 //! half of that transport:
 //!
 //! * [`open_feed`] builds a [`modv_media::audio::engine::AudioFeed`] for the
-//!   `--audio-source` selection — the default sink's PipeWire monitor
-//!   (`pipewire`) or a cpal input device (`input`, `input:<device>`).
+//!   `--audio-source` selection — the platform's system-audio loopback
+//!   (`system`, with `pipewire` kept as a legacy alias) or a cpal input device
+//!   (`input`, `input:<device>`).
 //! * [`snapshot_to_frame`] maps one
 //!   [`modv_media::audio::analyser::AudioSnapshot`] onto the
 //!   [`modv_renderers::two_d::AudioFrame`] shape the compositor, Input Links
@@ -37,8 +38,10 @@ pub const FALLBACK_SAMPLE_RATE: f32 = 44_100.0;
 
 /// Build the engine-owned feed for `selection`.
 ///
-/// * `Pipewire` captures the default sink's monitor (`device` optionally names
-///   a target sink node, passed through as `target.object`); it is Linux only.
+/// * `System` captures the system output: the PipeWire monitor on Linux
+///   (`device` optionally names a target sink node, passed through as
+///   `target.object`), WASAPI loopback on Windows and CoreAudio loopback on
+///   macOS 14.6+ (`device` optionally names an output endpoint).
 /// * `Input` captures an input device (`device` is a name or cpal id resolved
 ///   through [`resolve_input_device`]; `None` is the host default input).
 /// * `Renderer` has no engine feed; it is a programming error and reported as
@@ -57,7 +60,7 @@ pub fn open_feed(
         AudioSourceSelection::Renderer => {
             Err("the renderer owns capture for --audio-source renderer".to_string())
         }
-        AudioSourceSelection::Pipewire => open_monitor(device),
+        AudioSourceSelection::System => open_system_audio(device),
         AudioSourceSelection::Input => {
             let devices = input_devices();
             let device = match device {
@@ -85,21 +88,17 @@ pub fn open_feed(
     }
 }
 
-/// Start the PipeWire monitor feed, or explain why this platform cannot.
-#[cfg(target_os = "linux")]
-fn open_monitor(device: Option<&str>) -> Result<AudioFeed, String> {
-    AudioFeed::with_monitor(CaptureConfig {
+/// Start the platform's system-audio loopback feed.
+///
+/// `modv-media` selects the backend: the PipeWire monitor on Linux, WASAPI
+/// loopback on Windows and CoreAudio loopback on macOS 14.6+. The app layer
+/// therefore never names a platform API.
+fn open_system_audio(device: Option<&str>) -> Result<AudioFeed, String> {
+    AudioFeed::with_system_audio(CaptureConfig {
         device: device.map(str::to_string),
         ..CaptureConfig::default()
     })
     .map_err(|error| error.to_string())
-}
-
-/// The native PipeWire monitor is Linux only (`modv-media` compiles it behind
-/// `cfg(target_os = "linux")`).
-#[cfg(not(target_os = "linux"))]
-fn open_monitor(_device: Option<&str>) -> Result<AudioFeed, String> {
-    Err("the pipewire source is Linux only; use --audio-source input".to_string())
 }
 
 /// Start a PipeWire `Audio/Source` capture targeted at `node` — the only
@@ -118,7 +117,11 @@ fn open_pipewire_source(node: &str) -> Result<AudioFeed, String> {
 /// The native PipeWire source capture is Linux only.
 #[cfg(not(target_os = "linux"))]
 fn open_pipewire_source(_node: &str) -> Result<AudioFeed, String> {
-    Err("the pipewire source is Linux only; use --audio-source input".to_string())
+    Err(
+        "a pw: source id needs the Linux PipeWire backend; pick an input device or \
+         system audio instead"
+            .to_string(),
+    )
 }
 
 /// The `pw:` source-node target carried by a device id, when it is one.
@@ -186,8 +189,8 @@ pub fn resolve_input_device(wanted: &str, devices: &[InputDeviceInfo]) -> Option
 /// device, and the hint points at the system-audio source instead.
 pub fn describe_devices(devices: &[InputDeviceInfo]) -> String {
     if devices.is_empty() {
-        return "no audio input devices found (check the host's ALSA/PipeWire inputs, or use \
-                MODV_AUDIO_SOURCE=pipewire to capture the system monitor)"
+        return "no audio input devices found (check the host's audio inputs, or use \
+                MODV_AUDIO_SOURCE=system to capture the system output)"
             .to_string();
     }
 
@@ -505,7 +508,7 @@ mod tests {
         let table = describe_devices(&[]);
 
         assert!(table.contains("no audio input devices"), "{table}");
-        assert!(table.contains("MODV_AUDIO_SOURCE=pipewire"), "{table}");
+        assert!(table.contains("MODV_AUDIO_SOURCE=system"), "{table}");
     }
 
     #[test]
@@ -566,19 +569,44 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn live_pipewire_feed_smoke_test_or_skip() {
-        match open_feed(AudioSourceSelection::Pipewire, None) {
+    fn live_system_audio_feed_smoke_test_or_skip() {
+        match open_feed(AudioSourceSelection::System, None) {
             Ok(mut feed) => {
                 let snapshot = feed.frame(1.0 / 60.0);
 
                 println!(
-                    "live pipewire feed: {} Hz, bass {:.3}",
+                    "live system audio feed: {} Hz, bass {:.3}",
                     feed.sample_rate(),
                     snapshot.bands[0]
                 );
                 feed.stop();
             }
-            Err(error) => println!("skipping live pipewire feed smoke test (no server): {error}"),
+            Err(error) => {
+                println!("skipping live system audio feed smoke test (no server): {error}")
+            }
+        }
+    }
+
+    /// On Windows/macOS the system source is cpal's output-endpoint loopback.
+    /// A host without an output endpoint skips loudly, matching the other live
+    /// audio smoke tests.
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn live_system_loopback_feed_smoke_test_or_skip() {
+        match open_feed(AudioSourceSelection::System, None) {
+            Ok(mut feed) => {
+                let snapshot = feed.frame(1.0 / 60.0);
+
+                println!(
+                    "live system loopback feed: {} Hz, bass {:.3}",
+                    feed.sample_rate(),
+                    snapshot.bands[0]
+                );
+                feed.stop();
+            }
+            Err(error) => {
+                println!("skipping live system loopback feed smoke test (no output): {error}")
+            }
         }
     }
 

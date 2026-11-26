@@ -779,8 +779,7 @@ impl WebState {
             }
             "inheritFrom" => {
                 group.inherit_from = match value {
-                    Value::String(id) => InheritFrom::Group(id.clone()),
-                    Value::Number(number) => InheritFrom::Previous(number.as_i64().unwrap_or(-1)),
+                    Value::String(_) | Value::Number(_) => InheritFrom::from_wire(Some(value)),
                     _ => return false,
                 };
             }
@@ -1040,6 +1039,7 @@ fn group_view(group: &Group) -> GroupView {
         inherit_from: match &group.inherit_from {
             InheritFrom::Previous(_) => InheritTarget::Previous,
             InheritFrom::Group(id) => InheritTarget::Group(id.clone()),
+            InheritFrom::Composition => InheritTarget::Composition,
         },
         clearing: group.clearing,
         pipeline: group.pipeline,
@@ -1522,5 +1522,29 @@ mod tests {
             json!({ "groupId": group, "key": "alpha", "value": 0.5 })
         )));
         assert_eq!(state.state().groups[0].alpha, 0.5);
+    }
+
+    #[test]
+    fn group_inherit_composition_round_trips_through_the_snapshot() {
+        let mut state = WebState::new();
+        let group = state.group_id().to_string();
+
+        assert!(state.apply_action(&UiAction::new(
+            "groups/UPDATE_GROUP_BY_KEY",
+            json!({
+                "groupId": group,
+                "key": "inheritFrom",
+                "value": modv_engine::engine_state::INHERIT_COMPOSITION,
+            })
+        )));
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert_eq!(snapshot.groups[0].inherit_from, InheritTarget::Composition);
+
+        assert!(state.apply_action(&UiAction::new(
+            "groups/UPDATE_GROUP_BY_KEY",
+            json!({ "groupId": group, "key": "inheritFrom", "value": -1 })
+        )));
+        let snapshot = state.snapshot([640, 360], 60.0, 16.0);
+        assert_eq!(snapshot.groups[0].inherit_from, InheritTarget::Previous);
     }
 }

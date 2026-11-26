@@ -46,7 +46,8 @@
 //!
 //! Shaders without a `.vs` sidecar use [`DEFAULT_VERTEX_WGSL`] (a full-screen
 //! triangle, `@location(0) isf_FragNormCoord` with a top-left origin) or
-//! [`BOTTOM_LEFT_VERTEX_WGSL`] for texture-free generators. A translated `.vs`
+//! [`BOTTOM_LEFT_VERTEX_WGSL`] for self-contained generators (every sampler
+//! names one of the document's own `PASSES` targets). A translated `.vs`
 //! sidecar replaces both stages (`translate_with_sidecar_vertex`) and is drawn
 //! with the legacy six-vertex quad ([`SIDECAR_VERTICES`]) so vertex-stage
 //! maths sees the screen corners. Outputs are given explicit locations from
@@ -120,15 +121,16 @@ fn vs_main(@builtin(vertex_index) index: u32) -> IsfVertexOut {
 }
 "#;
 
-/// The vertex shader for texture-free ISF generators.
+/// The vertex shader for self-contained ISF generators.
 ///
 /// Legacy ISF runs on WebGL, where `isf_FragNormCoord` is bottom-left
 /// (`(gl_Position.x + 1) / 2`, `(gl_Position.y + 1) / 2`). A shader with no
-/// texture inputs cannot be affected by sampling orientation, so it gets the
-/// legacy coordinate system: procedural posters (`rave.exe`) and other
-/// coordinate-built generators would otherwise render upside down. Shaders
-/// that sample textures keep the top-left varying above, which is what makes
-/// `IMG_NORM_PIXEL`/`texture2D` sampling match the wgpu input textures.
+/// externally-supplied textures cannot be affected by sampling orientation,
+/// so it gets the legacy coordinate system: procedural posters (`rave.exe`)
+/// and buffer-only multi-pass generators (`Life.fs`, the `*-tunnel`
+/// raymarchers) would otherwise render upside down. Shaders that sample
+/// externally-supplied textures keep the top-left varying above, which is what
+/// makes `IMG_NORM_PIXEL`/`texture2D` sampling match the wgpu input textures.
 pub const BOTTOM_LEFT_VERTEX_WGSL: &str = r#"
 struct IsfVertexOut {
     @builtin(position) position: vec4<f32>,
@@ -935,11 +937,12 @@ impl IsfRuntime {
                 immediate_size: 0,
             });
 
-        // A shader with no texture bindings is a pure generator: use the
-        // legacy bottom-left coordinate system. Anything that samples a
+        // A self-contained generator (every sampler names one of the
+        // document's own PASSES buffers) uses the legacy bottom-left
+        // coordinate system. Anything that samples an externally-supplied
         // texture keeps the wgpu-native top-left one, so input sampling stays
         // upright.
-        let bottom_left = !custom_vertex && slots.is_empty();
+        let bottom_left = !custom_vertex && source::self_contained(doc);
         // Key the pipeline cache on the final translated stages and the full
         // layout: the same name can be reused with a different source (media
         // shader vs corpus name) and must build a fresh pipeline.
@@ -1776,6 +1779,170 @@ mod tests {
         assert!(DEFAULT_VERTEX_WGSL.contains("(1.0 - position.y)"));
         assert!(BOTTOM_LEFT_VERTEX_WGSL.contains("(position.y + 1.0)"));
         assert!(!BOTTOM_LEFT_VERTEX_WGSL.contains("(1.0 - position.y)"));
+    }
+
+    const ORIENTATION_PROBE: &str = r#"/*{
+        "DESCRIPTION": "orientation probe: round-trip isf_FragNormCoord through a buffer",
+        "PASSES": [
+            { "TARGET": "accum", "PERSISTENT": true }
+        ]
+    }*/
+    void main() { gl_FragColor = vec4(isf_FragNormCoord, gl_FragCoord.y / RENDERSIZE.y, 1.0); }"#;
+
+    fn orientation_rows(pixels: &[u8], width: u32) -> (u8, u8, u8, u8) {
+        // (top-row green, bottom-row green, top-row blue, bottom-row blue)
+        let stride = width as usize * 4;
+        let top = pixels[1];
+        let bottom = pixels[pixels.len() - stride + 1];
+        let top_blue = pixels[2];
+        let bottom_blue = pixels[pixels.len() - stride + 2];
+        (top, bottom, top_blue, bottom_blue)
+    }
+
+    /// A self-contained multi-pass generator has no externally-supplied
+    /// textures, so it must use the WebGL bottom-left origin like its
+    /// single-pass siblings. Before this fix the whole class rendered
+    /// vertically mirrored vs the legacy renderer.
+    #[test]
+    fn self_contained_buffer_generator_uses_the_legacy_bottom_left_coordinates() {
+        let Some(mut runtime) = try_runtime() else {
+            eprintln!("skipping ISF orientation test: no adapter");
+            return;
+        };
+        let document = doc(ORIENTATION_PROBE);
+        let mut compiled = runtime
+            .compile(
+                &document,
+                "Orientation Probe",
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+            .expect("the probe compiles");
+        let destination = target(&runtime, 8, wgpu::TextureFormat::Rgba8Unorm);
+        let view = destination.create_view(&wgpu::TextureViewDescriptor::default());
+        runtime
+            .draw(
+                &mut compiled,
+                &view,
+                [8, 8],
+                IsfFrameUniforms::default(),
+                &IsfValues::new(),
+                &[],
+                &[],
+            )
+            .expect("draws");
+        let pixels =
+            read_texture(runtime.device(), &runtime.queue, &destination).expect("read back");
+        let (top_green, bottom_green, top_blue, bottom_blue) = orientation_rows(&pixels, 8);
+        assert!(
+            top_green > 200 && bottom_green < 60,
+            "isf_FragNormCoord.y must start at the bottom like WebGL \
+             (top green {top_green}, bottom green {bottom_green})"
+        );
+        assert!(
+            top_blue > 200 && bottom_blue < 60,
+            "gl_FragCoord.y / RENDERSIZE.y must start at the bottom like WebGL \
+             (top blue {top_blue}, bottom blue {bottom_blue})"
+        );
+    }
+
+    /// The flip is not for everything with a buffer: a multi-pass shader
+    /// that *samples an input image* must keep the wgpu top-left origin so
+    /// input sampling stays upright. This pins that the selector is
+    /// "buffer-only", not merely "has buffers".
+    #[test]
+    fn externally_supplied_multipass_generator_keeps_the_wgpu_top_left_coordinates() {
+        let Some(mut runtime) = try_runtime() else {
+            eprintln!("skipping ISF orientation test: no adapter");
+            return;
+        };
+        let shader = r#"/*{
+            "INPUTS": [
+                { "NAME": "inputImage", "TYPE": "image" }
+            ],
+            "PASSES": [
+                { "TARGET": "accum", "PERSISTENT": true }
+            ]
+        }*/
+        void main() { gl_FragColor = vec4(isf_FragNormCoord, gl_FragCoord.y / RENDERSIZE.y, 1.0); }"#;
+        let document = doc(shader);
+        let mut compiled = runtime
+            .compile(
+                &document,
+                "Orientation Probe External",
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+            .expect("the probe compiles");
+        let destination = target(&runtime, 8, wgpu::TextureFormat::Rgba8Unorm);
+        let view = destination.create_view(&wgpu::TextureViewDescriptor::default());
+        let input = solid_input(&runtime, 8, [255, 0, 0, 255]);
+        runtime
+            .draw(
+                &mut compiled,
+                &view,
+                [8, 8],
+                IsfFrameUniforms::default(),
+                &IsfValues::new(),
+                &[("inputImage", &input.1)],
+                &[],
+            )
+            .expect("draws");
+        let pixels =
+            read_texture(runtime.device(), &runtime.queue, &destination).expect("read back");
+        let (top_green, bottom_green, _, _) = orientation_rows(&pixels, 8);
+        assert!(
+            top_green < 60 && bottom_green > 200,
+            "an ISF filter keeps the wgpu top-left origin \
+             (top green {top_green}, bottom green {bottom_green})"
+        );
+    }
+
+    /// `Life.fs` is a sidecar generator: it renders through a `.vs`, so the
+    /// `slots.is_empty()` vertex criterion never applied to it. A
+    /// self-contained sidecar must take the WebGL bottom-left origin too.
+    #[test]
+    fn self_contained_sidecar_generator_uses_the_legacy_bottom_left_coordinates() {
+        let Some(mut runtime) = try_runtime() else {
+            eprintln!("skipping ISF orientation test: no adapter");
+            return;
+        };
+        let fragment = r#"/*{
+            "PASSES": [
+                { "TARGET": "accum", "PERSISTENT": true }
+            ]
+        }*/
+        varying vec2 norm;
+        void main() { gl_FragColor = vec4(norm.x, norm.y, 0.0, 1.0); }"#;
+        let vertex = r#"varying vec2 norm;
+        void main() { isf_vertShaderInit(); norm = isf_FragNormCoord; }"#;
+        let document = parse_isf(fragment, Some(vertex)).expect("the sidecar test shader parses");
+        let mut compiled = runtime
+            .compile(
+                &document,
+                "Orientation Probe Sidecar",
+                wgpu::TextureFormat::Rgba8Unorm,
+            )
+            .expect("the sidecar probe compiles");
+        let destination = target(&runtime, 8, wgpu::TextureFormat::Rgba8Unorm);
+        let view = destination.create_view(&wgpu::TextureViewDescriptor::default());
+        runtime
+            .draw(
+                &mut compiled,
+                &view,
+                [8, 8],
+                IsfFrameUniforms::default(),
+                &IsfValues::new(),
+                &[],
+                &[],
+            )
+            .expect("draws");
+        let pixels =
+            read_texture(runtime.device(), &runtime.queue, &destination).expect("read back");
+        let (top_green, bottom_green, _, _) = orientation_rows(&pixels, 8);
+        assert!(
+            top_green > 200 && bottom_green < 60,
+            "a self-contained sidecar generator starts isf_FragNormCoord.y at the bottom \
+             (top green {top_green}, bottom green {bottom_green})"
+        );
     }
 
     fn try_runtime() -> Option<IsfRuntime> {

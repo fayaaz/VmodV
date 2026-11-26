@@ -722,7 +722,7 @@ impl VmodvApp {
 
         // Audio capture selection: explicit `--audio-source`/`--audio-device`
         // (or their MODV_* environment fallbacks) wins, then the choice saved
-        // by the Audio panel, then the PipeWire monitor → default input
+        // by the Audio panel, then the system-audio monitor → default input
         // fallback the VmodV shell has always used.
         let audio_settings_path = user_data.join(crate::audio_settings::AUDIO_SETTINGS_FILENAME);
         let audio_explicit = crate::audio_settings::audio_cli_explicit(
@@ -762,7 +762,7 @@ impl VmodvApp {
                 audio_plan
                     .first()
                     .map(|(selection, _)| *selection)
-                    .unwrap_or(AudioSourceSelection::Pipewire),
+                    .unwrap_or(AudioSourceSelection::System),
                 audio_plan.first().and_then(|(_, device)| device.clone()),
             ),
         };
@@ -2907,10 +2907,12 @@ impl VmodvApp {
     /// persisted to `<userData>/vmodv-audio.json` for the next launch.
     fn set_audio_source(&mut self, source: &str, device: Option<&str>) {
         let selection = match source {
-            "pipewire" => AudioSourceSelection::Pipewire,
+            // `pipewire` is the legacy spelling accepted from older persisted
+            // documents and control clients.
+            "system" | "pipewire" => AudioSourceSelection::System,
             "input" => AudioSourceSelection::Input,
             other => {
-                let error = format!("unknown audio source {other:?} (expected pipewire or input)");
+                let error = format!("unknown audio source {other:?} (expected system or input)");
                 self.audio_switch_error = Some(error.clone());
                 self.record_error(error);
                 return;
@@ -4493,6 +4495,7 @@ fn group_view(group: &Group) -> GroupView {
         inherit_from: match &group.inherit_from {
             modv_engine::engine_state::InheritFrom::Previous(_) => InheritTarget::Previous,
             modv_engine::engine_state::InheritFrom::Group(id) => InheritTarget::Group(id.clone()),
+            modv_engine::engine_state::InheritFrom::Composition => InheritTarget::Composition,
         },
         clearing: group.clearing,
         pipeline: group.pipeline,
@@ -5854,15 +5857,15 @@ module.exports = {
     fn vmodv_audio_defaults_to_the_system_monitor_then_input() {
         assert_eq!(
             vmodv_audio_sources(AudioSourceSelection::Renderer),
-            vec![AudioSourceSelection::Pipewire, AudioSourceSelection::Input]
+            vec![AudioSourceSelection::System, AudioSourceSelection::Input]
         );
         assert_eq!(
             vmodv_audio_sources(AudioSourceSelection::Input),
             vec![AudioSourceSelection::Input]
         );
         assert_eq!(
-            vmodv_audio_sources(AudioSourceSelection::Pipewire),
-            vec![AudioSourceSelection::Pipewire]
+            vmodv_audio_sources(AudioSourceSelection::System),
+            vec![AudioSourceSelection::System]
         );
     }
 
@@ -5917,17 +5920,13 @@ module.exports = {
             "the BPM indicator reads the feed's negotiated rate"
         );
 
-        let selection =
-            audio_selection_view(AudioSourceSelection::Pipewire, None, None, rate.get());
+        let selection = audio_selection_view(AudioSourceSelection::System, None, None, rate.get());
         assert_eq!(
             selection.capture_sample_rate,
             Some(48_000),
             "the active banner reads the same live rate for the monitor"
         );
-        assert_eq!(
-            selection.active_detail(&[]),
-            "PipeWire monitor · 48 kHz · pipewire"
-        );
+        assert_eq!(selection.active_detail(&[]), "Loopback · 48 kHz · system");
 
         // `pump_audio` stops a failed feed and the cache clears with it: every
         // surface must drop the rate rather than keep showing the last one.
@@ -5935,12 +5934,9 @@ module.exports = {
         let silent = audio_view(128.0, false, &frame, rate.get());
         assert_eq!(silent.sample_rate, None);
         let silent_selection =
-            audio_selection_view(AudioSourceSelection::Pipewire, None, None, rate.get());
+            audio_selection_view(AudioSourceSelection::System, None, None, rate.get());
         assert_eq!(silent_selection.capture_sample_rate, None);
-        assert_eq!(
-            silent_selection.active_detail(&[]),
-            "PipeWire monitor · pipewire"
-        );
+        assert_eq!(silent_selection.active_detail(&[]), "Loopback · system");
     }
 
     #[test]
@@ -6441,6 +6437,36 @@ module.exports = {
         assert_eq!(view.enabled, 1);
         assert!(view.draws_to_output());
         assert_eq!(view.inherit_from, InheritTarget::Previous);
+    }
+
+    #[test]
+    fn composed_output_sentinel_is_shared_and_maps_to_the_ui_target() {
+        // `modv-app` is the only crate that sees both definitions: keep the
+        // engine's wire sentinel and the UI's copy in lockstep, and check the
+        // engine -> UI view mapping that the real shell relies on.
+        assert_eq!(
+            modv_engine::engine_state::INHERIT_COMPOSITION,
+            modv_ui::model::INHERIT_COMPOSITION
+        );
+
+        let composed: Group = serde_json::from_value(serde_json::json!({
+            "id": "group-fx",
+            "name": "Effects",
+            "hidden": false,
+            "modules": [],
+            "enabled": 1,
+            "alpha": 1.0,
+            "inherit": true,
+            "inheritFrom": "vmodv:composition",
+            "pipeline": false,
+            "clearing": false,
+            "compositeOperation": "normal",
+        }))
+        .expect("group JSON");
+        assert_eq!(
+            group_view(&composed).inherit_from,
+            InheritTarget::Composition
+        );
     }
 
     #[test]

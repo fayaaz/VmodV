@@ -44,7 +44,7 @@
 //! * `meyda/SET_BANDS` — the renderer's audio pump commits the AGC bands
 //!   (`meyda.js:88-96`); the engine stores them in [`Store::audio`] for the
 //!   compositor. When the engine owns capture (`--audio-source
-//!   pipewire|input`, WS-9) the renderer's frames are ignored instead —
+//!   system|input`, WS-9) the renderer's frames are ignored instead —
 //!   [`Store::set_engine_audio`] is then the authoritative writer.
 //!
 //! ## Known gaps (documented, not silent)
@@ -1131,7 +1131,7 @@ impl Store {
             enabled: int_field(params, "enabled").unwrap_or(GROUP_DISABLED),
             alpha: number_field(params, "alpha").unwrap_or(1.0),
             inherit: bool_field(params, "inherit").unwrap_or(true),
-            inherit_from: inherit_from_value(params.get("inheritFrom")),
+            inherit_from: InheritFrom::from_wire(params.get("inheritFrom")),
             pipeline: bool_field(params, "pipeline").unwrap_or(false),
             clearing: bool_field(params, "clearing").unwrap_or(false),
             composite_operation: params
@@ -1186,7 +1186,7 @@ impl Store {
             "enabled" => group.enabled = int_value(&value, group.enabled),
             "alpha" => group.alpha = number_value(&value, group.alpha),
             "inherit" => group.inherit = bool_value(&value, group.inherit),
-            "inheritFrom" => group.inherit_from = inherit_from_value(Some(&value)),
+            "inheritFrom" => group.inherit_from = InheritFrom::from_wire(Some(&value)),
             "pipeline" => group.pipeline = bool_value(&value, group.pipeline),
             "clearing" => group.clearing = bool_value(&value, group.clearing),
             "compositeOperation" => {
@@ -4967,7 +4967,8 @@ impl Drop for SnapshotWriter {
 /// blocking save is never dropped, and any periodic snapshot older than it is
 /// superseded (writing an older frame after the explicit save would regress the
 /// file). On shutdown, still-pending blocking saves are acked with an error so
-/// their callers cannot hang.
+/// their callers cannot hang, and the newest coalesced periodic snapshot is
+/// still flushed before the worker exits.
 fn run_snapshot_writer(
     jobs: &std::sync::mpsc::Receiver<SnapshotJob>,
     #[cfg(test)] before_write: BeforeWrite,
@@ -5005,13 +5006,15 @@ fn run_snapshot_writer(
         }
 
         if shutdown {
-            for job in to_run {
+            for job in to_run.drain(..) {
                 ack_snapshot_error(job);
             }
             for job in jobs.try_iter() {
                 ack_snapshot_error(job);
             }
-            break;
+            // Do not break yet: the newest periodic write coalesced before
+            // the shutdown marker still has to reach disk before the join
+            // returns.
         }
         if let Some(job) = pending_periodic {
             to_run.push(job);
@@ -5048,6 +5051,10 @@ fn run_snapshot_writer(
             if let Some(ack) = ack {
                 let _ = ack.send(result);
             }
+        }
+
+        if shutdown {
+            break;
         }
     }
 }
@@ -5106,8 +5113,8 @@ fn write_snapshot_atomically(path: &Path, snapshot: &Value) -> io::Result<()> {
 /// array's entries across scoped clone threads keeps the periodic save's
 /// hand-off short while producing exactly the same document. Small values (and
 /// non-array slots, which are bounded in practice) take the plain clone.
-/// Measured on the RED fixture's 40 000 entries: a plain clone costs ~60 ms in
-/// a debug build (over the 50 ms budget), the scoped split ~25 ms.
+/// Measured on a synthetic 40 000-entry debug fixture: a plain clone costs
+/// ~60 ms (over the former 50 ms test budget), the scoped split ~25 ms.
 fn clone_snapshot_slot(value: &Value) -> Value {
     const MIN_PARALLEL_ENTRIES: usize = 1024;
     const MAX_CLONE_THREADS: usize = 16;
@@ -5469,19 +5476,6 @@ fn string_array_value(value: &Value) -> Option<Vec<String>> {
 
 fn string_array_field(params: &Map<String, Value>, key: &str) -> Option<Vec<String>> {
     params.get(key).and_then(string_array_value)
-}
-
-/// `inheritFrom` carries `-1` (previous Group in render order) or a Group UUID.
-fn inherit_from_value(value: Option<&Value>) -> InheritFrom {
-    match value {
-        Some(Value::String(id)) => InheritFrom::Group(id.clone()),
-        Some(other) => other
-            .as_i64()
-            .or_else(|| other.as_f64().map(|number| number as i64))
-            .map(InheritFrom::Previous)
-            .unwrap_or_default(),
-        None => InheritFrom::default(),
-    }
 }
 
 /// Serialise a value, falling back to `null` for the impossible failure.
@@ -10709,22 +10703,106 @@ mod tests {
     }
 
     #[test]
-    fn save_snapshot_defers_serialisation_and_write_off_the_caller_thread() {
-        // A deliberately large verbatim state slot: pretty-serialising and
-        // writing this on the output frame thread is what the periodic save
-        // must stop doing.
-        let bulk: Vec<Value> = (0..40_000)
-            .map(|i| {
-                json!({
-                    "id": format!("tween-{i}"),
-                    "duration": 1000 + i,
-                    "easing": "easeInOutSine",
-                    "data": [[i, i + 1, i + 2], [i * 2, i * 3, i * 4]],
-                    "label": "x".repeat(64),
-                })
+    fn snapshot_writer_flushes_newest_periodic_write_when_shutdown_is_in_the_same_batch() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is after the epoch")
+            .as_nanos();
+        let name = format!("vmodv-shutdown-snapshot-{}-{nanos}", std::process::id());
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!("{name}.json"));
+        let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        let missing_parent = temp_dir.join(format!("{name}-missing"));
+        let unwritable_path = missing_parent.join("snapshot.json");
+
+        struct Cleanup(PathBuf, PathBuf, PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+                let _ = fs::remove_file(&self.1);
+                let _ = fs::remove_dir_all(&self.2);
+            }
+        }
+        let _cleanup = Cleanup(path.clone(), tmp.clone(), missing_parent);
+
+        let (tx, rx) = mpsc::channel::<SnapshotJob>();
+        tx.send(SnapshotJob::Write {
+            path: unwritable_path,
+            snapshot: json!({ "marker": "old" }),
+            ack: None,
+        })
+        .expect("queue the older periodic snapshot");
+        tx.send(SnapshotJob::Write {
+            path: path.clone(),
+            snapshot: json!({ "marker": "newest" }),
+            ack: None,
+        })
+        .expect("queue the newest periodic snapshot");
+        tx.send(SnapshotJob::Shutdown)
+            .expect("queue shutdown after both periodic snapshots");
+        drop(tx);
+
+        run_snapshot_writer(&rx, Arc::new(|_path: &Path, _snapshot: &Value| {}));
+
+        assert!(
+            path.exists(),
+            "shutdown must flush the newest periodic snapshot before returning"
+        );
+        let written: Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("the newest periodic snapshot is readable"),
+        )
+        .expect("the newest periodic snapshot is valid JSON");
+        assert_eq!(written["marker"], json!("newest"));
+        assert!(
+            !tmp.exists(),
+            "the atomic write must not leave its temp file"
+        );
+
+        let temp_prefix = format!(
+            ".{}.",
+            path.file_name()
+                .expect("snapshot file name")
+                .to_string_lossy()
+        );
+        let leftover_temps: Vec<PathBuf> = fs::read_dir(&temp_dir)
+            .expect("the temp directory is readable")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&temp_prefix)
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "tmp")
             })
+            .map(|entry| entry.path())
             .collect();
-        let expected_tweens = Value::Array(bulk);
+        assert!(
+            leftover_temps.is_empty(),
+            "the atomic write left temporary files behind: {leftover_temps:?}"
+        );
+    }
+
+    #[test]
+    fn save_snapshot_queues_for_a_worker_and_flushes_on_drop() {
+        let expected_tweens = json!([
+            {
+                "id": "tween-1",
+                "duration": 1000,
+                "easing": "easeInOutSine",
+                "data": [[0, 1, 2], [2, 4, 6]],
+                "label": "first",
+            },
+            {
+                "id": "tween-2",
+                "duration": 2000,
+                "easing": "linear",
+                "data": [[1, 2, 3], [3, 6, 9]],
+                "label": "second",
+            },
+        ]);
         let mut store = Store::new();
         store.state.tweens = expected_tweens.clone();
 
@@ -10732,45 +10810,53 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock is after the epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "vmodv-deferred-snapshot-{}-{nanos}.json",
-            std::process::id()
-        ));
+        let name = format!("vmodv-deferred-snapshot-{}-{nanos}", std::process::id());
+        let path = std::env::temp_dir().join(format!("{name}.json"));
         let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        let missing_parent = std::env::temp_dir().join(format!("{name}-missing"));
+        let unwritable_path = missing_parent.join("snapshot.json");
 
-        struct Cleanup(PathBuf, PathBuf);
+        struct Cleanup(PathBuf, PathBuf, PathBuf);
         impl Drop for Cleanup {
             fn drop(&mut self) {
                 let _ = fs::remove_file(&self.0);
                 let _ = fs::remove_file(&self.1);
+                let _ = fs::remove_dir_all(&self.2);
             }
         }
-        let _cleanup = Cleanup(path.clone(), tmp);
+        let _cleanup = Cleanup(path.clone(), tmp.clone(), missing_parent);
 
-        let started = Instant::now();
+        // A blocking implementation would attempt this write and return Err.
+        // The queued implementation accepts the request and reports the failure
+        // from its worker, so no wall-clock threshold is needed to distinguish
+        // the two behaviours.
         store
-            .save_snapshot(&path, 0)
-            .expect("save request is accepted");
-        let elapsed = started.elapsed();
+            .save_snapshot(&unwritable_path, 8)
+            .expect("an unwritable destination is still queued");
+        store
+            .save_snapshot(&path, 7)
+            .expect("valid save request after a failed write is accepted");
 
-        assert!(
-            elapsed < Duration::from_millis(50),
-            "save_snapshot blocked the caller for {elapsed:?}; serialisation and the file write must run on a background worker",
-        );
-        assert!(
-            !path.exists(),
-            "save_snapshot wrote {} synchronously; the write must be queued and observed later",
-            path.display(),
+        let caller_thread = std::thread::current().id();
+        let worker_thread = store
+            .snapshot_writer
+            .lock()
+            .expect("snapshot writer lock is not poisoned")
+            .as_ref()
+            .expect("save_snapshot initialized the writer")
+            .thread
+            .as_ref()
+            .expect("snapshot worker is running")
+            .thread()
+            .id();
+        assert_ne!(
+            worker_thread, caller_thread,
+            "snapshot writes must be handed to a distinct worker thread"
         );
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !path.exists() {
-            assert!(
-                Instant::now() < deadline,
-                "queued snapshot was not written within 10s"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // SnapshotWriter::drop sends Shutdown and joins the FIFO worker, making
+        // the completed file observable without polling or racing its creation.
+        drop(store);
 
         let written: Value = serde_json::from_str(
             &fs::read_to_string(&path).expect("queued snapshot file is readable"),
@@ -10780,6 +10866,10 @@ mod tests {
             written["tweens"], expected_tweens,
             "the deferred write must round-trip the whole snapshot"
         );
-        assert_eq!(written[ENGINE_SIDECAR_KEY]["framesPresented"], json!(0));
+        assert_eq!(written[ENGINE_SIDECAR_KEY]["framesPresented"], json!(7));
+        assert!(
+            !tmp.exists(),
+            "the atomic write must not leave its temp file"
+        );
     }
 }

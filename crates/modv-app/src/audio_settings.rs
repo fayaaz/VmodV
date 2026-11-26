@@ -21,8 +21,9 @@ use crate::cli::AudioSourceSelection;
 /// The persisted audio choice inside the shared userData directory.
 pub const AUDIO_SETTINGS_FILENAME: &str = "vmodv-audio.json";
 
-/// One persisted capture choice (`pipewire`, or `input` with an optional
-/// device id; `None` is the host default input).
+/// One persisted capture choice (`system`, or `input` with an optional
+/// device id; `None` is the host default input). The legacy `pipewire`
+/// spelling is read as `system`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AudioSettings {
     pub source: String,
@@ -45,7 +46,7 @@ impl AudioSettings {
     /// is ignored rather than silently muting the engine.
     pub fn selection(&self) -> Option<AudioSourceSelection> {
         match self.source.as_str() {
-            "pipewire" => Some(AudioSourceSelection::Pipewire),
+            "system" | "pipewire" => Some(AudioSourceSelection::System),
             "input" => Some(AudioSourceSelection::Input),
             _ => None,
         }
@@ -54,10 +55,10 @@ impl AudioSettings {
     /// A one-line description for the startup log.
     pub fn describe(&self) -> String {
         match (self.selection(), self.device.as_deref()) {
-            (Some(AudioSourceSelection::Pipewire), Some(device)) => {
-                format!("system audio (pipewire, target {device})")
+            (Some(AudioSourceSelection::System), Some(device)) => {
+                format!("system audio (loopback, target {device})")
             }
-            (Some(AudioSourceSelection::Pipewire), None) => "system audio (pipewire)".to_string(),
+            (Some(AudioSourceSelection::System), None) => "system audio (loopback)".to_string(),
             (Some(AudioSourceSelection::Input), Some(device)) => {
                 // `pw:<node.name>` ids are PipeWire source captures.
                 match device.strip_prefix(modv_media::audio::capture::PIPEWIRE_SOURCE_PREFIX) {
@@ -84,7 +85,7 @@ impl AudioSettings {
             .map_err(|error| format!("invalid JSON in {}: {error}", path.display()))?;
         if settings.selection().is_none() {
             return Err(format!(
-                "{} names unknown audio source {:?} (expected pipewire or input)",
+                "{} names unknown audio source {:?} (expected system or input)",
                 path.display(),
                 settings.source
             ));
@@ -150,7 +151,7 @@ pub fn default_sources(selection: AudioSourceSelection) -> Vec<AudioSourceSelect
     if selection.engine_owned() {
         vec![selection]
     } else {
-        vec![AudioSourceSelection::Pipewire, AudioSourceSelection::Input]
+        vec![AudioSourceSelection::System, AudioSourceSelection::Input]
     }
 }
 
@@ -421,7 +422,7 @@ mod tests {
         assert!(!audio_cli_explicit(none, None, None));
         assert!(!audio_cli_explicit(none, Some("  "), Some("")));
 
-        let args = ["modv", "--audio-source", "pipewire"]
+        let args = ["modv", "--audio-source", "system"]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
@@ -444,7 +445,7 @@ mod tests {
             initial_plan(AudioSourceSelection::Renderer, None, false, Some(&saved)),
             vec![
                 (AudioSourceSelection::Input, Some("alsa:usb".to_string())),
-                (AudioSourceSelection::Pipewire, None),
+                (AudioSourceSelection::System, None),
                 (AudioSourceSelection::Input, None),
             ],
             "a stale device still falls through to the defaults"
@@ -455,10 +456,11 @@ mod tests {
                 AudioSourceSelection::Renderer,
                 None,
                 false,
+                // The legacy spelling keeps loading as system audio.
                 Some(&settings("pipewire", None))
             ),
             vec![
-                (AudioSourceSelection::Pipewire, None),
+                (AudioSourceSelection::System, None),
                 (AudioSourceSelection::Input, None),
             ]
         );
@@ -469,7 +471,7 @@ mod tests {
         assert_eq!(
             initial_plan(AudioSourceSelection::Renderer, None, false, None),
             vec![
-                (AudioSourceSelection::Pipewire, None),
+                (AudioSourceSelection::System, None),
                 (AudioSourceSelection::Input, None),
             ]
         );
@@ -493,8 +495,8 @@ mod tests {
             "the explicit source/device is the only startup attempt"
         );
         assert_eq!(
-            initial_plan(AudioSourceSelection::Pipewire, None, true, Some(&saved)),
-            vec![(AudioSourceSelection::Pipewire, None)]
+            initial_plan(AudioSourceSelection::System, None, true, Some(&saved)),
+            vec![(AudioSourceSelection::System, None)]
         );
     }
 
@@ -518,6 +520,31 @@ mod tests {
             AudioSettings::read_from(&path).expect("re-read settings"),
             Some(settings("input", Some("alsa:usb")))
         );
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn system_audio_round_trips_as_the_neutral_spelling_and_legacy_documents_load() {
+        let (directory, path) = temp_path();
+
+        let saved = settings("system", None);
+        saved.write_to(&path).expect("write system audio settings");
+        let document = std::fs::read_to_string(&path).expect("read document");
+        assert!(
+            document.contains("\"system\""),
+            "new documents use the platform-neutral spelling: {document}"
+        );
+        assert_eq!(
+            AudioSettings::read_from(&path).expect("read system audio"),
+            Some(saved)
+        );
+
+        std::fs::write(&path, r#"{"source":"pipewire"}"#).expect("write legacy document");
+        let legacy = AudioSettings::read_from(&path)
+            .expect("the legacy pipewire document still loads")
+            .expect("a persisted selection");
+        assert_eq!(legacy.selection(), Some(AudioSourceSelection::System));
 
         std::fs::remove_dir_all(directory).ok();
     }
@@ -602,7 +629,21 @@ mod tests {
     }
 
     #[test]
-    fn settings_describe_a_pipewire_source() {
+    fn settings_describe_the_system_audio_monitor() {
+        assert_eq!(
+            settings("system", None).describe(),
+            "system audio (loopback)"
+        );
+        assert_eq!(
+            settings("system", Some("wasapi:speakers")).describe(),
+            "system audio (loopback, target wasapi:speakers)"
+        );
+        // The old document spelling resolves to the same selection.
+        assert_eq!(
+            settings("pipewire", None).describe(),
+            "system audio (loopback)"
+        );
+
         let saved = settings("input", Some("pw:alsa_input.usb-thing"));
 
         assert_eq!(saved.describe(), "PipeWire source alsa_input.usb-thing");

@@ -7,7 +7,7 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use modv_ui::model::{OscServerView, OscSnapshot, osc_addresses};
-use modv_ui::state::SidePanelTab;
+use modv_ui::state::{DEFAULT_OSC_HOST, SidePanelTab};
 use modv_ui::{EngineSnapshot, UiState};
 
 fn demo_snapshot() -> EngineSnapshot {
@@ -86,9 +86,11 @@ fn adding_a_listener_dispatches_the_typed_host_and_port() {
     let actions = taken_actions(&mut harness);
     assert_eq!(actions.len(), 1, "got {actions:?}");
     assert_eq!(actions[0].action, "osc/createServer");
+    // An empty host field falls back to the loopback default so a listener
+    // added from the UI is not exposed off-host unless the user opts in.
     assert_eq!(
         actions[0].payload,
-        serde_json::json!({ "host": "0.0.0.0", "port": 9001 })
+        serde_json::json!({ "host": DEFAULT_OSC_HOST, "port": 9001 })
     );
 }
 

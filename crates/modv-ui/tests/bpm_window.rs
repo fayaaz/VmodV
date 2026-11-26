@@ -22,7 +22,7 @@ fn snapshot(bpm: f64, capture_rate: Option<u32>) -> EngineSnapshot {
             ..Default::default()
         },
         audio_selection: AudioSelectionView {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
             capture_sample_rate: capture_rate,
             error: None,
@@ -94,7 +94,7 @@ fn the_info_panel_tempo_row_agrees_with_the_status_bar() {
         harness.get_all_by_label("BPM 128").count() >= 3,
         "the Info panel Tempo row plus the menu bar and status bar show the bare tempo"
     );
-    harness.get_by_label("System audio (PipeWire monitor)  (engine · 48 kHz)");
+    harness.get_by_label("System audio (loopback)  (engine · 48 kHz)");
 }
 
 #[test]

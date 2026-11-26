@@ -1845,6 +1845,12 @@ impl Compositor {
     ) -> Result<(), CompositorError> {
         let order = state.group_index_render_order();
 
+        // Contributions to `main` accumulated so far this frame, in draw order.
+        // A `Composition` inheritance target replays these into its own canvas
+        // before its modules run, so it sees every earlier Group as composited
+        // onto `main` — regardless of those Groups' own `inherit` flags.
+        let mut contributions: Vec<(TextureId, f64, RenderBlendMode)> = Vec::new();
+
         for (position, &index) in order.iter().enumerate() {
             let Some(group) = state.groups.get(index) else {
                 continue;
@@ -1893,29 +1899,47 @@ impl Compositor {
             // group. `rendered` only holds groups that became `lastCanvas`, so
             // culled groups never feed the next row (`loop.js:538-557`).
             if group.inherit {
-                // The resolver's third argument is an `IndexMap<String, ()>`
-                // (insertion = draw order in the JS). `modv-app` does not depend
-                // on `indexmap`, so the map is built by inference from the
-                // resolver's signature: a sentinel entry guarantees the "frame
-                // context" branch, and an all-culled row then inherits nothing
-                // (`lastCanvas == null`) instead of falling back to the
-                // positional previous group.
-                let rendered_map = std::iter::once((String::new(), ()))
-                    .chain(rendered.iter().map(|id| (id.clone(), ())))
-                    .collect();
-                if let Some(source) =
-                    state.resolve_inherit_source(&group.inherit_from, position, &rendered_map)
-                    && source.id != group.id
-                {
-                    // Both halves of a row crossfade resolve to the same
-                    // blended texture; a ghost is never the inheritable
-                    // Group itself (`loop.js:530-535`).
-                    let source_id = fades
-                        .sources
-                        .get(&source.id)
-                        .cloned()
-                        .unwrap_or_else(|| self.group_target(&source.id));
-                    self.composite(source_id, target_id.clone(), 1.0, RenderBlendMode::Normal)?;
+                if group.inherit_from.is_composition() {
+                    // Composed Output: replay every earlier `main` contribution
+                    // into this Group's canvas before its modules run. The
+                    // contributions are from this same frame, so there is no
+                    // latency. `main` is unregistered during `render_groups`,
+                    // so these composites only touch the Group target.
+                    let mut graph = FrameGraph::new();
+                    for (source, alpha, blend) in &contributions {
+                        graph.push(PassNode::Composite {
+                            source: source.clone(),
+                            target: target_id.clone(),
+                            alpha: *alpha,
+                            blend: *blend,
+                        });
+                    }
+                    self.executor.execute(&graph, &mut self.surfaces)?;
+                } else {
+                    // The resolver's third argument is an `IndexMap<String, ()>`
+                    // (insertion = draw order in the JS). `modv-app` does not
+                    // depend on `indexmap`, so the map is built by inference from
+                    // the resolver's signature: a sentinel entry guarantees the
+                    // "frame context" branch, and an all-culled row then inherits
+                    // nothing (`lastCanvas == null`) instead of falling back to
+                    // the positional previous group.
+                    let rendered_map = std::iter::once((String::new(), ()))
+                        .chain(rendered.iter().map(|id| (id.clone(), ())))
+                        .collect();
+                    if let Some(source) =
+                        state.resolve_inherit_source(&group.inherit_from, position, &rendered_map)
+                        && source.id != group.id
+                    {
+                        // Both halves of a row crossfade resolve to the same
+                        // blended texture; a ghost is never the inheritable
+                        // Group itself (`loop.js:530-535`).
+                        let source_id = fades
+                            .sources
+                            .get(&source.id)
+                            .cloned()
+                            .unwrap_or_else(|| self.group_target(&source.id));
+                        self.composite(source_id, target_id.clone(), 1.0, RenderBlendMode::Normal)?;
+                    }
                 }
             }
 
@@ -1957,6 +1981,19 @@ impl Compositor {
                         .sources
                         .insert(fade.ghost_group_id.clone(), fade_target);
                 }
+            }
+
+            // Record this Group's contribution to `main` for a later
+            // `Composition` inheritance target, mirroring `compose_main`'s
+            // culls and source choice exactly. Pushed after the Group has fully
+            // rendered (inheritance, modules and the row fade), so its canvas
+            // is final and a Group can never inherit its own pixels.
+            if group.enabled == GROUP_ENABLED
+                && group.transition_ghost != Some(true)
+                && !group.modules.is_empty()
+                && let Some(contribution) = self.main_contribution(group, fade_row, fades)
+            {
+                contributions.push(contribution);
             }
 
             // `loop.js:538-557`: only a visible, fully-enabled, non-ghost group
@@ -3052,6 +3089,28 @@ impl Compositor {
         self.composite(texture_id, target.clone(), alpha, blend)
     }
 
+    /// The `(source, alpha, blend)` a Group contributes to `main` this frame.
+    ///
+    /// A blended row stands in for the Group with alpha 1.0 (the eased alphas
+    /// are baked into the blend); otherwise an empty or non-positive-alpha
+    /// Group contributes nothing. Shared by [`Self::compose_main`] and the
+    /// Composed Output inheritance replay so the two cannot drift.
+    fn main_contribution(
+        &mut self,
+        group: &Group,
+        fade_row: Option<usize>,
+        fades: &RowFadeState,
+    ) -> Option<(TextureId, f64, RenderBlendMode)> {
+        let blended_row = fade_row.filter(|row| fades.blended.contains(row));
+        let (source, alpha) = match blended_row {
+            Some(row) => (row_fade_texture_id(row), 1.0),
+            None if group.alpha.is_nan() || group.alpha <= 0.0 => return None,
+            None => (self.group_target(&group.id), group.alpha),
+        };
+        let blend = self.render_blend_mode(&group.composite_operation);
+        Some((source, alpha, blend))
+    }
+
     /// Main composite (`loop.js:555-663`).
     fn compose_main(
         &mut self,
@@ -3087,28 +3146,10 @@ impl Compositor {
 
             // Once both halves rendered, the blended texture stands in for
             // the incoming Group: it already has the eased alphas baked in.
-            let blended_row = fades
-                .by_group
-                .get(&group.id)
-                .copied()
-                .filter(|row| fades.blended.contains(row));
-
-            let (source, alpha, blend) = match blended_row {
-                Some(row) => (
-                    row_fade_texture_id(row),
-                    1.0,
-                    self.render_blend_mode(&group.composite_operation),
-                ),
-                None => {
-                    if group.alpha.is_nan() || group.alpha <= 0.0 {
-                        continue;
-                    }
-                    (
-                        self.group_target(&group.id),
-                        group.alpha,
-                        self.render_blend_mode(&group.composite_operation),
-                    )
-                }
+            let fade_row = fades.by_group.get(&group.id).copied();
+            let Some((source, alpha, blend)) = self.main_contribution(group, fade_row, fades)
+            else {
+                continue;
             };
 
             graph.push(PassNode::Composite {
@@ -5792,6 +5833,52 @@ void main() {
             .count()
     }
 
+    /// A `Ball` 2D module with the prop shape the 2D-inheritance tests use:
+    /// `color.value` is the resolved palette entry, here a flat `[r, g, b]`.
+    fn ball_module(module_id: &str, color: [f64; 3]) -> ModuleInstance {
+        two_d_module(
+            module_id,
+            "Ball",
+            json!({
+                "amount": 12,
+                "speed": 2.0,
+                "wrap": false,
+                "size": 4,
+                "intensity": 15,
+                "soundType": false,
+                "color": { "value": color },
+            }),
+        )
+    }
+
+    /// Lit pixels whose red channel dominates the green/blue channels.
+    fn red_dominant_pixels(pixels: &[u8]) -> usize {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| {
+                pixel[0] > 40
+                    && pixel[0] > pixel[1].saturating_add(40)
+                    && pixel[0] > pixel[2].saturating_add(40)
+            })
+            .count()
+    }
+
+    /// Lit pixels whose green channel dominates the red/blue channels.
+    fn green_dominant_pixels(pixels: &[u8]) -> usize {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| {
+                pixel[1] > 40
+                    && pixel[1] > pixel[0].saturating_add(40)
+                    && pixel[1] > pixel[2].saturating_add(40)
+            })
+            .count()
+    }
+
     fn read_group_texture(compositor: &Compositor, group_id: &str) -> Vec<u8> {
         let texture = compositor
             .surfaces
@@ -5926,6 +6013,146 @@ void main() {
             lit_pixels(&first),
             lit_pixels(&second),
             "inheriting at alpha 1 copies the first group's pixels exactly"
+        );
+    }
+
+    /// Three-group layout for the `inheritFrom` targets: `Background` draws a
+    /// red `Ball`, `Foreground` draws a green `Ball`, and `Effects` clears and
+    /// draws a no-op `Texture 2D` — so the Effects Group's texture is pure
+    /// inheritance, as the guard tests around `loop.js:338-379` assume.
+    fn composition_layout(fx_inherit_from: Value) -> EngineState {
+        let mut state = EngineState::new();
+        state.groups.push(group_with(
+            "group-bg",
+            "Background",
+            &["module-bg"],
+            GROUP_ENABLED,
+            1.0,
+            true,
+            false,
+            json!(-1),
+        ));
+        state.groups.push(group_with(
+            "group-fg",
+            "Foreground",
+            &["module-fg"],
+            GROUP_ENABLED,
+            1.0,
+            true,
+            false,
+            json!(-1),
+        ));
+        state.groups.push(group_with(
+            "group-fx",
+            "Effects",
+            &["module-fx"],
+            GROUP_ENABLED,
+            1.0,
+            true,
+            true,
+            fx_inherit_from,
+        ));
+        state.modules.insert(
+            "module-bg".to_string(),
+            ball_module("module-bg", [255.0, 0.0, 0.0]),
+        );
+        state.modules.insert(
+            "module-fg".to_string(),
+            ball_module("module-fg", [0.0, 255.0, 0.0]),
+        );
+        state.modules.insert(
+            "module-fx".to_string(),
+            two_d_module("module-fx", "Texture 2D", json!({})),
+        );
+        state
+    }
+
+    #[test]
+    fn composition_inherit_sees_all_earlier_groups_when_foreground_does_not_inherit() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+
+        let state = composition_layout(json!("vmodv:composition"));
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders");
+
+        let fx = read_group_texture(&compositor, "group-fx");
+        assert!(
+            red_dominant_pixels(&fx) > 0,
+            "Effects did not see the red Background pixels"
+        );
+        assert!(
+            green_dominant_pixels(&fx) > 0,
+            "Effects did not see the green Foreground pixels"
+        );
+
+        let fg = read_group_texture(&compositor, "group-fg");
+        assert!(
+            green_dominant_pixels(&fg) > 0,
+            "the Foreground drew its green Ball"
+        );
+        assert_eq!(
+            red_dominant_pixels(&fg),
+            0,
+            "the Foreground must not inherit the Background's red pixels"
+        );
+    }
+
+    #[test]
+    fn previous_inherit_still_copies_only_the_immediate_group() {
+        // The `-1` target is unchanged: the Effects Group copies the
+        // immediate (Foreground) canvas, not the Background's.
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+
+        let state = composition_layout(json!(-1));
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders");
+
+        let fx = read_group_texture(&compositor, "group-fx");
+        assert!(
+            green_dominant_pixels(&fx) > 0,
+            "the previous-Group target must inherit the immediate Foreground"
+        );
+        assert_eq!(
+            red_dominant_pixels(&fx),
+            0,
+            "numeric -1 inherits only the previous Group"
+        );
+    }
+
+    #[test]
+    fn explicit_group_inherit_still_copies_the_named_group() {
+        // The named-target behaviour is unchanged: the Effects Group copies
+        // the `group-fg` canvas, not the Background's.
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(SIZE, SIZE);
+
+        let state = composition_layout(json!("group-fg"));
+        compositor
+            .render_frame(&state, &frame_info())
+            .expect("frame renders");
+
+        let fx = read_group_texture(&compositor, "group-fx");
+        assert!(
+            green_dominant_pixels(&fx) > 0,
+            "the named-Group target must inherit the named Foreground"
+        );
+        assert_eq!(
+            red_dominant_pixels(&fx),
+            0,
+            "the explicit target is only the named Group"
         );
     }
 
@@ -7476,7 +7703,8 @@ void main(void) {
                 pixels[index + 3],
             ]
         };
-        // `isf_FragNormCoord` is top-left here: at the right edge x+0.5
+        // A texture-free sidecar is a self-contained generator, so
+        // `isf_FragNormCoord` is bottom-left here: at the right edge x+0.5
         // clamps to 1; the oversized triangle would interpolate the clamped
         // corner back to ~0.75 (a half-size stretch).
         let right = pixel(SIZE as usize - 1, SIZE as usize / 2);
@@ -7485,21 +7713,21 @@ void main(void) {
             "the right-edge varying is {right:?}, not the clamped 1.0; \
              vertex maths ran off-screen"
         );
-        // Top-left: x=0+0.5 -> 0.5, y=0-0.25 clamps to 0.
+        // Top-left: x=0+0.5 -> 0.5, y=1-0.25 -> 0.75 (bottom-left origin).
         let top_left = pixel(1, 1);
         assert!(
             (top_left[0] as i32 - 128).abs() <= 4,
             "top-left x varying is {top_left:?}, expected ~0.5"
         );
         assert!(
-            top_left[1] <= 4,
-            "top-left y varying is {top_left:?}, expected the 0 clamp"
+            (top_left[1] as i32 - 191).abs() <= 4,
+            "top-left y varying is {top_left:?}, expected ~0.75"
         );
-        // Bottom-left: y=1-0.25 -> 0.75.
+        // Bottom-left: y=0-0.25 clamps to 0.
         let bottom_left = pixel(1, SIZE as usize - 1);
         assert!(
-            (bottom_left[1] as i32 - 191).abs() <= 4,
-            "bottom-left y varying is {bottom_left:?}, expected ~0.75"
+            bottom_left[1] <= 4,
+            "bottom-left y varying is {bottom_left:?}, expected the 0 clamp"
         );
     }
 

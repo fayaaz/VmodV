@@ -63,7 +63,7 @@
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
 //! 27 Point10 scenes and 36 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 396 `.fs` shaders of the ISF corpus (475 total). Names match
+//! module and the 402 `.fs` shaders of the ISF corpus (481 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -74,7 +74,7 @@
 //!
 //! ## ISF corpus (WS-4)
 //!
-//! The 396 `.fs` shaders under `resources/isf`
+//! The 402 `.fs` shaders under `resources/isf`
 //! are not compiled into the binary: [`ModuleRegistry::build`] scans a
 //! directory at startup and registers one [`IsfDefinition`] per parsable
 //! shader (name = file stem, matching the JS `getIsfModuleName`). The scan is
@@ -3411,7 +3411,7 @@ void main() { gl_FragColor = vec4(1.0); }
     }
 
     /// Assert set equality (and no duplicate registrations) and print the
-    /// symmetric difference on failure instead of two 396-entry lists.
+    /// symmetric difference on failure instead of two 402-entry lists.
     fn assert_same_module_names(group: &str, actual: Vec<String>, expected: Vec<String>) {
         use std::collections::BTreeSet;
 
@@ -3480,7 +3480,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 27 + 396 + milkdrop_count,
+            36 + 16 + 27 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3536,12 +3536,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 27 + 396 + milkdrop_count,
+            36 + 16 + 27 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(475),
+            Some(481),
             "manifest total"
         );
     }

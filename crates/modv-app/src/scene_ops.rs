@@ -106,7 +106,7 @@ use modv_engine::default_scenes::{
     scene_key,
 };
 use modv_engine::engine_state::{
-    GALLERY_GROUP_NAME, GROUP_ENABLED, Group, InheritFrom, ModuleInstance,
+    GALLERY_GROUP_NAME, GROUP_ENABLED, Group, INHERIT_COMPOSITION, InheritFrom, ModuleInstance,
 };
 use modv_engine::inputs::{Input, InputLink, source_uses_tween_descriptor};
 use modv_engine::preset::create_preset_from_state;
@@ -1201,6 +1201,9 @@ impl Store {
         let Some(target) = snapshot.get("inheritFrom").and_then(Value::as_str) else {
             return InheritFrom::Previous(-1);
         };
+        if target == INHERIT_COMPOSITION {
+            return InheritFrom::Composition;
+        }
         let Some(index) = scene
             .get("groups")
             .and_then(Value::as_array)
@@ -2677,7 +2680,7 @@ impl Store {
                 .get("inherit")
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
-            inherit_from: inherit_from(snapshot.get("inheritFrom")),
+            inherit_from: InheritFrom::from_wire(snapshot.get("inheritFrom")),
             pipeline: bool_value(snapshot.get("pipeline")),
             clearing: bool_value(snapshot.get("clearing")),
             composite_operation: snapshot
@@ -2967,17 +2970,22 @@ impl Store {
             let Some(new_id) = id_map.get(old_id) else {
                 continue;
             };
-            let inherit = id_map
-                .get(old_target)
-                .cloned()
-                .map(InheritFrom::Group)
-                .unwrap_or(InheritFrom::Previous(-1));
+            let inherit = if old_target == INHERIT_COMPOSITION {
+                InheritFrom::Composition
+            } else {
+                id_map
+                    .get(old_target)
+                    .cloned()
+                    .map(InheritFrom::Group)
+                    .unwrap_or(InheritFrom::Previous(-1))
+            };
             if let Some(group) = self.state.find_group_mut(new_id) {
                 group.inherit_from = inherit.clone();
             }
             let value = match &inherit {
                 InheritFrom::Group(id) => json!(id),
                 InheritFrom::Previous(index) => json!(index),
+                InheritFrom::Composition => json!(INHERIT_COMPOSITION),
             };
             self.deltas.push(
                 "groups/UPDATE_GROUP",
@@ -4431,18 +4439,6 @@ fn bool_value(value: Option<&Value>) -> bool {
     }
 }
 
-fn inherit_from(value: Option<&Value>) -> InheritFrom {
-    match value {
-        Some(Value::String(id)) => InheritFrom::Group(id.clone()),
-        Some(other) => other
-            .as_i64()
-            .or_else(|| other.as_f64().map(|number| number as i64))
-            .map(InheritFrom::Previous)
-            .unwrap_or_default(),
-        None => InheritFrom::default(),
-    }
-}
-
 fn set_group_input_id(group: &mut Group, key: &str, value: Option<String>) {
     match key {
         "alphaInputId" => group.alpha_input_id = value,
@@ -4819,6 +4815,37 @@ mod tests {
         assert_eq!(
             effects.inherit_from,
             InheritFrom::Group(background.id.clone())
+        );
+    }
+
+    #[test]
+    fn scene_apply_preserves_composition_inherit_target() {
+        // A Scene group snapshot carrying the reserved `vmodv:composition`
+        // sentinel (the Composed Output target) must survive apply: the
+        // `inheritFrom` remappers keep the sentinel instead of degrading it
+        // to the numeric `-1` fallback.
+        let mut scene = two_row_scene("scene-composition-inherit");
+        scene["groups"][1]["inheritFrom"] = json!("vmodv:composition");
+
+        let mut store = Store::new();
+        seed_scene(&mut store, scene);
+        store
+            .dispatch(
+                "scenes/applyScene",
+                json!({ "sceneId": "scene-composition-inherit" }),
+            )
+            .expect("applyScene dispatches");
+
+        let effects = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| group.name == "Effects")
+            .expect("the live Effects Group exists");
+        assert_eq!(
+            serde_json::to_value(effects).expect("Group serialises")["inheritFrom"],
+            json!("vmodv:composition"),
+            "the Composed Output target round-trips through applyScene"
         );
     }
 

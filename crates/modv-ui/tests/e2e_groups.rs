@@ -551,6 +551,28 @@ fn inherit_and_inherit_from_can_be_set() {
 }
 
 #[test]
+fn composed_output_is_selectable_as_an_inherit_from_target() {
+    let (mut harness, snapshot) = build();
+    select_group(&mut harness, "Background");
+
+    choose_inherit(&mut harness, "Composed Output");
+    let actions = run_and_apply(&mut harness, &snapshot);
+    let updates = find(&actions, "groups/UPDATE_GROUP_BY_KEY");
+    assert_eq!(updates.len(), 1, "one inheritFrom update: {actions:?}");
+    assert_eq!(updates[0].payload["groupId"], "group-bg");
+    assert_eq!(updates[0].payload["key"], "inheritFrom");
+    assert_eq!(
+        updates[0].payload["value"],
+        serde_json::json!("vmodv:composition")
+    );
+    assert_eq!(
+        harness.get_all_by_value("Composed Output").count(),
+        1,
+        "the closed selector shows the Composed Output target"
+    );
+}
+
+#[test]
 // `pipelineStateCanBeToggledBetween0and1.spec.js`.
 fn pipeline_state_can_be_toggled_between_0_and_1() {
     let (mut harness, snapshot) = build();
