@@ -160,6 +160,32 @@ fn job_condition(block: &str) -> Option<String> {
     if_conditions_at_indent(block, Some(4)).into_iter().next()
 }
 
+/// Counts invocations of a command in executable workflow lines.
+///
+/// Whole-line `#` comments often name the command a step runs (for example to
+/// explain its cache scope); those are documentation, not builds. The match
+/// also stops at command-name boundaries so `make vmodv-deb` does not count
+/// `make vmodv-deb-check`.
+fn command_invocations(text: &str, command: &str) -> usize {
+    let is_boundary = |c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .map(|line| {
+            let mut occurrences = 0;
+            let mut rest = line;
+            while let Some(index) = rest.find(command) {
+                let before = rest[..index].chars().next_back();
+                let after = rest[index + command.len()..].chars().next();
+                if before.is_none_or(is_boundary) && after.is_none_or(is_boundary) {
+                    occurrences += 1;
+                }
+                rest = &rest[index + command.len()..];
+            }
+            occurrences
+        })
+        .sum()
+}
+
 #[test]
 fn release_job_never_waits_for_a_build_job() {
     let text = release_workflow();
@@ -324,6 +350,30 @@ fn every_build_job_has_an_independent_attach_job() {
 }
 
 #[test]
+fn command_invocations_ignore_comments_and_longer_command_names() {
+    let text = "\
+  # `make vmodv-deb` explains the toolchain cache scope.
+  # `make vmodv-deb` is mentioned again here.
+        run: make vmodv-deb BASE_IMAGE=ubuntu:24.04
+        run: make vmodv-deb-check
+";
+
+    assert_eq!(
+        command_invocations(text, "make vmodv-deb"),
+        1,
+        "a comment or the longer `make vmodv-deb-check` must not be counted as a build"
+    );
+    assert_eq!(
+        command_invocations(
+            "run: make vmodv-deb\nrun: make vmodv-deb\n",
+            "make vmodv-deb"
+        ),
+        2,
+        "two real build lines must still be reported as duplicates"
+    );
+}
+
+#[test]
 fn each_artifact_is_built_only_once_in_the_release_workflow() {
     let text = release_workflow();
     // Build once, persist as a workflow artifact, then let an `attach-*` job
@@ -336,7 +386,7 @@ fn each_artifact_is_built_only_once_in_the_release_workflow() {
         ("macOS bundle", "bash tools/macos-portable.sh"),
         ("Ubuntu .deb", "make vmodv-deb"),
     ] {
-        let count = text.matches(command).count();
+        let count = command_invocations(&text, command);
         assert_eq!(
             count, 1,
             "{artifact} is built {count} times in release.yml via `{command}`; \
