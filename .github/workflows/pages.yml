@@ -1,9 +1,10 @@
-name: GitHub Pages — module catalogue
+name: GitHub Pages — VmodV browser
 
-# This repository serves Pages from the `gh-pages` branch (the `github-pages`
-# environment only allows that branch). So the workflow builds the catalogue
-# from the Rust tree and publishes it into `gh-pages` under /modules/, keeping
-# the hand-maintained front page intact.
+# Pages is served from the `gh-pages` branch (the `github-pages` environment
+# only permits that branch). The module gallery has been replaced by the real
+# browser shell: /modules/ and /app/ now serve the wasm client, and the old
+# catalogue assets are removed from gh-pages. The hand-maintained root page is
+# left intact.
 on:
   push:
     branches:
@@ -11,9 +12,7 @@ on:
     paths:
       - 'crates/**'
       - 'resources/isf/**'
-      - 'docs/**'
       - 'web/**'
-      - 'tools/build-preview-wasm.sh'
       - 'tools/build-web.sh'
       - 'Dockerfile'
       - 'Makefile'
@@ -24,9 +23,7 @@ on:
     paths:
       - 'crates/**'
       - 'resources/isf/**'
-      - 'docs/**'
       - 'web/**'
-      - 'tools/build-preview-wasm.sh'
       - 'tools/build-web.sh'
       - 'Dockerfile'
       - 'Makefile'
@@ -46,7 +43,7 @@ env:
 
 jobs:
   build:
-    name: Build and publish the module catalogue
+    name: Build and publish the browser shell
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -76,32 +73,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Rust toolchain image
+      - name: Build WebAssembly toolchain image
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: rust
-          tags: modv-rust:local
+          target: wasm
+          tags: modv-wasm:local
           load: true
-          cache-from: type=gha,scope=rust-toolchain
-
-      - name: Build WebAssembly toolchain image
-        run: docker build --target wasm -t modv-wasm:local .
-
-      - name: Regenerate the catalogue from the registry
-        run: make module-docs
-
-      - name: Rebuild the WebAssembly preview runtime
-        run: make preview-wasm
+          cache-from: type=gha,scope=wasm-toolchain
 
       - name: Build the browser shell
         run: make web-build
-
-      # The JSON is deterministic; if it changes in CI, the committed copy is
-      # stale. The .wasm blob can vary with the Rust toolchain patch version,
-      # so it is rebuilt but not diffed here.
-      - name: Check the committed catalogue is up to date
-        run: git diff --exit-code -- docs/modules/modules.json docs/modules/previews.json
 
       - name: Checkout the gh-pages branch
         if: ${{ github.event_name != 'pull_request' }}
@@ -110,16 +92,27 @@ jobs:
           ref: gh-pages
           path: gh-pages
 
-      - name: Stage the catalogue and browser shell into gh-pages
+      - name: Replace the gallery with the browser shell
         if: ${{ github.event_name != 'pull_request' }}
         run: |
-          mkdir -p gh-pages/modules gh-pages/assets/wasm gh-pages/app
-          cp -R docs/modules/. gh-pages/modules/
-          cp docs/assets/site.css docs/assets/catalog.js docs/assets/preview.js docs/assets/icon.png gh-pages/assets/
-          cp docs/assets/wasm/*.js docs/assets/wasm/*.wasm gh-pages/assets/wasm/
-          rm -rf gh-pages/app
-          mkdir -p gh-pages/app
-          cp -R web/. gh-pages/app/
+          rm -rf gh-pages/modules gh-pages/app gh-pages/assets/wasm
+          mkdir -p gh-pages/modules gh-pages/app
+
+          # Primary URL: the old gallery location now boots the real app.
+          cp -R web/. gh-pages/modules/
+
+          # Keep the earlier /app/ link working without duplicating the
+          # 18 MB wasm payload.
+          cat > gh-pages/app/index.html <<'EOF'
+          <!doctype html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=../modules/">
+          <title>VmodV — browser</title>
+          <a href="../modules/">Open the VmodV browser shell</a>
+          EOF
+
+          # Catalogue-only runtime files are no longer referenced.
+          rm -f gh-pages/assets/catalog.js gh-pages/assets/preview.js
 
       - name: Commit and push to gh-pages
         if: ${{ github.event_name != 'pull_request' }}
@@ -129,8 +122,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "Catalogue unchanged; nothing to publish."
+            echo "Browser shell unchanged; nothing to publish."
           else
-            git commit -m "docs(site): refresh module catalogue from ${GITHUB_SHA::7}"
+            git commit -m "feat(site): publish the VmodV browser shell from ${GITHUB_SHA::7}"
             git push origin HEAD:gh-pages
           fi

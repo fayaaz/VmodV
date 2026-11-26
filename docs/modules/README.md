@@ -64,13 +64,14 @@ folders are not loaded there yet.
 
 ## Publishing
 
-`.github/workflows/pages.yml` rebuilds both data files and the WASM runtime,
-fails if the committed JSON is stale, then copies the catalogue into the
-`gh-pages` branch under `/modules/` (plus the shared assets under `/assets/`).
-Pages in this repository is served from `gh-pages`, and the `github-pages`
-environment only permits that branch — the workflow therefore does not use
-`actions/deploy-pages`. The existing hand-maintained front page stays in
-place and links to `/modules/`.
+`.github/workflows/pages.yml` now builds the real browser shell and publishes
+it into the `gh-pages` branch at `/modules/` (with `/app/` redirecting there),
+replacing the module gallery. The generated catalogue JSON and preview runtime
+are still rebuilt locally with `make pages-data` for inspection, but are no
+longer deployed. Pages in this repository is served from `gh-pages`, and the
+`github-pages` environment only permits that branch — the workflow therefore
+does not use `actions/deploy-pages`. The existing hand-maintained front page
+stays in place and links to `/modules/`.
 
 Third-party licence information is in
 [`THIRD_PARTY_NOTICES.md`](https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md).

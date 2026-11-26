@@ -20,7 +20,8 @@ make web-serve    # http://127.0.0.1:8000/
 
 A plain static server is enough. `web/index.html` and `web/main.js` are served
 next to the generated `web/pkg/` directory. `web/pkg` is gitignored; CI rebuilds
-it and deploys it under `/app/` on GitHub Pages.
+it and deploys it at `/modules/` on GitHub Pages (the old `/app/` link
+redirects there).
 
 WebGPU is preferred. When the browser exposes no working WebGPU adapter (or
 the machine has none), eframe falls back to wgpu's WebGL2 backend and the shell
@@ -31,6 +32,11 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
 
 - The real **Groups → Gallery → Inspector** shell, including group enable,
   alpha, blend mode and module add/remove/reorder.
+- **Input Links**: every module prop, module alpha/enabled and group
+  alpha/enabled has an input id. The Inspector's `+ link` editor can bind them
+  to audio features (bass/mid/treble/kick/FFT features), a freehand Draw curve
+  or a Tween. Links evaluate once per 60 Hz output frame; Draw/Tween curves
+  animate even while the microphone is silent.
 - The full **bundled ISF corpus**: 36 shader modules, the 16 2D canvas
   modules, the 27 Point10 scenes and the 396 `resources/isf` shaders (475
   modules). The corpus is embedded in the wasm binary, so there is no asset
@@ -52,6 +58,8 @@ These are out of scope for this branch, not accidental omissions:
   library folders and user ISF/MilkDrop hot-reload.
 - MilkDrop presets. The ISF corpus is embedded and parsed at startup; user
   ISF/MilkDrop folders still need the browser file API.
+- Input-link expressions, MIDI/OSC link sources and plugin-provided features
+  are not wired in the browser shell.
 - OSC, NDI, MIDI and the local JavaScript plugin host.
 - Performance-mode Scenes/playlists (the Scenes tab renders its empty state).
 - Extra native output windows. The browser has one canvas; fullscreen uses the
