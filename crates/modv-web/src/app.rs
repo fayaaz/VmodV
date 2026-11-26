@@ -182,6 +182,14 @@ impl WebApp {
             UiCommand::Quit => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            // The browser's substitute for an Output Window is the tab's
+            // fullscreen mode. `Open output` and fullscreen both map there.
+            UiCommand::OpenOutputWindow => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            }
+            UiCommand::CloseOutputWindow => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            }
             UiCommand::ToggleOutputFullscreen => {
                 let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
@@ -244,9 +252,12 @@ impl eframe::App for WebApp {
         self.state.note_frame();
         self.update_preview_texture(frame);
 
-        let snapshot = self
+        let mut snapshot = self
             .state
             .snapshot(self.render_size, self.fps, self.frame_ms);
+        let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        snapshot.health.output_open = fullscreen;
+        snapshot.health.output_fullscreen = fullscreen;
         self.ui_state.ensure_default_group_focus(&snapshot);
         self.ui_state.sync_status(&snapshot);
         if self.ui_state.selected_module.is_none() {
