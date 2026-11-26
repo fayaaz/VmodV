@@ -2,11 +2,11 @@
   "schema": 1,
   "source": "ModuleRegistry + modv_renderers::isf (see tools/gen-module-docs.sh)",
   "counts": {
-    "total": 475,
+    "total": 481,
     "2d": 16,
     "point10": 27,
     "shader": 36,
-    "isf": 396
+    "isf": 402
   },
   "modules": [
     {
@@ -12412,6 +12412,88 @@
       "passes": 4
     },
     {
+      "id": "laser-lattice-wormhole",
+      "name": "Laser Lattice Wormhole",
+      "kind": "isf",
+      "category": "generator",
+      "author": "glslop agent (Claude)",
+      "version": null,
+      "description": "Laser dot lattice: a Menger KIFS rendered with NO surface shading at all — the ray flies through the invisible structure and only deposits light at the fold-axis hot points, leaving a glowing dotted constellation tracing the fractal in black space. Real-time, seamless 16s loop.",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "speed",
+          "label": "speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "glow",
+          "label": "glow",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.3,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "hue",
+          "label": "hue",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "spin",
+          "label": "spin",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.5,
+          "step": 0.01
+        },
+        {
+          "name": "zoom",
+          "label": "zoom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.5,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "lens",
+          "label": "lens",
+          "type": "float",
+          "default": 0.95,
+          "min": 0.3,
+          "max": 1.5,
+          "step": 0.01
+        },
+        {
+          "name": "iterCount",
+          "label": "iterCount",
+          "type": "enum",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        }
+      ],
+      "source": "resources/isf/Laser Lattice Wormhole.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
       "id": "layer-mask",
       "name": "Layer Mask",
       "kind": "isf",
@@ -15345,6 +15427,151 @@
       "passes": 2
     },
     {
+      "id": "neptune-exe",
+      "name": "neptune.exe",
+      "kind": "isf",
+      "category": "generator",
+      "author": "CC0",
+      "version": null,
+      "description": "A Greek paradise pool at the end of the world, seen through a vaporwave haze. A long turquoise pool tiled in a navy grid and ringed with a Greek key border, its water rippling and throwing caustics on the floor, stretches toward a white marble temple: fluted columns, a heavy entablature and a pediment, a neon glow spilling from its doorway. Domed pavilions stand to either side, marble busts watch from their pedestals, balustrades run along the edges and palm trees lean over the water. The whole terrace floats above an endless magenta grid. Behind it all, a huge striped retro sun sinks into wireframe mountains under a purple-pink sky, and every bit of it is mirrored in the pool. SPEED is the camera drift, SUN HEIGHT and SUN SIZE place the sun, STRIPES cuts its bands, WAVES and CAUSTICS stir the water, NEON the glow of the grid and doorway, GRID, MOUNTAINS, PALMS and STATUES switch the set dressing, SCANLINES the CRT look, HUE spins the palette, EXPOSURE the overall light.",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "SPEED",
+          "label": "SPEED",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0,
+          "step": 0.01
+        },
+        {
+          "name": "SUN_HEIGHT",
+          "label": "sun height",
+          "type": "float",
+          "default": 0.17,
+          "min": -0.1,
+          "max": 0.5,
+          "step": 0.01
+        },
+        {
+          "name": "SUN_SIZE",
+          "label": "sun size",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.4,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "STRIPES",
+          "label": "STRIPES",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "WAVES",
+          "label": "WAVES",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "CAUSTICS",
+          "label": "CAUSTICS",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "NEON",
+          "label": "NEON",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "GRID",
+          "label": "GRID",
+          "type": "bool",
+          "default": true,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "MOUNTAINS",
+          "label": "MOUNTAINS",
+          "type": "bool",
+          "default": true,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "PALMS",
+          "label": "PALMS",
+          "type": "bool",
+          "default": true,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "STATUES",
+          "label": "STATUES",
+          "type": "bool",
+          "default": true,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "SCANLINES",
+          "label": "SCANLINES",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "HUE",
+          "label": "HUE",
+          "type": "float",
+          "default": 0.0,
+          "min": -3.14159,
+          "max": 3.14159,
+          "step": 0.01
+        },
+        {
+          "name": "EXPOSURE",
+          "label": "EXPOSURE",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.3,
+          "max": 3.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/neptune.exe.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
       "id": "nested-octahedron-modded",
       "name": "nested octahedron modded",
       "kind": "isf",
@@ -15797,6 +16024,232 @@
       "passes": 1
     },
     {
+      "id": "not-responding",
+      "name": "Not Responding",
+      "kind": "isf",
+      "category": "generator",
+      "author": "CC0",
+      "version": null,
+      "description": "The Windows XP window-trail glitch, rendered with the gloss the era actually wanted. A dialog is being dragged across a Bliss-green hill, and the desktop never repaints behind it, so every position it has ever occupied stays painted on the screen. The trail is not decoration: each copy in the cascade is the SAME window sampled at a point in its own past, drawn oldest first, so what you are looking at is literally the path it has been dragged along. Some stale copies never finished repainting and smear one scanline sideways across their own body. Over the top of that is the Frutiger Aero treatment the period was reaching for and the hardware could not quite manage - Luna titlebars with a specular sweep riding across them, soap bubbles with iridescent films, a sun with lens ghosts, oversaturated skies, bloom, a taskbar with task buttons and a system tray, desktop icons, and a start menu. Everything is drawn from signed distance fields; there is no texture anywhere. Twenty-two sliders and one switch: speed, how many copies survive, the gap between them, drag distance, per-copy glitch jitter, tearing, how much the oldest copies wash out, Aero glass, bubbles, sun flare, cloud cover, vividness, bloom, taskbar, scanlines, vignette, plus how many windows are being dragged at once, desktop icons, the two-pane Luna start menu, open or shut, and the pointer that is still holding the live window's titlebar, and three that decide what the failed repaint left behind - text returning as characters from no alphabet, query dialogs and stray question marks, and rows that tear sideways or invert into a stale selection block.",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "uSpeed",
+          "label": "uSpeed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "uCount",
+          "label": "uCount",
+          "type": "float",
+          "default": 34.0,
+          "min": 1.0,
+          "max": 48.0,
+          "step": 0.01
+        },
+        {
+          "name": "uTrail",
+          "label": "uTrail",
+          "type": "float",
+          "default": 0.13,
+          "min": 0.005,
+          "max": 0.25,
+          "step": 0.01
+        },
+        {
+          "name": "uDrift",
+          "label": "uDrift",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uJitter",
+          "label": "uJitter",
+          "type": "float",
+          "default": 0.35,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "uSmear",
+          "label": "uSmear",
+          "type": "float",
+          "default": 0.45,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uFade",
+          "label": "uFade",
+          "type": "float",
+          "default": 0.18,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uGlass",
+          "label": "uGlass",
+          "type": "float",
+          "default": 0.55,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uBubbles",
+          "label": "uBubbles",
+          "type": "float",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uFlare",
+          "label": "uFlare",
+          "type": "float",
+          "default": 0.7,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uClouds",
+          "label": "uClouds",
+          "type": "float",
+          "default": 0.75,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uSat",
+          "label": "uSat",
+          "type": "float",
+          "default": 1.15,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uBloom",
+          "label": "uBloom",
+          "type": "float",
+          "default": 0.45,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uTaskbar",
+          "label": "uTaskbar",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uScan",
+          "label": "uScan",
+          "type": "float",
+          "default": 0.15,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uVignette",
+          "label": "uVignette",
+          "type": "float",
+          "default": 0.3,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uCascades",
+          "label": "uCascades",
+          "type": "float",
+          "default": 1.0,
+          "min": 1.0,
+          "max": 4.0,
+          "step": 0.01
+        },
+        {
+          "name": "uIcons",
+          "label": "uIcons",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uStart",
+          "label": "uStart",
+          "type": "bool",
+          "default": false,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "uCursor",
+          "label": "uCursor",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uAlien",
+          "label": "uAlien",
+          "type": "float",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uQuestion",
+          "label": "uQuestion",
+          "type": "float",
+          "default": 0.45,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uGarble",
+          "label": "uGarble",
+          "type": "float",
+          "default": 0.4,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Not Responding.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
       "id": "optical-flow-distort",
       "name": "Optical Flow Distort",
       "kind": "isf",
@@ -15932,6 +16385,98 @@
         "passes": 3
       },
       "passes": 3
+    },
+    {
+      "id": "orbiting-prism-cluster",
+      "name": "Orbiting Prism Cluster",
+      "kind": "isf",
+      "category": "generator",
+      "author": "glslop agent (Claude)",
+      "version": null,
+      "description": "A cluster of smooth-blended glass gems orbiting a dark nucleus, shaded with thin-film iridescence: hue is driven by the view-normal grazing angle (fresnel), not by density, so it stays vivid instead of muddying into grey. A closest-ray-approach halo lights the void even off the geometry. Camera is fixed; an integer number of full turns per loop keeps the rotation exactly seamless.",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "turns",
+          "label": "turns",
+          "type": "float",
+          "default": 1.0,
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "spread",
+          "label": "spread",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.6,
+          "max": 1.6,
+          "step": 0.01
+        },
+        {
+          "name": "iridescence",
+          "label": "iridescence",
+          "type": "float",
+          "default": 1.1,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "coreColor",
+          "label": "coreColor",
+          "type": "vec4",
+          "default": [
+            0.07,
+            0.08,
+            0.13,
+            1.0
+          ],
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "filmTint",
+          "label": "filmTint",
+          "type": "vec4",
+          "default": [
+            0.25,
+            0.55,
+            1.0,
+            1.0
+          ],
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "haloGlow",
+          "label": "haloGlow",
+          "type": "float",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "exposure",
+          "label": "exposure",
+          "type": "float",
+          "default": 1.3,
+          "min": 0.6,
+          "max": 2.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Orbiting Prism Cluster.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
     },
     {
       "id": "perlin-transition",
@@ -25315,6 +25860,151 @@
       "passes": 1
     },
     {
+      "id": "rec",
+      "name": "REC",
+      "kind": "isf",
+      "category": "generator",
+      "author": "CC0",
+      "version": null,
+      "description": "Running for your life through a black forest at night, first person. The path winds between tall dead trunks that vanish up into fog; a torch bounces in your hand and throws a hard beam through the mist, moonlight leaks through holes in a canopy you never see. Every few seconds you can't help it: you whip round over your shoulder -- and it is still there, a tall gaunt thing loping after you down the path with its arms reaching out, eyes catching the light. Then back to the path. The camera is a body: every footfall jolts it, the hands shake, the torch flickers when you least want it to, and now and then you stumble. SPEED is how fast you run, SHAKE how hard the camera jolts, LOOK BACK how often you check behind you, CLOSENESS how near it has got, TORCH whether you have a light, FLICKER how bad the batteries are, FOG the mist, MOON the moonlight, TREES how thick the forest is, BLUR the smear of a panicked turn, GRAIN the film, EXPOSURE the overall light. It all comes off a worn camcorder tape: VHS sets how chewed up it is -- chroma smeared off the edges, wobbling lines, head-switching noise along the bottom, a tracking band rolling through that tears worst when you look back, dropouts -- and OSD burns in the blinking REC and the running counter.",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "SPEED",
+          "label": "SPEED",
+          "type": "float",
+          "default": 14.0,
+          "min": 3.0,
+          "max": 22.0,
+          "step": 0.01
+        },
+        {
+          "name": "SHAKE",
+          "label": "SHAKE",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "LOOK_BACK",
+          "label": "look back",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "CLOSENESS",
+          "label": "CLOSENESS",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "TORCH",
+          "label": "TORCH",
+          "type": "bool",
+          "default": true,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "FLICKER",
+          "label": "FLICKER",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "FOG",
+          "label": "FOG",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "MOON",
+          "label": "MOON",
+          "type": "float",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 1.5,
+          "step": 0.01
+        },
+        {
+          "name": "TREES",
+          "label": "TREES",
+          "type": "float",
+          "default": 0.8,
+          "min": 0.2,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "BLUR",
+          "label": "BLUR",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "GRAIN",
+          "label": "GRAIN",
+          "type": "float",
+          "default": 0.5,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "EXPOSURE",
+          "label": "EXPOSURE",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.3,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "VHS",
+          "label": "VHS",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "OSD",
+          "label": "OSD",
+          "type": "bool",
+          "default": true,
+          "min": null,
+          "max": null,
+          "step": null
+        }
+      ],
+      "source": "resources/isf/REC.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": true,
+        "passes": 2
+      },
+      "passes": 2
+    },
+    {
       "id": "replicate",
       "name": "Replicate",
       "kind": "isf",
@@ -28105,6 +28795,340 @@
         }
       ],
       "source": "resources/isf/Sketch.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "skrrt",
+      "name": "Skrrt",
+      "kind": "isf",
+      "category": "generator",
+      "author": "CC0. Original. An homage - no marque assets, every number typed in by hand.",
+      "version": null,
+      "description": "TRUENO 86 - a 1983 Sprinter Trueno AE86 going down a Japanese mountain pass at night, sideways, on its headlights. The car is one signed distance field built from the real thing's measurements: 4180 long, 1625 wide, 1335 tall on a 2400 wheelbase, 185/60 on fourteens, and the overhangs deliberately unequal - 830 in front, 970 behind - because a body box centred on the axles is what makes a model car look like a toy. The road is a SHEAR OF SPACE: a cross-section drawn once as a polyline - cut face, gutter, six metres of asphalt, shoulder, then nothing - and extruded along z while every sample is displaced sideways and downward by the centreline's own functions, so the whole descending pass is three sines and an exact 2D distance rather than a mesh. Because the profile is a polyline and the road is an extrusion, that distance is EXACT; the shear costs one constant Lipschitz factor and nothing else. The drift is not an animation, it is the road: the car's yaw is the road's heading plus a term proportional to its CURVATURE, so it points into the corner wherever the corner is, the front wheels counter-steer against that angle, the body leans on it, the line runs wide on it and the tyre smoke comes off it. The drift, the camber and the suspension are all one transform on the RAY - the sample is pushed backward through the car's yaw, roll, pitch and a volume-preserving squash before the body is evaluated, and the returned distance is multiplied by the smallest scale factor so the field stays conservative and the march stays legal. Night is what makes it: one dim moon and two headlamps, which are elliptical cones with a flat CUTOFF along the top the way a low beam really is, and they are integrated through the air as well as landed on the road - sixteen taps down the view ray gathering haze, tail-light red and the smoke off the rear tyres, which the tail lights are the only thing lighting because the beams point the other way. The camera is a DIRECTOR rather than a chase rig: every uCut seconds the frame cuts to a shot drawn from a hash of the cut index - front three-quarter, head on, off the bank, chase, down at wheel height, or a roadside pass-by where the camera stops following and the car comes to it - the draw is squared so the front views come up most often, and every shot dollies and swings inside itself, because a cut from one locked-off camera to another is still locked off. Everything on the ground is keyed to the ABSOLUTE distance down the pass rather than to the car, because the car sits at z = 0 forever and anything drawn at its own z is nailed to it - the asphalt, the tar seams every eight metres, the cat's eyes, the guardrail posts and the delineator poles all stream past because of that one substitution, and they carry half a frame of travel of ordered motion blur with them while the car, which is not moving relative to the camera, stays sharp. The reflectors are modelled as RETROREFLECTORS - emission proportional to the beam landing on them, not a specular lobe - which is why they flare white as the pool reaches them and go out the moment it leaves. When the rear quarter leans on the barrier it throws sparks: eighteen ballistic particles shed backward at road speed, each drawn as the segment it swept since the last frame and glowed by the closest distance from the view ray to that segment, with a floor on the radius of what one pixel is worth at that depth - as a density in the volumetric they were invisible, because a spray forty centimetres across is missed by sixteen taps three metres apart. Nothing can clip the mountain: the car's line is clamped by its own SWEPT WIDTH, which for a box yawed by the drift angle is halfW*|cos| + halfL*|sin| - two metres of a six metre road at forty degrees - so the harder it is sideways the less of the road it is allowed to use, and the camera climbs out of the cut face by querying the same cross-section it would otherwise be buried in. Every edge on the car is a hard intersection of planes - no rounded boxes anywhere - because a smoothed corner is a modern renderer's tell. The PS2 look is the render and not a filter: the fragment coordinate is quantised before the ray is built, so the frame is genuinely traced at a couple of hundred lines, then posterised through an ordered 4x4 Bayer dither. Thirty-five controls: body, face, pop-ups, spoiler, paint (as three channels, because a colour input is the one thing hosts disagree about), panda, gloss, wheels, tyre, speed, drift, bumps, lean, curve, grade, camera distance, camera height, camera angle, seconds per cut, lens, headlamps, beam spread, haze, smoke, sparks, motion blur, moon, stars, town, render resolution, colour depth, dither and grain.",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "uBody",
+          "label": "uBody",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uFace",
+          "label": "uFace",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uPopup",
+          "label": "uPopup",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uSpoiler",
+          "label": "uSpoiler",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uPaintR",
+          "label": "uPaintR",
+          "type": "float",
+          "default": 0.86,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uPaintG",
+          "label": "uPaintG",
+          "type": "float",
+          "default": 0.87,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uPaintB",
+          "label": "uPaintB",
+          "type": "float",
+          "default": 0.88,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uPanda",
+          "label": "uPanda",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uGloss",
+          "label": "uGloss",
+          "type": "float",
+          "default": 0.75,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uWheel",
+          "label": "uWheel",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uTyre",
+          "label": "uTyre",
+          "type": "float",
+          "default": 0.35,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uSpeed",
+          "label": "uSpeed",
+          "type": "float",
+          "default": 16.0,
+          "min": 0.0,
+          "max": 40.0,
+          "step": 0.01
+        },
+        {
+          "name": "uDrift",
+          "label": "uDrift",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.6,
+          "step": 0.01
+        },
+        {
+          "name": "uBumps",
+          "label": "uBumps",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uLean",
+          "label": "uLean",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uCurve",
+          "label": "uCurve",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.6,
+          "step": 0.01
+        },
+        {
+          "name": "uGrade",
+          "label": "uGrade",
+          "type": "float",
+          "default": 0.065,
+          "min": 0.0,
+          "max": 0.16,
+          "step": 0.01
+        },
+        {
+          "name": "uCamBack",
+          "label": "uCamBack",
+          "type": "float",
+          "default": 7.0,
+          "min": 2.5,
+          "max": 30.0,
+          "step": 0.01
+        },
+        {
+          "name": "uCamH",
+          "label": "uCamH",
+          "type": "float",
+          "default": 0.8,
+          "min": 0.35,
+          "max": 8.0,
+          "step": 0.01
+        },
+        {
+          "name": "uCamSide",
+          "label": "uCamSide",
+          "type": "float",
+          "default": 2.62,
+          "min": -3.14,
+          "max": 3.14,
+          "step": 0.01
+        },
+        {
+          "name": "uCut",
+          "label": "uCut",
+          "type": "float",
+          "default": 3.2,
+          "min": 0.0,
+          "max": 9.0,
+          "step": 0.01
+        },
+        {
+          "name": "uLens",
+          "label": "uLens",
+          "type": "float",
+          "default": 1.25,
+          "min": 0.7,
+          "max": 3.5,
+          "step": 0.01
+        },
+        {
+          "name": "uBeam",
+          "label": "uBeam",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.5,
+          "step": 0.01
+        },
+        {
+          "name": "uSpread",
+          "label": "uSpread",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.4,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uHaze",
+          "label": "uHaze",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "uSmoke",
+          "label": "uSmoke",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.5,
+          "step": 0.01
+        },
+        {
+          "name": "uSpark",
+          "label": "uSpark",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uBlur",
+          "label": "uBlur",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "uMoon",
+          "label": "uMoon",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "uStars",
+          "label": "uStars",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uTown",
+          "label": "uTown",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.0,
+          "step": 0.01
+        },
+        {
+          "name": "uRes",
+          "label": "uRes",
+          "type": "float",
+          "default": 320.0,
+          "min": 96.0,
+          "max": 1080.0,
+          "step": 0.01
+        },
+        {
+          "name": "uBits",
+          "label": "uBits",
+          "type": "float",
+          "default": 5.0,
+          "min": 2.0,
+          "max": 8.0,
+          "step": 0.01
+        },
+        {
+          "name": "uDither",
+          "label": "uDither",
+          "type": "float",
+          "default": 0.8,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        },
+        {
+          "name": "uGrain",
+          "label": "uGrain",
+          "type": "float",
+          "default": 0.1,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Skrrt.fs",
       "preview": {
         "kind": "isf",
         "simplified": false,
