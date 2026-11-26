@@ -39,9 +39,13 @@
 //! # Deviations from the Electron renderer (all deliberate)
 //!
 //! * **Coordinates.** wgpu's `@builtin(position)` and texture `v = 0` are
-//!   top-left; GL's are bottom-left. `isf_FragNormCoord` is top-left origin,
-//!   so texture sampling is visually identical while shaders that treat it as
-//!   a Cartesian coordinate are mirrored. `gl_FragCoord` is top-left too.
+//!   top-left; GL's are bottom-left. For externally-supplied shaders
+//!   `isf_FragNormCoord` is top-left origin, so texture sampling is visually
+//!   identical while shaders that treat it as a Cartesian coordinate are
+//!   mirrored; `gl_FragCoord` is top-left there too. Self-contained generators
+//!   (every sampler names one of the document's own `PASSES` targets) use the
+//!   legacy bottom-left origin instead, with `gl_FragCoord` Y-flipped, so
+//!   procedural and buffer-only multi-pass shaders match WebGL.
 //! * **`isf_FragCoord`.** The vendored vertex skeleton writes a differently
 //!   cased `isf_fragCoord` that is never declared as an output, so reading it
 //!   in a fragment shader would be a link error. The preprocessor defines it

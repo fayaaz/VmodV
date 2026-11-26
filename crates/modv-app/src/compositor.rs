@@ -7656,7 +7656,8 @@ void main(void) {
                 pixels[index + 3],
             ]
         };
-        // `isf_FragNormCoord` is top-left here: at the right edge x+0.5
+        // A texture-free sidecar is a self-contained generator, so
+        // `isf_FragNormCoord` is bottom-left here: at the right edge x+0.5
         // clamps to 1; the oversized triangle would interpolate the clamped
         // corner back to ~0.75 (a half-size stretch).
         let right = pixel(SIZE as usize - 1, SIZE as usize / 2);
@@ -7665,21 +7666,21 @@ void main(void) {
             "the right-edge varying is {right:?}, not the clamped 1.0; \
              vertex maths ran off-screen"
         );
-        // Top-left: x=0+0.5 -> 0.5, y=0-0.25 clamps to 0.
+        // Top-left: x=0+0.5 -> 0.5, y=1-0.25 -> 0.75 (bottom-left origin).
         let top_left = pixel(1, 1);
         assert!(
             (top_left[0] as i32 - 128).abs() <= 4,
             "top-left x varying is {top_left:?}, expected ~0.5"
         );
         assert!(
-            top_left[1] <= 4,
-            "top-left y varying is {top_left:?}, expected the 0 clamp"
+            (top_left[1] as i32 - 191).abs() <= 4,
+            "top-left y varying is {top_left:?}, expected ~0.75"
         );
-        // Bottom-left: y=1-0.25 -> 0.75.
+        // Bottom-left: y=0-0.25 clamps to 0.
         let bottom_left = pixel(1, SIZE as usize - 1);
         assert!(
-            (bottom_left[1] as i32 - 191).abs() <= 4,
-            "bottom-left y varying is {bottom_left:?}, expected ~0.75"
+            bottom_left[1] <= 4,
+            "bottom-left y varying is {bottom_left:?}, expected the 0 clamp"
         );
     }
 
