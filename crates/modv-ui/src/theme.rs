@@ -45,6 +45,11 @@ pub const OK: Color32 = ACCENT;
 /// Tween badge blue (`#5E9CFF`): semantic, deliberately outside the palette.
 pub const TWEEN: Color32 = Color32::from_rgb(94, 156, 255);
 
+/// The Scenes grid's Group gutter (`#0E2418`): a dark green-tinted surface
+/// that separates the pinned row labels (and their "Groups" header) from the
+/// black Scene cells without matching any raised surface or the slider rail.
+pub const GROUPS_GUTTER: Color32 = Color32::from_rgb(14, 36, 24);
+
 /// The tab strip's fill. Same as [`PANEL`] so a detached tab never changes
 /// surface relative to the strip it came from.
 pub const STRIP_FILL: Color32 = PANEL;
@@ -299,6 +304,28 @@ mod tests {
         assert!(
             contrast(SLIDER_HANDLE, SLIDER_TRACK) >= 4.5,
             "the handle stroke must clear AA against the rail"
+        );
+    }
+
+    #[test]
+    fn the_groups_gutter_differs_from_every_panel_and_keeps_text_legible() {
+        for surface in [BACKGROUND, PANEL, PANEL_ALT, INPUT] {
+            assert_ne!(
+                GROUPS_GUTTER, surface,
+                "the gutter must not match a surface it sits beside"
+            );
+            assert!(
+                contrast(GROUPS_GUTTER, surface) > 1.1,
+                "the gutter must be visibly distinct from {surface:?}"
+            );
+        }
+        assert!(
+            contrast(MUTED, GROUPS_GUTTER) >= 4.5,
+            "muted text must clear AA on the gutter"
+        );
+        assert!(
+            contrast(FOREGROUND, GROUPS_GUTTER) >= 4.5,
+            "body text must clear AA on the gutter"
         );
     }
 

@@ -30,7 +30,8 @@ const SCENES: [(&str, &str); 4] = [
 const CELL_HEIGHT: f32 = 76.0;
 /// `CELL_SIZE.y` plus the fixed gap between rows.
 const ROW_PITCH: f32 = 81.0;
-const LABEL_WIDTH: f32 = 96.0;
+/// Mirrors `ROW_LABEL_WIDTH` in `src/panels/scene_grid.rs`.
+const LABEL_WIDTH: f32 = 120.0;
 const EPSILON: f32 = 0.1;
 
 fn populated(row: usize, names: &[&str], disabled: bool) -> SceneCellView {

@@ -356,7 +356,7 @@ impl SceneGridState {
 /// Width/height of one Scene cell.
 const CELL_SIZE: Vec2 = Vec2::new(154.0, 76.0);
 /// Width of the row-label gutter and the column-header height.
-const ROW_LABEL_WIDTH: f32 = 96.0;
+const ROW_LABEL_WIDTH: f32 = 120.0;
 const HEADER_HEIGHT: f32 = 20.0;
 /// Fixed gap between consecutive Scene rows. Row layout must never depend on
 /// cell content: the per-cell dot, timing chip and hover preview are painted
@@ -801,7 +801,7 @@ fn draw_layer_gutter(
             Vec2::new(ROW_LABEL_WIDTH, height),
         ),
         CornerRadius::same(0),
-        theme::PANEL,
+        theme::GROUPS_GUTTER,
     );
     row_label_column(&mut gutter, snapshot, grid, names, actions);
 }
@@ -820,6 +820,8 @@ fn row_label_column(
     let (header, header_response) =
         ui.allocate_exact_size(Vec2::new(ROW_LABEL_WIDTH, HEADER_HEIGHT), Sense::hover());
     header_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Groups"));
+    ui.painter()
+        .rect_filled(header, CornerRadius::same(0), theme::GROUPS_GUTTER);
     ui.painter().text(
         header.left_center() + egui::vec2(4.0, 0.0),
         Align2::LEFT_CENTER,
@@ -858,7 +860,7 @@ fn row_label_cell(
         } else if dragging || hovered {
             theme::PANEL_ALT
         } else {
-            theme::PANEL
+            theme::GROUPS_GUTTER
         },
     );
     painter.rect_stroke(
@@ -2253,6 +2255,105 @@ pub(crate) fn copy_payload(source: &CellRef, target: &CellRef) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groups_gutter_is_wider_and_uses_a_distinct_surface_from_scene_cells() {
+        let snapshot = EngineSnapshot {
+            scenes: vec![SceneView {
+                id: "scene-a".to_string(),
+                name: "Alpha".to_string(),
+                enabled: true,
+                timing: None,
+                cells: (0..2)
+                    .map(|row| SceneCellView {
+                        row,
+                        module_names: vec!["Bands".to_string()],
+                        disabled: false,
+                    })
+                    .collect(),
+            }],
+            scene_rows: vec!["Background".to_string(), "Effects".to_string()],
+            ..Default::default()
+        };
+        let names = grid_row_names(&snapshot, 2);
+        let mut grid = SceneGridState::default();
+        let mut actions = Vec::new();
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 180.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ui| {
+                row_label_column(ui, &snapshot, &mut grid, &names, &mut actions);
+            },
+        );
+        // This headless test inspects shapes only; no GPU backend applies the
+        // first frame's font texture delta.
+        output.textures_delta.clear();
+        let fills: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) => Some((rect.rect, rect.fill)),
+                _ => None,
+            })
+            .collect();
+        let fills_for_size = |size| {
+            fills
+                .iter()
+                .filter(|(rect, fill)| {
+                    (rect.size() - size).abs().max_elem() <= 0.01 && fill.a() > 0
+                })
+                .map(|(_, fill)| *fill)
+                .collect::<Vec<_>>()
+        };
+
+        // Identify the header by its height and measure its width from the
+        // painted geometry. Asserting on the constant itself would be vacuous
+        // (a const-vs-const comparison can never fail); measuring the rect
+        // keeps the check meaningful if the gutter is ever narrowed again.
+        let headers: Vec<_> = fills
+            .iter()
+            .filter(|(rect, fill)| (rect.height() - HEADER_HEIGHT).abs() <= 0.01 && fill.a() > 0)
+            .collect();
+        assert_eq!(
+            headers.len(),
+            1,
+            "the Group gutter must paint exactly one header band"
+        );
+        let (header_rect, header_fill) = headers[0];
+        assert_ne!(
+            *header_fill,
+            theme::PANEL,
+            "the Group gutter header must paint its own fill, distinct from the Scene cells"
+        );
+        let measured_width = header_rect.width();
+        assert!(
+            measured_width >= 112.0,
+            "the Groups gutter must be wider than its old 96 px width, measured {measured_width} px"
+        );
+        assert!(
+            (measured_width - ROW_LABEL_WIDTH).abs() <= 0.01,
+            "the painted header width {measured_width} px must match ROW_LABEL_WIDTH ({ROW_LABEL_WIDTH} px)"
+        );
+
+        let label_fills = fills_for_size(Vec2::new(ROW_LABEL_WIDTH, CELL_SIZE.y));
+        assert_eq!(
+            label_fills.len(),
+            names.len(),
+            "each Group label cell must paint its own fill"
+        );
+        for fill in label_fills {
+            assert_ne!(
+                fill,
+                theme::PANEL,
+                "each Group label cell must use a fill distinct from the Scene cells"
+            );
+        }
+    }
 
     #[test]
     fn copy_drag_emits_the_engine_payload() {
