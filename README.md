@@ -16,8 +16,8 @@ VmodV
   <a href="https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md" target="_blank">
     <img alt="Bundled third-party modules: see notices (some CC BY-NC-SA)" src="https://img.shields.io/badge/bundled%20modules-see%20notices-orange" />
   </a>
-  <a href="https://fayaaz.github.io/VmodV/modules/">
-    <img alt="Browse all 475 modules on GitHub Pages" src="https://img.shields.io/badge/module%20catalogue-475%20modules-blueviolet" />
+  <a href="https://fayaaz.github.io/VmodV/">
+    <img alt="Open the VmodV browser app" src="https://img.shields.io/badge/browser%20app-open-blueviolet" />
   </a>
 </p>
 
@@ -40,9 +40,8 @@ VmodV is a vjing app — with a timeline, **Scenes** and **Performance**.
   performance grid, with individual transitionable groups.
 - **Modules** — ISF shader corpus, Point10 scenes, 2D modules and user-supplied
   MilkDrop presets; audio-reactive inputs, MIDI, OSC, NDI and video capture.
-  Browse every bundled module — with live WebGPU previews driven by a small
-  WebAssembly runtime — in the [GitHub Pages catalogue](https://fayaaz.github.io/VmodV/modules/)
-  ([source](docs/modules/README.md)).
+  Try every bundled module in the [VmodV browser app](https://fayaaz.github.io/VmodV/),
+  which runs the real compositor and UI in WebAssembly.
 
 > **License note:** VmodV's own code is MIT-licensed. It also bundles
 > third-party modules and assets under other terms: several Shadertoy modules
