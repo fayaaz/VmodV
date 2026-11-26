@@ -2,7 +2,6 @@ import init, {
   enable_microphone,
   resume_microphone,
   start,
-  start_output,
 } from "./pkg/modv_web.js";
 
 const boot = document.getElementById("boot");
@@ -10,68 +9,11 @@ const status = document.getElementById("boot-status");
 const error = document.getElementById("boot-error");
 const mic = document.getElementById("mic");
 const micDevice = document.getElementById("mic-device");
-const toast = document.getElementById("toast");
 
-let toastTimer = 0;
-function showToast(message) {
-  if (!toast) return;
-  toast.textContent = message;
-  toast.classList.remove("hidden");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.add("hidden"), 4000);
-}
-
-// The output window plays a capture stream from a chrome-less renderer that
-// runs on an offscreen canvas in this page. The renderer mirrors the main
-// shell's exact state, audio and transition progress, so it cannot drift.
-let outputWindow = null;
-let outputEngine = null;
-
-function attachOutputStream() {
-  const canvas = document.getElementById("modv-output-canvas");
-  if (!canvas) return;
-  const stream = canvas.captureStream(30);
-  window.modvCaptureStream = stream;
-}
-
-function ensureOutputEngine() {
-  if (outputEngine) return outputEngine;
-  outputEngine = (async () => {
-    await start_output("modv-output-canvas");
-    attachOutputStream();
-  })().catch((reason) => {
-    outputEngine = null;
-    throw reason;
-  });
-  return outputEngine;
-}
-
-window.openModvOutput = () => {
-  if (!outputWindow || outputWindow.closed) {
-    outputWindow = window.open(
-      "./output.html",
-      "vmodv-output",
-      "popup=yes,width=1280,height=720",
-    );
-    if (!outputWindow) {
-      showToast("Allow pop-ups for this site to open the output window.");
-      return false;
-    }
-  }
-  window.__modvOutputActive = true;
-  outputWindow.focus();
-  ensureOutputEngine().catch((reason) => {
-    console.error("could not start the output renderer", reason);
-    showToast("Could not start the output renderer.");
-  });
-  return true;
-};
-
-window.closeModvOutput = () => {
-  if (outputWindow && !outputWindow.closed) outputWindow.close();
-  outputWindow = null;
-  window.__modvOutputActive = false;
-};
+// The output view is drawn by the wasm shell itself in this tab: `Open output`
+// hides the UI and draws the compositor over the whole canvas at the viewport
+// resolution, so there is no capture stream or pop-up window to encode and
+// soften. The cog in the top-right corner returns to the UI.
 
 async function refreshMicrophones() {
   if (!navigator.mediaDevices?.enumerateDevices) return;
