@@ -26,7 +26,6 @@ default = []
 web = []
 
 [dependencies]
-image = "0.25.10"
 indexmap = { version = "2", features = ["serde"] }
 modv-engine = { path = "../modv-engine" }
 modv-render = { version = "0.1.0", path = "../modv-render" }
@@ -38,6 +37,7 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 # native event loop.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 clap = "4.6.7"
+image = "0.25.10"
 egui = { version = "0.37.0", features = ["default_fonts"] }
 egui-wgpu = { version = "0.37.0", default-features = false, features = ["winit", "wayland", "x11"] }
 egui-winit = { version = "0.37.0", default-features = false, features = ["wayland", "x11"] }
@@ -50,6 +50,10 @@ modv-ui = { version = "0.1.0", path = "../modv-ui" }
 winit = "0.30.13"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Only the codecs the browser shell can actually fetch/decode. The default
+# `image` features pull EXR, whose thread-pool channels call
+# `std::time::Instant::now` and panic on wasm32-unknown-unknown.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 web-time = "1.1"
 
 [dev-dependencies]

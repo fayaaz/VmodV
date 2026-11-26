@@ -31,13 +31,15 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
 
 - The real **Groups → Gallery → Inspector** shell, including group enable,
   alpha, blend mode and module add/remove/reorder.
-- The **built-in registry**: 36 shader modules, the 15 2D canvas modules and
-  the 27 Point10 scenes (78 modules). Shader props are editable and feed the
+- The full **bundled ISF corpus**: 36 shader modules, the 16 2D canvas
+  modules, the 27 Point10 scenes and the 396 `resources/isf` shaders (475
+  modules). The corpus is embedded in the wasm binary, so there is no asset
+  fetch or CORS dependency. Shader/ISF props are editable and feed the
   compositor exactly like the native path.
 - The live compositor output is registered as an egui native texture; there is
   no browser readback in the preview path.
-- **Audio**: a deterministic 120 BPM simulation starts immediately. The
-  "Use microphone" button requests WebAudio capture and feeds the existing
+- **Audio**: the shell starts **silent** — no capture or synthesis on open.
+  The "Use microphone" button requests WebAudio capture and feeds the existing
   `AudioFrame` contract (bands, wave, FFT magnitudes) into the modules.
 - **Status/health**: real adapter/backend (`webgpu` or `webgl2`), FPS, frame
   time, resolution and audio activity.
@@ -48,8 +50,8 @@ These are out of scope for this branch, not accidental omissions:
 
 - Filesystem persistence: presets, `scenes.json`, project profiles, media
   library folders and user ISF/MilkDrop hot-reload.
-- The ISF corpus and MilkDrop presets. The registry is `builtin()`; ISF source
-  would need to be fetched and parsed at runtime.
+- MilkDrop presets. The ISF corpus is embedded and parsed at startup; user
+  ISF/MilkDrop folders still need the browser file API.
 - OSC, NDI, MIDI and the local JavaScript plugin host.
 - Performance-mode Scenes/playlists (the Scenes tab renders its empty state).
 - Extra native output windows. The browser has one canvas; fullscreen uses the

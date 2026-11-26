@@ -9,6 +9,7 @@ description = "Browser shell for the VmodV Rust engine"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+include_dir = "0.7"
 modv-engine = { path = "../modv-engine" }
 modv-render = { version = "0.1.0", path = "../modv-render" }
 modv-renderers = { version = "0.1.0", path = "../modv-renderers" }

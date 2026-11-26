@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio;
+pub mod pacing;
 pub mod state;
 
 #[cfg(target_arch = "wasm32")]

@@ -11,7 +11,7 @@ use modv_app::compositor::{Compositor, FrameInfo};
 use modv_render::wgpu;
 use modv_ui::state::{UiCommand, UiState};
 
-use crate::audio::SimAudio;
+use crate::pacing::{FramePacer, TARGET_FPS};
 use crate::state::WebState;
 
 /// Start the browser shell on `canvas_id`.
@@ -45,15 +45,16 @@ struct WebApp {
     state: WebState,
     compositor: Compositor,
     ui_state: UiState,
-    audio: SimAudio,
     preview_texture: Option<egui::TextureId>,
     render_size: [u32; 2],
     webgl_fallback: bool,
-    last_time: f64,
+    pacer: FramePacer,
+    last_render_time: f64,
     start_time: f64,
     frames: u64,
     fps: f32,
     frame_ms: f32,
+    resizes: u64,
 }
 
 impl WebApp {
@@ -114,15 +115,16 @@ impl WebApp {
             state,
             compositor,
             ui_state,
-            audio: SimAudio::new(),
             preview_texture: None,
             render_size: [1, 1],
             webgl_fallback: backend == "webgl2",
-            last_time: 0.0,
+            pacer: FramePacer::new(TARGET_FPS),
+            last_render_time: 0.0,
             start_time: 0.0,
             frames: 0,
             fps: 0.0,
             frame_ms: 0.0,
+            resizes: 0,
         })
     }
 
@@ -131,10 +133,11 @@ impl WebApp {
         let ppp = ctx.pixels_per_point();
         let width = (rect.width() * ppp).round().max(0.0) as u32;
         let height = (rect.height() * ppp).round().max(0.0) as u32;
-        // Keep the internal targets bounded: the browser canvas can be a 4K
-        // surface, and a couple of Point10 scenes at 4K would stall the tab.
-        // The WebGL2 software fallback also gets a smaller target.
-        let max_width = if self.webgl_fallback { 960 } else { 1280 };
+        // Keep the internal targets bounded at the native reference size
+        // (960x540). The browser canvas can be a 4K surface, and a couple of
+        // Point10 scenes at 4K would stall the tab; 960x540 keeps the 60 fps
+        // output budget reachable on ordinary GPUs.
+        let max_width = 960;
         if width > max_width {
             let height = (u64::from(height) * u64::from(max_width) / u64::from(width)) as u32;
             [max_width, height.max(1)]
@@ -177,6 +180,33 @@ impl WebApp {
         self.render_size = [width, height];
     }
 
+    /// Publish a small JSON snapshot on `window.__modvStats` for browser
+    /// soak tests. This is a debug hook; the app never reads it.
+    fn publish_stats(&self) {
+        if !self.frames.is_multiple_of(30) {
+            return;
+        }
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let stats = format!(
+            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{}}}",
+            self.fps,
+            self.frame_ms,
+            self.frames,
+            self.resizes,
+            self.render_size[0],
+            self.render_size[1],
+            self.webgl_fallback,
+            self.preview_texture.is_some()
+        );
+        let _ = js_sys::Reflect::set(
+            &window,
+            &wasm_bindgen::JsValue::from_str("__modvStats"),
+            &wasm_bindgen::JsValue::from_str(&stats),
+        );
+    }
+
     fn handle_command(&mut self, command: UiCommand, ctx: &egui::Context) {
         match command {
             UiCommand::Quit => {
@@ -215,42 +245,66 @@ impl eframe::App for WebApp {
         if self.start_time == 0.0 {
             self.start_time = now;
         }
-        let dt = if self.last_time == 0.0 {
-            1.0 / 60.0
-        } else {
-            (now - self.last_time).clamp(0.0, 0.1)
-        };
-        self.last_time = now;
-        self.frame_ms = (dt * 1000.0) as f32;
-        self.fps = if dt > 0.0 { 1.0 / dt as f32 } else { 0.0 };
 
-        let audio = crate::mic::frame(dt as f32).unwrap_or_else(|| self.audio.update(dt as f32));
-        self.state.set_audio(audio.clone());
+        // The compositor advances on a fixed 60 Hz deadline grid. egui may
+        // still call this method for input events; those frames draw the UI
+        // over the last output texture without advancing audio or the scene.
+        if self.pacer.due(now) {
+            let dt = if self.last_render_time == 0.0 {
+                1.0 / TARGET_FPS
+            } else {
+                (now - self.last_render_time).clamp(0.0, 0.1)
+            };
+            self.last_render_time = now;
+            // A 60 Hz deadline grid on a 144 Hz display renders in alternating
+            // two/three-rAF gaps. Smooth the frame time and derive FPS from it
+            // so the status bar shows the sustained rate instead of
+            // flickering between 48 and 72, and never reports above the cap.
+            let instant_ms = (dt * 1000.0) as f32;
+            self.frame_ms = if self.frame_ms <= 0.0 {
+                instant_ms
+            } else {
+                self.frame_ms * 0.9 + instant_ms * 0.1
+            };
+            self.fps = if self.frame_ms > 0.0 {
+                (1000.0 / self.frame_ms).min(TARGET_FPS as f32)
+            } else {
+                0.0
+            };
 
-        let target = self.render_target_size(&ctx);
-        if target != [self.compositor.size().0, self.compositor.size().1] {
-            self.compositor.resize(target[0], target[1]);
-        }
+            // Silence until the user explicitly enables the microphone.
+            // Nothing is captured or synthesized on open.
+            let audio = crate::mic::frame(dt as f32).unwrap_or_default();
+            self.state.set_audio(audio.clone());
 
-        let info = FrameInfo {
-            time_seconds: (now - self.start_time) as f32,
-            frame_index: self.frames,
-            date: browser_date(),
-            audio,
-            row_fades: Vec::new(),
-            scene_transition: None,
-        };
-        if let Err(error) = self.compositor.render_frame(self.state.state(), &info) {
-            if self.frames < 5 {
-                log(&format!("compositor error: {error}"));
+            let target = self.render_target_size(&ctx);
+            if target != [self.compositor.size().0, self.compositor.size().1] {
+                self.compositor.resize(target[0], target[1]);
+                self.resizes = self.resizes.saturating_add(1);
             }
-            self.state.set_error(Some(format!("compositor: {error}")));
-        } else {
-            self.state.set_error(None);
+
+            let info = FrameInfo {
+                time_seconds: (now - self.start_time) as f32,
+                frame_index: self.frames,
+                date: browser_date(),
+                audio,
+                row_fades: Vec::new(),
+                scene_transition: None,
+            };
+            if let Err(error) = self.compositor.render_frame(self.state.state(), &info) {
+                if self.frames < 5 {
+                    log(&format!("compositor error: {error}"));
+                }
+                self.state.set_error(Some(format!("compositor: {error}")));
+            } else {
+                self.state.set_error(None);
+            }
+            self.frames = self.frames.saturating_add(1);
+            self.state.note_frame();
+            self.update_preview_texture(frame);
+            self.pacer.mark(now);
+            self.publish_stats();
         }
-        self.frames = self.frames.saturating_add(1);
-        self.state.note_frame();
-        self.update_preview_texture(frame);
 
         let mut snapshot = self
             .state
@@ -278,9 +332,9 @@ impl eframe::App for WebApp {
             self.handle_command(command, &ctx);
         }
 
-        // The compositor is animated every frame, so keep the browser's
-        // requestAnimationFrame loop alive even when egui has no input.
-        ctx.request_repaint();
+        // Wake at the next 60 Hz deadline. UI-only input frames before it
+        // simply redraw over the current output texture.
+        ctx.request_repaint_after(self.pacer.delay(now));
     }
 }
 

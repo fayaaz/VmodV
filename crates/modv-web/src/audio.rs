@@ -1,10 +1,8 @@
-//! Demo audio for the browser shell.
+//! Demo audio for browser tests.
 //!
-//! The native app's capture stack (PipeWire/ALSA) is out of scope for the web
-//! build. Until the WebAudio microphone bridge lands, the shell drives the
-//! same `AudioFrame` contract from a deterministic 120 BPM four-on-the-floor
-//! simulation: the visuals react immediately, with no permission prompt and
-//! no silent first frame.
+//! The shell itself starts silent; the microphone button is the only capture
+//! path. This deterministic 120 BPM source is kept for host tests and as an
+//! opt-in fixture for future browser demos.
 
 use modv_renderers::two_d::AudioFrame;
 
