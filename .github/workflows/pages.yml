@@ -6,17 +6,11 @@ name: GitHub Pages — VmodV browser
 # catalogue assets are removed from gh-pages. The hand-maintained root page is
 # left intact.
 on:
+  # Every push to main republishes the browser shell. No path filter: a main
+  # update is the deployment trigger, even when the change is docs-only.
   push:
     branches:
       - main
-    paths:
-      - 'crates/**'
-      - 'resources/isf/**'
-      - 'web/**'
-      - 'tools/build-web.sh'
-      - 'Dockerfile'
-      - 'Makefile'
-      - '.github/workflows/pages.yml'
   pull_request:
     branches:
       - main
