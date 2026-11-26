@@ -126,7 +126,7 @@ fn shader_and_isf_modules_ship_compilable_wgsl_previews() {
         }
     }
     assert_eq!(shader_previews, 36);
-    assert_eq!(isf_previews, 396);
+    assert_eq!(isf_previews, 402);
 }
 
 #[test]

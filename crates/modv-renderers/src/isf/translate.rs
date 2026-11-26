@@ -1937,6 +1937,37 @@ void main(void) {
         assert!(message.contains("line"), "{message}");
     }
 
+    /// The CC0 glslop shaders imported into the corpus must all translate —
+    /// including `REC`, which is multi-pass and uses `IMG_NORM_PIXEL`.
+    #[test]
+    fn glslop_imports_translate() {
+        let corpus = default_corpus_dir();
+        for name in [
+            "Skrrt",
+            "REC",
+            "neptune.exe",
+            "Not Responding",
+            "Orbiting Prism Cluster",
+            "Laser Lattice Wormhole",
+        ] {
+            let path = corpus.join(format!("{name}.fs"));
+            let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!("missing imported shader {}: {error}", path.display())
+            });
+            let document = parse_isf(&source, None)
+                .unwrap_or_else(|error| panic!("{name} header does not parse: {error}"));
+            assert!(!document.passes.is_empty(), "{name} has no passes");
+            for pass in 0..document.passes.len() {
+                let translated = translate_fragment(&document, pass).unwrap_or_else(|error| {
+                    panic!("{name} pass {pass} does not translate: {error}")
+                });
+                if let Some(wgsl) = translated.wgsl {
+                    assert_valid_wgsl(&wgsl);
+                }
+            }
+        }
+    }
+
     #[test]
     fn corpus_matches_the_checked_in_baseline() {
         let directory = default_corpus_dir();

@@ -15,7 +15,7 @@
 //!
 //! # Why a translator at all
 //!
-//! The corpus is 396 `.fs` files (77 with a `.vs` sidecar), 55 multi-pass
+//! The corpus is 402 `.fs` files (77 with a `.vs` sidecar), 56 multi-pass
 //! shaders, 53 with a `PERSISTENT` buffer, 17 with a `FLOAT` buffer and 289
 //! with an `image` input. Hand porting them is not an option;
 //! `docs/isf-translation-notes.md` records the verified path: preprocess ES →

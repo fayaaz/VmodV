@@ -102,6 +102,23 @@ Upstream is contradictory: its `LICENSE` is CC0-1.0, while its README says the s
 
 `phreax twisted carbon` had its unused `IMPORTED` cube-map block dropped: the upstream archive ships only one of six faces and the `textureCube` sampling is commented out in the upstream shader. The evvvvil shaders' declared JPEG is bundled under its hashed filename. Three shaders needed small WGSL-translation fixes, recorded in their in-file notes: `diatribes -water cavern mod` (matrix-first rotation instead of `*=`), `phreax blue lotus` (replaced the unsupported Shadertoy `MOUSE` uniform with its declared `iMouse` input) and `phreax twisted carbon` (removed unsupported GLSL precision qualifiers/statements; temporaries for `inout` calls with `p.xy`/`p.z`) and `phreax hexflower` (a float temporary instead of passing `p.z` to an `inout` parameter, which WGSL forbids). All other shader bodies are the upstream text with only the ISF `CREDIT` field and attribution comment added.
 
+## glslop CC0 shader imports
+
+The six shaders below were imported verbatim from [glslop](https://glslop.com/) via its public
+`/api/v1/shaders/<id>` endpoint. glslop publishes its shader commons under CC0-1.0, so no
+attribution is required; the upstream page, author and in-file `CREDIT` are recorded here for
+provenance. `REC` is a two-pass ISF shader; it translates and runs through the normal ISF
+multi-pass path without an override.
+
+| File | Upstream | Author / credit | Licence |
+| --- | --- | --- | --- |
+| `resources/isf/Skrrt.fs` | [ouq919a0](https://glslop.com/shader/ouq919a0) | ksin — "CC0. Original. An homage - no marque assets, every number typed in by hand." | CC0-1.0 |
+| `resources/isf/REC.fs` | [e5nbqrtg](https://glslop.com/shader/e5nbqrtg) | ksin — "CC0" | CC0-1.0 |
+| `resources/isf/neptune.exe.fs` | [8wbksuit](https://glslop.com/shader/8wbksuit) | ksin — "CC0" | CC0-1.0 |
+| `resources/isf/Not Responding.fs` | [k0xfhmb2](https://glslop.com/shader/k0xfhmb2) | ksin — "CC0" | CC0-1.0 |
+| `resources/isf/Orbiting Prism Cluster.fs` | [07m1ixly](https://glslop.com/shader/07m1ixly) | glslop agent (Claude) | CC0-1.0 |
+| `resources/isf/Laser Lattice Wormhole.fs` | [720112cj](https://glslop.com/shader/720112cj) | glslop agent (Claude) | CC0-1.0 |
+
 ## Point10 scenes
 
 The 27 registered `Point10 ...` scenes do **not** share one provenance. Only
