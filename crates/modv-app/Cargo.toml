@@ -18,25 +18,39 @@ path = "src/main.rs"
 name = "modv"
 path = "src/bin/modv.rs"
 
+[features]
+# Build only the platform-neutral core (registry, compositor, previews) that
+# the WebAssembly shell in `modv-web` composes. Native modules are excluded by
+# `src/lib.rs`; the full desktop app is the default feature set.
+default = []
+web = []
+
 [dependencies]
+image = "0.25.10"
+indexmap = { version = "2", features = ["serde"] }
+modv-engine = { path = "../modv-engine" }
+modv-render = { version = "0.1.0", path = "../modv-render" }
+modv-renderers = { version = "0.1.0", path = "../modv-renderers" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+
+# Desktop-only: windowing, the egui shell, capture, MIDI, sockets and the
+# native event loop.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 clap = "4.6.7"
 egui = { version = "0.37.0", features = ["default_fonts"] }
 egui-wgpu = { version = "0.37.0", default-features = false, features = ["winit", "wayland", "x11"] }
 egui-winit = { version = "0.37.0", default-features = false, features = ["wayland", "x11"] }
-image = "0.25.10"
-indexmap = { version = "2", features = ["serde"] }
 libc = "0.2"
 midir = "0.11.1"
 notify = "9.0.0"
-modv-engine = { path = "../modv-engine" }
 modv-ipc = { path = "../modv-ipc" }
 modv-media = { version = "0.1.0", path = "../modv-media" }
-modv-render = { version = "0.1.0", path = "../modv-render" }
-modv-renderers = { version = "0.1.0", path = "../modv-renderers" }
 modv-ui = { version = "0.1.0", path = "../modv-ui" }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.154", features = ["preserve_order"] }
 winit = "0.30.13"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1.1"
 
 [dev-dependencies]
 gst = { package = "gstreamer", version = "0.25.4" }

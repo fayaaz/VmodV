@@ -167,6 +167,14 @@ use modv_renderers::two_d::{
     TwoDModule, TwoDModuleMeta, TwoDProp, all_modules as all_two_d_modules,
 };
 
+/// Hidden/temporary media entries skipped by the user-ISF walk.
+///
+/// Mirrors `media_watch::is_ignored_media_name`; kept local so the registry
+/// compiles in the browser shell, which has no filesystem watcher.
+fn is_ignored_media_name(name: &str) -> bool {
+    name.starts_with('.') || name.ends_with('~') || name.ends_with(".tmp")
+}
+
 /// Which renderer owns a registered module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -1835,7 +1843,7 @@ impl ModuleFileScan {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if crate::media_watch::is_ignored_media_name(name) {
+            if is_ignored_media_name(name) {
                 continue;
             }
             let Ok(file_type) = entry.file_type() else {

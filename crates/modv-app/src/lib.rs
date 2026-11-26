@@ -4,61 +4,112 @@
 //! compositor: windowed rendering of the engine state, control socket,
 //! snapshot/restore and the shared-memory preview ring.
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "web")))]
 mod gpu_test;
 
-pub mod audio;
-pub mod audio_settings;
-pub mod cli;
+// Platform-neutral core: the WebAssembly shell (`modv-web`) composes these
+// with browser I/O; the desktop shell composes them with winit/media/control
+// sockets.
 pub mod compositor;
-pub mod control_socket;
-pub mod expressions;
-pub mod fixtures;
-pub mod headless;
-pub mod ids;
-pub mod input_links;
-pub mod logging;
-pub mod media;
-pub mod media_dialogs;
-pub mod media_import;
-pub mod media_library;
-pub mod media_probe;
-pub mod media_profiles;
-pub mod media_settings;
-pub mod media_watch;
-pub mod midi;
-pub mod module_docs;
 pub mod module_preview;
 pub mod module_registry;
-pub mod ndi_readback;
-pub mod ndi_runtime;
-pub mod pacing;
-pub mod performance;
-pub mod plugin_runtime;
-pub mod preview_worker;
 pub mod quality;
-pub mod registry_worker;
-pub mod render_settings;
-pub mod report;
-pub mod scene_ops;
-pub mod scene_preview;
 pub mod scene_transition;
-pub mod screen_share;
-pub mod settings_compat;
-pub mod store_ops;
-pub mod supervisor;
 pub mod texture_sources;
+
+// Desktop-only modules. The `web` feature leaves them out so the same crate
+// can be compiled for wasm32 without GStreamer, PipeWire, ALSA, MIDI, NDI,
+// inotify, Unix sockets or the native window loop.
+#[cfg(not(feature = "web"))]
+pub mod audio;
+#[cfg(not(feature = "web"))]
+pub mod audio_settings;
+#[cfg(not(feature = "web"))]
+pub mod cli;
+#[cfg(not(feature = "web"))]
+pub mod control_socket;
+#[cfg(not(feature = "web"))]
+pub mod expressions;
+#[cfg(not(feature = "web"))]
+pub mod fixtures;
+#[cfg(not(feature = "web"))]
+pub mod headless;
+#[cfg(not(feature = "web"))]
+pub mod ids;
+#[cfg(not(feature = "web"))]
+pub mod input_links;
+#[cfg(not(feature = "web"))]
+pub mod logging;
+#[cfg(not(feature = "web"))]
+pub mod media;
+#[cfg(not(feature = "web"))]
+pub mod media_dialogs;
+#[cfg(not(feature = "web"))]
+pub mod media_import;
+#[cfg(not(feature = "web"))]
+pub mod media_library;
+#[cfg(not(feature = "web"))]
+pub mod media_probe;
+#[cfg(not(feature = "web"))]
+pub mod media_profiles;
+#[cfg(not(feature = "web"))]
+pub mod media_settings;
+#[cfg(not(feature = "web"))]
+pub mod media_watch;
+#[cfg(not(feature = "web"))]
+pub mod midi;
+#[cfg(not(feature = "web"))]
+pub mod module_docs;
+#[cfg(not(feature = "web"))]
+pub mod ndi_readback;
+#[cfg(not(feature = "web"))]
+pub mod ndi_runtime;
+#[cfg(not(feature = "web"))]
+pub mod pacing;
+#[cfg(not(feature = "web"))]
+pub mod performance;
+#[cfg(not(feature = "web"))]
+pub mod plugin_runtime;
+#[cfg(not(feature = "web"))]
+pub mod preview_worker;
+#[cfg(not(feature = "web"))]
+pub mod registry_worker;
+#[cfg(not(feature = "web"))]
+pub mod render_settings;
+#[cfg(not(feature = "web"))]
+pub mod report;
+#[cfg(not(feature = "web"))]
+pub mod scene_ops;
+#[cfg(not(feature = "web"))]
+pub mod scene_preview;
+#[cfg(not(feature = "web"))]
+pub mod screen_share;
+#[cfg(not(feature = "web"))]
+pub mod settings_compat;
+#[cfg(not(feature = "web"))]
+pub mod store_ops;
+#[cfg(not(feature = "web"))]
+pub mod supervisor;
+#[cfg(not(feature = "web"))]
 pub mod ui_layout;
+#[cfg(not(feature = "web"))]
 pub mod video_sources;
+#[cfg(not(feature = "web"))]
 pub mod vmodv;
+#[cfg(not(feature = "web"))]
 pub mod window;
+#[cfg(not(feature = "web"))]
 pub mod window_state;
+#[cfg(not(feature = "web"))]
 pub mod windows;
 
+#[cfg(not(feature = "web"))]
 use std::process::ExitCode;
 
+#[cfg(not(feature = "web"))]
 use modv_render::{Engine, EngineConfig};
 
+#[cfg(not(feature = "web"))]
 pub fn run_engine() -> ExitCode {
     die_with_parent();
 
@@ -149,6 +200,7 @@ pub fn run_engine() -> ExitCode {
 /// Entry point for the `modv` VmodV UI binary.
 ///
 /// `--headless` and `--screenshot` keep the engine-only behaviour.
+#[cfg(not(feature = "web"))]
 pub fn vmodv_main() -> ExitCode {
     die_with_parent();
 
@@ -224,7 +276,7 @@ pub fn vmodv_main() -> ExitCode {
 ///
 /// Only applies when the session is X11: the Wayland path needs
 /// `libxkbcommon` only, which is a hard dependency of the windowing stack.
-#[cfg(target_os = "linux")]
+#[cfg(all(not(feature = "web"), target_os = "linux"))]
 fn x11_backend_problem() -> Option<String> {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_none() {
         return None;
@@ -252,7 +304,7 @@ fn x11_backend_problem() -> Option<String> {
     )
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(feature = "web"), not(target_os = "linux")))]
 fn x11_backend_problem() -> Option<String> {
     None
 }
@@ -264,7 +316,7 @@ fn x11_backend_problem() -> Option<String> {
 /// engine would otherwise be orphaned (it owns a native window and GPU
 /// device). `PR_SET_PDEATHSIG` ties its lifetime to the spawner; the periodic
 /// snapshot is the state-restore safety net in that path.
-#[cfg(target_os = "linux")]
+#[cfg(all(not(feature = "web"), target_os = "linux"))]
 fn die_with_parent() {
     // SAFETY: prctl(PR_SET_PDEATHSIG, SIGTERM) only sets a per-process signal
     // disposition; it has no memory-safety implications and cannot fail in a
@@ -274,5 +326,5 @@ fn die_with_parent() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(feature = "web"), not(target_os = "linux")))]
 fn die_with_parent() {}

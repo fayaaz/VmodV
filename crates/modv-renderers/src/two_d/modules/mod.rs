@@ -341,9 +341,24 @@ impl<'a> DrawContext<'a> {
     }
 }
 
+/// `Send` on native, no bound on wasm32.
+///
+/// WebGPU handles are `Rc`-backed in the browser backend, so none of the wgpu
+/// objects held by a 2D module are `Send`. The desktop compositor never moves
+/// modules between threads either; the bound exists for the native preview
+/// worker, where it is still enforced.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait TwoDModuleSend: Send {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send> TwoDModuleSend for T {}
+#[cfg(target_arch = "wasm32")]
+pub trait TwoDModuleSend {}
+#[cfg(target_arch = "wasm32")]
+impl<T> TwoDModuleSend for T {}
+
 /// The module lifecycle contract (the JS `{meta, props, init, resize, update,
 /// draw}` object).
-pub trait TwoDModule: Send {
+pub trait TwoDModule: TwoDModuleSend {
     /// Static metadata.
     fn meta(&self) -> TwoDModuleMeta;
 

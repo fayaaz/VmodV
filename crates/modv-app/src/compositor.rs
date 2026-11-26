@@ -293,7 +293,10 @@
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(target_arch = "wasm32")]
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -301,13 +304,17 @@ use modv_engine::blend::BlendMode as EngineBlendMode;
 use modv_engine::engine_state::{
     EngineState, GALLERY_GROUP_NAME, GROUP_DISABLED, GROUP_ENABLED, Group, ModuleInstance,
 };
+#[cfg(not(feature = "web"))]
 use modv_ipc::preview::{PreviewFrame, PreviewRing};
+#[cfg(not(feature = "web"))]
 use modv_media::video::VideoFrame;
+use modv_render::TexturePool;
 use modv_render::frame_graph::{
     Executor, FrameGraph, GraphError, MAIN_TEXTURE_ID, PassNode, TextureId, TextureSurfaces,
 };
 use modv_render::wgpu;
-use modv_render::{TexturePool, TexturePoolKey, UsageClass};
+#[cfg(not(feature = "web"))]
+use modv_render::{TexturePoolKey, UsageClass};
 use modv_renderers::isf::{
     CompiledIsf, IsfDocument, IsfFrameUniforms, IsfRuntime, IsfValue, IsfValues,
 };
@@ -325,10 +332,12 @@ use modv_renderers::shader::pipeline::{ShaderAudioUniforms, ShaderError, ShaderR
 use modv_renderers::shader::uniforms::{PropKind, PropSlots, ShaderProp};
 use modv_renderers::two_d::{AudioFrame, Canvas, DrawContext, ModuleContext, TwoDModule};
 
+#[cfg(not(feature = "web"))]
 use crate::media::{MediaHub, padded_rows};
 use crate::module_preview::{ModulePreviews, PreviewError};
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
 use crate::quality::module_render_size;
+#[cfg(not(feature = "web"))]
 use crate::scene_preview::ScenePreviews;
 use crate::scene_transition::{SceneTransitionInfo, SceneTransitionPass};
 use crate::texture_sources::{ImageTextures, TextureRequest};
@@ -763,6 +772,7 @@ impl IsfAudioTextures {
 /// The pool is **per source**: [`TexturePoolKey`] only carries
 /// `(width, height, format, class)`, so two sources at the same size would
 /// otherwise be handed the same texture and overwrite each other.
+#[cfg_attr(feature = "web", allow(dead_code))]
 struct MediaTexture {
     /// Size-keyed pool for this source (one live size, one spare).
     pool: TexturePool,
@@ -777,6 +787,7 @@ struct MediaTexture {
     scratch: Vec<u8>,
 }
 
+#[cfg_attr(feature = "web", allow(dead_code))]
 impl MediaTexture {
     fn new(device: &wgpu::Device) -> Self {
         Self {
@@ -789,6 +800,7 @@ impl MediaTexture {
     }
 
     /// Upload one tightly packed RGBA8 frame, allocating/resizing on demand.
+    #[cfg(not(feature = "web"))]
     fn upload(
         &mut self,
         device: &wgpu::Device,
@@ -957,6 +969,7 @@ pub struct Compositor {
     ndi_order: Vec<String>,
     /// Last uploaded frame sequence per `ndi:<receiverId>`. One upload per new
     /// frame, exactly like the media sources' `is_new` gate.
+    #[cfg_attr(feature = "web", allow(dead_code))]
     ndi_sequences: HashMap<String, u64>,
     /// One-shot log keys (unknown blend mode, skipped module type, ...).
     warned: HashSet<String>,
@@ -966,6 +979,7 @@ pub struct Compositor {
     /// Isolated Scene hover-preview renderer (`preview/scene`), created on the
     /// first request. It owns a private compositor, so it never shares a
     /// texture, pipeline slot or module instance with the live composition.
+    #[cfg(not(feature = "web"))]
     scene_previews: Option<ScenePreviews>,
     /// The most recent frame's audio clock, reused by preview renders so a
     /// Gallery tile animates on the same clock (and with the same audio) as
@@ -1014,6 +1028,23 @@ impl RetainedInstances {
     pub fn retain_module(&mut self, id: impl Into<String>) {
         self.modules.insert(id.into());
     }
+}
+
+/// The Webcam module's 1-based `camera` prop, rounded and clamped to 1.
+///
+/// Mirrors `MediaHub::camera_index`; the web compositor has no media hub, and
+/// the native upload path still feeds the same texture map.
+fn camera_index(props: &Value) -> i64 {
+    let Some(value) = props.get("camera") else {
+        return 1;
+    };
+    let Some(number) = value.get("value").unwrap_or(value).as_f64() else {
+        return 1;
+    };
+    if !number.is_finite() {
+        return 1;
+    }
+    (number.round() as i64).max(1)
 }
 
 impl Compositor {
@@ -1131,6 +1162,7 @@ impl Compositor {
             ndi_sequences: HashMap::new(),
             warned: HashSet::new(),
             previews: None,
+            #[cfg(not(feature = "web"))]
             scene_previews: None,
             preview_frame: FrameInfo::default(),
             group_sampler,
@@ -1241,6 +1273,7 @@ impl Compositor {
         }
         // Scene hover previews own a private compositor and isolated states;
         // drop both so a restored Scene list cannot reuse stale instances.
+        #[cfg(not(feature = "web"))]
         if let Some(previews) = &mut self.scene_previews {
             previews.reset();
         }
@@ -1268,6 +1301,7 @@ impl Compositor {
     /// The start order is mirrored in [`Self::media_order`] so the Webcam
     /// module can resolve its `camera` prop without borrowing the hub from the
     /// render path.
+    #[cfg(not(feature = "web"))]
     pub fn sync_media(&mut self, media: &mut MediaHub) {
         if self.media_order.as_slice() != media.ids() {
             self.media_order.clear();
@@ -1320,6 +1354,7 @@ impl Compositor {
     ///
     /// NDI receiver frames are user-level like media sources: they survive
     /// Scene applies, resizes and `engine/restore`.
+    #[cfg(not(feature = "web"))]
     pub fn sync_ndi(&mut self, ndi: &crate::ndi_runtime::NdiRuntime) {
         let order = ndi.enabled_receiver_ids();
         if self.ndi_order != order {
@@ -1420,7 +1455,14 @@ impl Compositor {
     /// the new size; the window/present path still targets the full
     /// swapchain, so the visible frame only goes a little softer.
     pub fn set_render_scale(&mut self, scale: f32) {
+        #[cfg(not(feature = "web"))]
         let scale = crate::render_settings::RenderSettings::clamp_scale(scale);
+        #[cfg(feature = "web")]
+        let scale = if scale.is_finite() {
+            scale.clamp(0.25, 1.0)
+        } else {
+            1.0
+        };
         if (scale - self.render_scale).abs() < f32::EPSILON {
             return;
         }
@@ -1450,7 +1492,7 @@ impl Compositor {
 
         // `select_source_id` semantics: below 1 clamps to the first source and
         // an out-of-range index falls back to the first.
-        let index = MediaHub::camera_index(props).max(1) as usize;
+        let index = camera_index(props).max(1) as usize;
         let position = if index > total { 0 } else { index - 1 };
 
         let (source_id, textures) = if position < media_order.len() {
@@ -3236,6 +3278,7 @@ impl Compositor {
     /// the instances of every still-cached cell (R-10b). The preview keys
     /// every materialisation with fresh ids, so the evicted cell's ids name
     /// exactly its own instances.
+    #[cfg_attr(feature = "web", allow(dead_code))]
     pub(crate) fn dispose_instances(&mut self, ids: &RetainedInstances) {
         self.dispose_group_targets(ids.groups.iter().cloned().collect());
         self.dispose_module_instances(ids.modules.iter().cloned().collect());
@@ -3816,6 +3859,7 @@ impl Compositor {
     /// Returns the written [`PreviewFrame`] so the supervisor can publish the
     /// `preview/frame` event, or `None` when there is nothing to publish (no
     /// groups have ever rendered yet).
+    #[cfg(not(feature = "web"))]
     pub fn read_preview(
         &mut self,
         ring: &mut PreviewRing,
@@ -3957,6 +4001,7 @@ impl Compositor {
     /// packed** `width × height` RGBA8.
     ///
     /// See [`crate::scene_preview`] for the isolation, cache and cost notes.
+    #[cfg(not(feature = "web"))]
     #[allow(clippy::too_many_arguments)]
     pub fn render_scene_preview(
         &mut self,
@@ -3981,6 +4026,7 @@ impl Compositor {
     }
 
     /// [`Self::render_scene_preview`] without waiting for the read-back map.
+    #[cfg(not(feature = "web"))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_scene_preview_pending(
         &mut self,
@@ -4005,6 +4051,7 @@ impl Compositor {
     }
 
     /// The Scene hover-preview cache (tests/diagnostics).
+    #[cfg(not(feature = "web"))]
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn scene_previews(&mut self) -> &mut ScenePreviews {
         let device = self.device.clone();
