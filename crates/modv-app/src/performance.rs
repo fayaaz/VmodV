@@ -64,8 +64,11 @@
 //!   Groups with no Modules (`scenes.js:3940-3978`); the VmodV runtime's
 //!   `tick_scenes` has no such branch, so there is no legacy phrase rule to
 //!   mirror.
-//! * Point10 pre-warming — the engine builds scenes synchronously; the
-//!   `nextSceneId` field is still tracked so the selection is made once.
+//! * Point10/ISF/MilkDrop pre-warming — the mid-dwell pick queues a warm
+//!   request for the incoming Scene's heavy modules ([`Store::
+//!   take_pending_scene_prewarms`]); the native render loops compile them
+//!   during dwell so the crossfade's first frame does not. The `nextSceneId`
+//!   field is still tracked so the selection is made once.
 //! * Scene hover previews — M5d.
 
 use std::collections::{BTreeMap, HashSet};
@@ -73,10 +76,12 @@ use std::collections::{BTreeMap, HashSet};
 use serde_json::{Map, Value, json};
 
 use modv_engine::engine_state::{GALLERY_GROUP_NAME, Group};
+use modv_engine::scene_prewarm::{PrewarmKind, PrewarmTarget, ScenePrewarmRequest};
 use modv_engine::scene_rows::{
-    PickNextRowScene, ResolveRowAdvanceScene, ShouldAdvanceRow, get_row_count, is_row_cell_empty,
-    is_scene_cell_disabled, is_scene_enabled, normalize_disabled_cells, normalize_row_names,
-    pick_next_row_scene_with_disabled, resolve_row_advance_scene_with_disabled, should_advance_row,
+    PickNextRowScene, ResolveRowAdvanceScene, ShouldAdvanceRow, get_row_count, get_row_group,
+    is_row_cell_empty, is_scene_cell_disabled, is_scene_enabled, normalize_disabled_cells,
+    normalize_row_names, pick_next_row_scene_with_disabled,
+    resolve_row_advance_scene_with_disabled, should_advance_row,
 };
 use modv_engine::scene_timing::{
     normalize_transition_duration, pick_cell_dwell_numeric, resolve_scene_timing_at,
@@ -86,13 +91,16 @@ use modv_engine::scene_transition_pick::{
 };
 use modv_engine::scenes_playlist::normalize_transition_list;
 
+use crate::module_registry::ModuleKind;
+use crate::quality::{is_heavy, module_quality};
 use crate::scene_ops::RowApplyOutcome;
 use crate::store_ops::{Store, StoreError};
 
 /// How long a cell plays before its next Scene is selected
-/// (`ROW_PREWARM_AFTER_SECONDS`, `scenes.js:1084`). The engine has no GPU
-/// pre-warm yet, but the selection is still made once at this point so the
-/// advance uses the Scene chosen mid-dwell (`resolveRowAdvanceScene`).
+/// (`ROW_PREWARM_AFTER_SECONDS`, `scenes.js:1084`). The Scene is selected once
+/// at this point so the advance uses the mid-dwell choice
+/// (`resolveRowAdvanceScene`), and the pick queues a pre-warm request for the
+/// heavy modules the native renderer compiles during the rest of the dwell.
 pub const ROW_PREWARM_AFTER_SECONDS: f64 = 0.5;
 
 /// Minimum interval between mirror progress/alpha deltas while a crossfade
@@ -420,6 +428,138 @@ impl Store {
             .is_some_and(|scene_id| is_scene_cell_disabled(disabled, scene_id, row))
     }
 
+    /// The distinct heavy modules (Point10, ISF, MilkDrop) a Scene row draws.
+    ///
+    /// Shader and 2D modules compile cheaply on their first live draw, so they
+    /// are skipped; only renderer families that build expensive pipelines or
+    /// allocate simulation targets are pre-warmed. Each target also carries
+    /// the resolved inputs of [`crate::quality::module_render_size`] so the
+    /// compositor warms at the same size the first live draw will use.
+    fn scene_row_prewarm_targets(
+        &self,
+        scene: &Value,
+        row: usize,
+        row_names: &[String],
+    ) -> Vec<PrewarmTarget> {
+        let Some(group) = get_row_group(scene, row, row_names) else {
+            return Vec::new();
+        };
+        let module_map = scene.get("modules");
+
+        // Scene documents store group modules either as ids into `modules` or
+        // inline snapshots. Resolve both shapes to the snapshot first.
+        fn snapshot<'a>(item: &'a Value, module_map: Option<&'a Value>) -> Option<&'a Value> {
+            match item {
+                Value::String(id) => module_map.and_then(|map| map.get(id.as_str())),
+                Value::Object(_) => Some(item),
+                _ => None,
+            }
+        }
+        let mut modules: Vec<&Value> = Vec::new();
+        match group.get("modules") {
+            Some(Value::Array(items)) => {
+                modules.extend(items.iter().filter_map(|item| snapshot(item, module_map)));
+            }
+            Some(Value::Object(map)) => {
+                modules.extend(map.values().filter_map(|item| snapshot(item, module_map)));
+            }
+            _ => {}
+        }
+
+        let mut targets: Vec<PrewarmTarget> = Vec::new();
+        for module in modules {
+            let Some(name) = module
+                .get("$moduleName")
+                .or_else(|| module.get("moduleName"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let kind = match self.registry.kind(name) {
+                Some(ModuleKind::Point10) => PrewarmKind::Point10,
+                Some(ModuleKind::Isf) => PrewarmKind::Isf,
+                Some(ModuleKind::Milkdrop) => PrewarmKind::Milkdrop,
+                _ => continue,
+            };
+            if targets
+                .iter()
+                .any(|target| target.kind == kind && target.name == name)
+            {
+                continue;
+            }
+
+            // Mirror `insert_module`: registry defaults first, then the Scene
+            // snapshot's overrides. Missing registry data falls back to the
+            // `global`/light defaults in `quality.rs`.
+            let mut props = self
+                .registry
+                .default_props(name)
+                .as_ref()
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(overrides) = module.get("props").and_then(Value::as_object) {
+                props.extend(
+                    overrides
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+            }
+            let quality = module_quality(&Value::Object(props)).to_string();
+
+            let mut meta = self.registry.meta_fields(name).unwrap_or_default();
+            if let Some(overrides) = module.get("meta").and_then(Value::as_object) {
+                meta.extend(
+                    overrides
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+            }
+            let point10_heavy = (kind == PrewarmKind::Point10).then_some(true);
+            let heavy = is_heavy(&meta, point10_heavy);
+
+            targets.push(PrewarmTarget {
+                kind,
+                name: name.to_string(),
+                quality,
+                heavy,
+            });
+        }
+        targets
+    }
+
+    /// Queue one mid-dwell pre-warm request for an already-picked Scene.
+    ///
+    /// Disabled and empty cells never warm: performance mode will not draw
+    /// them, and a stale request would repeat on every dwell.
+    fn enqueue_scene_prewarm(&mut self, scene_id: &str, row: usize, row_names: &[String]) {
+        let disabled = self.disabled_cells();
+        let Some(scene) = self
+            .scenes
+            .scenes
+            .iter()
+            .find(|scene| scene.get("id").and_then(Value::as_str) == Some(scene_id))
+        else {
+            return;
+        };
+        if !is_scene_enabled(scene)
+            || is_row_cell_empty(scene, row, row_names)
+            || Self::scene_cell_disabled(&disabled, scene, row)
+        {
+            return;
+        }
+        let modules = self.scene_row_prewarm_targets(scene, row, row_names);
+        if modules.is_empty() {
+            return;
+        }
+        self.pending_scene_prewarms.push(ScenePrewarmRequest {
+            scene_id: scene_id.to_string(),
+            row,
+            epoch: self.scene_prewarm_epoch,
+            modules,
+        });
+    }
+
     /// Pick the next Scene for one row (`pickNextRowScene`).
     ///
     /// `row_names` is passed in so a caller that already normalised them (the
@@ -673,6 +813,9 @@ impl Store {
     pub fn stop_performance(&mut self) -> Result<Value, StoreError> {
         self.complete_all_row_transitions();
         self.complete_whole_scene_transition();
+        // No dwell can use a warm result after the stop, and a request queued
+        // this frame must not warm a Scene performance mode no longer targets.
+        self.invalidate_scene_prewarms();
         self.performance.rows.clear();
         self.performance.progress_emit_elapsed = 0.0;
         self.performance.enabled = false;
@@ -858,6 +1001,12 @@ impl Store {
                 runtime.pick_pending = true;
                 runtime.next_scene_id =
                     self.pick_next_scene_for_row(row, scene_id.as_deref(), &row_names);
+                // The JS warm guard queues its request as soon as the Scene is
+                // picked, so the heavy pipelines compile during dwell instead
+                // of on the crossfade's first incoming frame.
+                if let Some(next_scene_id) = runtime.next_scene_id.clone() {
+                    self.enqueue_scene_prewarm(&next_scene_id, row, &row_names);
+                }
             }
 
             runtime.dwell_elapsed += dt;

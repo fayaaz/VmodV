@@ -742,6 +742,9 @@ impl Store {
         let Some(scene) = modv_engine::scenes_playlist::normalize_scene_document(&raw) else {
             return Ok(Value::Null);
         };
+        // A whole-Scene change replaces every live Group: queued warm requests
+        // and in-flight results for the previous stack are stale.
+        self.invalidate_scene_prewarms();
 
         let row_names = normalize_row_names(self.scenes.performance.get("rowNames"));
         // A UI editor may still name an input this apply is about to replace;

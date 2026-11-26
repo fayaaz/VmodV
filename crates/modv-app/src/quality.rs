@@ -65,9 +65,30 @@ pub fn module_render_size(
     meta: &Map<String, Value>,
     point10_heavy: Option<bool>,
 ) -> (u32, u32) {
+    module_render_size_for(
+        module_quality(props),
+        is_heavy(meta, point10_heavy),
+        full_size,
+        render_size,
+    )
+}
+
+/// The size rule shared by live draws and predictive Scene pre-warming.
+///
+/// Callers that only know the resolved quality prop and heavy classification
+/// (a warm request built from the Scene document and registry defaults) use
+/// this entry point; [`module_render_size`] derives both from a live module's
+/// props/meta and delegates here, so a warm template is built at the exact
+/// size its first live draw will adopt.
+pub fn module_render_size_for(
+    quality: &str,
+    heavy: bool,
+    full_size: (u32, u32),
+    render_size: (u32, u32),
+) -> (u32, u32) {
     let scale_dim =
         |dimension: u32, factor: f32| (dimension as f32 * factor).round().max(1.0) as u32;
-    match module_quality(props) {
+    match quality {
         "full" => full_size,
         "balanced" => (
             scale_dim(full_size.0, BALANCED_SCALE),
@@ -79,7 +100,7 @@ pub fn module_render_size(
         ),
         // "global" and anything unrecognised defer to the heavy/light split.
         _ => {
-            if is_heavy(meta, point10_heavy) {
+            if heavy {
                 render_size
             } else {
                 full_size
@@ -187,6 +208,21 @@ mod tests {
         ] {
             let size = module_render_size(FULL, HALF, &props, &meta(Some("3d-scenes")), None);
             assert_eq!(size, HALF, "{props}");
+        }
+    }
+
+    #[test]
+    fn prewarm_size_rule_matches_the_live_module_size_rule() {
+        for quality in ["global", "full", "balanced", "performance", "ultra"] {
+            let props = json!({ "quality": quality });
+            for heavy in [false, true] {
+                let category = heavy.then_some("3d-scenes");
+                assert_eq!(
+                    module_render_size_for(quality, heavy, FULL, HALF),
+                    module_render_size(FULL, HALF, &props, &meta(category), None),
+                    "quality {quality}, heavy {heavy}"
+                );
+            }
         }
     }
 }

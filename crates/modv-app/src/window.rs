@@ -802,6 +802,18 @@ impl WindowedApp {
             }
         }
 
+        // 1d1. Predictive warm: after the mid-dwell pick, compile the incoming
+        // Scene's heavy modules now so the crossfade's first incoming frame
+        // does not pay for it. The Store bumps its epoch on every invalidation;
+        // syncing it drops warm results that finish too late.
+        if let Some(compositor) = &mut self.compositor {
+            compositor.set_scene_prewarm_epoch(self.store.scene_prewarm_epoch());
+            let requests = self.store.take_pending_scene_prewarms();
+            for request in &requests {
+                compositor.prewarm_scene_request(request);
+            }
+        }
+
         // 1d2. Apply OSC datagrams that arrived since the last frame, before
         // the Input Links read `osc.data` (`node-osc` delivers asynchronously).
         self.store.drain_osc();

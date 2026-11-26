@@ -1285,6 +1285,10 @@ impl VmodvApp {
                 self.record_error(format!("scenes/tick failed: {error}"));
             }
         }
+        // Predictive warm: the mid-dwell pick queues the incoming Scene's heavy
+        // modules. Warming this frame is cheap compared with the crossfade's
+        // first incoming frame, which is where the stall used to land.
+        self.prewarm_pending_scene();
         let audio = self.store.audio().clone();
         self.store.update_input_links(&audio, self.start.elapsed());
     }
@@ -3348,6 +3352,19 @@ impl VmodvApp {
             + registry.isf_definitions().len()
             + registry.milkdrop_definitions().len();
         eprintln!("ui: INFO user ISF rescan registered {count} module definitions");
+    }
+
+    /// Warm the incoming Scene's heavy modules from the Store's mid-dwell
+    /// queue, after `scenes/tick` picked it and before the first incoming draw.
+    fn prewarm_pending_scene(&mut self) {
+        let Some(compositor) = self.compositor.as_mut() else {
+            return;
+        };
+        compositor.set_scene_prewarm_epoch(self.store.scene_prewarm_epoch());
+        let requests = self.store.take_pending_scene_prewarms();
+        for request in &requests {
+            compositor.prewarm_scene_request(request);
+        }
     }
 
     /// Capture the outgoing frame for a starting whole-scene transition.

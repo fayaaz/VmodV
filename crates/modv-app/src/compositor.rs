@@ -237,8 +237,10 @@
 //! Compile-on-activate cost: the first frame after a module is added runs the
 //! GLSL → WGSL translation and pipeline creation on the render thread. The
 //! corpus translates in a few milliseconds per shader on the reference
-//! machine, but a heavy multi-pass shader can stall that frame; predictive
-//! prewarming (like Point10's) is a follow-up.
+//! machine, but a heavy multi-pass shader can stall that frame. Predictive
+//! Scene pre-warming removes that cost from the crossfade: the mid-dwell
+//! request compiles the incoming Scene's Point10/ISF/MilkDrop modules ahead of
+//! the first live draw, and the live path adopts the matching warm template.
 //!
 //! ## Gallery thumbnails (WS-14)
 //!
@@ -304,6 +306,10 @@ use modv_engine::blend::BlendMode as EngineBlendMode;
 use modv_engine::engine_state::{
     EngineState, GALLERY_GROUP_NAME, GROUP_DISABLED, GROUP_ENABLED, Group, ModuleInstance,
 };
+use modv_engine::scene_prewarm::{
+    DEFAULT_SCENE_PREWARM_CACHE_LIMIT, PrewarmCache, PrewarmKey, PrewarmKind, PrewarmSignature,
+    ScenePrewarmRequest,
+};
 #[cfg(not(feature = "web"))]
 use modv_ipc::preview::{PreviewFrame, PreviewRing};
 #[cfg(not(feature = "web"))]
@@ -336,7 +342,7 @@ use modv_renderers::two_d::{AudioFrame, Canvas, DrawContext, ModuleContext, TwoD
 use crate::media::{MediaHub, padded_rows};
 use crate::module_preview::{ModulePreviews, PreviewError};
 use crate::module_registry::{ModuleKind, ModuleRegistry, Point10SceneKind};
-use crate::quality::module_render_size;
+use crate::quality::{module_render_size, module_render_size_for};
 #[cfg(not(feature = "web"))]
 use crate::scene_preview::ScenePreviews;
 use crate::scene_transition::{SceneTransitionInfo, SceneTransitionPass};
@@ -622,6 +628,32 @@ struct MilkdropInstance {
     feedback: Option<OutputTexture>,
     /// Size the targets were allocated for.
     size: Option<(u32, u32)>,
+}
+
+/// GPU-owned templates parked by predictive Scene pre-warming during dwell.
+/// A compatible first live draw moves them into the per-module maps; stale or
+/// size-mismatched entries are dropped instead.
+#[allow(clippy::large_enum_variant)]
+enum CompositorPrewarmEntry {
+    Point10(Point10Instance),
+    Isf(IsfPrewarmEntry),
+    Milkdrop(MilkdropPrewarmEntry),
+}
+
+struct IsfPrewarmEntry {
+    compiled: CompiledIsf,
+    target: OutputTexture,
+    masked: OutputTexture,
+    audio: Option<IsfAudioTextures>,
+    size: (u32, u32),
+}
+
+struct MilkdropPrewarmEntry {
+    instance: MilkInstance,
+    gpu: MilkGpuTargets,
+    target: OutputTexture,
+    feedback: OutputTexture,
+    size: (u32, u32),
 }
 
 /// The two ISF audio input textures (`ISFAudio.js`).
@@ -946,6 +978,10 @@ pub struct Compositor {
     /// MilkDrop module ids whose preset failed; skipped without retrying each
     /// frame.
     failed_milkdrop: HashSet<String>,
+    /// Bounded, epoch-aware templates warmed during performance-mode dwell.
+    prewarm_cache: PrewarmCache<CompositorPrewarmEntry>,
+    /// Number of matching warm templates adopted by a first live draw.
+    prewarm_adoptions: usize,
     /// Uploaded video frames keyed by media source id (WS-10).
     media_textures: HashMap<String, MediaTexture>,
     /// Decoded image assets keyed by `(path, requested size)` — the image
@@ -1153,6 +1189,8 @@ impl Compositor {
             failed_isf: HashSet::new(),
             milkdrop: HashMap::new(),
             failed_milkdrop: HashSet::new(),
+            prewarm_cache: PrewarmCache::new(DEFAULT_SCENE_PREWARM_CACHE_LIMIT),
+            prewarm_adoptions: 0,
             media_textures: HashMap::new(),
             images: ImageTextures::new(),
             media_order: Vec::new(),
@@ -1203,6 +1241,10 @@ impl Compositor {
         self.drop_output_textures();
         self.group_targets.clear();
         self.surfaces = TextureSurfaces::new();
+        // Warm templates own output-sized targets, so their size signature no
+        // longer matches. Drop them without bumping the epoch: the current
+        // epoch may warm the new size again during the next dwell.
+        self.prewarm_cache.discard_entries();
         // 2D canvases are output-sized too. Dropping them (rather than
         // resizing in place) keeps the next frame on one creation path; the
         // module's `resize` runs when its canvas is rebuilt at the new size.
@@ -1260,6 +1302,9 @@ impl Compositor {
         self.failed_isf.clear();
         self.milkdrop.clear();
         self.failed_milkdrop.clear();
+        // Warm templates were built by the runtimes dropped below and may
+        // belong to the pre-restore Scene graph; none may be adopted.
+        self.prewarm_cache.discard_entries();
         // Drop cached MilkDrop pipelines/failures too: a restored state can
         // reference different presets.
         self.milkdrop_runtime = create_milk_runtime(&self.device, &self.queue);
@@ -1415,6 +1460,250 @@ impl Compositor {
     /// The internal rendering resolution scale (1.0 = full output size).
     pub fn render_scale(&self) -> f32 {
         self.render_scale
+    }
+
+    /// Warm every heavy module in one mid-dwell request, isolating failures.
+    /// Returns the number of entries parked successfully.
+    pub(crate) fn prewarm_scene_request(&mut self, request: &ScenePrewarmRequest) -> usize {
+        // An invalidated request must not spend GPU work on a Scene the Store
+        // no longer targets; the shell syncs the epoch just before draining.
+        if request.epoch != self.prewarm_cache.epoch() {
+            return 0;
+        }
+        let mut warmed = 0;
+        for target in &request.modules {
+            // Use the same rule as the first live draw (quality prop + heavy
+            // classification resolved from the Scene document), not the full
+            // output size: a `global` Point10/3D ISF follows the render scale
+            // and an explicit `balanced`/`performance` pins its own size.
+            let (width, height) = module_render_size_for(
+                &target.quality,
+                target.heavy,
+                self.size,
+                self.render_size(),
+            );
+            let value = match target.kind {
+                PrewarmKind::Point10 => self
+                    .warm_point10(&target.name, width, height)
+                    .map(CompositorPrewarmEntry::Point10),
+                PrewarmKind::Isf => self
+                    .warm_isf(&target.name, width, height)
+                    .map(CompositorPrewarmEntry::Isf),
+                PrewarmKind::Milkdrop => self
+                    .warm_milkdrop(&target.name, width, height)
+                    .map(CompositorPrewarmEntry::Milkdrop),
+            };
+            // One missing or broken module must not abort its siblings: the
+            // match above yields `None` only for that target and the loop
+            // continues, leaving the lazy path as the fallback.
+            let Some(value) = value else {
+                continue;
+            };
+            let key = PrewarmKey {
+                kind: target.kind,
+                name: target.name.clone(),
+            };
+            self.prewarm_cache.insert_at(
+                key,
+                request.epoch,
+                Self::prewarm_signature(width, height),
+                value,
+            );
+            warmed += 1;
+        }
+        warmed
+    }
+
+    /// Synchronise the compositor with the Store's invalidation epoch.
+    pub(crate) fn set_scene_prewarm_epoch(&mut self, epoch: u64) {
+        self.prewarm_cache.set_epoch(epoch);
+    }
+
+    /// Configure the bounded warm-cache limit (the legacy default is one).
+    ///
+    /// Only tests reconfigure it today; the default stays in production.
+    #[cfg(test)]
+    pub(crate) fn set_scene_prewarm_cache_limit(&mut self, limit: usize) {
+        self.prewarm_cache.set_limit(limit);
+    }
+
+    /// Number of epoch-current templates retained by the warm cache.
+    #[cfg(test)]
+    pub(crate) fn scene_prewarm_cache_len(&self) -> usize {
+        self.prewarm_cache.len()
+    }
+
+    /// Number of warm templates adopted by matching first live draws.
+    #[cfg(test)]
+    pub(crate) fn scene_prewarm_adoptions(&self) -> usize {
+        self.prewarm_adoptions
+    }
+
+    fn prewarm_signature(width: u32, height: u32) -> PrewarmSignature {
+        PrewarmSignature {
+            width,
+            height,
+            format: "Rgba8Unorm".to_string(),
+        }
+    }
+
+    /// Build a Point10 instance and compile its pipelines by running one
+    /// zero-delta `update` + `render` into a scratch target.
+    fn warm_point10(&self, name: &str, width: u32, height: u32) -> Option<Point10Instance> {
+        let scene = self.registry.create_point10_instance(name)?;
+        let mut context =
+            SceneContext::new(&self.device, &self.queue, wgpu::TextureFormat::Rgba8Unorm);
+        context.resize(width, height);
+        let target =
+            self.create_output_texture(&format!("modv-prewarm-point10-{name}"), width, height);
+        self.clear_texture(&target.texture, "point10-prewarm-allocate");
+        let mut instance = Point10Instance {
+            scene,
+            context,
+            bridge: AudioBridge::new(),
+            target: Some(target),
+            size: Some((width, height)),
+            initialised: false,
+            last_time: None,
+        };
+        instance.scene.init(&mut instance.context);
+        instance.initialised = true;
+        instance.scene.update(0.0, &instance.bridge);
+        if let Some(target) = instance.target.as_ref() {
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("modv-point10-prewarm"),
+                });
+            instance.scene.render(&mut encoder, &target.view);
+            self.queue.submit(Some(encoder.finish()));
+        }
+        Some(instance)
+    }
+
+    /// Compile an ISF document and allocate its output targets for the live
+    /// group format.
+    fn warm_isf(&mut self, name: &str, width: u32, height: u32) -> Option<IsfPrewarmEntry> {
+        let definition = self.registry.isf_definition(name)?;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let compiled = self
+            .isf_runtime
+            .compile(&definition.document, &definition.name, format)
+            .ok()?;
+        let target = self.create_output_texture(&format!("modv-prewarm-isf-{name}"), width, height);
+        self.clear_texture(&target.texture, "isf-prewarm-allocate");
+        let masked =
+            self.create_output_texture(&format!("modv-prewarm-isf-masked-{name}"), width, height);
+        self.clear_texture(&masked.texture, "isf-prewarm-masked-allocate");
+        let audio = definition
+            .document
+            .has_audio()
+            .then(|| IsfAudioTextures::new(&self.device));
+        Some(IsfPrewarmEntry {
+            compiled,
+            target,
+            masked,
+            audio,
+            size: (width, height),
+        })
+    }
+
+    /// Compile a MilkDrop preset, create its EEL instance and allocate the
+    /// module and intermediate GPU targets.
+    fn warm_milkdrop(&self, name: &str, width: u32, height: u32) -> Option<MilkdropPrewarmEntry> {
+        let definition = self.registry.milkdrop_definition(name)?;
+        let compiled = compile_preset(
+            &definition.name,
+            &definition.document,
+            &self.milkdrop_runtime.failures,
+        )
+        .ok()?;
+        let instance = new_instance(compiled, MILKDROP_INITIAL_SEED);
+        let gpu = MilkGpuTargets::new(&self.device, width, height);
+        let target =
+            self.create_output_texture(&format!("modv-prewarm-milkdrop-{name}-a"), width, height);
+        let feedback =
+            self.create_output_texture(&format!("modv-prewarm-milkdrop-{name}-b"), width, height);
+        self.clear_texture(&target.texture, "milkdrop-prewarm-allocate");
+        self.clear_texture(&feedback.texture, "milkdrop-prewarm-allocate");
+        Some(MilkdropPrewarmEntry {
+            instance,
+            gpu,
+            target,
+            feedback,
+            size: (width, height),
+        })
+    }
+
+    /// Take a compatible Point10 template, counting a real adoption.
+    fn take_warm_point10(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+    ) -> Option<Point10Instance> {
+        let key = PrewarmKey {
+            kind: PrewarmKind::Point10,
+            name: name.to_string(),
+        };
+        let signature = Self::prewarm_signature(width, height);
+        match self.prewarm_cache.take_compatible(&key, &signature) {
+            Some(CompositorPrewarmEntry::Point10(instance)) => {
+                self.prewarm_adoptions += 1;
+                Some(instance)
+            }
+            _ => None,
+        }
+    }
+
+    /// Take a compatible ISF template, counting a real adoption.
+    fn take_warm_isf(&mut self, name: &str, width: u32, height: u32) -> Option<IsfInstance> {
+        let key = PrewarmKey {
+            kind: PrewarmKind::Isf,
+            name: name.to_string(),
+        };
+        let signature = Self::prewarm_signature(width, height);
+        match self.prewarm_cache.take_compatible(&key, &signature) {
+            Some(CompositorPrewarmEntry::Isf(warm)) => {
+                self.prewarm_adoptions += 1;
+                Some(IsfInstance {
+                    compiled: Some(warm.compiled),
+                    target: Some(warm.target),
+                    size: Some(warm.size),
+                    last_time: None,
+                    audio: warm.audio,
+                    masked: Some(warm.masked),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Take a compatible MilkDrop template, counting a real adoption.
+    fn take_warm_milkdrop(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+    ) -> Option<MilkdropInstance> {
+        let key = PrewarmKey {
+            kind: PrewarmKind::Milkdrop,
+            name: name.to_string(),
+        };
+        let signature = Self::prewarm_signature(width, height);
+        match self.prewarm_cache.take_compatible(&key, &signature) {
+            Some(CompositorPrewarmEntry::Milkdrop(warm)) => {
+                self.prewarm_adoptions += 1;
+                Some(MilkdropInstance {
+                    instance: warm.instance,
+                    gpu: warm.gpu,
+                    target: Some(warm.target),
+                    feedback: Some(warm.feedback),
+                    size: Some(warm.size),
+                })
+            }
+            _ => None,
+        }
     }
 
     /// The size a heavy module renders at: its own `quality` prop decides
@@ -2422,10 +2711,16 @@ impl Compositor {
         target: &TextureId,
         frame: &FrameInfo,
     ) -> Result<(), CompositorError> {
-        if !self.point10.contains_key(module_id)
-            && !self.create_point10_instance(&module.module_name, module_id)
-        {
-            return Ok(());
+        if !self.point10.contains_key(module_id) {
+            let adopted = {
+                let (width, height) = self.module_target_size(module);
+                self.take_warm_point10(&module.module_name, width, height)
+            };
+            if let Some(instance) = adopted {
+                self.point10.insert(module_id.to_string(), instance);
+            } else if !self.create_point10_instance(&module.module_name, module_id) {
+                return Ok(());
+            }
         }
 
         // `loop.js:410-412`: alpha and composite operation come from the meta.
@@ -2594,6 +2889,14 @@ impl Compositor {
 
         let (width, height) = self.module_target_size(module);
         let texture_id = milkdrop_texture_id(module_id);
+
+        // Adopt a warm template from this dwell's request instead of compiling
+        // and allocating on the crossfade's first live frame.
+        if !self.milkdrop.contains_key(module_id)
+            && let Some(instance) = self.take_warm_milkdrop(&module.module_name, width, height)
+        {
+            self.milkdrop.insert(module_id.to_string(), instance);
+        }
 
         // Compile + instantiate lazily, once per module id. `compile_preset`
         // records its own failure in the runtime's shared cache; a failure
@@ -2821,6 +3124,14 @@ impl Compositor {
         let (width, height) = self.module_target_size(module);
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let texture_id = isf_texture_id(module_id);
+
+        // Adopt a warm template from this dwell's request instead of
+        // translating and compiling on the crossfade's first live frame.
+        if !self.isf.contains_key(module_id)
+            && let Some(instance) = self.take_warm_isf(&module.module_name, width, height)
+        {
+            self.isf.insert(module_id.to_string(), instance);
+        }
 
         self.isf
             .entry(module_id.to_string())
@@ -4802,6 +5113,541 @@ mod tests {
             row_fades: Vec::new(),
             scene_transition: None,
         }
+    }
+
+    fn prewarm_test_dir(label: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "modv-compositor-prewarm-{label}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("prewarm temp dir");
+        dir
+    }
+
+    fn prewarm_test_scene(
+        id: &str,
+        row0: Option<Vec<(&str, Value)>>,
+        row1: Option<Vec<(&str, Value)>>,
+    ) -> Value {
+        let mut modules = serde_json::Map::new();
+        let mut groups = Vec::new();
+        for (row, (group_name, specs)) in [("Background", row0), ("Effects", row1)]
+            .into_iter()
+            .enumerate()
+        {
+            let Some(specs) = specs else {
+                groups.push(Value::Null);
+                continue;
+            };
+            let mut module_ids = Vec::new();
+            for (index, (name, props)) in specs.into_iter().enumerate() {
+                let module_id = format!("{id}-r{row}-{index}");
+                let mut props = props.as_object().cloned().unwrap_or_default();
+                props.insert("quality".to_string(), json!("full"));
+                modules.insert(
+                    module_id.clone(),
+                    json!({
+                        "$id": module_id,
+                        "$moduleName": name,
+                        "meta": { "name": name, "enabled": true },
+                        "props": props,
+                        "data": {},
+                        "$props": {},
+                    }),
+                );
+                module_ids.push(module_id);
+            }
+            groups.push(json!({
+                "id": format!("{id}-group-{row}"),
+                "name": group_name,
+                "hidden": false,
+                "modules": module_ids,
+                "enabled": 1,
+                "alpha": 1,
+                "inherit": row == 1,
+                "inheritFrom": if row == 1 { json!(format!("{id}-group-0")) } else { json!(-1) },
+                "pipeline": false,
+                "clearing": true,
+                "compositeOperation": "normal",
+            }));
+        }
+        json!({
+            "id": id,
+            "name": id,
+            "enabled": true,
+            "groups": groups,
+            "modules": modules,
+        })
+    }
+
+    fn prewarm_test_store(with_exclusions: bool) -> (Store, std::path::PathBuf) {
+        let root = prewarm_test_dir(if with_exclusions {
+            "exclusions"
+        } else {
+            "store"
+        });
+        let isf = root.join("isf");
+        let milkdrop = root.join("milkdrop");
+        std::fs::create_dir_all(&isf).expect("isf dir");
+        std::fs::create_dir_all(&milkdrop).expect("milkdrop dir");
+        std::fs::write(
+            isf.join("Prewarm Probe.fs"),
+            r#"/*{
+  "ISFVSN": "2",
+  "CATEGORIES": ["3d-scenes"],
+  "INPUTS": []
+}*/
+void main() { gl_FragColor = vec4(0.25, 0.5, 0.75, 1.0); }
+"#,
+        )
+        .expect("write prewarm ISF");
+        std::fs::write(
+            milkdrop.join("Prewarm Preset.milk"),
+            "[preset00]\ntitle=Prewarm Preset - Test Author\n",
+        )
+        .expect("write prewarm MilkDrop preset");
+
+        let mut store = Store::with_state_path_and_dirs(None, Some(&isf), &[], &[milkdrop]);
+        let light0 = vec![("Bands", json!({})), ("Ball", json!({}))];
+        let light1 = vec![("Ball", json!({})), ("Bands", json!({}))];
+        let heavy0 = vec![("Point10 Particle Field", json!({})), ("Bands", json!({}))];
+        let heavy1 = vec![
+            ("Prewarm Probe", json!({})),
+            ("Prewarm Preset", json!({})),
+            ("Ball", json!({})),
+        ];
+        let mut scenes = vec![
+            prewarm_test_scene("scene-a", Some(light0.clone()), Some(light1.clone())),
+            prewarm_test_scene("scene-b", Some(heavy0.clone()), Some(heavy1.clone())),
+        ];
+        if with_exclusions {
+            scenes.push(prewarm_test_scene(
+                "scene-c",
+                None,
+                Some(vec![
+                    ("Prewarm Probe", json!({})),
+                    ("Prewarm Preset", json!({})),
+                ]),
+            ));
+            scenes.push(prewarm_test_scene(
+                "scene-d",
+                Some(vec![("Point10 Waveform", json!({}))]),
+                None,
+            ));
+        }
+        for scene in scenes {
+            store
+                .dispatch(
+                    "scenes/loadSceneFromJson",
+                    json!({ "scene": scene, "apply": false, "persist": false }),
+                )
+                .expect("load prewarm Scene");
+        }
+        if with_exclusions {
+            store
+                .dispatch(
+                    "scenes/setCellEnabled",
+                    json!({ "sceneId": "scene-b", "rowIndex": 0, "enabled": false }),
+                )
+                .expect("disable excluded row cell");
+        }
+        store.performance.rng = crate::performance::Rng::seeded(7);
+        store
+            .dispatch(
+                "scenes/updatePerformance",
+                json!({
+                    "config": {
+                        "minSeconds": 5,
+                        "maxSeconds": 5,
+                        "transitionSeconds": 0,
+                        "order": "in-order",
+                        "allowedTransitions": ["None"],
+                    }
+                }),
+            )
+            .expect("prewarm performance config");
+        store.drain_deltas();
+        (store, root)
+    }
+
+    fn start_and_advance_prewarm_store(store: &mut Store) {
+        store
+            .dispatch("scenes/startPerformance", json!({}))
+            .expect("start performance");
+        for _ in 0..33 {
+            store
+                .dispatch("scenes/tick", json!({ "delta": 1000.0 / 60.0 }))
+                .expect("advance performance dwell");
+        }
+    }
+
+    fn assert_heavy_prewarm_live_instances(
+        compositor: &Compositor,
+        store: &Store,
+        expected_size: (u32, u32),
+    ) {
+        let incoming = |row| {
+            store
+                .state()
+                .groups
+                .iter()
+                .find(|group| {
+                    group.scene_id.as_deref() == Some("scene-b")
+                        && group.scene_row == Some(row)
+                        && group.transition_ghost != Some(true)
+                })
+                .expect("incoming prewarm Scene group")
+        };
+        let point10_id = &incoming(0).modules[0];
+        let isf_id = &incoming(1).modules[0];
+        let milkdrop_id = &incoming(1).modules[1];
+        assert_eq!(
+            compositor
+                .point10
+                .get(point10_id)
+                .and_then(|entry| entry.size),
+            Some(expected_size),
+            "Point10 uses the matching adopted/lazy target size"
+        );
+        assert!(
+            compositor
+                .isf
+                .get(isf_id)
+                .and_then(|entry| entry.compiled.as_ref())
+                .is_some(),
+            "ISF has a compiled live instance"
+        );
+        assert_eq!(
+            compositor.isf.get(isf_id).and_then(|entry| entry.size),
+            Some(expected_size),
+            "ISF uses the matching adopted/lazy target size"
+        );
+        let milk = compositor
+            .milkdrop
+            .get(milkdrop_id)
+            .expect("MilkDrop has a live instance");
+        assert_eq!((milk.gpu.width, milk.gpu.height), expected_size);
+        assert_eq!(milk.size, Some(expected_size));
+    }
+
+    #[test]
+    fn scene_prewarm_guards_cover_requests_cache_invalidation_and_heavy_adoption() {
+        use modv_engine::scene_prewarm::{
+            PrewarmKey, PrewarmKind, PrewarmSignature, PrewarmTarget,
+        };
+
+        let (mut store, _root) = prewarm_test_store(false);
+        start_and_advance_prewarm_store(&mut store);
+        let mut requests = store.take_pending_scene_prewarms();
+        let registry = store.registry_arc();
+        // The test scenes pin `quality: full`; heavy still comes from the
+        // registry metadata, exactly as the request builder resolves it.
+        let expected_target = |kind, name: &str| PrewarmTarget {
+            kind,
+            name: name.to_string(),
+            quality: "full".to_string(),
+            heavy: crate::quality::is_heavy(
+                &registry.meta_fields(name).unwrap_or_default(),
+                (kind == PrewarmKind::Point10).then_some(true),
+            ),
+        };
+        assert_eq!(
+            requests.len(),
+            2,
+            "the mid-dwell pick emits one request for each live row"
+        );
+        requests.sort_by_key(|request| request.row);
+        for request in &requests {
+            assert_eq!(
+                store
+                    .row_runtime(request.row)
+                    .and_then(|runtime| runtime.next_scene_id.as_deref()),
+                Some(request.scene_id.as_str()),
+                "the request names the Scene already picked for the next advance"
+            );
+        }
+        assert_eq!(requests[0].scene_id, "scene-b");
+        assert_eq!(requests[0].row, 0);
+        assert_eq!(
+            requests[0].modules,
+            vec![expected_target(
+                PrewarmKind::Point10,
+                "Point10 Particle Field"
+            )],
+            "row 0 lists its Point10 module and skips shader/2D modules"
+        );
+        assert_eq!(requests[1].scene_id, "scene-b");
+        assert_eq!(requests[1].row, 1);
+        assert_eq!(
+            requests[1].modules,
+            vec![
+                expected_target(PrewarmKind::Isf, "Prewarm Probe"),
+                expected_target(PrewarmKind::Milkdrop, "Prewarm Preset"),
+            ],
+            "row 1 lists ISF and MilkDrop but skips its 2D module"
+        );
+        assert_eq!(requests[0].epoch, requests[1].epoch);
+        assert!(
+            store.take_pending_scene_prewarms().is_empty(),
+            "the request queue drains exactly once"
+        );
+        for _ in 0..12 {
+            store
+                .dispatch("scenes/tick", json!({ "delta": 1000.0 / 60.0 }))
+                .expect("continue same dwell");
+        }
+        assert!(
+            store.take_pending_scene_prewarms().is_empty(),
+            "a dwell emits its pre-warm request at most once per row"
+        );
+
+        let (mut excluded, _excluded_root) = prewarm_test_store(true);
+        start_and_advance_prewarm_store(&mut excluded);
+        let mut excluded_requests = excluded.take_pending_scene_prewarms();
+        excluded_requests.sort_by_key(|request| request.row);
+        let excluded_row0 = excluded_requests
+            .iter()
+            .find(|request| request.row == 0)
+            .expect("row 0 request");
+        assert_eq!(excluded_row0.scene_id, "scene-d");
+        assert_eq!(excluded_row0.modules[0].name, "Point10 Waveform");
+        assert!(
+            excluded_requests.iter().all(|request| {
+                !(request.row == 0 && request.scene_id == "scene-b")
+                    && request.scene_id != "scene-c"
+            }),
+            "disabled and empty row cells never produce warm requests"
+        );
+
+        for invalidation in ["stop", "apply", "scene-list"] {
+            let (mut invalidated, _invalidated_root) = prewarm_test_store(false);
+            start_and_advance_prewarm_store(&mut invalidated);
+            let before = invalidated.scene_prewarm_epoch();
+            match invalidation {
+                "stop" => {
+                    invalidated
+                        .dispatch("scenes/stopPerformance", json!({}))
+                        .expect("stop performance");
+                }
+                "apply" => {
+                    invalidated
+                        .dispatch("scenes/applyScene", json!({ "sceneId": "scene-b" }))
+                        .expect("apply whole Scene");
+                }
+                "scene-list" => {
+                    invalidated
+                        .dispatch(
+                            "scenes/updateSceneName",
+                            json!({ "sceneId": "scene-b", "name": "Renamed Beta" }),
+                        )
+                        .expect("invalidate Scene list");
+                }
+                other => unreachable!("unknown invalidation {other}"),
+            }
+            assert!(
+                invalidated.take_pending_scene_prewarms().is_empty(),
+                "{invalidation} clears queued warm requests"
+            );
+            assert!(
+                invalidated.scene_prewarm_epoch() > before,
+                "{invalidation} bumps the warm epoch"
+            );
+        }
+
+        let signature = PrewarmSignature {
+            width: SIZE,
+            height: SIZE,
+            format: "Rgba8Unorm".to_string(),
+        };
+        let key_a = PrewarmKey {
+            kind: PrewarmKind::Point10,
+            name: "A".to_string(),
+        };
+        let key_b = PrewarmKey {
+            kind: PrewarmKind::Isf,
+            name: "B".to_string(),
+        };
+        let key_c = PrewarmKey {
+            kind: PrewarmKind::Milkdrop,
+            name: "C".to_string(),
+        };
+        let mut cache = PrewarmCache::<String>::new(2);
+        cache.set_epoch(4);
+        cache.insert_at(key_a.clone(), 4, signature.clone(), "a".to_string());
+        assert!(cache.has(&key_a), "inserted warm entries are visible");
+        cache.insert_at(key_b.clone(), 4, signature.clone(), "b".to_string());
+        assert!(cache.has(&key_a), "has refreshes A as most-recently-used");
+        cache.insert_at(key_c.clone(), 4, signature.clone(), "c".to_string());
+        assert!(
+            !cache.has(&key_b),
+            "the configurable LRU evicts the oldest entry"
+        );
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.take(&key_a), Some("a".to_string()));
+        assert_eq!(cache.take(&key_a), None, "warm entries are take-once");
+
+        cache.insert_at(key_a.clone(), 4, signature.clone(), "a".to_string());
+        let wrong_size = PrewarmSignature {
+            width: SIZE / 2,
+            height: SIZE,
+            format: signature.format.clone(),
+        };
+        assert_eq!(cache.take_compatible(&key_a, &wrong_size), None);
+        assert!(!cache.has(&key_a), "a wrong-size entry is discarded");
+        cache.insert_at(key_a.clone(), 4, signature.clone(), "a".to_string());
+        let wrong_format = PrewarmSignature {
+            width: SIZE,
+            height: SIZE,
+            format: "Bgra8Unorm".to_string(),
+        };
+        assert_eq!(cache.take_compatible(&key_a, &wrong_format), None);
+        assert!(!cache.has(&key_a), "a wrong-format entry is discarded");
+
+        cache.set_epoch(5);
+        assert_eq!(cache.len(), 0, "advancing the epoch discards stale entries");
+        cache.insert_at(key_a.clone(), 4, signature.clone(), "stale".to_string());
+        assert!(
+            !cache.has(&key_a),
+            "a warm result authorised by an older epoch is rejected"
+        );
+        cache.insert_at(key_a.clone(), 5, signature.clone(), "current".to_string());
+        assert!(cache.has(&key_a));
+        cache.clear();
+        assert!(cache.epoch() > 5, "clear bumps the invalidation epoch");
+        assert!(cache.is_empty());
+
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor =
+            Compositor::with_registry(&engine.device, &engine.queue, registry.clone());
+        compositor.set_scene_prewarm_cache_limit(4);
+        compositor.resize(SIZE, SIZE);
+        let epoch = store.scene_prewarm_epoch();
+        compositor.set_scene_prewarm_epoch(epoch);
+        let warm_all =
+            |compositor: &mut Compositor,
+             requests: &[modv_engine::scene_prewarm::ScenePrewarmRequest]| {
+                requests
+                    .iter()
+                    .map(|request| compositor.prewarm_scene_request(request))
+                    .sum::<usize>()
+            };
+
+        let mut mixed = requests[0].clone();
+        mixed.modules.extend([
+            PrewarmTarget {
+                kind: PrewarmKind::Point10,
+                name: "Missing Point10".to_string(),
+                quality: "full".to_string(),
+                heavy: true,
+            },
+            PrewarmTarget {
+                kind: PrewarmKind::Isf,
+                name: "Missing ISF".to_string(),
+                quality: "full".to_string(),
+                heavy: false,
+            },
+            PrewarmTarget {
+                kind: PrewarmKind::Milkdrop,
+                name: "Missing MilkDrop".to_string(),
+                quality: "full".to_string(),
+                heavy: false,
+            },
+        ]);
+        assert_eq!(
+            compositor.prewarm_scene_request(&mixed),
+            1,
+            "one failed Point10 warm does not block the valid module"
+        );
+        assert_eq!(
+            compositor.prewarm_scene_request(&requests[1]),
+            2,
+            "ISF and MilkDrop both warm during the same dwell"
+        );
+        assert_eq!(compositor.scene_prewarm_cache_len(), 3);
+
+        compositor.resize(SIZE * 2, SIZE * 2);
+        assert_eq!(
+            compositor.scene_prewarm_cache_len(),
+            0,
+            "resizing drops warm entries whose targets no longer match"
+        );
+        compositor.resize(SIZE, SIZE);
+        assert_eq!(warm_all(&mut compositor, &requests), 3);
+        assert_eq!(compositor.scene_prewarm_cache_len(), 3);
+
+        for row in 0..2 {
+            store
+                .apply_scene_row_transition("scene-b", row)
+                .expect("apply warmed row")
+                .expect("row apply produces a Group");
+        }
+        let mut frame = frame_info();
+        frame.row_fades = (0..2)
+            .filter_map(|row| {
+                let transition = store.row_transition(row)?;
+                Some(RowFadeInfo {
+                    row,
+                    group_id: transition.group_id.clone(),
+                    ghost_group_id: transition.ghost_group_id.clone(),
+                    from_alpha: transition.from_alpha,
+                    target_alpha: transition.target_alpha,
+                    progress: transition.progress(),
+                })
+            })
+            .collect();
+        compositor
+            .render_frame(store.state(), &frame)
+            .expect("first live draw adopts warm entries");
+        assert_eq!(compositor.scene_prewarm_cache_len(), 0);
+        assert_eq!(
+            compositor.scene_prewarm_adoptions(),
+            3,
+            "matching Point10, ISF and MilkDrop entries are adopted exactly once"
+        );
+        assert_heavy_prewarm_live_instances(&compositor, &store, (SIZE, SIZE));
+
+        // Warm at half the output resolution while the applied Scene's modules
+        // stay pinned to `full`: the signatures cannot match, so every entry
+        // is consumed and discarded and the first live draw builds lazily.
+        let mut half_size_requests = requests.clone();
+        for request in &mut half_size_requests {
+            for target in &mut request.modules {
+                target.quality = "performance".to_string();
+            }
+        }
+        let mut wrong_size_compositor =
+            Compositor::with_registry(&engine.device, &engine.queue, registry.clone());
+        wrong_size_compositor.set_scene_prewarm_cache_limit(4);
+        wrong_size_compositor.resize(SIZE * 2, SIZE * 2);
+        wrong_size_compositor.set_scene_prewarm_epoch(epoch);
+        assert_eq!(warm_all(&mut wrong_size_compositor, &half_size_requests), 3);
+        wrong_size_compositor
+            .render_frame(store.state(), &frame)
+            .expect("wrong-size warm entries fall back to lazy creation");
+        assert_eq!(wrong_size_compositor.scene_prewarm_cache_len(), 0);
+        assert_eq!(wrong_size_compositor.scene_prewarm_adoptions(), 0);
+        assert_heavy_prewarm_live_instances(&wrong_size_compositor, &store, (SIZE * 2, SIZE * 2));
+
+        let mut stale_compositor =
+            Compositor::with_registry(&engine.device, &engine.queue, registry);
+        stale_compositor.set_scene_prewarm_cache_limit(4);
+        stale_compositor.resize(SIZE, SIZE);
+        stale_compositor.set_scene_prewarm_epoch(epoch);
+        assert_eq!(warm_all(&mut stale_compositor, &requests), 3);
+        stale_compositor.set_scene_prewarm_epoch(epoch + 1);
+        assert_eq!(stale_compositor.scene_prewarm_cache_len(), 0);
+        stale_compositor
+            .render_frame(store.state(), &frame)
+            .expect("stale warm entries fall back to the normal lazy path");
+        assert_eq!(stale_compositor.scene_prewarm_adoptions(), 0);
+        assert_heavy_prewarm_live_instances(&stale_compositor, &store, (SIZE, SIZE));
+
+        std::fs::remove_dir_all(_root).ok();
+        std::fs::remove_dir_all(_excluded_root).ok();
     }
 
     /// One group (`Effects`) with one `Point10 Invert` module. The group clears

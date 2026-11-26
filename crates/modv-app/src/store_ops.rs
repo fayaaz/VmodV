@@ -174,6 +174,10 @@ pub struct Store {
     /// capture_transition_source`). Cleared on capture, completion, fallback,
     /// reset or a later change.
     pub(crate) pending_transition_capture: Option<crate::scene_transition::TransitionEffect>,
+    /// Predictive heavy-module warm requests waiting for the native render loop.
+    pub(crate) pending_scene_prewarms: Vec<modv_engine::scene_prewarm::ScenePrewarmRequest>,
+    /// Invalidates queued/in-flight Scene warm results when the Scene graph changes.
+    pub(crate) scene_prewarm_epoch: u64,
     /// Tween runtime (WS-12): descriptors from `state.tweens` pre-rendered at
     /// [`Store::fps`] and the current BPM. Input Links read and advance them.
     pub(crate) tweens: modv_engine::tweens::TweenSet,
@@ -417,6 +421,8 @@ impl Store {
             scene_list_revision: 0,
             performance,
             pending_transition_capture: None,
+            pending_scene_prewarms: Vec::new(),
+            scene_prewarm_epoch: 0,
             tweens: modv_engine::tweens::TweenSet::new(),
             fps: 60.0,
             ndi: NdiRuntime::new(),
@@ -607,6 +613,24 @@ impl Store {
         self.scene_list_revision
     }
 
+    /// Drain predictive Scene pre-warm requests exactly once.
+    pub fn take_pending_scene_prewarms(
+        &mut self,
+    ) -> Vec<modv_engine::scene_prewarm::ScenePrewarmRequest> {
+        std::mem::take(&mut self.pending_scene_prewarms)
+    }
+
+    /// Epoch carried by Scene pre-warm requests and completed warm results.
+    pub fn scene_prewarm_epoch(&self) -> u64 {
+        self.scene_prewarm_epoch
+    }
+
+    /// Clear queued requests and invalidate warm results still in flight.
+    pub(crate) fn invalidate_scene_prewarms(&mut self) {
+        self.pending_scene_prewarms.clear();
+        self.scene_prewarm_epoch = self.scene_prewarm_epoch.wrapping_add(1);
+    }
+
     /// Push one delta to the UI mirror (status metrics, resize events).
     pub(crate) fn push_delta(&mut self, type_: &str, payload: Value) {
         self.deltas.push(type_, payload);
@@ -644,8 +668,12 @@ impl Store {
 
     /// Mark the Scene list (or the row-name mapping that selects its rows) as
     /// changed.
+    ///
+    /// Queued/in-flight predictive warm results refer to the old Scene graph,
+    /// so they are invalidated with the same revision bump.
     pub(crate) fn touch_scene_list(&mut self) {
         self.scene_list_revision = self.scene_list_revision.wrapping_add(1);
+        self.invalidate_scene_prewarms();
     }
 
     /// Remove and return the pending `{ type, payload }` records, in issue

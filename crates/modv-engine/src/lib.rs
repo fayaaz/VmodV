@@ -69,6 +69,7 @@ pub mod scene_cells;
 pub mod scene_columns;
 pub mod scene_link_defaults;
 pub mod scene_preview_data;
+pub mod scene_prewarm;
 pub mod scene_rows;
 pub mod scene_timing;
 pub mod scene_transition_pick;
