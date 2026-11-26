@@ -397,32 +397,30 @@ fn each_artifact_is_built_only_once_in_the_release_workflow() {
 
 #[test]
 fn main_pushes_do_not_rebuild_release_artifacts_in_ci_workflows() {
-    // release.yml triggers on every push to main and owns all release builds.
-    // vmodv.yml and macos.yml also trigger on main, so without a guard the very
-    // same AppImage / Windows ZIP / macOS bundle is compiled twice for one
-    // commit. Lint and tests are deduplicated separately: vmodv.yml's lint and
-    // test jobs stand down for main pushes while release.yml's `validate` runs
-    // the full suite once and gates publication.
+    // release.yml owns all release builds on main, including macOS (which no
+    // other workflow builds any more) and manual runs of that workflow.
+    // vmodv.yml also runs on main, so without a ref-based guard the same
+    // AppImage / Windows ZIP is compiled twice for one commit. Event-based
+    // guards are not enough: a `workflow_dispatch` on main still duplicates
+    // the release build. Lint and tests are deduplicated in `validate`.
     let ci = fs::read_to_string(repo_root().join(".github/workflows/vmodv.yml"))
         .expect("read vmodv.yml");
-    let macos = fs::read_to_string(repo_root().join(".github/workflows/macos.yml"))
-        .expect("read macos.yml");
 
     for (name, text, job) in [
         ("vmodv.yml", ci.as_str(), "package"),
         ("vmodv.yml", ci.as_str(), "windows-portable"),
-        ("macos.yml", macos.as_str(), "macos-portable"),
     ] {
         let block = job_block(text, job).unwrap_or_default();
-        let guarded = block
-            .lines()
-            .map(str::trim)
-            .any(|line| line.starts_with("if:") && line.contains("refs/heads/main"));
+        let guarded = block.lines().map(str::trim).any(|line| {
+            line.starts_with("if:")
+                && line.contains("github.ref != 'refs/heads/main'")
+                && !line.contains("github.event_name")
+        });
         assert!(
             guarded,
-            "{name}'s `{job}` job still builds on main pushes; release.yml builds \
-             the same artifact for that commit — guard the CI job with an `if:` \
-             that skips main pushes"
+            "{name}'s `{job}` job still builds on main events; release.yml builds \
+             the same artifact for that commit — guard the CI job with a \
+             ref-based `if:` that also skips manual runs on main"
         );
     }
 }

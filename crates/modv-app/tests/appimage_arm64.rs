@@ -472,10 +472,9 @@ fn ci_package_workflow_builds_the_arm64_appimage() {
         .expect("vmodv.yml has no `package` job for native Linux installers");
 
     assert!(
-        package
-            .contains("if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}"),
-        "the package job must retain its main-push guard so release.yml remains the only \
-         main-push installer build"
+        package.contains("if: ${{ github.ref != 'refs/heads/main' }}"),
+        "the package job must use a ref-based main guard so release.yml remains \
+         the only installer build on main, including manual runs there"
     );
     assert!(
         package.contains("strategy:")

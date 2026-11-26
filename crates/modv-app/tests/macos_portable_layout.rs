@@ -181,50 +181,45 @@ fn dry_run_stages_the_portable_macos_app_bundle() {
 }
 
 #[test]
-fn ci_macos_push_trigger_is_branch_filtered_to_avoid_double_pr_builds() {
-    // macos.yml fired on every push *and* on pull_request to main. A push to
-    // a PR branch therefore triggered both events for the same commit,
-    // paying for two macOS build matrices. Branch-filter `push` to `main`
-    // and keep `pull_request` so fork PRs are still covered.
+fn macos_bundles_are_built_only_on_main() {
+    // macOS runners are expensive. release.yml is the sole builder and it
+    // triggers only on main; PR and feature-branch macOS bundles are gone.
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let root = root.canonicalize().unwrap_or(root);
-    let text =
-        fs::read_to_string(root.join(".github/workflows/macos.yml")).expect("read macos.yml");
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines
-        .iter()
-        .position(|line| *line == "  push:")
-        .expect("macos.yml has no push trigger");
-    let push_block = lines
-        .iter()
-        .skip(start + 1)
-        .take_while(|line| {
-            let indented = line.starts_with("  ") && !line.starts_with("   ");
-            !(indented && line.contains(':'))
-        })
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
+    let dir = root.join(".github/workflows");
+    for entry in fs::read_dir(&dir).expect("read .github/workflows") {
+        let path = entry.expect("read workflow entry").path();
+        let is_workflow = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "yml" || ext == "yaml");
+        if !path.is_file() || !is_workflow {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if name == "release.yml" {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !text.contains("tools/macos-portable.sh") && !text.contains("macos-15"),
+            "{name} still builds macOS bundles; those expensive runners must \
+             run only on main via release.yml"
+        );
+    }
+    let release =
+        fs::read_to_string(root.join(".github/workflows/release.yml")).expect("read release.yml");
     assert!(
-        push_block.contains("branches:"),
-        "macos.yml's `push:` trigger is unfiltered, so a push to a PR branch \
-         fires both `push` and `pull_request` for the same commit and builds \
-         the macOS matrices twice; branch-filter it like vmodv.yml"
-    );
-    let branches: Vec<&str> = push_block
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("- "))
-        .collect();
-    assert_eq!(
-        branches,
-        vec!["main"],
-        "macos.yml's push trigger must build only `main` now that \
-         rust-hybrid is retired; got {branches:?}"
+        release.contains("  push:\n    branches:\n      - main"),
+        "release.yml must trigger macOS builds only on main"
     );
     assert!(
-        text.contains("  pull_request:"),
-        "macos.yml must keep the `pull_request` trigger so PRs from forks \
-         still build the portable bundles"
+        release.contains("tools/macos-portable.sh"),
+        "release.yml no longer builds the macOS bundles at all"
     );
 }
 
@@ -253,72 +248,37 @@ fn workflows_do_not_reference_the_retired_rust_hybrid_branch() {
 }
 
 #[test]
-fn ci_workflow_builds_and_uploads_macos_bundle() {
+fn release_workflow_builds_both_macos_architectures() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let repo_root = repo_root.canonicalize().unwrap_or(repo_root);
-
-    let macos_workflow = repo_root.join(".github/workflows/macos.yml");
-    assert!(
-        macos_workflow.is_file(),
-        ".github/workflows/macos.yml is missing — a macOS build workflow is not implemented"
-    );
     let release_workflow = repo_root.join(".github/workflows/release.yml");
-    assert!(
-        release_workflow.is_file(),
-        "{} is not a file",
-        release_workflow.display()
-    );
-
-    let macos_text = fs::read_to_string(&macos_workflow)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", macos_workflow.display()));
+    let release_text = fs::read_to_string(&release_workflow)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", release_workflow.display()));
     for token in [
         "macos-15-intel",
-        "brew install",
-        "gstreamer",
-        "PKG_CONFIG_PATH",
-        "cargo build --release --manifest-path crates/Cargo.toml -p modv-app --bin modv",
-        "tools/macos-portable.sh",
-        "actions/upload-artifact@v4",
-        "workflow_dispatch",
-        "vmodv-macos-x86_64-portable",
-        "VmodV-macOS-x86_64-portable-",
-        // arm64 is built alongside x86_64 via an explicit, pinned matrix.
         "arch: arm64",
         "runner: macos-15",
         "matrix.arch",
         "fail-fast: false",
+        "brew install",
+        "PKG_CONFIG_PATH",
+        "cargo build --release --manifest-path crates/Cargo.toml -p modv-app --bin modv",
+        "tools/macos-portable.sh",
+        "vmodv-macos-x86_64-portable",
+        "VmodV-macOS-x86_64-portable-",
         "vmodv-macos-arm64-portable",
         "VmodV-macOS-arm64-portable-",
-        "${{ runner.os }}-${{ matrix.arch }}-cargo-",
-    ] {
-        assert!(
-            macos_text.contains(token),
-            ".github/workflows/macos.yml does not mention {token}"
-        );
-    }
-
-    assert!(
-        !macos_text.contains("macos-latest"),
-        ".github/workflows/macos.yml still targets the capacity-constrained `macos-latest` arm64 runner"
-    );
-
-    let release_text = fs::read_to_string(&release_workflow)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", release_workflow.display()));
-    for token in [
-        "macos",
-        "vmodv-macos",
+        "actions/upload-artifact@v4",
         "actions/download-artifact@v4",
         "dist-macos/*.zip",
-        "vmodv-macos-x86_64-portable",
-        // The release publishes both architectures' portable bundles.
-        "arch: arm64",
-        "runner: macos-15",
-        "matrix.arch",
-        "vmodv-macos-arm64-portable",
     ] {
         assert!(
             release_text.contains(token),
             ".github/workflows/release.yml does not mention {token}"
         );
     }
+    assert!(
+        !release_text.contains("macos-latest"),
+        "release.yml still targets the capacity-constrained `macos-latest` arm64 runner"
+    );
 }

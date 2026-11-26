@@ -23,6 +23,21 @@ on:
   push:
     branches:
       - main
+    # Keep the full lint/guard/e2e validation for code, packaging and build
+    # plumbing, but not for docs-only commits. Workflow files are included so
+    # a change to this file is still validated (vmodv.yml's jobs skip main).
+    paths:
+      - 'crates/**'
+      - 'resources/**'
+      - 'packaging/vmodv/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'Dockerfile'
+      - 'Makefile'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'LICENSE'
+      - 'docs/releasing.md'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:

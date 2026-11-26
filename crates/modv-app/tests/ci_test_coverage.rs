@@ -61,6 +61,72 @@ fn selected_targets(contents: &str, recipes_only: bool) -> BTreeSet<String> {
         .collect()
 }
 
+/// The body of an `on:` trigger, bounded by the next top-level trigger key.
+fn trigger_block(contents: &str, trigger: &str) -> String {
+    let lines: Vec<&str> = contents.lines().collect();
+    let key = format!("  {trigger}:");
+    let start = lines
+        .iter()
+        .position(|line| *line == key)
+        .unwrap_or_else(|| panic!("no `{trigger}` trigger found"));
+    lines
+        .iter()
+        .skip(start + 1)
+        .take_while(|line| {
+            let top_level = line.starts_with("  ") && !line.starts_with("   ");
+            !(top_level && line.contains(':'))
+        })
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn main_push_validation_skips_docs_only_commits() {
+    // release.yml's `validate` runs lint, all guards and the e2e suites on
+    // every main push. Without a path filter a docs-only commit pays for that
+    // full run, which the old path-filtered vmodv.yml job avoided.
+    let root = repo_root();
+    let release = read_text(&root.join(".github/workflows/release.yml"));
+    let push = trigger_block(&release, "push");
+    assert!(
+        push.contains("paths:"),
+        "release.yml's push trigger has no path filter: docs-only main pushes \
+         run the full lint/guard/e2e suite"
+    );
+    for path in [
+        "'.github/workflows/**'",
+        "'crates/**'",
+        "'resources/**'",
+        "'tools/**'",
+        "'Makefile'",
+        "'Dockerfile'",
+    ] {
+        assert!(
+            push.contains(path),
+            "release.yml's push filter must include {path} so changes to that \
+             tree still trigger validation; got:\n{push}"
+        );
+    }
+}
+
+#[test]
+fn workflow_only_changes_trigger_ci_validation() {
+    // Without workflow files in vmodv.yml's path filters, a PR touching only
+    // release.yml would skip lint and the guards entirely.
+    let root = repo_root();
+    let workflow = read_text(&root.join(".github/workflows/vmodv.yml"));
+    let hits = active_lines(&workflow, false)
+        .filter(|line| line.trim() == "- '.github/workflows/**'")
+        .count();
+    assert_eq!(
+        hits, 2,
+        "vmodv.yml must list `.github/workflows/**` in both the push and \
+         pull_request path filters so workflow-only changes are linted and \
+         tested; found {hits} entries"
+    );
+}
+
 #[test]
 fn every_top_level_integration_target_runs_in_ci() {
     let root = repo_root();
