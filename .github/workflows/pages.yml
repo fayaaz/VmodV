@@ -46,15 +46,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pages-cargo-
 
-      - name: Prepare cargo cache mounts
-        run: |
-          mkdir -p .cargo-cache crates/target
-          chmod -R a+rwX .cargo-cache crates/target
-
-      - name: Free runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          df -h /
+      - name: Prepare Linux runner
+        uses: ./.github/actions/prepare-linux-runner
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -68,6 +61,11 @@ jobs:
           load: true
           cache-from: type=gha,scope=wasm-toolchain
           cache-to: type=gha,mode=max,scope=wasm-toolchain
+
+      - name: Check the browser shell (wasm32)
+        run: make web-check
+        env:
+          DOCKER_BUILD_ARGS: --cache-from type=gha,scope=wasm-toolchain
 
       - name: Build the browser shell
         run: make web-build

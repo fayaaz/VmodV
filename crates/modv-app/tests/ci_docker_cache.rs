@@ -192,6 +192,77 @@ fn makefile_image_builds_use_buildx_and_forward_cache_args() {
 }
 
 #[test]
+fn linux_jobs_share_the_runner_prep_action() {
+    // Every Docker/Linux job used to repeat the same cache-mount chmod and
+    // disk-space cleanup. Keep those details in one composite action so a
+    // runner fix lands everywhere and workflow YAML stays readable.
+    let root = repo_root();
+    let action = read_text(&root.join(".github/actions/prepare-linux-runner/action.yml"));
+    for token in [
+        "using: composite",
+        "mkdir -p .cargo-cache crates/target",
+        "chmod -R a+rwX",
+        "sudo rm -rf /usr/share/dotnet",
+        "df -h /",
+    ] {
+        assert!(
+            action.contains(token),
+            "the shared Linux runner-prep action is missing `{token}`"
+        );
+    }
+    for (path, text) in docker_workflows() {
+        for inline in [
+            "- name: Prepare cargo cache mounts",
+            "- name: Free runner disk space",
+        ] {
+            assert!(
+                !text.contains(inline),
+                "REL-08: {} still has an inline `{inline}` step; use \
+                 ./.github/actions/prepare-linux-runner",
+                path.display()
+            );
+        }
+        if text.contains("runs-on: ubuntu-latest") {
+            assert!(
+                text.contains("./.github/actions/prepare-linux-runner"),
+                "REL-08: {} has Linux jobs but never uses the shared runner-prep \
+                 action",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn cargo_cache_keys_are_scoped_per_workflow() {
+    // vmodv.yml and release.yml both cache the same `crates/target` tree under
+    // `Linux-cargo-<lock hash>`. GitHub caches are immutable, so whichever job
+    // saves first wins and the other workflow never refreshes its entry. Give
+    // each workflow its own key prefix (pages.yml already uses `pages`).
+    for (name, path, prefix) in [
+        ("vmodv.yml", "vmodv.yml", "ci"),
+        ("release.yml", "release.yml", "release"),
+    ] {
+        let text = read_text(&repo_root().join(".github/workflows").join(path));
+        assert!(
+            text.contains(&format!(
+                "-{prefix}-cargo-${{{{ hashFiles('crates/Cargo.lock') }}}}"
+            )),
+            "REL-08: {name} must use a `{prefix}-cargo` cache key"
+        );
+        assert!(
+            text.contains(&format!("-{prefix}-${{{{ matrix.arch }}}}-cargo-")),
+            "REL-08: {name} must keep the `{prefix}` prefix on its per-arch cache key"
+        );
+        assert!(
+            !text.contains("${{ runner.os }}-cargo-"),
+            "REL-08: {name} still uses the unscoped `runner.os-cargo` cache key, \
+             which collides with the other workflow"
+        );
+    }
+}
+
+#[test]
 fn docker_workflows_pass_cache_args_to_make() {
     for (path, text) in docker_workflows() {
         assert!(

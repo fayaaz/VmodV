@@ -74,19 +74,12 @@ jobs:
           path: |
             .cargo-cache
             crates/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          key: ${{ runner.os }}-ci-cargo-${{ hashFiles('crates/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-ci-cargo-
 
-      - name: Prepare cargo cache mounts
-        run: |
-          mkdir -p .cargo-cache crates/target
-          chmod -R a+rwX .cargo-cache crates/target
-
-      - name: Free runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          df -h /
+      - name: Prepare Linux runner
+        uses: ./.github/actions/prepare-linux-runner
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -124,19 +117,12 @@ jobs:
           path: |
             .cargo-cache
             crates/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          key: ${{ runner.os }}-ci-cargo-${{ hashFiles('crates/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-ci-cargo-
 
-      - name: Prepare cargo cache mounts
-        run: |
-          mkdir -p .cargo-cache crates/target
-          chmod -R a+rwX .cargo-cache crates/target
-
-      - name: Free runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          df -h /
+      - name: Prepare Linux runner
+        uses: ./.github/actions/prepare-linux-runner
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -207,19 +193,12 @@ jobs:
           path: |
             .cargo-cache
             crates/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          key: ${{ runner.os }}-ci-${{ matrix.arch }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-cargo-
+            ${{ runner.os }}-ci-${{ matrix.arch }}-cargo-
 
-      - name: Prepare cargo cache mounts
-        run: |
-          mkdir -p .cargo-cache crates/target
-          chmod -R a+rwX .cargo-cache crates/target
-
-      - name: Free runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          df -h /
+      - name: Prepare Linux runner
+        uses: ./.github/actions/prepare-linux-runner
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -301,9 +280,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             crates/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          key: ${{ runner.os }}-ci-cargo-${{ hashFiles('crates/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-ci-cargo-
 
       - name: Cache GStreamer MSIs
         uses: actions/cache@v4
@@ -316,64 +295,7 @@ jobs:
 
       - name: Install GStreamer 1.24 (MSVC, runtime + devel)
         shell: pwsh
-        run: |
-          $base = 'https://gstreamer.freedesktop.org/data/pkg/windows/1.24.13/msvc'
-          $runtime = "$base/gstreamer-1.0-msvc-x86_64-1.24.13.msi"
-          $devel = "$base/gstreamer-1.0-devel-msvc-x86_64-1.24.13.msi"
-          New-Item -ItemType Directory -Force -Path '.gst-cache' | Out-Null
-          $runtimeMsi = "$pwd\.gst-cache\gst-runtime.msi"
-          $develMsi = "$pwd\.gst-cache\gst-devel.msi"
-          if (-not (Test-Path $runtimeMsi)) {
-            Invoke-WebRequest -Uri $runtime -OutFile $runtimeMsi
-          }
-          if (-not (Test-Path $develMsi)) {
-            Invoke-WebRequest -Uri $devel -OutFile $develMsi
-          }
-          $runtimeInstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList '/i', $runtimeMsi, '/quiet', '/norestart', 'INSTALLDIR=C:\gstreamer\1.0\msvc_x86_64', '/L*V', "$pwd\.gst-cache\gst-runtime-install.log"
-          if ($runtimeInstall.ExitCode -ne 0) { throw "GStreamer runtime MSI install failed with exit code $($runtimeInstall.ExitCode)" }
-          $develInstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList '/i', $develMsi, '/quiet', '/norestart', 'INSTALLDIR=C:\gstreamer\1.0\msvc_x86_64', '/L*V', "$pwd\.gst-cache\gst-devel-install.log"
-          if ($develInstall.ExitCode -ne 0) { throw "GStreamer devel MSI install failed with exit code $($develInstall.ExitCode)" }
-          # Chocolatey's feed is flaky; install pinned pkgconf MSI directly and cache it.
-          $pkgconfMsi = Join-Path $pwd '.gst-cache\pkgconf-x64-3.0.11.msi'
-          if (-not (Test-Path $pkgconfMsi)) {
-            Invoke-WebRequest -Uri 'https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.11/pkgconf-x64-3.0.11.msi' -OutFile $pkgconfMsi
-          }
-          $digest = (Get-FileHash -Path $pkgconfMsi -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($digest -ne 'ea99c87ab4a3dd8799d47ef196f66ca57d274ec4f49b25d2f48b7c9d9df0eb96') { throw "pkgconf MSI checksum mismatch: $digest" }
-          $pkgconfInstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList '/i', $pkgconfMsi, '/quiet', '/norestart'
-          if ($pkgconfInstall.ExitCode -ne 0) { throw "pkgconf MSI install failed with exit code $($pkgconfInstall.ExitCode)" }
-          # The MSI updates PATH only for future processes, so the runner's
-          # captured PATH still lacks pkgconf; refresh it from the registry and
-          # export the resolved absolute path (a bare name fails in glib-sys).
-          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-          $pkgconf = (Get-Command pkgconf.exe -ErrorAction Stop).Source
-          "PKG_CONFIG=$pkgconf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PKG_CONFIG_PATH=/gst-pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $libFile = Get-ChildItem -Path 'C:\gstreamer', "$env:SystemDrive\gstreamer" -Filter 'gstvideo-1.0.lib' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $libFile) { throw 'gstvideo-1.0.lib not found under the GStreamer install' }
-          $libDir = $libFile.DirectoryName
-          "RUSTFLAGS=-L$libDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $gstRoot = (Split-Path -Parent $libDir).Replace('\','/')
-          "GSTREAMER_ROOT=$gstRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          # pkgconf 3.0.10 also splits PKG_CONFIG_PATH on ':', so a drive-letter
-          # path is mangled. Stage the devel .pc files into a colon-free root-level
-          # gst-pkgconfig directory on both the system drive and the workspace
-          # drive (registry crates build from C:, workspace crates from D:).
-          $pcFile = Get-ChildItem -Path 'C:\gstreamer' -Filter 'glib-2.0.pc' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $pcFile) { throw 'glib-2.0.pc not found under C:\gstreamer after the GStreamer MSI install' }
-          $gstPc = $pcFile.DirectoryName
-          $targets = @("$env:SystemDrive\gst-pkgconfig")
-          $wsDrive = (Get-Location).Drive.Name
-          if ($wsDrive -ne $env:SystemDrive.TrimEnd(':')) { $targets += "${wsDrive}:\gst-pkgconfig" }
-          foreach ($target in $targets) {
-            New-Item -ItemType Directory -Force -Path $target | Out-Null
-            Copy-Item -Path "$gstPc\*.pc" -Destination $target -Force
-          }
-
-      - name: Configure GStreamer build environment
-        shell: bash
-        run: |
-          echo "C:/gstreamer/1.0/msvc_x86_64/bin" >> "$GITHUB_PATH"
+        run: pwsh tools/setup-windows-gstreamer.ps1
 
       - name: Build modv (x86_64-pc-windows-msvc, release)
         shell: pwsh

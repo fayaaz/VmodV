@@ -277,6 +277,44 @@ fn extract_gstreamer_msi_urls(text: &str) -> Vec<String> {
     urls
 }
 
+#[test]
+fn ci_workflows_share_the_windows_gstreamer_setup() {
+    // The MSI/pkgconf bootstrap used to be ~60 duplicated PowerShell lines in
+    // vmodv.yml and release.yml. Keep one script so a fix cannot land in only
+    // one CI path.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = root.canonicalize().unwrap_or(root);
+    let script = fs::read_to_string(root.join("tools/setup-windows-gstreamer.ps1"))
+        .expect("read tools/setup-windows-gstreamer.ps1");
+    for token in [
+        "gstreamer-1.0-msvc-x86_64",
+        "Get-Command pkgconf.exe",
+        "GSTREAMER_ROOT=",
+        "Copy-Item",
+    ] {
+        assert!(
+            script.contains(token),
+            "tools/setup-windows-gstreamer.ps1 is missing `{token}`"
+        );
+    }
+    for (name, path) in [
+        ("vmodv.yml", root.join(".github/workflows/vmodv.yml")),
+        ("release.yml", root.join(".github/workflows/release.yml")),
+    ] {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+        assert!(
+            text.contains("pwsh tools/setup-windows-gstreamer.ps1"),
+            "{name} must call the shared Windows GStreamer setup script"
+        );
+        assert!(
+            !text.contains("$base = 'https://gstreamer.freedesktop.org"),
+            "{name} still inlines the GStreamer MSI setup instead of calling \
+             the shared script"
+        );
+    }
+}
+
 /// Both `windows-portable` jobs pin GStreamer MSI downloads. The 1.24.0
 /// release was removed from the GStreamer index (HTTP 404), so the pin drifted
 /// and broke CI. This guard keeps both workflows on the verified 1.24.13
@@ -297,22 +335,30 @@ fn ci_gstreamer_msi_urls_point_at_the_verified_release() {
         ),
     ];
 
+    let script = fs::read_to_string(repo_root.join("tools/setup-windows-gstreamer.ps1"))
+        .expect("read tools/setup-windows-gstreamer.ps1");
+    let urls = extract_gstreamer_msi_urls(&script);
+    assert!(
+        urls.iter().any(|url| url == EXPECTED_RUNTIME),
+        "the shared Windows setup script is missing verified runtime MSI URL \
+         {EXPECTED_RUNTIME}; found: {urls:#?}"
+    );
+    assert!(
+        urls.iter().any(|url| url == EXPECTED_DEVEL),
+        "the shared Windows setup script is missing verified devel MSI URL \
+         {EXPECTED_DEVEL}; found: {urls:#?}"
+    );
+    assert!(
+        !urls.iter().any(|url| url.contains("/1.24.0/")),
+        "stale /1.24.0/ GStreamer MSI URL(s) still present in the shared script; \
+         found: {urls:#?}"
+    );
     for (name, path) in workflows {
         let text = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
-        let urls = extract_gstreamer_msi_urls(&text);
-
         assert!(
-            urls.iter().any(|url| url == EXPECTED_RUNTIME),
-            "{name}: missing verified runtime MSI URL {EXPECTED_RUNTIME}; found: {urls:#?}"
-        );
-        assert!(
-            urls.iter().any(|url| url == EXPECTED_DEVEL),
-            "{name}: missing verified devel MSI URL {EXPECTED_DEVEL}; found: {urls:#?}"
-        );
-        assert!(
-            !urls.iter().any(|url| url.contains("/1.24.0/")),
-            "{name}: stale /1.24.0/ GStreamer MSI URL(s) still present; found: {urls:#?}"
+            text.contains("pwsh tools/setup-windows-gstreamer.ps1"),
+            "{name} does not call the shared Windows GStreamer setup script"
         );
     }
 }
@@ -467,9 +513,18 @@ fn ci_windows_uses_native_pkgconf_for_drive_letter_paths() {
     const LEGACY_HARDCODED_GSTREAMER_ROOT: &str =
         "--gstreamer-root \"C:/gstreamer/1.0/msvc_x86_64\"";
 
+    let script = fs::read_to_string(repo_root.join("tools/setup-windows-gstreamer.ps1"))
+        .expect("read tools/setup-windows-gstreamer.ps1");
     for (name, path) in workflows {
-        let text = fs::read_to_string(&path)
+        let workflow = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+        assert!(
+            workflow.contains("pwsh tools/setup-windows-gstreamer.ps1"),
+            "{name} does not call the shared Windows GStreamer setup script"
+        );
+        // The setup contract lives in the script; job structure stays in the
+        // workflow. Scan both so a fix cannot land in only one CI path.
+        let text = format!("{workflow}\n{script}");
 
         assert!(
             !text.contains(BROKEN_TOOL),

@@ -1,0 +1,17 @@
+name: Prepare Linux runner
+description: Make the cargo cache mounts writable and free disk space before Docker builds.
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare cargo cache mounts
+      shell: bash
+      run: |
+        mkdir -p .cargo-cache crates/target
+        chmod -R a+rwX .cargo-cache crates/target
+
+    - name: Free runner disk space
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+        df -h /

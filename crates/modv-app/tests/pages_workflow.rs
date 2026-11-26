@@ -48,6 +48,22 @@ fn pages_workflow_builds_the_browser_shell_from_main() {
 }
 
 #[test]
+fn pages_workflow_runs_the_wasm_compile_gate() {
+    let workflow = pages_workflow();
+    let check = workflow
+        .find("make web-check")
+        .expect("PAGES-01: pages.yml must invoke `make web-check`, the wasm32 compile gate");
+    let build = workflow
+        .find("make web-build")
+        .expect("PAGES-01: pages.yml must invoke `make web-build`");
+    assert!(
+        check < build,
+        "PAGES-01: `make web-check` must run before `make web-build` so a \
+         wasm32 compile failure never deploys a stale browser shell"
+    );
+}
+
+#[test]
 fn pages_workflow_deploys_an_artifact_instead_of_pushing_gh_pages() {
     let workflow = pages_workflow();
 
