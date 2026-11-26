@@ -13,8 +13,11 @@
 //!   and by the engine's offline/oscilloscope fixtures).
 //! * [`AudioFeed::with_capture`] wraps an input device
 //!   ([`super::capture::AudioCapture`]).
-//! * [`AudioFeed::with_monitor`] wraps the native PipeWire capture (the
-//!   default sink's monitor, or a targeted `Audio/Source` node when the
+//! * [`AudioFeed::with_system_audio`] wraps the platform's output-monitor
+//!   capture: the native PipeWire monitor on Linux, cpal's WASAPI/CoreAudio
+//!   loopback elsewhere.
+//! * [`AudioFeed::with_monitor`] wraps the native PipeWire capture directly
+//!   (the default sink's monitor, or a targeted `Audio/Source` node when the
 //!   config sets `capture_sink = false`) — Linux only.
 //!
 //! Capture errors never abort a frame: they are stored and surfaced through
@@ -60,15 +63,38 @@ impl AudioFeed {
     /// Start capturing from an input device and analyse at the device's
     /// negotiated sample rate.
     pub fn with_capture(config: CaptureConfig) -> Result<Self, CaptureError> {
-        let capture = AudioCapture::start(config)?;
+        AudioCapture::start(config).map(Self::from_capture)
+    }
+
+    /// Start capturing the system output — the platform's loopback monitor.
+    ///
+    /// * Linux uses the native PipeWire monitor ([`Self::with_monitor`]).
+    /// * Windows uses WASAPI loopback and macOS 14.6+ uses CoreAudio loopback
+    ///   through [`AudioCapture::start_loopback`].
+    ///
+    /// `config.device` optionally targets one output endpoint; the app-facing
+    /// `--audio-source system:<device>`/Audio-panel selection passes it through.
+    #[cfg(target_os = "linux")]
+    pub fn with_system_audio(config: CaptureConfig) -> Result<Self, CaptureError> {
+        Self::with_monitor(config)
+    }
+
+    /// Start capturing the system output through cpal's output-endpoint
+    /// loopback (WASAPI on Windows, CoreAudio on macOS 14.6+).
+    #[cfg(not(target_os = "linux"))]
+    pub fn with_system_audio(config: CaptureConfig) -> Result<Self, CaptureError> {
+        AudioCapture::start_loopback(config).map(Self::from_capture)
+    }
+
+    fn from_capture(capture: AudioCapture) -> Self {
         let sample_rate = capture.sample_rate() as f32;
 
-        Ok(Self {
+        Self {
             analyser: AudioAnalyser::new(sample_rate),
             source: Some(Source::Capture(capture)),
             sample_rate,
             last_error: None,
-        })
+        }
     }
 
     /// Start capturing through PipeWire and analyse at the **negotiated**

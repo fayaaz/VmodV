@@ -15,7 +15,7 @@
 //! Audio is owned by exactly one side. With the default `--audio-source
 //! renderer` the renderer's audio pump commits the full analyser payload
 //! (`meyda/SET_BANDS`, WS-9) and the engine only stores it. With
-//! `--audio-source pipewire|input` the engine opens an
+//! `--audio-source system|input` the engine opens an
 //! [`modv_media::audio::engine::AudioFeed`] before the loop, pumps it each
 //! frame before Input Links are evaluated, and pushes the analysis into the
 //! store ([`Store::set_engine_audio`]); a capture failure logs once, stops the

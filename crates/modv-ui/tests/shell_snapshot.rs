@@ -181,7 +181,7 @@ fn demo_snapshot() -> EngineSnapshot {
             capture_sample_rate: 48_000,
         }],
         audio_selection: AudioSelectionView {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
             capture_sample_rate: Some(48_000),
             error: None,

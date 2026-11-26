@@ -3541,21 +3541,19 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
     ui.separator();
     ui.label(egui::RichText::new("OUTPUT MONITOR").strong().size(11.0));
     ui.label(
-        egui::RichText::new(
-            "Capture what this machine is playing (PipeWire system audio loopback).",
-        )
-        .size(11.0)
-        .color(theme::MUTED),
+        egui::RichText::new("Capture what this machine is playing (system audio loopback).")
+            .size(11.0)
+            .color(theme::MUTED),
     );
     if audio_choice_row(
         ui,
-        selection.is_pipewire(),
-        "System audio (PipeWire monitor)",
-        "PipeWire monitor · captures everything your speakers play",
-        "System audio loopback (pipewire)",
+        selection.is_system(),
+        "System audio (loopback)",
+        "Captures everything your speakers play",
+        "Capture the default output device (system audio loopback)",
     ) {
         state.queue(UiCommand::SetAudioSource {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
         });
     }
@@ -3623,7 +3621,7 @@ fn audio_panel(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiState
             state.queue(UiCommand::RefreshAudioDevices);
         }
         ui.label(
-            egui::RichText::new("Re-scans ALSA/PipeWire inputs")
+            egui::RichText::new("Re-scans audio input devices")
                 .size(11.0)
                 .color(theme::MUTED),
         );

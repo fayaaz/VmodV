@@ -1,9 +1,10 @@
 //! Kittest coverage for the VmodV Audio panel.
 //!
 //! The panel is the VmodV counterpart of Electron's `AudioVideo.vue` input
-//! picker: system audio (PipeWire monitor), the host default input and every
-//! enumerated cpal device, with the active choice marked and a live switch
-//! queued as a [`UiCommand::SetAudioSource`].
+//! picker: system audio (the platform's output monitor), the host default
+//! input and every enumerated cpal device, with the active choice marked and a
+//! live switch queued as a [`UiCommand::SetAudioSource`]. The labels must stay
+//! platform-neutral: PipeWire/WASAPI/CoreAudio are implementation details.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -35,7 +36,7 @@ fn demo_snapshot() -> EngineSnapshot {
             ..Default::default()
         },
         audio_selection: AudioSelectionView {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
             capture_sample_rate: Some(48_000),
             error: None,
@@ -68,10 +69,11 @@ fn audio_panel_lists_the_system_monitor_default_input_and_devices() {
     harness.get_by_label("IN USE");
     harness.get_by_label("System audio");
     harness.get_by_label("Captures what your speakers play");
-    harness.get_by_label("PipeWire monitor · 48 kHz · pipewire");
+    harness.get_by_label("Loopback · 48 kHz · system");
 
     // The two source groups, with the default input sorted first.
     harness.get_by_label("OUTPUT MONITOR");
+    harness.get_by_label("System audio (loopback)");
     harness.get_by_label("INPUT DEVICES");
     harness.get_by_label("2 inputs");
     harness.get_by_label("System default input");
@@ -142,6 +144,46 @@ fn clicking_a_device_queues_the_live_switch() {
             }),
         "clicking a device must queue the switch, got {:?}",
         harness.state().commands
+    );
+}
+
+#[test]
+fn clicking_the_system_audio_row_queues_the_platform_neutral_source() {
+    let snapshot = demo_snapshot();
+    let mut state = UiState::new();
+    state.side_panel_tab = SidePanelTab::Audio;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 800.0])
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, state| {
+                modv_ui::shell::draw(ui, &snapshot, state);
+            },
+            state,
+        );
+    harness.run();
+
+    harness.get_by_label("System audio (loopback)").click();
+    harness.run();
+
+    assert!(
+        harness
+            .state()
+            .commands
+            .contains(&UiCommand::SetAudioSource {
+                source: "system".to_string(),
+                device: None,
+            }),
+        "the monitor row must queue the neutral system source, got {:?}",
+        harness.state().commands
+    );
+    assert!(
+        !harness
+            .state()
+            .commands
+            .iter()
+            .any(|command| matches!(command, UiCommand::SetAudioSource { source, .. } if source == "pipewire")),
+        "the UI must not send the Linux-only pipewire spelling"
     );
 }
 

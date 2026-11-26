@@ -491,9 +491,11 @@ impl AudioDeviceView {
 
 /// The VmodV shell's live audio capture selection.
 ///
-/// `source` mirrors `AudioSourceSelection::as_str` (`pipewire` or `input`).
-/// `input` with no `device` means the host default input device, exactly like
-/// `--audio-source input` without a device.
+/// `source` mirrors `AudioSourceSelection::as_str` (`system` or `input`).
+/// `system` is the platform's output monitor (PipeWire on Linux, WASAPI or
+/// CoreAudio loopback elsewhere); the legacy persisted `pipewire` spelling is
+/// still recognised. `input` with no `device` means the host default input
+/// device, exactly like `--audio-source input` without a device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudioSelectionView {
     pub source: String,
@@ -511,7 +513,7 @@ pub struct AudioSelectionView {
 impl Default for AudioSelectionView {
     fn default() -> Self {
         Self {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
             capture_sample_rate: None,
             error: None,
@@ -520,8 +522,12 @@ impl Default for AudioSelectionView {
 }
 
 impl AudioSelectionView {
-    pub fn is_pipewire(&self) -> bool {
-        self.source == "pipewire"
+    /// Whether the selection is the platform's system-audio output monitor.
+    ///
+    /// `pipewire` is accepted because documents written before the neutral
+    /// `system` spelling existed may still surface through older callers.
+    pub fn is_system(&self) -> bool {
+        self.source == "system" || self.source == "pipewire"
     }
 
     pub fn is_default_input(&self) -> bool {
@@ -555,8 +561,10 @@ impl AudioSelectionView {
         if let Some(device) = self.active_device(devices) {
             return device.name.clone();
         }
+        if self.is_system() {
+            return "System audio".to_string();
+        }
         match (self.source.as_str(), self.device.as_deref()) {
-            ("pipewire", _) => "System audio".to_string(),
             ("input", None) => "System default input".to_string(),
             ("input", Some(_)) => "Input device".to_string(),
             (source, _) => source.to_string(),
@@ -568,8 +576,10 @@ impl AudioSelectionView {
         if self.active_device(devices).is_some() {
             return "Microphone or audio interface".to_string();
         }
+        if self.is_system() {
+            return "Captures what your speakers play".to_string();
+        }
         match (self.source.as_str(), self.device.as_deref()) {
-            ("pipewire", _) => "Captures what your speakers play".to_string(),
             ("input", None) => "Follows the system's default device".to_string(),
             ("input", Some(_)) => "The selected device is not currently connected".to_string(),
             _ => String::new(),
@@ -603,8 +613,12 @@ impl AudioSelectionView {
         if let Some(device) = self.active_device(devices) {
             return format!("{} ch{rate_note} · {}", device.channels, device.id);
         }
+        if self.is_system() {
+            // Always print the neutral source id, even for a legacy
+            // `pipewire` document: the panel must not name a Linux backend.
+            return format!("Loopback{rate_note} · system");
+        }
         match (self.source.as_str(), self.device.as_deref()) {
-            ("pipewire", _) => format!("PipeWire monitor{rate_note} · pipewire"),
             ("input", None) => format!("System default{rate_note} · input"),
             ("input", Some(device)) => format!("input{rate_note} · {device}"),
             (source, _) => source.to_string(),
@@ -614,8 +628,10 @@ impl AudioSelectionView {
     /// A human-readable label for the active source (device names are
     /// resolved by the panel from [`EngineSnapshot::audio_devices`]).
     pub fn describe(&self) -> String {
+        if self.is_system() {
+            return "System audio (loopback)".to_string();
+        }
         match (self.source.as_str(), self.device.as_deref()) {
-            ("pipewire", _) => "System audio (PipeWire monitor)".to_string(),
             ("input", Some(device)) => format!("input: {device}"),
             ("input", None) => "Default input (system default)".to_string(),
             (source, _) => source.to_string(),
@@ -2749,12 +2765,20 @@ mod tests {
     }
 
     #[test]
-    fn the_default_audio_selection_is_the_system_monitor() {
+    fn the_default_audio_selection_is_the_platform_neutral_system_monitor() {
         let selection = AudioSelectionView::default();
 
-        assert!(selection.is_pipewire());
+        assert!(selection.is_system());
         assert!(!selection.is_default_input());
-        assert_eq!(selection.describe(), "System audio (PipeWire monitor)");
+        assert_eq!(selection.source, "system");
+        assert_eq!(selection.describe(), "System audio (loopback)");
+        assert!(
+            !selection
+                .describe()
+                .to_ascii_lowercase()
+                .contains("pipewire"),
+            "the Audio panel must not name a Linux-only backend"
+        );
         assert!(!selection.matches_device(&device("alsa:usb", "USB Microphone")));
     }
 
@@ -2767,12 +2791,9 @@ mod tests {
     fn the_audio_selection_view_exposes_the_system_audio_state() {
         let idle = AudioSelectionView::default();
 
-        assert!(
-            idle.is_pipewire(),
-            "the system monitor is the default source"
-        );
-        assert_eq!(idle.source, "pipewire");
-        assert_eq!(idle.device, None, "PipeWire has no cpal device id");
+        assert!(idle.is_system(), "the system monitor is the default source");
+        assert_eq!(idle.source, "system");
+        assert_eq!(idle.device, None, "the monitor has no input device id");
         assert_eq!(idle.capture_sample_rate, None, "no feed while inactive");
         assert_eq!(idle.error, None);
         assert_eq!(
@@ -2782,24 +2803,27 @@ mod tests {
         );
 
         let active = AudioSelectionView {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
             capture_sample_rate: Some(48_000),
             error: None,
         };
 
-        assert!(active.is_pipewire());
+        assert!(active.is_system());
         assert_eq!(active.capture_sample_rate, Some(48_000));
         assert_eq!(active.capture_rate(&[]), Some(48_000));
 
         // A failed live switch keeps the previous feed running; the error is
         // surfaced instead of the capture silently stopping.
         let failed = AudioSelectionView {
-            error: Some("pipewire: node disconnected".to_string()),
+            error: Some("system audio: output device disconnected".to_string()),
             ..active
         };
 
-        assert_eq!(failed.error.as_deref(), Some("pipewire: node disconnected"));
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("system audio: output device disconnected")
+        );
     }
 
     #[test]
@@ -2826,7 +2850,7 @@ mod tests {
         assert_eq!(selection.describe(), "Default input (system default)");
         assert!(!selection.matches_device(&usb));
 
-        selection.source = "pipewire".to_string();
+        selection.source = "system".to_string();
         selection.device = Some(usb.id.clone());
         assert!(
             !selection.matches_device(&usb),
@@ -2837,18 +2861,24 @@ mod tests {
     #[test]
     fn the_active_banner_names_the_system_sources_without_exposing_ids() {
         let devices = [device("alsa:usb", "USB Microphone")];
-        let pipewire = AudioSelectionView::default();
+        let system_audio = AudioSelectionView::default();
 
-        assert_eq!(pipewire.active_label(&devices), "System audio");
+        assert_eq!(system_audio.active_label(&devices), "System audio");
         assert_eq!(
-            pipewire.active_subtitle(&devices),
+            system_audio.active_subtitle(&devices),
             "Captures what your speakers play"
         );
-        assert_eq!(
-            pipewire.active_detail(&devices),
-            "PipeWire monitor · pipewire"
-        );
-        assert!(pipewire.active_device(&devices).is_none());
+        assert_eq!(system_audio.active_detail(&devices), "Loopback · system");
+        assert!(!system_audio.active_detail(&devices).contains("PipeWire"));
+        assert!(system_audio.active_device(&devices).is_none());
+
+        // Legacy persisted selections render with the neutral wording too.
+        let legacy = AudioSelectionView {
+            source: "pipewire".to_string(),
+            ..AudioSelectionView::default()
+        };
+        assert!(legacy.is_system());
+        assert_eq!(legacy.active_detail(&devices), "Loopback · system");
 
         let default_input = AudioSelectionView {
             source: "input".to_string(),
@@ -2927,15 +2957,15 @@ mod tests {
         );
 
         let monitor = AudioSelectionView {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
             capture_sample_rate: Some(48_000),
             error: None,
         };
         assert_eq!(
             monitor.active_detail(&[]),
-            "PipeWire monitor · 48 kHz · pipewire",
-            "the PipeWire monitor reports its negotiated rate too"
+            "Loopback · 48 kHz · system",
+            "the system monitor reports its negotiated rate too"
         );
         assert_eq!(monitor.capture_rate(&[]), Some(48_000));
         assert_eq!(AudioSelectionView::default().capture_rate(&[]), None);

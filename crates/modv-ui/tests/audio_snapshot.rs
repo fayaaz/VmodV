@@ -38,7 +38,7 @@ fn audio_snapshot() -> EngineSnapshot {
             },
         ],
         audio_selection: AudioSelectionView {
-            source: "pipewire".to_string(),
+            source: "system".to_string(),
             device: None,
             capture_sample_rate: Some(48_000),
             error: None,

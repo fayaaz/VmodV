@@ -24,8 +24,10 @@ pub enum AudioSourceSelection {
     /// The renderer's WebAudio pump owns capture and analysis (default).
     #[default]
     Renderer,
-    /// The engine captures the default sink's monitor through PipeWire (Linux).
-    Pipewire,
+    /// The engine captures the system's output (the default sink's monitor):
+    /// PipeWire on Linux, WASAPI loopback on Windows and CoreAudio loopback on
+    /// macOS. `pipewire` is accepted as a legacy spelling.
+    System,
     /// The engine captures an input device through cpal.
     Input,
 }
@@ -41,7 +43,7 @@ impl AudioSourceSelection {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Renderer => "renderer",
-            Self::Pipewire => "pipewire",
+            Self::System => "system",
             Self::Input => "input",
         }
     }
@@ -53,7 +55,7 @@ impl AudioSourceSelection {
 /// window or socket work (exit code 2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioSourceError {
-    /// The value is not `renderer`, `pipewire`, `input` or `input:<device>`
+    /// The value is not `renderer`, `system`, `input` or `input:<device>`
     /// (`renderer` takes no device suffix).
     UnknownSource(String),
     /// `input:` was given without a device.
@@ -65,8 +67,9 @@ impl std::fmt::Display for AudioSourceError {
         match self {
             Self::UnknownSource(value) => write!(
                 f,
-                "unknown audio source {value:?} (accepted: renderer, pipewire, input, \
-                 input:<device>; the MODV_AUDIO_SOURCE environment variable sets the default)"
+                "unknown audio source {value:?} (accepted: renderer, system, input, \
+                 input:<device>; pipewire is a legacy alias for system; the \
+                 MODV_AUDIO_SOURCE environment variable sets the default)"
             ),
             Self::MissingDevice => write!(
                 f,
@@ -83,10 +86,12 @@ impl std::error::Error for AudioSourceError {}
 
 /// Parse one `--audio-source` value.
 ///
-/// Accepted spellings: `renderer`, `pipewire`, `input` (host default input) and
+/// Accepted spellings: `renderer`, `system`, `input` (host default input) and
 /// `input:<device>` (a device name or id, see [`crate::audio::resolve_input_device`]).
-/// The device in the suffix wins over `--audio-device`; `<device>` is trimmed,
-/// and an empty suffix is [`AudioSourceError::MissingDevice`].
+/// `system:<device>` optionally targets one output endpoint; `pipewire` is the
+/// legacy spelling for `system`. The device in the suffix wins over
+/// `--audio-device`; `<device>` is trimmed, and an empty suffix is
+/// [`AudioSourceError::MissingDevice`].
 pub fn parse_audio_source(
     value: &str,
 ) -> Result<(AudioSourceSelection, Option<String>), AudioSourceError> {
@@ -97,7 +102,7 @@ pub fn parse_audio_source(
 
     let selection = match head {
         "renderer" => AudioSourceSelection::Renderer,
-        "pipewire" => AudioSourceSelection::Pipewire,
+        "system" | "pipewire" => AudioSourceSelection::System,
         "input" => AudioSourceSelection::Input,
         _ => return Err(AudioSourceError::UnknownSource(value.trim().to_string())),
     };
@@ -201,12 +206,12 @@ pub struct Cli {
     /// See [`resolve_isf_dir`].
     pub isf_dir: Option<PathBuf>,
     /// Which side owns audio capture/analysis (WS-9):
-    /// `--audio-source renderer|pipewire|input|input:<device>`, with
+    /// `--audio-source renderer|system|input|input:<device>`, with
     /// `$MODV_AUDIO_SOURCE` as the fallback. See [`AudioSourceSelection`].
     pub audio_source: AudioSourceSelection,
-    /// Input device name or id for `--audio-source input`, or the target sink
-    /// node for `--audio-source pipewire` (`--audio-device`). A device in the
-    /// `input:<device>` suffix wins over this.
+    /// Input device name or id for `--audio-source input`, or the target
+    /// output endpoint for `--audio-source system` (`--audio-device`). A device
+    /// in the `input:<device>` suffix wins over this.
     pub audio_device: Option<String>,
     /// Print the host's audio input devices (`--list-audio-devices`) and exit.
     pub list_audio_devices: bool,
@@ -412,13 +417,13 @@ pub fn parse() -> Cli {
             Arg::new("audio-source")
                 .long("audio-source")
                 .value_name("SOURCE")
-                .help("Audio capture owner: renderer (default), pipewire, input or input:<device>; env MODV_AUDIO_SOURCE"),
+                .help("Audio capture owner: renderer (default), system, input or input:<device>; env MODV_AUDIO_SOURCE"),
         )
         .arg(
             Arg::new("audio-device")
                 .long("audio-device")
                 .value_name("NAME_OR_ID")
-                .help("Input device for --audio-source input (or a target sink node for pipewire); env MODV_AUDIO_DEVICE"),
+                .help("Input device for --audio-source input (or a target output for system); env MODV_AUDIO_DEVICE"),
         )
         .arg(
             Arg::new("list-audio-devices")
@@ -668,17 +673,26 @@ mod tests {
             parse_audio_source("renderer"),
             Ok((AudioSourceSelection::Renderer, None))
         );
+
+        // `system` is the platform-neutral spelling for the output monitor
+        // (PipeWire monitor on Linux, WASAPI/CoreAudio loopback elsewhere).
+        let (system, device) = parse_audio_source("system").expect("system is accepted");
+        assert_eq!(system.as_str(), "system");
+        assert_eq!(device, None);
+
         assert_eq!(
             parse_audio_source("pipewire"),
-            Ok((AudioSourceSelection::Pipewire, None))
+            Ok((AudioSourceSelection::System, None)),
+            "pipewire is kept as an alias for system audio"
         );
+
+        let (targeted, device) =
+            parse_audio_source("system:alsa_output.hdmi").expect("output target");
+        assert_eq!(targeted.as_str(), "system");
         assert_eq!(
-            parse_audio_source("pipewire:alsa_output.hdmi"),
-            Ok((
-                AudioSourceSelection::Pipewire,
-                Some("alsa_output.hdmi".to_string())
-            )),
-            "pipewire takes an optional target sink node"
+            device.as_deref(),
+            Some("alsa_output.hdmi"),
+            "system audio takes an optional output target"
         );
         assert_eq!(
             parse_audio_source("input"),
@@ -714,7 +728,11 @@ mod tests {
         );
         let message = error.to_string();
         assert!(message.contains("microphone"), "{message}");
-        assert!(message.contains("renderer, pipewire, input"), "{message}");
+        assert!(message.contains("renderer, system, input"), "{message}");
+        assert!(
+            message.contains("pipewire"),
+            "the legacy alias is named: {message}"
+        );
         assert!(message.contains("MODV_AUDIO_SOURCE"), "{message}");
     }
 
@@ -735,8 +753,8 @@ mod tests {
     #[test]
     fn resolution_prefers_the_flag_then_the_environment_then_the_default() {
         assert_eq!(
-            resolve_audio_source(Some("pipewire"), Some("input")),
-            Ok((AudioSourceSelection::Pipewire, None))
+            resolve_audio_source(Some("system"), Some("input")),
+            Ok((AudioSourceSelection::System, None))
         );
         assert_eq!(
             resolve_audio_source(None, Some("input:mic")),
@@ -756,7 +774,7 @@ mod tests {
     #[test]
     fn engine_owned_is_only_false_for_the_renderer_pump() {
         assert!(!AudioSourceSelection::Renderer.engine_owned());
-        assert!(AudioSourceSelection::Pipewire.engine_owned());
+        assert!(AudioSourceSelection::System.engine_owned());
         assert!(AudioSourceSelection::Input.engine_owned());
         assert_eq!(
             AudioSourceSelection::default(),

@@ -44,7 +44,7 @@
 //! * `meyda/SET_BANDS` — the renderer's audio pump commits the AGC bands
 //!   (`meyda.js:88-96`); the engine stores them in [`Store::audio`] for the
 //!   compositor. When the engine owns capture (`--audio-source
-//!   pipewire|input`, WS-9) the renderer's frames are ignored instead —
+//!   system|input`, WS-9) the renderer's frames are ignored instead —
 //!   [`Store::set_engine_audio`] is then the authoritative writer.
 //!
 //! ## Known gaps (documented, not silent)
