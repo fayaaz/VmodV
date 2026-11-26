@@ -48,9 +48,8 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
   The microphone selector and button request WebAudio capture, then feed the
   samples through the native `AudioAnalyser` (FFT, bands, Meyda features,
   BeatDetektor and TempoDetector), so B-M-T, kicks and BPM match the desktop
-  pipeline. An analysis-only input boost (1×–8×, default 2×) lifts quiet
-  microphones above the analyser's near-silence gate; the context resumes on
-  focus/visibility so backgrounding does not stall the engine.
+  pipeline. The context resumes on focus/visibility so backgrounding does not
+  stall the engine.
 - **Default Scenes**: the 56 versioned default Scenes are seeded into the
   Scenes tab. A cell/whole-Scene apply rebuilds the live stack with its module
   props, input links and tweens; capture, rename, reorder, enable, timing,
