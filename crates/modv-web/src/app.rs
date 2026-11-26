@@ -230,8 +230,9 @@ impl WebApp {
             return;
         };
         let audio = self.state.audio();
+        let audio_state = crate::mic::state().unwrap_or_else(|| "none".to_string());
         let stats = format!(
-            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{},\"bass\":{:.3},\"mid\":{:.3},\"treble\":{:.3},\"bpm\":{:.1},\"modules\":{},\"scenes\":{},\"rows\":{}}}",
+            "{{\"fps\":{:.2},\"frame_ms\":{:.2},\"frames\":{},\"resizes\":{},\"width\":{},\"height\":{},\"webgl2\":{},\"preview\":{},\"bass\":{:.3},\"mid\":{:.3},\"treble\":{:.3},\"bpm\":{:.1},\"modules\":{},\"scenes\":{},\"rows\":{},\"audio_state\":\"{}\"}}",
             self.fps,
             self.frame_ms,
             self.frames,
@@ -246,7 +247,8 @@ impl WebApp {
             self.state.bpm(),
             self.state.state().modules.len(),
             self.state.scene_library().scenes().len(),
-            self.row_monitors.len()
+            self.row_monitors.len(),
+            audio_state
         );
         let _ = js_sys::Reflect::set(
             &window,

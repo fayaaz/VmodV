@@ -46,20 +46,36 @@ pub fn enable_microphone(device_id: Option<String>) -> js_sys::Promise {
             .media_devices()
             .map_err(|_| JsValue::from_str("mediaDevices is unavailable"))?;
         let constraints = web_sys::MediaStreamConstraints::new();
-        match device_id.filter(|id| !id.is_empty()) {
-            Some(device_id) => {
-                let device = js_sys::Object::new();
-                let exact = js_sys::Object::new();
-                js_sys::Reflect::set(
-                    &exact,
-                    &JsValue::from_str("exact"),
-                    &JsValue::from_str(&device_id),
-                )?;
-                js_sys::Reflect::set(&device, &JsValue::from_str("deviceId"), &exact)?;
-                constraints.set_audio(&device);
-            }
-            None => constraints.set_audio_bool(true),
+        // A loopback monitor must reach the analyser unprocessed. Browser voice
+        // processing (AGC/noise suppression/echo cancellation) pumps and gates
+        // monitor audio, which shows up as the input going silent and
+        // recovering in a loop.
+        let audio = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &audio,
+            &JsValue::from_str("echoCancellation"),
+            &JsValue::from_bool(false),
+        )?;
+        js_sys::Reflect::set(
+            &audio,
+            &JsValue::from_str("noiseSuppression"),
+            &JsValue::from_bool(false),
+        )?;
+        js_sys::Reflect::set(
+            &audio,
+            &JsValue::from_str("autoGainControl"),
+            &JsValue::from_bool(false),
+        )?;
+        if let Some(device_id) = device_id.filter(|id| !id.is_empty()) {
+            let exact = js_sys::Object::new();
+            js_sys::Reflect::set(
+                &exact,
+                &JsValue::from_str("exact"),
+                &JsValue::from_str(&device_id),
+            )?;
+            js_sys::Reflect::set(&audio, &JsValue::from_str("deviceId"), &exact)?;
         }
+        constraints.set_audio(&audio);
         let stream = JsFuture::from(
             devices
                 .get_user_media_with_constraints(&constraints)
@@ -92,12 +108,14 @@ pub fn enable_microphone(device_id: Option<String>) -> js_sys::Promise {
             mic.source = Some(source);
             mic.analyser = Some(analyser);
             mic.gain = Some(gain);
+            mic.checks = 0;
             mic.stream = Some(stream);
             mic.processor = Some(AudioAnalyser::new(sample_rate));
             mic.sample_rate = sample_rate;
             mic.pushed_until = 0;
             mic.time_domain.clear();
             mic.active = true;
+            mic.last_context_state = None;
         });
         Ok(JsValue::from_str("microphone live"))
     })
@@ -121,6 +139,18 @@ pub fn resume_microphone() -> js_sys::Promise {
     })
 }
 
+/// The current AudioContext state (`running`, `suspended`, `closed`, ...).
+pub fn context_state(context: &web_sys::AudioContext) -> Option<String> {
+    js_sys::Reflect::get(context, &JsValue::from_str("state"))
+        .ok()
+        .and_then(|value| value.as_string())
+}
+
+/// The live microphone context state, for diagnostics.
+pub fn state() -> Option<String> {
+    MIC.with(|mic| mic.borrow().context.as_ref().and_then(context_state))
+}
+
 /// One analyser frame, or `None` before the microphone is enabled.
 pub fn frame(dt: f32) -> Option<MicFrame> {
     MIC.with(|mic| mic.borrow_mut().frame(dt))
@@ -139,11 +169,28 @@ struct MicCapture {
     pushed_until: u64,
     time_domain: Vec<f32>,
     active: bool,
+    checks: u64,
+    last_context_state: Option<String>,
 }
 
 impl MicCapture {
     fn frame(&mut self, dt: f32) -> Option<MicFrame> {
         let analyser = self.analyser.as_ref()?;
+        self.checks = self.checks.saturating_add(1);
+        if self.checks.is_multiple_of(30)
+            && let Some(context) = self.context.as_ref()
+        {
+            let state = context_state(context);
+            if state != self.last_context_state {
+                web_sys::console::log_1(&JsValue::from_str(&format!(
+                    "[modv-web] audio context: {state:?}"
+                )));
+                self.last_context_state = state.clone();
+            }
+            if state.as_deref() != Some("running") {
+                let _ = context.resume();
+            }
+        }
         if !self.active {
             return None;
         }
