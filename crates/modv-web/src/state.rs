@@ -2344,12 +2344,6 @@ fn registered_modules(registry: &ModuleRegistry) -> Vec<ModuleMetaView> {
     map.iter()
         .filter_map(|(name, entry)| {
             let meta = entry.get("meta").and_then(Value::as_object)?;
-            let get = |key: &str| {
-                meta.get(key)
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string()
-            };
             // The renderer helper owns the Plane9 roster so the desktop and
             // wasm snapshot builders derive the Gallery kind identically.
             let kind = modv_renderers::point10::gallery_kind(
@@ -2359,15 +2353,7 @@ fn registered_modules(registry: &ModuleRegistry) -> Vec<ModuleMetaView> {
                     .map(|kind| kind.as_str())
                     .unwrap_or_default(),
             );
-            Some(ModuleMetaView {
-                name: name.clone(),
-                module_type: get("type"),
-                kind,
-                category: get("category"),
-                author: get("author"),
-                version: get("version"),
-                description: get("description"),
-            })
+            Some(ModuleMetaView::from_registry_meta(name, meta, &kind))
         })
         .collect()
 }

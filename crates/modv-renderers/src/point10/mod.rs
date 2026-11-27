@@ -330,10 +330,10 @@ pub fn resolve_effect_name(name: &str) -> &str {
 ///
 /// The thirty Plane9 preset ports and the fifty-two renamed Plane9
 /// effects share the Point10 runtime renderer but are surfaced to the Gallery
-/// as their own kind (`type:plane9`); every other module keeps `default_kind`
-/// (its engine renderer kind). Using this helper in both snapshot builders
-/// keeps the roster in one place so the desktop and wasm Galleries cannot
-/// diverge.
+/// as their own kind (`plane9`, matched as free text); every other module keeps
+/// `default_kind` (its engine renderer kind). Using this helper in both snapshot
+/// builders keeps the roster in one place so the desktop and wasm Galleries
+/// cannot diverge.
 pub fn gallery_kind(name: &str, default_kind: &str) -> String {
     if PLANE9_SCENE_NAMES.contains(&name) || PLANE9_EFFECT_NAMES.contains(&name) {
         "plane9".to_string()

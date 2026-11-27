@@ -24,6 +24,7 @@ fn harness() -> Harness<'static, UiState> {
             author: "mojovideotech".to_string(),
             version: "1.0".to_string(),
             description: "A boxy ISF tunnel".to_string(),
+            tags: Vec::new(),
         }],
         ..Default::default()
     };

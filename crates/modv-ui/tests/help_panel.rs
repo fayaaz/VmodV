@@ -53,6 +53,7 @@ fn module_meta() -> ModuleMetaView {
         author: "modV".to_string(),
         version: "1.0".to_string(),
         description: String::new(),
+        tags: Vec::new(),
     }
 }
 

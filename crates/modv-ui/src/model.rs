@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The project profile shown by the File menu.
 ///
@@ -2416,6 +2416,9 @@ pub struct ModuleMetaView {
     pub author: String,
     pub version: String,
     pub description: String,
+    /// Free-text tags used by the Gallery search. Registration seeds sensible
+    /// defaults; the module info window edits them for the session.
+    pub tags: Vec<String>,
 }
 
 /// The licence shown for a module in its info window.
@@ -2574,6 +2577,45 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
 }
 
 impl ModuleMetaView {
+    /// Build a Gallery view from a registry entry's `meta` object.
+    ///
+    /// Both the native shell and the browser shell register modules through the
+    /// same `ModuleRegistry`; this keeps their metadata parsing in one place.
+    /// Free-text `tags` are read verbatim and defaulted when absent so every
+    /// module is searchable by its section and renderer kind.
+    pub fn from_registry_meta(name: &str, meta: &Map<String, Value>, kind: &str) -> Self {
+        let get = |key: &str| {
+            meta.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let tags = meta
+            .get("tags")
+            .and_then(Value::as_array)
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut view = Self {
+            name: name.to_string(),
+            module_type: get("type"),
+            kind: kind.to_string(),
+            category: get("category"),
+            author: get("author"),
+            version: get("version"),
+            description: get("description"),
+            tags,
+        };
+        if view.tags.is_empty() {
+            view.tags = view.default_tags();
+        }
+        view
+    }
+
     /// The Gallery section this module belongs to (`effects`, `2d-scenes`,
     /// `3d-scenes`), following `Gallery.vue`'s category fallback.
     pub fn gallery_category(&self) -> &'static str {
@@ -2586,6 +2628,34 @@ impl ModuleMetaView {
                 "3d" => "3d-scenes",
                 _ => "effects",
             },
+        }
+    }
+
+    /// The default tags for a module that has none registered: the Gallery
+    /// section (`effect`/`scene`) plus the authoritative renderer kind.
+    pub fn default_tags(&self) -> Vec<String> {
+        let mut tags = vec![
+            if self.gallery_category() == "effects" {
+                "effect"
+            } else {
+                "scene"
+            }
+            .to_string(),
+        ];
+        if !self.kind.is_empty() && !tags.iter().any(|tag| tag.eq_ignore_ascii_case(&self.kind)) {
+            tags.push(self.kind.clone());
+        }
+        tags
+    }
+
+    /// The tags the Gallery searches for this module. Explicit tags (seeded at
+    /// registration or edited in the info window) replace the defaults; an
+    /// empty list falls back to [`Self::default_tags`].
+    pub fn effective_tags(&self) -> Vec<String> {
+        if self.tags.is_empty() {
+            self.default_tags()
+        } else {
+            self.tags.clone()
         }
     }
 }

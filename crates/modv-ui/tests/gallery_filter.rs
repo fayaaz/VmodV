@@ -15,6 +15,7 @@ fn module(name: &str, module_type: &str, category: &str) -> ModuleMetaView {
         author: "modV".to_string(),
         version: "1.0".to_string(),
         description: String::new(),
+        tags: Vec::new(),
     }
 }
 
@@ -207,12 +208,13 @@ fn search_matches_author_case_insensitively_and_trims_whitespace() {
     );
 }
 
-// --- Searching by module type (`type:` queries) -----------------------------
+// --- Searching by module type (plain free text) -----------------------------
 //
 // Point10 scenes register with `module_type: "2d"` for JS/preset compatibility
 // even though a Point10 renderer owns them; they are identified by their
-// `Point10` author. A plain 2D module must therefore never match a Point10
-// type query, despite sharing that `module_type`.
+// authoritative `kind`. A plain 2D module must therefore never match a Point10
+// type search, despite sharing that `module_type`. There is no query language:
+// the renderer kind is just another searchable term.
 
 /// Like `module`, but for a Point10 scene: the renderer kind is authoritative
 /// even though Point10 registers with the legacy `module_type` of `"2d"`.
@@ -225,6 +227,7 @@ fn module_by(name: &str, module_type: &str, category: &str, author: &str) -> Mod
         author: author.to_string(),
         version: "1.0".to_string(),
         description: String::new(),
+        tags: Vec::new(),
     }
 }
 
@@ -244,9 +247,9 @@ fn typed_modules() -> Vec<ModuleMetaView> {
 }
 
 #[test]
-fn type_isf_query_selects_only_isf_modules_case_insensitively() {
+fn plain_isf_search_selects_only_isf_modules_case_insensitively() {
     let modules = typed_modules();
-    for query in ["type:isf", "TYPE:ISF", "  type:ISF  "] {
+    for query in ["isf", "ISF", "  ISF  "] {
         assert_eq!(
             names(&filter_gallery_modules(
                 &modules,
@@ -254,19 +257,19 @@ fn type_isf_query_selects_only_isf_modules_case_insensitively() {
                 query
             )),
             vec!["Tunnel", "Deep Sea"],
-            "type tokens must be case-insensitive and tolerate surrounding whitespace: {query:?}"
+            "type searches must be case-insensitive and tolerate surrounding whitespace: {query:?}"
         );
     }
 }
 
 #[test]
-fn type_shader_and_milkdrop_queries_select_only_their_own_modules() {
+fn shader_and_milkdrop_searches_select_only_their_own_modules() {
     let modules = typed_modules();
     assert_eq!(
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::All,
-            "type:shader"
+            "shader"
         )),
         vec!["Bands", "Ring of Fire"]
     );
@@ -274,20 +277,20 @@ fn type_shader_and_milkdrop_queries_select_only_their_own_modules() {
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::All,
-            "type:milkdrop"
+            "milkdrop"
         )),
         vec!["Strobe Riot", "Feedback Fractal"]
     );
 }
 
 #[test]
-fn type_point10_query_excludes_plain_2d_modules_sharing_the_module_type() {
+fn point10_search_excludes_plain_2d_modules_sharing_the_module_type() {
     let modules = typed_modules();
     assert_eq!(
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::All,
-            "type:point10"
+            "point10"
         )),
         vec!["Point10 Boxy", "Point10 Rolling Fire"],
         "Point10 is a renderer kind: its modules register as module_type '2d', \
@@ -297,13 +300,13 @@ fn type_point10_query_excludes_plain_2d_modules_sharing_the_module_type() {
 }
 
 #[test]
-fn type_query_combines_with_free_text_and_the_gallery_category() {
+fn type_search_combines_with_free_text_and_the_gallery_category() {
     let modules = typed_modules();
     assert_eq!(
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::All,
-            "type:isf sea"
+            "isf sea"
         )),
         vec!["Deep Sea"]
     );
@@ -311,31 +314,31 @@ fn type_query_combines_with_free_text_and_the_gallery_category() {
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::All,
-            "sea type:isf"
+            "sea isf"
         )),
         vec!["Deep Sea"],
-        "the type token may appear before or after the free-text terms"
+        "the type term may appear before or after the free-text terms"
     );
     assert_eq!(
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::ThreeDScenes,
-            "type:isf"
+            "isf"
         )),
         vec!["Tunnel", "Deep Sea"]
     );
     assert!(
-        filter_gallery_modules(&modules, GalleryCategory::Effects, "type:isf sea").is_empty(),
-        "category filtering still applies on top of a type query"
+        filter_gallery_modules(&modules, GalleryCategory::Effects, "isf sea").is_empty(),
+        "category filtering still applies on top of a type search"
     );
 }
 
 #[test]
-fn unknown_type_matches_nothing() {
+fn unknown_plain_text_matches_nothing() {
     let modules = typed_modules();
     assert!(
-        filter_gallery_modules(&modules, GalleryCategory::All, "type:bogus").is_empty(),
-        "an unsupported type token must not fall back to an unfiltered list"
+        filter_gallery_modules(&modules, GalleryCategory::All, "bogus").is_empty(),
+        "an unmatched search term must not fall back to an unfiltered list"
     );
 }
 
@@ -361,6 +364,94 @@ fn plain_text_search_keeps_its_original_name_and_author_semantics() {
         )),
         vec!["Fire Chars"]
     );
+}
+
+#[test]
+fn plain_text_search_matches_module_types_and_default_tags() {
+    let mut modules = typed_modules();
+    // Keep the renderer kind detectable even when neither the name nor author
+    // contains "Point10", and even though its legacy module_type is "2d".
+    modules.push(module_by("Boxy", "2d", "2d-scenes", "Studio"));
+
+    for query in ["isf", "  ISF  "] {
+        assert_eq!(
+            names(&filter_gallery_modules(
+                &modules,
+                GalleryCategory::All,
+                query
+            )),
+            vec!["Tunnel", "Deep Sea"],
+            "plain module-type searches must be case-insensitive and trimmed: {query:?}"
+        );
+    }
+    for query in ["shader", "  SHADER  "] {
+        assert_eq!(
+            names(&filter_gallery_modules(
+                &modules,
+                GalleryCategory::All,
+                query
+            )),
+            vec!["Bands", "Ring of Fire"],
+            "plain module-type searches must select only shader modules: {query:?}"
+        );
+    }
+    for query in ["point10", "  POINT10  "] {
+        assert_eq!(
+            names(&filter_gallery_modules(
+                &modules,
+                GalleryCategory::All,
+                query
+            )),
+            vec!["Point10 Boxy", "Point10 Rolling Fire", "Boxy"],
+            "Point10 must match its renderer kind, not the legacy '2d' module_type: {query:?}"
+        );
+    }
+
+    // None of these names or authors contain "effect" or "scene"; the matches
+    // can only come from default tags derived from the Gallery categories.
+    for query in ["effect", "  EFFECT  "] {
+        assert_eq!(
+            names(&filter_gallery_modules(
+                &modules,
+                GalleryCategory::All,
+                query
+            )),
+            vec!["Bands", "Ring of Fire", "Strobe Riot"],
+            "effects must have a searchable default 'effect' tag: {query:?}"
+        );
+    }
+    for query in ["scene", "  SCENE  "] {
+        assert_eq!(
+            names(&filter_gallery_modules(
+                &modules,
+                GalleryCategory::All,
+                query
+            )),
+            vec![
+                "Chromatic Line",
+                "Fire Chars",
+                "Point10 Boxy",
+                "Point10 Rolling Fire",
+                "Tunnel",
+                "Deep Sea",
+                "Feedback Fractal",
+                "Boxy",
+            ],
+            "2D and 3D scene categories, including Point10, need a default \
+             'scene' tag: {query:?}"
+        );
+    }
+    for query in ["scene fire", "fire scene"] {
+        assert_eq!(
+            names(&filter_gallery_modules(
+                &modules,
+                GalleryCategory::All,
+                query
+            )),
+            vec!["Fire Chars", "Point10 Rolling Fire"],
+            "free-text terms must combine across default tags and module names: {query:?}"
+        );
+    }
 }
 
 /// Like [`module`], but with an authoritative renderer kind independent of the
@@ -431,20 +522,26 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
     // missing behaviour rather than stopping at the first unsupported token.
     let mut failures = Vec::new();
 
-    // A — the existing renderer-kind filter surface is the `type:<kind>`
-    // search syntax. Every current kind must remain selectable, with Plane9
-    // joining Point10 as a distinct kind.
-    let kind_modules: Vec<_> = ["shader", "2d", "point10", "plane9", "isf", "milkdrop"]
-        .into_iter()
-        .map(|kind| module_with_kind(&format!("{kind} tile"), kind))
+    // A — the renderer kind is matched as free text, exactly like any other
+    // tag. Every current kind must remain selectable, with Plane9 joining
+    // Point10 as a distinct kind. The tile names deliberately avoid the kind
+    // word and the legacy `module_type` is neutral, so a match can only come
+    // from the authoritative `kind` field.
+    let kinds = ["shader", "2d", "point10", "plane9", "isf", "milkdrop"];
+    let kind_modules: Vec<_> = kinds
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| ModuleMetaView {
+            module_type: "custom".to_string(),
+            ..module_with_kind(&format!("Tile {}", (b'A' + index as u8) as char), kind)
+        })
         .collect();
-    for kind in ["shader", "2d", "point10", "plane9", "isf", "milkdrop"] {
-        let filtered =
-            filter_gallery_modules(&kind_modules, GalleryCategory::All, &format!("type:{kind}"));
-        let expected = format!("{kind} tile");
+    for (index, kind) in kinds.iter().enumerate() {
+        let filtered = filter_gallery_modules(&kind_modules, GalleryCategory::All, kind);
+        let expected = format!("Tile {}", (b'A' + index as u8) as char);
         if names(&filtered) != vec![expected.as_str()] {
             failures.push(format!(
-                "A: type:{kind} selected {:?}, expected only {expected:?}",
+                "A: {kind:?} selected {:?}, expected only {expected:?}",
                 names(&filtered)
             ));
         }
@@ -455,19 +552,19 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
     modules.extend(POINT10.iter().map(|name| module_with_kind(name, "point10")));
 
     // B — Plane9 is exactly the thirty renamed/imported preset ports.
-    let plane9 = filter_gallery_modules(&modules, GalleryCategory::All, "type:plane9");
+    let plane9 = filter_gallery_modules(&modules, GalleryCategory::All, "plane9");
     if names(&plane9) != PLANE9 {
         failures.push(format!(
-            "B: type:plane9 selected {:?}, expected exactly {PLANE9:?}",
+            "B: plane9 selected {:?}, expected exactly {PLANE9:?}",
             names(&plane9)
         ));
     }
 
     // C — Point10 is exactly the other eighteen scenes, with no Plane9 leakage.
-    let point10 = filter_gallery_modules(&modules, GalleryCategory::All, "type:point10");
+    let point10 = filter_gallery_modules(&modules, GalleryCategory::All, "point10");
     if names(&point10) != POINT10 {
         failures.push(format!(
-            "C: type:point10 selected {:?}, expected exactly {POINT10:?}",
+            "C: point10 selected {:?}, expected exactly {POINT10:?}",
             names(&point10)
         ));
     }
@@ -576,7 +673,7 @@ fn legacy_plane9_alias_lookup_matches_renderer_roster() {
 }
 
 #[test]
-fn type_tokens_are_case_insensitive_and_do_not_match_by_prefix() {
+fn search_terms_are_case_insensitive() {
     let modules = vec![
         module_with_kind("A", "plane9"),
         module_with_kind("B", "point10"),
@@ -585,7 +682,7 @@ fn type_tokens_are_case_insensitive_and_do_not_match_by_prefix() {
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::All,
-            "TYPE:PLANE9"
+            "PLANE9"
         )),
         vec!["A"]
     );
@@ -593,12 +690,9 @@ fn type_tokens_are_case_insensitive_and_do_not_match_by_prefix() {
         names(&filter_gallery_modules(
             &modules,
             GalleryCategory::All,
-            "type:PoInT10"
+            "PoInT10"
         )),
         vec!["B"]
     );
-    assert!(filter_gallery_modules(&modules, GalleryCategory::All, "type:nope").is_empty());
-    // Unknown/partial tokens must not leak via prefix comparison.
-    assert!(filter_gallery_modules(&modules, GalleryCategory::All, "type:plane").is_empty());
-    assert!(filter_gallery_modules(&modules, GalleryCategory::All, "type:point").is_empty());
+    assert!(filter_gallery_modules(&modules, GalleryCategory::All, "nope").is_empty());
 }

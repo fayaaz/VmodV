@@ -4793,7 +4793,7 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         let search = ui
             .add(
                 egui::TextEdit::singleline(&mut state.search)
-                    .hint_text("Search modules  (type:isf)  (Ctrl+K)")
+                    .hint_text("Search modules, tags and types  (Ctrl+K)")
                     .desired_width(search_width),
             )
             .on_hover_text("Double-click a tile to add it to the selected Group");
@@ -4808,8 +4808,26 @@ fn gallery_strip(ui: &mut egui::Ui, snapshot: &EngineSnapshot, state: &mut UiSta
         );
     });
 
-    let filtered =
-        filter_gallery_modules(&snapshot.registered, state.gallery_category, &state.search);
+    // Session tag edits replace the registered tags; without overrides the
+    // registry's own tags are searched directly.
+    let overridden: Vec<ModuleMetaView>;
+    let registered: &[ModuleMetaView] = if state.module_tag_overrides.is_empty() {
+        &snapshot.registered
+    } else {
+        overridden = snapshot
+            .registered
+            .iter()
+            .map(|module| {
+                let mut module = module.clone();
+                if let Some(tags) = state.module_tag_overrides.get(&module.name) {
+                    module.tags = tags.clone();
+                }
+                module
+            })
+            .collect();
+        &overridden
+    };
+    let filtered = filter_gallery_modules(registered, state.gallery_category, &state.search);
     // The Gallery section is resizable: the grid fills it and scrolls
     // vertically inside, instead of imposing its own height on the split.
     let available_height = ui.available_height().max(1.0);
@@ -5403,7 +5421,7 @@ fn about_window(ctx: &egui::Context, state: &mut UiState) {
 /// Shows the module's Gallery metadata and its third-party licence, as recorded
 /// in `THIRD_PARTY_NOTICES.md`.
 fn module_info_window(ctx: &egui::Context, state: &mut UiState) {
-    let Some(meta) = state.module_info.as_ref() else {
+    let Some(meta) = state.module_info.clone() else {
         return;
     };
     let mut open = true;
@@ -5428,7 +5446,22 @@ fn module_info_window(ctx: &egui::Context, state: &mut UiState) {
         ui.label(format!("Type: {}", meta.module_type));
         ui.label(format!("Author: {}", meta.author));
         ui.label(format!("Version: {}", meta.version));
-        ui.label(format!("License: {}", module_license(meta)));
+        ui.label(format!("License: {}", module_license(&meta)));
+        ui.separator();
+        ui.label("Tags");
+        let mut draft_changed = false;
+        ui.horizontal(|ui| {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut state.module_tags_draft)
+                    .hint_text("comma-separated tags")
+                    .desired_width(f32::INFINITY),
+            );
+            draft_changed = response.changed();
+        });
+        if draft_changed {
+            let draft = state.module_tags_draft.clone();
+            state.set_module_tags(&meta.name, &draft);
+        }
         ui.separator();
         ui.label(&meta.description);
     });

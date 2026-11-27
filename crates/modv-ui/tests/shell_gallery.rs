@@ -53,11 +53,12 @@ fn gallery_meta(name: &str, module_type: &str) -> ModuleMetaView {
         author: "modV".to_string(),
         version: "1.0".to_string(),
         description: String::new(),
+        tags: Vec::new(),
     }
 }
 
 #[test]
-fn typing_a_type_query_in_the_gallery_search_hides_other_module_tiles() {
+fn typing_a_type_in_the_gallery_search_hides_other_module_tiles() {
     let snapshot = EngineSnapshot {
         registered: vec![
             gallery_meta("Bands", "shader"),
@@ -85,7 +86,7 @@ fn typing_a_type_query_in_the_gallery_search_hides_other_module_tiles() {
             .next()
             .expect("the gallery search field");
         search.focus();
-        search.type_text("type:isf");
+        search.type_text("isf");
     }
     harness.run();
 
@@ -95,10 +96,10 @@ fn typing_a_type_query_in_the_gallery_search_hides_other_module_tiles() {
     );
     assert!(
         harness.query_by_label("Tunnel").is_some(),
-        "the ISF tile must remain visible for a `type:isf` search"
+        "the ISF tile must remain visible for an `isf` search"
     );
     assert!(
         harness.query_by_label("Deep Sea").is_some(),
-        "every ISF tile must remain visible for a `type:isf` search"
+        "every ISF tile must remain visible for an `isf` search"
     );
 }
