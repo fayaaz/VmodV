@@ -681,6 +681,403 @@ fn sound_cube_renders() {
     assert!(transparent > 0, "SoundCube lost its transparent clear");
 }
 
+const SOUND_CUBE_QUALITY_WIDTH: u32 = 1280;
+const SOUND_CUBE_QUALITY_HEIGHT: u32 = 720;
+const SOUND_CUBE_QUALITY_FRAMES: usize = 12;
+
+/// Render the real scene/composer path at the report's 1280x720 size. Spin is
+/// frozen so the radial measurement follows the feedback waves rather than a
+/// moving silhouette, and Lens is deliberately left unprop'd (its default 1).
+/// The existing loud payload's bass would put the camera inside the cube, so
+/// the preset's Pulse prop alone keeps the fixture framed; no band/Gain/AGC
+/// mapping is changed.
+fn render_sound_cube_quality(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    trail: f32,
+    frames: usize,
+) -> Vec<u8> {
+    use crate::point10::scenes::sound_cube::SoundCube;
+
+    let mut scene = SoundCube::new();
+    scene.apply_props(|key| match key {
+        "spinSpeed" => Some(0.0),
+        "pulse" => Some(0.25),
+        "trail" => Some(trail),
+        _ => None,
+    });
+
+    let mut ctx = SceneContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    ctx.resize(SOUND_CUBE_QUALITY_WIDTH, SOUND_CUBE_QUALITY_HEIGHT);
+    scene.init(&mut ctx);
+    scene.resize(SOUND_CUBE_QUALITY_WIDTH, SOUND_CUBE_QUALITY_HEIGHT);
+
+    let payload = loud_payload();
+    let mut bridge = AudioBridge::new();
+    let target = TestTarget::new(device, SOUND_CUBE_QUALITY_WIDTH, SOUND_CUBE_QUALITY_HEIGHT);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("point10-sound-cube-quality"),
+    });
+    for _ in 0..frames {
+        bridge.update(0.0, Some(&payload), &Default::default());
+        scene.update(0.0, &bridge);
+        scene.render(&mut encoder, &target.view);
+    }
+    queue.submit(Some(encoder.finish()));
+    target.read(device, queue)
+}
+
+fn quality_luma(pixel: &[u8]) -> f32 {
+    (0.2126 * f32::from(pixel[0]) + 0.7152 * f32::from(pixel[1]) + 0.0722 * f32::from(pixel[2]))
+        / 255.0
+}
+
+/// Bilinear RGBA resize used only for the deterministic old-path control.
+/// Pixel-centre mapping matches the GPU sampler's 1:1 texel centres while the
+/// 256-square intermediate reproduces the old target's x=5 px upscale knots.
+fn quality_bilinear_resize(
+    pixels: &[u8],
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> Vec<u8> {
+    assert_eq!(
+        pixels.len(),
+        source_width as usize * source_height as usize * 4,
+        "source RGBA length must match its dimensions"
+    );
+    assert!(source_width > 0 && source_height > 0);
+    assert!(target_width > 0 && target_height > 0);
+
+    let sample = |x: f32, y: f32| -> [f32; 4] {
+        let x = x.clamp(0.0, source_width as f32 - 1.0);
+        let y = y.clamp(0.0, source_height as f32 - 1.0);
+        let x0 = x.floor() as usize;
+        let y0 = y.floor() as usize;
+        let x1 = (x0 + 1).min(source_width as usize - 1);
+        let y1 = (y0 + 1).min(source_height as usize - 1);
+        let fx = x - x0 as f32;
+        let fy = y - y0 as f32;
+        let mut out = [0.0; 4];
+        for channel in 0..4 {
+            let top = f32::from(pixels[(y0 * source_width as usize + x0) * 4 + channel])
+                * (1.0 - fx)
+                + f32::from(pixels[(y0 * source_width as usize + x1) * 4 + channel]) * fx;
+            let bottom = f32::from(pixels[(y1 * source_width as usize + x0) * 4 + channel])
+                * (1.0 - fx)
+                + f32::from(pixels[(y1 * source_width as usize + x1) * 4 + channel]) * fx;
+            out[channel] = top * (1.0 - fy) + bottom * fy;
+        }
+        out
+    };
+
+    let mut resized = Vec::with_capacity(target_width as usize * target_height as usize * 4);
+    for y in 0..target_height {
+        let source_y = (y as f32 + 0.5) * source_height as f32 / target_height as f32 - 0.5;
+        for x in 0..target_width {
+            let source_x = (x as f32 + 0.5) * source_width as f32 / target_width as f32 - 0.5;
+            let pixel = sample(source_x, source_y);
+            for channel in pixel {
+                resized.push(channel.round().clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    resized
+}
+
+/// Resolution-sensitive 5 px periodicity ratio over the central cube region.
+///
+/// A native smooth ring has no preferred horizontal sample phase. A 256-wide
+/// bilinear upscale to 1280 px is linear within each five-pixel span and kinks
+/// at every source texel boundary, concentrating horizontal curvature in one
+/// `x mod 5` phase. The ratio is invariant to overall brightness.
+fn quality_five_pixel_kink_ratio(pixels: &[u8], width: u32, height: u32) -> f32 {
+    const PERIOD: usize = 5;
+    let width = width as usize;
+    let height = height as usize;
+    assert!(width > 2 && height > 2);
+    let x_start = width / 4 + 1;
+    let x_end = width * 3 / 4 - 1;
+    let y_start = height / 4;
+    let y_end = height * 3 / 4;
+    let mut phase_sums = [0.0_f64; PERIOD];
+    let mut phase_counts = [0_usize; PERIOD];
+
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let index = (y * width + x) * 4;
+            let left = f64::from(quality_luma(&pixels[index - 4..index]));
+            let center = f64::from(quality_luma(&pixels[index..index + 4]));
+            let right = f64::from(quality_luma(&pixels[index + 4..index + 8]));
+            let curvature = (left - 2.0 * center + right).abs();
+            let phase = x % PERIOD;
+            phase_sums[phase] += curvature;
+            phase_counts[phase] += 1;
+        }
+    }
+
+    assert!(
+        phase_counts.iter().all(|count| *count > 0),
+        "all 5 px sample phases must be represented"
+    );
+    let phase_means: Vec<f32> = phase_sums
+        .iter()
+        .zip(&phase_counts)
+        .map(|(sum, count)| (*sum / *count as f64) as f32)
+        .collect();
+    let mean = phase_means.iter().sum::<f32>() / PERIOD as f32;
+    let max = phase_means.iter().copied().fold(0.0_f32, f32::max);
+    if mean > 0.0 {
+        max / mean
+    } else {
+        f32::INFINITY
+    }
+}
+
+/// Outer radius of the direct-only cube, used to exclude its sharp silhouette
+/// and face rings from the radial trail measurement.
+fn quality_visible_radius(pixels: &[u8], width: u32, height: u32) -> f32 {
+    let width = width as usize;
+    let height = height as usize;
+    let center_x = (width - 1) as f64 * 0.5;
+    let center_y = (height - 1) as f64 * 0.5;
+    let mut max_radius = 0.0_f64;
+
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        if pixel[3] > 0 {
+            let x = (index % width) as f64 - center_x;
+            let y = (index / width) as f64 - center_y;
+            max_radius = max_radius.max(x.hypot(y));
+        }
+    }
+
+    max_radius as f32
+}
+
+/// Angularly averaged luma profile outside the direct cube. The normalized
+/// mean absolute radial slope measures profile shape independently of peak
+/// brightness, so merely dimming the waves cannot satisfy diffuseness.
+fn quality_radial_trail(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    direct_radius: f32,
+) -> (f32, f32, f32, f32, u32, u32) {
+    let width = width as usize;
+    let height = height as usize;
+    let center_x = (width - 1) as f64 * 0.5;
+    let center_y = (height - 1) as f64 * 0.5;
+    let inner = (direct_radius + 4.0).ceil() as u32;
+    let outer = (((height as f64) * 0.72)
+        .min(f64::from(direct_radius) + 320.0)
+        .floor() as u32)
+        .max(inner + 8);
+    let bins = (outer - inner + 1) as usize;
+    let mut sums = vec![0.0_f64; bins];
+    let mut counts = vec![0_u32; bins];
+
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        let x = (index % width) as f64 - center_x;
+        let y = (index / width) as f64 - center_y;
+        let radius = x.hypot(y);
+        if radius >= f64::from(inner) && radius <= f64::from(outer) {
+            let bin = (radius.floor() as usize).saturating_sub(inner as usize);
+            sums[bin] += f64::from(quality_luma(pixel));
+            counts[bin] += 1;
+        }
+    }
+
+    assert!(
+        counts.iter().filter(|count| **count > 0).count() >= bins / 2,
+        "radial trail annulus {inner}..={outer} has too few sampled radii"
+    );
+    let profile: Vec<(u32, f32)> = sums
+        .iter()
+        .zip(&counts)
+        .enumerate()
+        .filter(|entry| *entry.1.1 > 0)
+        .map(|(index, (sum, count))| (inner + index as u32, (*sum / f64::from(*count)) as f32))
+        .collect();
+    let peak = profile
+        .iter()
+        .map(|(_, value)| *value)
+        .fold(0.0_f32, f32::max);
+    let radial_span = (profile.last().expect("non-empty profile").0
+        - profile.first().expect("non-empty profile").0) as f32;
+    let mean_abs_slope = profile
+        .windows(2)
+        .map(|pair| (pair[1].1 - pair[0].1).abs())
+        .sum::<f32>()
+        / radial_span;
+    let max_abs_slope = profile
+        .windows(2)
+        .map(|pair| (pair[1].1 - pair[0].1).abs() / (pair[1].0 - pair[0].0) as f32)
+        .fold(0.0_f32, f32::max);
+    let normalized_slope = if peak > 0.0 {
+        mean_abs_slope / peak
+    } else {
+        f32::INFINITY
+    };
+
+    (
+        peak,
+        mean_abs_slope,
+        max_abs_slope,
+        normalized_slope,
+        inner,
+        outer,
+    )
+}
+
+/// Regression contract for the accidental 256-square Sound Cube port: the
+/// cube must be sharp at scene resolution while its feedback remains a small,
+/// diffuse buffer. This is deliberately pixel-based; no production target-size
+/// accessor is required.
+#[test]
+fn sound_cube_uses_scene_resolution_for_cube_and_diffuses_the_trail() {
+    use std::cmp::Ordering;
+
+    use crate::point10::scenes::sound_cube::{RTT_SIZE, SCALE_AUDIO, SCALE_BASE, sound_cube_drive};
+
+    // The native image must not prefer a 5 px sample phase. The deterministic
+    // 256-square downscale/upscale control must strongly prefer one, proving
+    // that this metric detects the old low-resolution capture path.
+    const CUBE_KINK_RATIO_MAX: f32 = 2.0;
+    const UPSCALE_CONTROL_KINK_RATIO_MIN: f32 = 2.0;
+    // RED trail baselines: require a 30% reduction in profile slope
+    // (independent of peak), and a 10% lower peak that remains clearly visible.
+    const TRAIL_NORMALIZED_SLOPE_MAX: f32 = 0.003212 * 0.7;
+    const TRAIL_PEAK_MAX: f32 = 0.287752 * 0.9;
+    const TRAIL_PEAK_MIN: f32 = 0.02;
+
+    let mut failures = Vec::new();
+
+    // Audio mapping is not the tuning knob: preserve Expression1 and the
+    // bridge's damping/AGC selection exactly.
+    assert_eq!(SCALE_BASE, 0.3);
+    assert_eq!(SCALE_AUDIO, 8.0);
+    for (bass, expected) in [(0.0, 0.3), (0.5, 4.3), (1.0, 8.3)] {
+        let drive = sound_cube_drive(bass, 1.0);
+        assert!(
+            (drive.expression - expected).abs() < 1e-6,
+            "sound_cube_drive({bass}) changed: {:?}",
+            drive.expression
+        );
+        assert!(
+            (drive.scale - expected).abs() < 1e-6,
+            "sound_cube_drive({bass}) scale changed: {:?}",
+            drive.scale
+        );
+    }
+    let scene_source = include_str!("scenes/sound_cube.rs");
+    assert!(
+        scene_source.contains("sound_cube_drive(self.audio.band(-1, 1, 0, 0.0), self.pulse_scale)"),
+        "Sound Cube must keep reading the existing smoothed bass lane"
+    );
+    let audio_source = include_str!("audio_bridge.rs");
+    for needle in [
+        "let src_lanes = if levers.use_agc {",
+        "let tau = 0.02 + levers.smoothing * 0.6;",
+        "self.smoo[damping * 3 + index]",
+    ] {
+        assert!(
+            audio_source.contains(needle),
+            "audio bridge contract changed: lost {needle}"
+        );
+    }
+
+    let Some((device, queue)) = gpu() else {
+        panic!("GPU fallback unavailable: Sound Cube quality contract could not run");
+    };
+    let direct = render_sound_cube_quality(&device, &queue, 0.0, 1);
+    let trail = render_sound_cube_quality(&device, &queue, 1.0, SOUND_CUBE_QUALITY_FRAMES);
+    let cube_kink_ratio =
+        quality_five_pixel_kink_ratio(&direct, SOUND_CUBE_QUALITY_WIDTH, SOUND_CUBE_QUALITY_HEIGHT);
+    let downscaled_control = quality_bilinear_resize(
+        &direct,
+        SOUND_CUBE_QUALITY_WIDTH,
+        SOUND_CUBE_QUALITY_HEIGHT,
+        RTT_SIZE,
+        RTT_SIZE,
+    );
+    let upscaled_control = quality_bilinear_resize(
+        &downscaled_control,
+        RTT_SIZE,
+        RTT_SIZE,
+        SOUND_CUBE_QUALITY_WIDTH,
+        SOUND_CUBE_QUALITY_HEIGHT,
+    );
+    let control_kink_ratio = quality_five_pixel_kink_ratio(
+        &upscaled_control,
+        SOUND_CUBE_QUALITY_WIDTH,
+        SOUND_CUBE_QUALITY_HEIGHT,
+    );
+    let direct_radius =
+        quality_visible_radius(&direct, SOUND_CUBE_QUALITY_WIDTH, SOUND_CUBE_QUALITY_HEIGHT);
+    let (trail_peak, radial_slope, radial_max_slope, normalized_slope, inner, outer) =
+        quality_radial_trail(
+            &trail,
+            SOUND_CUBE_QUALITY_WIDTH,
+            SOUND_CUBE_QUALITY_HEIGHT,
+            direct_radius,
+        );
+
+    eprintln!(
+        "sound cube quality: native_5px_kink_ratio={cube_kink_ratio:.6} \
+         (max {CUBE_KINK_RATIO_MAX:.6}); simulated_256_5px_kink_ratio={control_kink_ratio:.6} \
+         (min {UPSCALE_CONTROL_KINK_RATIO_MIN:.6}); direct_radius={direct_radius:.3}; \
+         trail_annulus={inner}..={outer}; trail_peak={trail_peak:.6} \
+         (min {TRAIL_PEAK_MIN:.6}, max {TRAIL_PEAK_MAX:.6}); \
+         radial_mean_abs_slope={radial_slope:.6}; radial_max_abs_slope={radial_max_slope:.6}; \
+         radial_normalized_slope={normalized_slope:.6} (max {TRAIL_NORMALIZED_SLOPE_MAX:.6})"
+    );
+
+    match cube_kink_ratio.partial_cmp(&CUBE_KINK_RATIO_MAX) {
+        Some(Ordering::Less | Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "native 5 px kink ratio {cube_kink_ratio:.6} exceeds {CUBE_KINK_RATIO_MAX:.6}; \
+             the cube still has low-resolution resampling periodicity"
+        )),
+    }
+    match control_kink_ratio.partial_cmp(&UPSCALE_CONTROL_KINK_RATIO_MIN) {
+        Some(Ordering::Greater | Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "simulated 256-wide 5 px kink ratio {control_kink_ratio:.6} is below \
+             {UPSCALE_CONTROL_KINK_RATIO_MIN:.6}; the resolution control is not discriminating"
+        )),
+    }
+    match trail_peak.partial_cmp(&TRAIL_PEAK_MAX) {
+        Some(Ordering::Less | Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "trail peak {trail_peak:.6} exceeds {TRAIL_PEAK_MAX:.6}; the waves are still too harsh/bright"
+        )),
+    }
+    match trail_peak.partial_cmp(&TRAIL_PEAK_MIN) {
+        Some(Ordering::Greater | Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "trail peak {trail_peak:.6} is below {TRAIL_PEAK_MIN:.6}; the waves are no longer clearly visible"
+        )),
+    }
+    match normalized_slope.partial_cmp(&TRAIL_NORMALIZED_SLOPE_MAX) {
+        Some(Ordering::Less | Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "radial normalized slope {normalized_slope:.6} exceeds {TRAIL_NORMALIZED_SLOPE_MAX:.6}; \
+             the feedback waves are still too sharp"
+        )),
+    }
+
+    if failures.is_empty() {
+        eprintln!("Sound Cube resolution/diffuse-trail contract passed");
+    } else {
+        panic!(
+            "Sound Cube resolution/diffuse-trail contract failed ({} checks):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
+
 // ————— batch 5a —————
 
 /// HollowCube's cubes are 0.01 world units in a 0.5-unit shell seen by a
