@@ -62,8 +62,8 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 48 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 402 `.fs` shaders of the ISF corpus (499 total). Names match
+//! 49 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
+//! module and the 402 `.fs` shaders of the ISF corpus (500 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -146,6 +146,7 @@ use modv_renderers::point10::scenes::color_cube::ColorCube;
 use modv_renderers::point10::scenes::colors::Colors;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
 use modv_renderers::point10::scenes::earth::Earth;
+use modv_renderers::point10::scenes::evil_box::EvilBox;
 use modv_renderers::point10::scenes::gradient::Gradient;
 use modv_renderers::point10::scenes::hollow_cube::HollowCube;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
@@ -421,6 +422,8 @@ pub enum Point10SceneKind {
     CloudFlight(CloudFlight),
     /// `Plane9 Spiky` (`scenes/spiky.rs`).
     Spiky(Spiky),
+    /// `Plane9 Evil Box` (`scenes/evil_box.rs`).
+    EvilBox(EvilBox),
 }
 
 impl Point10SceneKind {
@@ -504,6 +507,7 @@ impl Point10SceneKind {
             "Plane9 Mirror Tunnel" => Self::MirrorTunnel(MirrorTunnel::new()),
             "Plane9 Cloud Flight" => Self::CloudFlight(CloudFlight::new()),
             "Plane9 Spiky" => Self::Spiky(Spiky::new()),
+            "Plane9 Evil Box" => Self::EvilBox(EvilBox::new()),
             _ => return None,
         })
     }
@@ -564,6 +568,7 @@ impl Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.apply_props(|key| get(key)),
             Self::CloudFlight(scene) => scene.apply_props(|key| get(key)),
             Self::Spiky(scene) => scene.apply_props(|key| get(key)),
+            Self::EvilBox(scene) => scene.apply_props(|key| get(key)),
         }
     }
 }
@@ -620,6 +625,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.name(),
             Self::CloudFlight(scene) => scene.name(),
             Self::Spiky(scene) => scene.name(),
+            Self::EvilBox(scene) => scene.name(),
         }
     }
 
@@ -673,6 +679,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.init(ctx),
             Self::CloudFlight(scene) => scene.init(ctx),
             Self::Spiky(scene) => scene.init(ctx),
+            Self::EvilBox(scene) => scene.init(ctx),
         }
     }
 
@@ -726,6 +733,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.resize(width, height),
             Self::CloudFlight(scene) => scene.resize(width, height),
             Self::Spiky(scene) => scene.resize(width, height),
+            Self::EvilBox(scene) => scene.resize(width, height),
         }
     }
 
@@ -779,6 +787,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.update(dt, audio),
             Self::CloudFlight(scene) => scene.update(dt, audio),
             Self::Spiky(scene) => scene.update(dt, audio),
+            Self::EvilBox(scene) => scene.update(dt, audio),
         }
     }
 
@@ -836,6 +845,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.render(encoder, target),
             Self::CloudFlight(scene) => scene.render(encoder, target),
             Self::Spiky(scene) => scene.render(encoder, target),
+            Self::EvilBox(scene) => scene.render(encoder, target),
         }
     }
 
@@ -889,6 +899,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.dispose(),
             Self::CloudFlight(scene) => scene.dispose(),
             Self::Spiky(scene) => scene.dispose(),
+            Self::EvilBox(scene) => scene.dispose(),
         }
     }
 
@@ -942,6 +953,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.props(),
             Self::CloudFlight(scene) => scene.props(),
             Self::Spiky(scene) => scene.props(),
+            Self::EvilBox(scene) => scene.props(),
         }
     }
 
@@ -995,6 +1007,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.meta(),
             Self::CloudFlight(scene) => scene.meta(),
             Self::Spiky(scene) => scene.meta(),
+            Self::EvilBox(scene) => scene.meta(),
         }
     }
 }
@@ -2647,7 +2660,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 33 + 16 + 48, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 33 + 16 + 49, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2667,7 +2680,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 48);
+        assert_eq!(registry.point10_definitions().len(), 49);
     }
 
     #[test]
@@ -2729,6 +2742,7 @@ mod tests {
                 "Plane9 Mirror Tunnel",
                 "Plane9 Cloud Flight",
                 "Plane9 Spiky",
+                "Plane9 Evil Box",
             ]
         );
 
@@ -3806,7 +3820,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 48 + 402 + milkdrop_count,
+            33 + 16 + 49 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3882,12 +3896,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 48 + 402 + milkdrop_count,
+            33 + 16 + 49 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(499),
+            Some(500),
             "manifest total"
         );
     }

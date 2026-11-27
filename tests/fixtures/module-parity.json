@@ -2,11 +2,11 @@
   "$comment": "Generated from the legacy worker import.meta.glob registrations. Consumed by the Rust registry guard in crates/modv-app/src/module_registry.rs. The legacy worker itself is archived on branch legacy-electron (tag v1.x-final). Video is a VmodV-only 2D module added with start/finish playback trims (not present in the legacy registrations); Point10 The Cave is a VmodV-only port of the Plane9 preset from ../Point10; Colour Key is a VmodV-only ISF chroma-key filter (not present in the legacy registrations).",
   "counts": {
     "twoD": 16,
-    "point10": 48,
+    "point10": 49,
     "shader": 33,
     "isf": 402,
     "milkdrop": 0,
-    "total": 499
+    "total": 500
   },
   "milkdrop": [],
   "twoD": [
@@ -75,7 +75,8 @@
     "Plane9 Color Beams",
     "Plane9 Mirror Tunnel",
     "Plane9 Cloud Flight",
-    "Plane9 Spiky"
+    "Plane9 Spiky",
+    "Plane9 Evil Box"
   ],
   "shader": [
     "Bands",

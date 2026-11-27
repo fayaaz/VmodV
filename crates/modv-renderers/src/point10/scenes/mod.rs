@@ -26,6 +26,7 @@
 //! | [`latent_backrooms`] | Latent Backrooms | `scenes/LatentBackrooms.js` |
 //! | [`the_cave`] | The Cave | `../Point10/public/plane9/xml/Nature/The Cave.xml` |
 //! | [`spiky`] | Spiky | `Things/Spiky.xml` (mesh-modifier chain) |
+//! | [`evil_box`] | Evil Box | `Cube/Evil Box.xml` (feedback RTT chain) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -43,6 +44,9 @@
 //! the CPU mesh-modifier chain (subdivide/select/extrude/randomize) that Spiky
 //! is the first preset to need.
 
+#[cfg(test)]
+mod evil_box_red_contract;
+
 pub mod abstract_clouds;
 pub mod around_plus;
 pub mod attractor_particles;
@@ -59,6 +63,7 @@ pub mod cube_mesh;
 pub mod dvd_logo;
 pub mod dvd_room;
 pub mod earth;
+pub mod evil_box;
 pub mod fire_common;
 pub mod gradient;
 pub mod hollow_cube;
