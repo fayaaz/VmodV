@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 SlideIn",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -83,11 +84,14 @@ float _bump(float value, float start, float end, float width) {
 
 void main()
 {
-	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
-	float a = (atan(p.x,-p.y)+PI)/PI2;
-	vec4 c1 = texture2D(startImage, isf_FragNormCoord);
-	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-	vec4 c = mix(c2,c1,saturate(_bump(a, 0.0, 1.0-(progress+0.05), 0.05)));
-	gl_FragColor = vec4(c.rgb, c.a);
+	float slideAmount = 1.0;
+	float u = isf_FragNormCoord.x+smoothstep(0.0, 1.0, progress);
+	if(abs(saturate(u)-u) > 0.0)
+	{	
+		u = fract(u);
+		gl_FragColor = texture2D(endImage, vec2(u, isf_FragNormCoord.y));
+		return;
+	}
+	gl_FragColor = texture2D(startImage, vec2(u, isf_FragNormCoord.y));
 }
 

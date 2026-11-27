@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Shrink",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -83,16 +84,24 @@ float _bump(float value, float start, float end, float width) {
 
 void main()
 {
-	vec2 toUV = isf_FragNormCoord- vec2(0.5,0.5);
-	vec2 normToUV = toUV;
-	vec4 c1 = vec4(0.0,0.0,0.0,0.0);
-		float s = progress * 0.02;
-	for(int i=0; i<24; i++)
-	{
-		c1 += texture2D(startImage, isf_FragNormCoord - normToUV * s * float(i)); 
-	}
-	c1 /= 24.0;
+	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
+
+	float speed = 20.0;
+	vec2 center = vec2(0.5);
+	vec2 toUV = isf_FragNormCoord - center;
+	float distanceFromCenter = length(toUV);
+	vec2 normToUV = toUV / distanceFromCenter;
+	vec2 newUV = center + normToUV * (distanceFromCenter * (progress * speed + 1.0));
+	vec4 c1 = vec4(0.0,0.0,0.0,0.0); 
 	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-	gl_FragColor = mix(c1, c2, progress);	
+	vec2 t = abs(saturate(newUV) - newUV);
+	if (t.x > 0.0 || t.y > 0.0)
+	{
+		gl_FragColor = c2;
+		return;
+	}
+	c1 = texture2D(startImage,newUV); 
+	gl_FragColor = mix(c1, c2, progress);
 }
+
 

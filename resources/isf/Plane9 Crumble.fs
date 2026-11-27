@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Crumble",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -83,11 +84,18 @@ float _bump(float value, float start, float end, float width) {
 
 void main()
 {
-	if(fract(isf_FragNormCoord.y * 10.0) < progress)
+	float randomSeed = 1.0;
+	vec2 offset;
+	offset.x = _noise(vec2(isf_FragNormCoord.x, fract(isf_FragNormCoord.y + randomSeed)));
+	offset.y = _noise(vec2(isf_FragNormCoord.x, fract(isf_FragNormCoord.y + randomSeed)+PI));
+	float p = progress * 2.0;
+	if (p > 1.0)
 	{
-		gl_FragColor = texture2D(endImage, isf_FragNormCoord);
-		return;
+		p = 1.0 - (p - 1.0);
 	}
-	gl_FragColor = texture2D(startImage, isf_FragNormCoord);
+	vec4 c1 = texture2D(startImage, fract(isf_FragNormCoord + offset * p));
+	vec4 c2 = texture2D(endImage, fract(isf_FragNormCoord + offset * p));
+
+	gl_FragColor = mix(c1, c2, progress);
 }
 

@@ -18609,6 +18609,22 @@
       "passes": 1
     },
     {
+      "id": "plane9-3d-blocks",
+      "name": "Plane9 3d Blocks",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
       "id": "plane9-abstract-clouds",
       "name": "Plane9 Abstract Clouds",
       "kind": "point10",
@@ -18675,6 +18691,162 @@
       "preview": null
     },
     {
+      "id": "plane9-banded-swirl",
+      "name": "Plane9 Banded Swirl",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Banded Swirl.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-bathroom-window",
+      "name": "Plane9 Bathroom Window",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-bayer-8-matrix-dithering-bw",
+      "name": "Plane9 Bayer 8 Matrix Dithering BW",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-bayer-matrix-dithering-color",
+      "name": "Plane9 Bayer Matrix Dithering Color",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-blackandwhite",
+      "name": "Plane9 BlackAndWhite",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-blinds",
+      "name": "Plane9 Blinds",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Blinds.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
       "id": "plane9-blob-fade",
       "name": "Plane9 Blob Fade",
       "kind": "point10",
@@ -18739,6 +18911,68 @@
       ],
       "source": null,
       "preview": null
+    },
+    {
+      "id": "plane9-block",
+      "name": "Plane9 Block",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Block.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-blocks",
+      "name": "Plane9 Blocks",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
     },
     {
       "id": "plane9-boxy",
@@ -18903,6 +19137,190 @@
       ],
       "source": null,
       "preview": null
+    },
+    {
+      "id": "plane9-circle-reveal",
+      "name": "Plane9 Circle Reveal",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Circle Reveal.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-circle-stretch",
+      "name": "Plane9 Circle Stretch",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Circle Stretch.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-clock-swipe",
+      "name": "Plane9 Clock Swipe",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Clock Swipe.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-close-horizontal",
+      "name": "Plane9 Close Horizontal",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Close Horizontal.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
     },
     {
       "id": "plane9-cloud-flight",
@@ -19201,6 +19619,26 @@
       "preview": null
     },
     {
+      "id": "plane9-color-distort",
+      "name": "Plane9 Color Distort",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
       "id": "plane9-colors",
       "name": "Plane9 Colors",
       "kind": "point10",
@@ -19265,6 +19703,258 @@
       ],
       "source": null,
       "preview": null
+    },
+    {
+      "id": "plane9-contrast",
+      "name": "Plane9 Contrast",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-crossfade",
+      "name": "Plane9 Crossfade",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Crossfade.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-crosshatching",
+      "name": "Plane9 Crosshatching",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-crt",
+      "name": "Plane9 Crt",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-crumble",
+      "name": "Plane9 Crumble",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Crumble.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-cubic-lens-distortion",
+      "name": "Plane9 Cubic Lens Distortion",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-disolve",
+      "name": "Plane9 Disolve",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Disolve.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-dropfade",
+      "name": "Plane9 Dropfade",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Dropfade.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
     },
     {
       "id": "plane9-earth",
@@ -19373,6 +20063,132 @@
       "preview": null
     },
     {
+      "id": "plane9-embos",
+      "name": "Plane9 Embos",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-embos-merge",
+      "name": "Plane9 Embos Merge",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-erode",
+      "name": "Plane9 Erode",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Erode.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-film-grain",
+      "name": "Plane9 Film Grain",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-fractured",
+      "name": "Plane9 Fractured",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-fuzzy-pixels",
+      "name": "Plane9 Fuzzy Pixels",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
       "id": "plane9-gradient",
       "name": "Plane9 Gradient",
       "kind": "point10",
@@ -19437,6 +20253,54 @@
       ],
       "source": null,
       "preview": null
+    },
+    {
+      "id": "plane9-gray",
+      "name": "Plane9 Gray",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-gray-stripes",
+      "name": "Plane9 Gray Stripes",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-hexagons",
+      "name": "Plane9 Hexagons",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
     },
     {
       "id": "plane9-hollow-cube",
@@ -19537,6 +20401,38 @@
       "preview": null
     },
     {
+      "id": "plane9-invert",
+      "name": "Plane9 Invert",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-invert-gray",
+      "name": "Plane9 Invert Gray",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
       "id": "plane9-it-is-coming-for-you",
       "name": "Plane9 It Is Coming For You",
       "kind": "point10",
@@ -19627,6 +20523,38 @@
       "preview": null
     },
     {
+      "id": "plane9-led-display",
+      "name": "Plane9 Led Display",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-led-display-curved",
+      "name": "Plane9 Led Display Curved",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
       "id": "plane9-light-tunnel",
       "name": "Plane9 Light Tunnel",
       "kind": "point10",
@@ -19715,6 +20643,114 @@
       ],
       "source": null,
       "preview": null
+    },
+    {
+      "id": "plane9-limit-hue",
+      "name": "Plane9 Limit Hue",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-line-reveal",
+      "name": "Plane9 Line Reveal",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Line Reveal.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-lines",
+      "name": "Plane9 Lines",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Lines.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
     },
     {
       "id": "plane9-magic-smoke-box",
@@ -19997,6 +21033,252 @@
       "preview": null
     },
     {
+      "id": "plane9-pixelate",
+      "name": "Plane9 Pixelate",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Pixelate.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-posterization",
+      "name": "Plane9 Posterization",
+      "kind": "shader",
+      "category": "effects",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [],
+      "props": [],
+      "source": null,
+      "preview": {
+        "kind": "shader",
+        "sharedUniformBytes": 160
+      }
+    },
+    {
+      "id": "plane9-pour",
+      "name": "Plane9 Pour",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Pour.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-radial-blur",
+      "name": "Plane9 Radial Blur",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Radial Blur.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-random-circle",
+      "name": "Plane9 Random Circle",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Random Circle.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-ripple",
+      "name": "Plane9 Ripple",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Ripple.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
       "id": "plane9-rorschach",
       "name": "Plane9 Rorschach",
       "kind": "point10",
@@ -20061,6 +21343,190 @@
       ],
       "source": null,
       "preview": null
+    },
+    {
+      "id": "plane9-shockwave",
+      "name": "Plane9 Shockwave",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Shockwave.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-shrink",
+      "name": "Plane9 Shrink",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Shrink.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-slidein",
+      "name": "Plane9 SlideIn",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 SlideIn.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-smooth-swirl-grid",
+      "name": "Plane9 Smooth Swirl Grid",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Smooth Swirl Grid.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
     },
     {
       "id": "plane9-sound-cube",
@@ -20407,6 +21873,98 @@
       "preview": null
     },
     {
+      "id": "plane9-swirl",
+      "name": "Plane9 Swirl",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Swirl.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-swirl-grid",
+      "name": "Plane9 Swirl Grid",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Swirl Grid.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
       "id": "plane9-the-cave",
       "name": "Plane9 The Cave",
       "kind": "point10",
@@ -20693,6 +22251,98 @@
       ],
       "source": null,
       "preview": null
+    },
+    {
+      "id": "plane9-water",
+      "name": "Plane9 Water",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Water.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "plane9-wave",
+      "name": "Plane9 Wave",
+      "kind": "isf",
+      "category": "transition",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": null,
+      "description": "Transition imported from Plane9",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "startImage",
+          "label": "startImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "endImage",
+          "label": "endImage",
+          "type": "texture",
+          "default": null,
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "progress",
+          "label": "progress",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0,
+          "step": 0.01
+        }
+      ],
+      "source": "resources/isf/Plane9 Wave.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
     },
     {
       "id": "plane9-wormhole",
@@ -21216,22 +22866,6 @@
       "passes": 1
     },
     {
-      "id": "point10-3d-blocks",
-      "name": "Point10 3d Blocks",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
       "id": "point10-around-plus",
       "name": "Point10 Around Plus",
       "kind": "point10",
@@ -21542,224 +23176,6 @@
       "preview": null
     },
     {
-      "id": "point10-banded-swirl",
-      "name": "Point10 Banded Swirl",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Banded Swirl.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-bathroom-window",
-      "name": "Point10 Bathroom Window",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-bayer-8-matrix-dithering-bw",
-      "name": "Point10 Bayer 8 Matrix Dithering BW",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-bayer-matrix-dithering-color",
-      "name": "Point10 Bayer Matrix Dithering Color",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-blackandwhite",
-      "name": "Point10 BlackAndWhite",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-blinds",
-      "name": "Point10 Blinds",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Blinds.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-block",
-      "name": "Point10 Block",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Block.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-blocks",
-      "name": "Point10 Blocks",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
       "id": "point10-bloom",
       "name": "Point10 Bloom",
       "kind": "shader",
@@ -21956,370 +23372,6 @@
       "preview": null
     },
     {
-      "id": "point10-circle-reveal",
-      "name": "Point10 Circle Reveal",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Circle Reveal.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-circle-stretch",
-      "name": "Point10 Circle Stretch",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Circle Stretch.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-clock-swipe",
-      "name": "Point10 Clock Swipe",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Clock Swipe.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-close-horizontal",
-      "name": "Point10 Close Horizontal",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Close Horizontal.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-color-distort",
-      "name": "Point10 Color Distort",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-contrast",
-      "name": "Point10 Contrast",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-crossfade",
-      "name": "Point10 Crossfade",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Crossfade.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-crosshatching",
-      "name": "Point10 Crosshatching",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-crt",
-      "name": "Point10 Crt",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-crumble",
-      "name": "Point10 Crumble",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Crumble.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-cubic-lens-distortion",
-      "name": "Point10 Cubic Lens Distortion",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
       "id": "point10-digital-glitch",
       "name": "Point10 Digital Glitch",
       "kind": "shader",
@@ -22338,98 +23390,6 @@
         "kind": "shader",
         "sharedUniformBytes": 160
       }
-    },
-    {
-      "id": "point10-disolve",
-      "name": "Point10 Disolve",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Disolve.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-dropfade",
-      "name": "Point10 Dropfade",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Dropfade.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
     },
     {
       "id": "point10-dvd-room",
@@ -22552,180 +23512,6 @@
       ],
       "source": null,
       "preview": null
-    },
-    {
-      "id": "point10-embos",
-      "name": "Point10 Embos",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-embos-merge",
-      "name": "Point10 Embos Merge",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-erode",
-      "name": "Point10 Erode",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Erode.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-film-grain",
-      "name": "Point10 Film Grain",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-fractured",
-      "name": "Point10 Fractured",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-fuzzy-pixels",
-      "name": "Point10 Fuzzy Pixels",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-gray",
-      "name": "Point10 Gray",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-gray-stripes",
-      "name": "Point10 Gray Stripes",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-hexagons",
-      "name": "Point10 Hexagons",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
     },
     {
       "id": "point10-hollow-cube-blur",
@@ -23022,38 +23808,6 @@
       "preview": null
     },
     {
-      "id": "point10-invert",
-      "name": "Point10 Invert",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-invert-gray",
-      "name": "Point10 Invert Gray",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
       "id": "point10-latent-backrooms",
       "name": "Point10 Latent Backrooms",
       "kind": "point10",
@@ -23150,146 +23904,6 @@
       ],
       "source": null,
       "preview": null
-    },
-    {
-      "id": "point10-led-display",
-      "name": "Point10 Led Display",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-led-display-curved",
-      "name": "Point10 Led Display Curved",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-limit-hue",
-      "name": "Point10 Limit Hue",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-line-reveal",
-      "name": "Point10 Line Reveal",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Line Reveal.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-lines",
-      "name": "Point10 Lines",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Lines.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
     },
     {
       "id": "point10-mycelium",
@@ -23472,52 +24086,6 @@
       "preview": null
     },
     {
-      "id": "point10-pixelate",
-      "name": "Point10 Pixelate",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Pixelate.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
       "id": "point10-pixelation",
       "name": "Point10 Pixelation",
       "kind": "shader",
@@ -23532,160 +24100,6 @@
         "kind": "shader",
         "sharedUniformBytes": 160
       }
-    },
-    {
-      "id": "point10-posterization",
-      "name": "Point10 Posterization",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "point10-pour",
-      "name": "Point10 Pour",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Pour.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-radial-blur",
-      "name": "Point10 Radial Blur",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Radial Blur.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-random-circle",
-      "name": "Point10 Random Circle",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Random Circle.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
     },
     {
       "id": "point10-rgb-shift",
@@ -23706,52 +24120,6 @@
         "kind": "shader",
         "sharedUniformBytes": 160
       }
-    },
-    {
-      "id": "point10-ripple",
-      "name": "Point10 Ripple",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Ripple.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
     },
     {
       "id": "point10-rolling-fire",
@@ -23876,144 +24244,6 @@
       "preview": null
     },
     {
-      "id": "point10-shockwave",
-      "name": "Point10 Shockwave",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Shockwave.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-shrink",
-      "name": "Point10 Shrink",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Shrink.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-slidein",
-      "name": "Point10 SlideIn",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 SlideIn.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
       "id": "point10-smoke-room",
       "name": "Point10 Smoke Room",
       "kind": "point10",
@@ -24136,52 +24366,6 @@
       "preview": null
     },
     {
-      "id": "point10-smooth-swirl-grid",
-      "name": "Point10 Smooth Swirl Grid",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Smooth Swirl Grid.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
       "id": "point10-spiral-particles",
       "name": "Point10 Spiral Particles",
       "kind": "point10",
@@ -24270,98 +24454,6 @@
       ],
       "source": null,
       "preview": null
-    },
-    {
-      "id": "point10-swirl",
-      "name": "Point10 Swirl",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Swirl.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
-      "id": "point10-swirl-grid",
-      "name": "Point10 Swirl Grid",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Swirl Grid.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
     },
     {
       "id": "point10-ultra-hdr",
@@ -24470,52 +24562,6 @@
       }
     },
     {
-      "id": "point10-water",
-      "name": "Point10 Water",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Water.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
-    },
-    {
       "id": "point10-water-ripple",
       "name": "Point10 Water Ripple",
       "kind": "point10",
@@ -24612,52 +24658,6 @@
       ],
       "source": null,
       "preview": null
-    },
-    {
-      "id": "point10-wave",
-      "name": "Point10 Wave",
-      "kind": "isf",
-      "category": "transition",
-      "author": "Point10",
-      "version": null,
-      "description": "Transition imported from Point10",
-      "audioFeatures": [],
-      "props": [
-        {
-          "name": "startImage",
-          "label": "startImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "endImage",
-          "label": "endImage",
-          "type": "texture",
-          "default": null,
-          "min": null,
-          "max": null,
-          "step": null
-        },
-        {
-          "name": "progress",
-          "label": "progress",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0,
-          "step": 0.01
-        }
-      ],
-      "source": "resources/isf/Point10 Wave.fs",
-      "preview": {
-        "kind": "isf",
-        "simplified": false,
-        "passes": 1
-      },
-      "passes": 1
     },
     {
       "id": "point10-waveform",

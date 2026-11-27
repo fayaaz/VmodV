@@ -1250,7 +1250,11 @@ impl ModuleRegistry {
     }
 
     /// Look up a shader module by its registration name (`$moduleName`).
+    ///
+    /// Historical `Point10 <Name>` aliases of the renamed Plane9 shader effects
+    /// resolve to their canonical module.
     pub fn shader_module(&self, name: &str) -> Option<&ShaderModule> {
+        let name = modv_renderers::point10::resolve_effect_name(name);
         self.shader.iter().find(|module| module.name == name)
     }
 
@@ -1262,15 +1266,19 @@ impl ModuleRegistry {
     /// Look up a Point10 scene definition by its wrapper module name
     /// (`"Point10 Chromatic Wave"` or `"Plane9 Light Tunnel"`).
     ///
-    /// Historical `Point10 <Name>` aliases of the twelve Plane9 ports resolve
-    /// to the canonical `Plane9 <Name>` definition.
+    /// Historical `Point10 <Name>` aliases of the renamed Plane9 scenes
+    /// resolve to the canonical `Plane9 <Name>` definition.
     pub fn point10_definition(&self, name: &str) -> Option<&Point10Definition> {
         let name = modv_renderers::point10::resolve_scene_name(name);
         self.point10.iter().find(|scene| scene.meta.name == name)
     }
 
     /// Look up an ISF definition by the shader's file stem (`"Bloom"`).
+    ///
+    /// Historical `Point10 <Name>` aliases of the renamed Plane9 transitions
+    /// resolve to their canonical definition.
     pub fn isf_definition(&self, name: &str) -> Option<&IsfDefinition> {
+        let name = modv_renderers::point10::resolve_effect_name(name);
         self.isf.iter().find(|definition| definition.name == name)
     }
 
@@ -1321,11 +1329,12 @@ impl ModuleRegistry {
 
     /// Which renderer owns `name`, or `None` when it is not registered.
     ///
-    /// Historical `Point10 <Name>` aliases of the twelve renamed Plane9 ports
-    /// report the canonical scene's kind.
+    /// Historical `Point10 <Name>` aliases of the renamed Plane9 scenes and
+    /// effects report the canonical definition's kind.
     pub fn kind(&self, name: &str) -> Option<ModuleKind> {
         self.kind_index().get(name).copied().or_else(|| {
             modv_renderers::point10::canonical_scene_name(name)
+                .or_else(|| modv_renderers::point10::canonical_effect_name(name))
                 .and_then(|canonical| self.kind_index().get(canonical).copied())
         })
     }
@@ -3835,8 +3844,20 @@ void main() { gl_FragColor = vec4(1.0); }
             .map(|name| modv_renderers::point10::resolve_scene_name(&name).to_string())
             .collect();
         assert_same_module_names("Point10", point10, historical_point10);
-        assert_same_module_names("shader", shader, manifest_names(&manifest, "shader"));
-        assert_same_module_names("ISF", isf, manifest_names(&manifest, "isf"));
+        // The shader and ISF buckets were renamed to `Plane9 <Name>`; the
+        // historical manifest keeps the old `Point10 <Name>` strings, so
+        // alias-normalise them before comparing. The manifest is never
+        // rewritten.
+        let historical_shader: Vec<String> = manifest_names(&manifest, "shader")
+            .into_iter()
+            .map(|name| modv_renderers::point10::resolve_effect_name(&name).to_string())
+            .collect();
+        assert_same_module_names("shader", shader, historical_shader);
+        let historical_isf: Vec<String> = manifest_names(&manifest, "isf")
+            .into_iter()
+            .map(|name| modv_renderers::point10::resolve_effect_name(&name).to_string())
+            .collect();
+        assert_same_module_names("ISF", isf, historical_isf);
         assert_same_module_names("MilkDrop", milkdrop, manifest_names(&manifest, "milkdrop"));
 
         let milkdrop_count = manifest["counts"]["milkdrop"]

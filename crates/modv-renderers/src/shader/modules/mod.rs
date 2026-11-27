@@ -6,13 +6,13 @@
 //! | Flavour | Count | Modules |
 //! |---------|-------|---------|
 //! | direct (`gl_FragColor` → own `fs_main`) | 5 | Bands, Fisheye, MattiasCRT, Plasma, Wobble |
-//! | mainImage shim (`mainImage` + wrapper) | 32 | Chromatic Abberation, 31 × Point10 |
+//! | mainImage shim (`mainImage` + wrapper) | 32 | Chromatic Abberation, 25 × Plane9, 5 × Point10 |
 //!
 //! # Registration order
 //!
 //! [`all_modules`] preserves the JS registration order: the six
 //! single-effect modules first (in `modules/` directory listing order),
-//! then the Point10 effects in the order they appear in
+//! then the 25 Plane9 and five Point10 effects in the order they appear in
 //! `Point10Effects.js`. Gallery order changes only deliberately.
 //!
 //! # Prop-buffer contract
@@ -42,11 +42,12 @@
 //!
 //! `audio = true` means the module requests meyda features — ported from
 //! `meta.audioFeatures`. Bands requests `["bass", "mid", "treble"]` and so
-//! do the four audio Point10 effects (Contrast, Color Distort, RGB Shift,
-//! Digital Glitch). Note this diverges from the shorthand "audio=true only
-//! for the four Point10 effects" note in the work order — Bands' JS meta
-//! unmistakably requests audio, and dropping it would leave the rings
-//! static. `audio_features` carries the exact list for the engine.
+//! do Contrast, Color Distort, RGB Shift and Digital Glitch (the two renamed
+//! Plane9 effects now report their canonical names). Note this diverges from
+//! the shorthand "audio=true only for the audio effects" note in the work
+//! order — Bands' JS meta unmistakably requests audio, and dropping it would
+//! leave the rings static. `audio_features` carries the exact list for the
+//! engine.
 //!
 //! # Chromatic Abberation keeps the JS spelling
 //!
@@ -78,7 +79,7 @@ mod wobble;
 /// the engine side.
 pub struct ShaderModule {
     /// Gallery registration name, as it appears in presets and the Gallery
-    /// (e.g. `Bands`, `Point10 Gray`).
+    /// (e.g. `Bands`, `Plane9 Gray`).
     pub name: Cow<'static, str>,
     /// Final WGSL fragment source — shared prelude already expanded, the
     /// mainImage wrapper already applied for mainImage-flavour modules.
@@ -205,26 +206,49 @@ mod tests {
 
     #[test]
     fn point10_modules_consume_builtins_only() {
-        // The 30 Point10 effects request no props, and all of them opt into
-        // preview-with-output, like the JS meta.
+        // The 25 audited Plane9 effects and the five Point10-only effects
+        // request no props, all opt into preview-with-output, and carry the
+        // per-name provenance author.
         let modules = all_modules();
-        let point10 = modules
+        let effects: Vec<_> = modules
             .iter()
-            .filter(|module| module.name.starts_with("Point10 "));
-        assert_eq!(point10.clone().count(), 30);
-        for module in point10 {
+            .filter(|module| {
+                module.name.starts_with("Point10 ") || module.name.starts_with("Plane9 ")
+            })
+            .collect();
+        assert_eq!(effects.len(), 30);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|module| module.name.starts_with("Plane9 "))
+                .count(),
+            25
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|module| module.name.starts_with("Point10 "))
+                .count(),
+            5
+        );
+        for module in effects {
             assert!(
                 module.props.is_empty(),
-                "Point10 module {:?} must not declare props",
+                "effect module {:?} must not declare props",
                 module.name
             );
             assert!(
                 module.preview_with_output,
-                "Point10 module {:?} must set previewWithOutput",
+                "effect module {:?} must set previewWithOutput",
                 module.name
             );
             assert_eq!(module.category, None);
-            assert_eq!(module.meta_author, "Point10");
+            let expected_author = if module.name.starts_with("Plane9 ") {
+                "Plane9 (Joakim Dahl)"
+            } else {
+                "Point10"
+            };
+            assert_eq!(module.meta_author, expected_author);
             assert_eq!(module.meta_version, "1.0.0");
         }
     }
@@ -248,8 +272,8 @@ mod tests {
         for module in &modules {
             let expected_features: &[&str] = match module.name.as_ref() {
                 "Bands"
-                | "Point10 Contrast"
-                | "Point10 Color Distort"
+                | "Plane9 Contrast"
+                | "Plane9 Color Distort"
                 | "Point10 RGB Shift"
                 | "Point10 Digital Glitch" => &["bass", "mid", "treble"],
                 _ => &[],

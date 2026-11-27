@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Circle Reveal",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,12 +81,18 @@ float _bump(float value, float start, float end, float width) {
 
 
 
+
 void main()
 {
-	float n = _rand(fract(isf_FragNormCoord + vec2(0.5)));
-	if(n > smoothstep(0.0, 1.0, progress))
-		gl_FragColor = texture2D(startImage, isf_FragNormCoord);
-	else 
-		gl_FragColor = texture2D(endImage, isf_FragNormCoord);
+	float fuzzyAmount = (_noise(isf_FragNormCoord*100.0)*0.5+0.5)*0.05;
+	float radius = -fuzzyAmount + progress * (0.70710678 + 2.0 * fuzzyAmount);
+	float fromCenter = length(isf_FragNormCoord - vec2(0.5,0.5));
+	float distFromCircle = fromCenter - radius;
+	
+	vec4 c1 = texture2D(startImage, isf_FragNormCoord); 
+	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
+	
+	float p = saturate((distFromCircle + fuzzyAmount) / (2.0 * fuzzyAmount));
+	gl_FragColor = mix(c2, c1, p);
 }
 

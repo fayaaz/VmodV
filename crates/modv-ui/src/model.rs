@@ -2000,8 +2000,8 @@ impl EngineSnapshot {
 
     /// The module definition with `name`.
     ///
-    /// Historical `Point10 <Name>` references to one of the twelve renamed
-    /// Plane9 ports resolve to the canonical `Plane9 <Name>` entry. The
+    /// Historical `Point10 <Name>` references to a renamed Plane9 scene or
+    /// effect resolve to the canonical `Plane9 <Name>` entry. The
     /// registry only holds the canonical names (the renderers' alias table in
     /// `point10::resolve_scene_name` lists the same aliases), so saved Scenes
     /// and presets keep loading without a second alias tile.
@@ -2438,8 +2438,9 @@ pub struct ModuleMetaView {
 /// The split literals render the same text as single literals would.
 pub fn module_license(meta: &ModuleMetaView) -> &'static str {
     // Point10 scenes are registered under their full `Point10 `- or `Plane9 `-
-    // prefixed names (`Point10 <Name>` stays a load alias for the twelve Plane9
-    // ports). Match the suffix once and return directly: every registered scene
+    // prefixed names (`Point10 <Name>` stays a load alias for the renamed
+    // Plane9 scenes and effects). Match the suffix once and return directly:
+    // every registered scene
     // has an explicit provenance, so none may fall through to the Shadertoy
     // default.
     if let Some(name) = meta
@@ -2480,6 +2481,49 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             | "Color Blob"
             | "Magic Smoke Box"
             | "Stargate Event Horizon" => concat!(
+                "CC BY-NC-",
+                "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+            ),
+            // Plane9 shader effects and ISF transitions audited as Plane9
+            // originals (previously registered under the `Point10 ` prefix).
+            // The versions come from the ported sources / notices table.
+            "Gray" | "Invert" | "Posterization" | "Film Grain" | "BlackAndWhite"
+            | "Gray Stripes" | "Invert Gray" | "Crosshatching" | "Blocks" | "Fuzzy Pixels"
+            | "Fractured" | "Bathroom Window" | "Color Distort" | "Crt" | "Hexagons"
+            | "Led Display" | "Led Display Curved" | "Limit Hue" | "Embos Merge" | "Block"
+            | "Clock Swipe" | "Close Horizontal" | "Wave" => concat!(
+                "CC BY-NC-",
+                "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+            ),
+            "3d Blocks"
+            | "Bayer 8 Matrix Dithering BW"
+            | "Bayer Matrix Dithering Color"
+            | "Contrast"
+            | "Cubic Lens Distortion"
+            | "Embos"
+            | "Banded Swirl"
+            | "Blinds"
+            | "Circle Reveal"
+            | "Circle Stretch"
+            | "Crossfade"
+            | "Crumble"
+            | "Disolve"
+            | "Dropfade"
+            | "Erode"
+            | "Line Reveal"
+            | "Lines"
+            | "Pixelate"
+            | "Pour"
+            | "Radial Blur"
+            | "Random Circle"
+            | "Ripple"
+            | "Shockwave"
+            | "Shrink"
+            | "SlideIn"
+            | "Smooth Swirl Grid"
+            | "Swirl"
+            | "Swirl Grid"
+            | "Water" => concat!(
                 "CC BY-NC-",
                 "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),

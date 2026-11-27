@@ -200,15 +200,96 @@ pub const PLANE9_SCENE_NAMES: &[&str] = &[
 ];
 
 /// The prefix of the scenes that kept their `Point10 ` registry name, and of
-/// the historical aliases of the twelve renamed Plane9 ports (the ten later
-/// imports are accepted under this prefix too).
+/// the historical aliases of the renamed Plane9 ports and effects (which now
+/// register under [`PLANE9_PREFIX`]).
 pub const POINT10_PREFIX: &str = "Point10 ";
 
 /// The prefix of the renamed Plane9 ports.
 pub const PLANE9_PREFIX: &str = "Plane9 ";
 
+/// The fifty-two Plane9 (Joakim Dahl) shader effects and ISF transitions that
+/// were audited as Plane9 originals and moved from the historical `Point10 `
+/// prefix to their canonical `Plane9 <Name>` registry names.
+///
+/// Saved Scenes and presets still carry the old strings, so the legacy
+/// `Point10 <Name>` aliases stay resolvable through
+/// [`canonical_effect_name`] — this list is the single source of truth for both
+/// directions and for the Gallery's `plane9` kind. The five effects without a
+/// Plane9 preset (`Pixelation`, `RGB Shift`, `Digital Glitch`, `Vignette`,
+/// `Bloom`) are deliberately absent and keep their `Point10 ` names.
+pub const PLANE9_EFFECT_NAMES: &[&str] = &[
+    // Shader effects (`shader/modules/point10_effects.rs`).
+    "Plane9 Gray",
+    "Plane9 Invert",
+    "Plane9 Posterization",
+    "Plane9 Film Grain",
+    "Plane9 BlackAndWhite",
+    "Plane9 Gray Stripes",
+    "Plane9 Invert Gray",
+    "Plane9 Crosshatching",
+    "Plane9 Blocks",
+    "Plane9 3d Blocks",
+    "Plane9 Bayer 8 Matrix Dithering BW",
+    "Plane9 Bayer Matrix Dithering Color",
+    "Plane9 Fuzzy Pixels",
+    "Plane9 Fractured",
+    "Plane9 Bathroom Window",
+    "Plane9 Contrast",
+    "Plane9 Color Distort",
+    "Plane9 Crt",
+    "Plane9 Cubic Lens Distortion",
+    "Plane9 Hexagons",
+    "Plane9 Led Display",
+    "Plane9 Led Display Curved",
+    "Plane9 Limit Hue",
+    "Plane9 Embos Merge",
+    "Plane9 Embos",
+    // ISF transitions (`resources/isf/Plane9 *.fs`).
+    "Plane9 Banded Swirl",
+    "Plane9 Blinds",
+    "Plane9 Block",
+    "Plane9 Circle Reveal",
+    "Plane9 Circle Stretch",
+    "Plane9 Clock Swipe",
+    "Plane9 Close Horizontal",
+    "Plane9 Crossfade",
+    "Plane9 Crumble",
+    "Plane9 Disolve",
+    "Plane9 Dropfade",
+    "Plane9 Erode",
+    "Plane9 Line Reveal",
+    "Plane9 Lines",
+    "Plane9 Pixelate",
+    "Plane9 Pour",
+    "Plane9 Radial Blur",
+    "Plane9 Random Circle",
+    "Plane9 Ripple",
+    "Plane9 Shockwave",
+    "Plane9 Shrink",
+    "Plane9 SlideIn",
+    "Plane9 Smooth Swirl Grid",
+    "Plane9 Swirl",
+    "Plane9 Swirl Grid",
+    "Plane9 Water",
+    "Plane9 Wave",
+];
+
 /// Author credit for the twenty-nine Plane9 preset ports.
 pub const PLANE9_AUTHOR: &str = "Plane9 (Joakim Dahl)";
+
+/// Resolve `name` against one canonical roster, rewriting the legacy
+/// `Point10 <Name>` prefix to `Plane9 <Name>`.
+///
+/// Both public resolvers share this walk so the scenes and effects tables
+/// cannot diverge in how aliases are matched.
+fn canonical_alias_in<'a>(name: &str, canonical_names: &'a [&'a str]) -> Option<&'a str> {
+    let suffix = name.strip_prefix(POINT10_PREFIX)?;
+    canonical_names.iter().copied().find(|canonical| {
+        canonical
+            .strip_prefix(PLANE9_PREFIX)
+            .is_some_and(|canonical_suffix| canonical_suffix == suffix)
+    })
+}
 
 /// Resolve a historical `Point10 <Name>` registry reference to its canonical
 /// `Plane9 <Name>` name.
@@ -216,12 +297,7 @@ pub const PLANE9_AUTHOR: &str = "Plane9 (Joakim Dahl)";
 /// Returns `None` when `name` is not one of the Plane9 roster (either already
 /// canonical, or a Point10 scene that kept its name).
 pub fn canonical_scene_name(name: &str) -> Option<&'static str> {
-    let suffix = name.strip_prefix(POINT10_PREFIX)?;
-    PLANE9_SCENE_NAMES.iter().copied().find(|canonical| {
-        canonical
-            .strip_prefix(PLANE9_PREFIX)
-            .is_some_and(|canonical_suffix| canonical_suffix == suffix)
-    })
+    canonical_alias_in(name, PLANE9_SCENE_NAMES)
 }
 
 /// The canonical registry name for `name`, resolving legacy aliases.
@@ -231,15 +307,33 @@ pub fn resolve_scene_name(name: &str) -> &str {
     canonical_scene_name(name).unwrap_or(name)
 }
 
+/// Resolve a historical `Point10 <Name>` reference to a renamed Plane9 shader
+/// effect or ISF transition, returning its canonical `Plane9 <Name>` name.
+///
+/// Returns `None` when `name` is not one of the audited effects (including the
+/// five effects that kept their `Point10 ` names).
+pub fn canonical_effect_name(name: &str) -> Option<&'static str> {
+    canonical_alias_in(name, PLANE9_EFFECT_NAMES)
+}
+
+/// The canonical registry name for a shader effect or ISF transition,
+/// resolving legacy aliases.
+///
+/// Non-aliases are returned unchanged.
+pub fn resolve_effect_name(name: &str) -> &str {
+    canonical_effect_name(name).unwrap_or(name)
+}
+
 /// The authoritative Gallery renderer kind for a registry module named `name`.
 ///
-/// The twenty-nine Plane9 preset ports share the Point10 runtime renderer but
-/// are surfaced to the Gallery as their own kind (`type:plane9`); every other
-/// module keeps `default_kind` (its engine renderer kind). Using this
-/// helper in both snapshot builders keeps the roster in one place so the
-/// desktop and wasm Galleries cannot diverge.
+/// The twenty-nine Plane9 preset ports and the fifty-two renamed Plane9
+/// effects share the Point10 runtime renderer but are surfaced to the Gallery
+/// as their own kind (`type:plane9`); every other module keeps `default_kind`
+/// (its engine renderer kind). Using this helper in both snapshot builders
+/// keeps the roster in one place so the desktop and wasm Galleries cannot
+/// diverge.
 pub fn gallery_kind(name: &str, default_kind: &str) -> String {
-    if PLANE9_SCENE_NAMES.contains(&name) {
+    if PLANE9_SCENE_NAMES.contains(&name) || PLANE9_EFFECT_NAMES.contains(&name) {
         "plane9".to_string()
     } else {
         default_kind.to_string()
@@ -249,13 +343,16 @@ pub fn gallery_kind(name: &str, default_kind: &str) -> String {
 /// Rewrite every legacy `Point10 <Name>` alias string in a JSON document to its
 /// canonical `Plane9 <Name>` name.
 ///
-/// Walks arrays and objects so nested Scene cells, Groups and module records
-/// are migrated; every other value is left untouched. Idempotent: canonical
-/// names never match the legacy prefix.
+/// Covers both the twenty-nine Plane9 preset scenes and the fifty-two audited
+/// Plane9 shader effects/ISF transitions. Walks arrays and objects so nested
+/// Scene cells, Groups and module records are migrated; every other value is
+/// left untouched. Idempotent: canonical names never match the legacy prefix.
 pub fn rename_legacy_scene_names(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(text) => {
-            if let Some(canonical) = canonical_scene_name(text) {
+            if let Some(canonical) =
+                canonical_scene_name(text).or_else(|| canonical_effect_name(text))
+            {
                 *text = canonical.to_string();
             }
         }
@@ -451,8 +548,8 @@ pub struct SceneMeta {
     /// Display + registration name, e.g. `"Point10 Particle Field"` or
     /// `"Plane9 Light Tunnel"`.
     pub name: &'static str,
-    /// Module author: `"Point10"`, or [`PLANE9_AUTHOR`] for the twelve Plane9
-    /// preset ports.
+    /// Module author: `"Point10"`, or [`PLANE9_AUTHOR`] for the twenty-nine
+    /// Plane9 preset ports.
     pub author: &'static str,
     /// Module version (`"1.0.0"`).
     pub version: &'static str,
@@ -485,7 +582,7 @@ impl SceneMeta {
         }
     }
 
-    /// Meta for one of the twelve Plane9 (Joakim Dahl) preset ports.
+    /// Meta for one of the twenty-nine Plane9 (Joakim Dahl) preset ports.
     pub const fn for_plane9_scene(name: &'static str, category: &'static str) -> Self {
         Self {
             name,

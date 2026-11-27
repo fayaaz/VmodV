@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Crossfade",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -84,12 +85,11 @@ float _bump(float value, float start, float end, float width) {
 void main()
 {
 	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
-	float v = _turbulencefast(vec3(isf_FragNormCoord*50.0, progress*0.5), 3.0);
-	float t = pow(progress,20.0);
-	float x = _bump(p.y, -t, t, v*smoothstep(0.0, 0.4, progress)*0.1);
+//	float r = length(p);
+//	float a = atan(p.y,p.x);
+//	float v = _turbulencefast(vec3(isf_FragNormCoord*2.0, progress*0.5), 5.0);
 	vec4 c1 = texture2D(startImage, isf_FragNormCoord);
 	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-	c2 = mix(c2, vec4(1.0,1.0,1.0,1.0), 1.0-pow(t,3.0));
-	gl_FragColor = mix(c1,c2,x);
+	gl_FragColor = mix(c1,c2,progress);
 }
 

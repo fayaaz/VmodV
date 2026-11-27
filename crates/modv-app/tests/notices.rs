@@ -2145,3 +2145,683 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         failures.join("\n")
     );
 }
+
+/// The audited Plane9 shader effects and ISF transitions keep their historical
+/// `Point10 <Name>` references loadable while registering under canonical
+/// `Plane9 <Name>` names. This cross-crate contract covers the registry,
+/// metadata, aliases, licences, notices, corpus baseline and generated catalogue
+/// without requiring a GPU.
+#[test]
+fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalogue() {
+    const SHADER_EFFECTS: &[(&str, &str)] = &[
+        ("Gray", "4.0"),
+        ("Invert", "4.0"),
+        ("Posterization", "4.0"),
+        ("Film Grain", "4.0"),
+        ("BlackAndWhite", "4.0"),
+        ("Gray Stripes", "4.0"),
+        ("Invert Gray", "4.0"),
+        ("Crosshatching", "4.0"),
+        ("Blocks", "4.0"),
+        ("3d Blocks", "3.0"),
+        ("Bayer 8 Matrix Dithering BW", "3.0"),
+        ("Bayer Matrix Dithering Color", "3.0"),
+        ("Fuzzy Pixels", "4.0"),
+        ("Fractured", "4.0"),
+        ("Bathroom Window", "4.0"),
+        ("Contrast", "3.0"),
+        ("Color Distort", "4.0"),
+        ("Crt", "4.0"),
+        ("Cubic Lens Distortion", "3.0"),
+        ("Hexagons", "4.0"),
+        ("Led Display", "4.0"),
+        ("Led Display Curved", "4.0"),
+        ("Limit Hue", "4.0"),
+        ("Embos Merge", "4.0"),
+        ("Embos", "3.0"),
+    ];
+    const ISF_TRANSITIONS: &[(&str, &str)] = &[
+        ("Banded Swirl", "3.0"),
+        ("Blinds", "3.0"),
+        ("Block", "4.0"),
+        ("Circle Reveal", "3.0"),
+        ("Circle Stretch", "3.0"),
+        ("Clock Swipe", "4.0"),
+        ("Close Horizontal", "4.0"),
+        ("Crossfade", "3.0"),
+        ("Crumble", "3.0"),
+        ("Disolve", "3.0"),
+        ("Dropfade", "3.0"),
+        ("Erode", "3.0"),
+        ("Line Reveal", "3.0"),
+        ("Lines", "3.0"),
+        ("Pixelate", "3.0"),
+        ("Pour", "3.0"),
+        ("Radial Blur", "3.0"),
+        ("Random Circle", "3.0"),
+        ("Ripple", "3.0"),
+        ("Shockwave", "3.0"),
+        ("Shrink", "3.0"),
+        ("SlideIn", "3.0"),
+        ("Smooth Swirl Grid", "3.0"),
+        ("Swirl", "3.0"),
+        ("Swirl Grid", "3.0"),
+        ("Water", "3.0"),
+        ("Wave", "4.0"),
+    ];
+    const POINT10_SHADER_EFFECTS: &[&str] = &[
+        "Pixelation",
+        "RGB Shift",
+        "Digital Glitch",
+        "Vignette",
+        "Bloom",
+    ];
+
+    let mut failures = Vec::new();
+    macro_rules! check {
+        ($condition:expr, $($arg:tt)*) => {
+            if !$condition {
+                failures.push(format!($($arg)*));
+            }
+        };
+    }
+    let summarize = |problems: &[String]| {
+        let shown: Vec<&str> = problems.iter().take(3).map(String::as_str).collect();
+        if problems.len() > shown.len() {
+            format!("{shown:?}; +{} more", problems.len() - shown.len())
+        } else {
+            format!("{shown:?}")
+        }
+    };
+
+    let corpus = repo_root().join("resources/isf");
+    let registry = ModuleRegistry::build(Some(&corpus));
+    let renamed: Vec<(&str, &str)> = SHADER_EFFECTS
+        .iter()
+        .chain(ISF_TRANSITIONS.iter())
+        .copied()
+        .collect();
+    let legacy_names: Vec<String> = renamed
+        .iter()
+        .map(|(suffix, _)| format!("Point10 {suffix}"))
+        .collect();
+    let canonical_names: Vec<String> = renamed
+        .iter()
+        .map(|(suffix, _)| format!("Plane9 {suffix}"))
+        .collect();
+
+    // A — exactly the audited effects move prefix, with unchanged bucket sizes
+    // and no duplicate registration inside or across renderer buckets.
+    let expected_shader_plane9: BTreeSet<String> = SHADER_EFFECTS
+        .iter()
+        .map(|(suffix, _)| (*suffix).to_string())
+        .collect();
+    let actual_shader_plane9: BTreeSet<String> = registry
+        .shader_modules()
+        .iter()
+        .filter_map(|module| module.name.strip_prefix("Plane9 ").map(str::to_string))
+        .collect();
+    let expected_shader_point10: BTreeSet<String> = POINT10_SHADER_EFFECTS
+        .iter()
+        .map(|suffix| (*suffix).to_string())
+        .collect();
+    let actual_shader_point10: BTreeSet<String> = registry
+        .shader_modules()
+        .iter()
+        .filter_map(|module| module.name.strip_prefix("Point10 ").map(str::to_string))
+        .collect();
+    let expected_isf_plane9: BTreeSet<String> = ISF_TRANSITIONS
+        .iter()
+        .map(|(suffix, _)| (*suffix).to_string())
+        .collect();
+    let actual_isf_plane9: BTreeSet<String> = registry
+        .isf_definitions()
+        .iter()
+        .filter_map(|definition| definition.name.strip_prefix("Plane9 ").map(str::to_string))
+        .collect();
+    let actual_isf_point10: BTreeSet<String> = registry
+        .isf_definitions()
+        .iter()
+        .filter_map(|definition| definition.name.strip_prefix("Point10 ").map(str::to_string))
+        .collect();
+
+    check!(
+        registry.shader_modules().len() == 36,
+        "A: shader bucket has {} modules, expected 36",
+        registry.shader_modules().len()
+    );
+    check!(
+        registry.isf_definitions().len() == 402,
+        "A: ISF bucket has {} modules, expected 402",
+        registry.isf_definitions().len()
+    );
+    check!(
+        actual_shader_plane9 == expected_shader_plane9,
+        "A: shader Plane9 roster has {} missing and {} unexpected suffixes",
+        expected_shader_plane9
+            .difference(&actual_shader_plane9)
+            .count(),
+        actual_shader_plane9
+            .difference(&expected_shader_plane9)
+            .count()
+    );
+    check!(
+        actual_shader_point10 == expected_shader_point10,
+        "A: shader Point10 roster has {} missing and {} unexpected suffixes",
+        expected_shader_point10
+            .difference(&actual_shader_point10)
+            .count(),
+        actual_shader_point10
+            .difference(&expected_shader_point10)
+            .count()
+    );
+    check!(
+        actual_isf_plane9 == expected_isf_plane9,
+        "A: ISF Plane9 roster has {} missing and {} unexpected suffixes",
+        expected_isf_plane9.difference(&actual_isf_plane9).count(),
+        actual_isf_plane9.difference(&expected_isf_plane9).count()
+    );
+    check!(
+        actual_isf_point10.is_empty(),
+        "A: {} ISF transitions still use the Point10 prefix",
+        actual_isf_point10.len()
+    );
+
+    let mut registered_names: Vec<String> = registry
+        .shader_modules()
+        .iter()
+        .map(|module| module.name.to_string())
+        .collect();
+    registered_names.extend(
+        registry
+            .two_d_definitions()
+            .iter()
+            .map(|definition| definition.meta.name.to_string()),
+    );
+    registered_names.extend(
+        registry
+            .point10_definitions()
+            .iter()
+            .map(|definition| definition.meta.name.to_string()),
+    );
+    registered_names.extend(
+        registry
+            .isf_definitions()
+            .iter()
+            .map(|definition| definition.name.clone()),
+    );
+    let unique_registered_names: BTreeSet<String> = registered_names.iter().cloned().collect();
+    check!(
+        unique_registered_names.len() == registered_names.len(),
+        "A: {} duplicate cross-bucket registrations",
+        registered_names.len() - unique_registered_names.len()
+    );
+
+    // B/C — canonical metadata is Plane9/Dahl, and every historical spelling
+    // resolves to the very same shader or ISF definition.
+    let mut metadata_mismatches = Vec::new();
+    let mut alias_mismatches = Vec::new();
+    for (suffix, _) in SHADER_EFFECTS {
+        let name = format!("Plane9 {suffix}");
+        let legacy_name = format!("Point10 {suffix}");
+        let Some(canonical) = registry.shader_module(&name) else {
+            metadata_mismatches.push(format!("{name}: missing"));
+            alias_mismatches.push(format!("{legacy_name}: canonical module missing"));
+            continue;
+        };
+        if canonical.meta_author != "Plane9 (Joakim Dahl)" {
+            metadata_mismatches.push(format!("{name}: author {:?}", canonical.meta_author));
+        }
+        let fields = registry.meta_fields(&name);
+        if !fields.is_some_and(|fields| {
+            fields.get("name").and_then(Value::as_str) == Some(name.as_str())
+                && fields.get("author").and_then(Value::as_str) == Some("Plane9 (Joakim Dahl)")
+        }) {
+            metadata_mismatches.push(format!("{name}: registered meta fields mismatch"));
+        }
+        let legacy = registry.shader_module(&legacy_name);
+        if !legacy.is_some_and(|legacy| std::ptr::eq(canonical, legacy))
+            || registry.kind(&name) != Some(ModuleKind::Shader)
+            || registry.kind(&legacy_name) != Some(ModuleKind::Shader)
+        {
+            alias_mismatches.push(format!("{legacy_name}: does not resolve to {name}"));
+        }
+    }
+    for (suffix, _) in ISF_TRANSITIONS {
+        let name = format!("Plane9 {suffix}");
+        let legacy_name = format!("Point10 {suffix}");
+        let Some(canonical) = registry.isf_definition(&name) else {
+            metadata_mismatches.push(format!("{name}: missing"));
+            alias_mismatches.push(format!("{legacy_name}: canonical module missing"));
+            continue;
+        };
+        if canonical.meta.author.as_deref() != Some("Plane9 (Joakim Dahl)") {
+            metadata_mismatches.push(format!("{name}: author {:?}", canonical.meta.author));
+        }
+        let fields = registry.meta_fields(&name);
+        if !fields.is_some_and(|fields| {
+            fields.get("name").and_then(Value::as_str) == Some(name.as_str())
+                && fields.get("author").and_then(Value::as_str) == Some("Plane9 (Joakim Dahl)")
+        }) {
+            metadata_mismatches.push(format!("{name}: registered meta fields mismatch"));
+        }
+        let legacy = registry.isf_definition(&legacy_name);
+        if !legacy.is_some_and(|legacy| std::ptr::eq(canonical, legacy))
+            || registry.kind(&name) != Some(ModuleKind::Isf)
+            || registry.kind(&legacy_name) != Some(ModuleKind::Isf)
+        {
+            alias_mismatches.push(format!("{legacy_name}: does not resolve to {name}"));
+        }
+    }
+    for suffix in POINT10_SHADER_EFFECTS {
+        let name = format!("Point10 {suffix}");
+        if !registry
+            .shader_module(&name)
+            .is_some_and(|module| module.meta_author == "Point10")
+        {
+            metadata_mismatches.push(format!("{name}: missing or wrong author"));
+        }
+        if registry
+            .shader_module(&format!("Plane9 {suffix}"))
+            .is_some()
+        {
+            metadata_mismatches.push(format!("Plane9 {suffix}: must not be registered"));
+        }
+    }
+    check!(
+        metadata_mismatches.is_empty(),
+        "B: {} metadata mismatches: {}",
+        metadata_mismatches.len(),
+        summarize(&metadata_mismatches)
+    );
+
+    // C — the shared JSON rewrite covers nested saved documents, and both preset
+    // restore and Scene import persist the canonical spelling for all 52 names.
+    let mut nested_legacy = json!({"scene": {"modules": {"$moduleName": legacy_names}}});
+    modv_renderers::point10::rename_legacy_scene_names(&mut nested_legacy);
+    check!(
+        nested_legacy["scene"]["modules"]["$moduleName"] == json!(canonical_names),
+        "C: nested legacy references were not all rewritten to canonical Plane9 names"
+    );
+
+    let legacy_document = || {
+        let mut modules = serde_json::Map::new();
+        let mut module_ids = Vec::new();
+        for (index, legacy_name) in legacy_names.iter().enumerate() {
+            let id = format!("plane9-effect-{index}");
+            module_ids.push(id.clone());
+            modules.insert(
+                id.clone(),
+                json!({
+                    "$id": id,
+                    "$moduleName": legacy_name,
+                    "meta": {"name": legacy_name},
+                    "props": {},
+                    "data": {},
+                    "$props": {}
+                }),
+            );
+        }
+        json!({
+            "id": "scene-legacy-plane9-effects",
+            "name": "Legacy Plane9 effects",
+            "groups": [{
+                "id": "group-legacy-plane9-effects",
+                "name": "Legacy",
+                "hidden": false,
+                "modules": module_ids,
+                "enabled": 1,
+                "alpha": 1,
+                "inherit": true,
+                "inheritFrom": -1,
+                "pipeline": false,
+                "clearing": false,
+                "compositeOperation": "normal"
+            }],
+            "modules": Value::Object(modules),
+            "inputs": {},
+            "expressions": {},
+            "tweens": [],
+            "midi": {}
+        })
+    };
+
+    let mut load_mismatches = Vec::new();
+    let mut preset_store = Store::with_state_path_and_isf(None, Some(&corpus));
+    match preset_store.restore(&legacy_document()) {
+        Ok(()) => {
+            for (index, canonical_name) in canonical_names.iter().enumerate() {
+                let id = format!("plane9-effect-{index}");
+                match preset_store.state().modules.get(&id) {
+                    Some(module) if module.module_name == *canonical_name => {}
+                    Some(module) => load_mismatches.push(format!(
+                        "preset {id}: kept {:?}, expected {canonical_name:?}",
+                        module.module_name
+                    )),
+                    None => load_mismatches.push(format!("preset {id}: missing")),
+                }
+            }
+        }
+        Err(error) => load_mismatches.push(format!("preset restore failed: {error:?}")),
+    }
+
+    let mut scene_store = Store::with_state_path_and_isf(None, Some(&corpus));
+    let scene_params = json!({"scene": legacy_document(), "persist": false});
+    match scene_store.load_scene_from_json(scene_params.as_object().expect("Scene params")) {
+        Ok(imported) => {
+            for (index, canonical_name) in canonical_names.iter().enumerate() {
+                let id = format!("plane9-effect-{index}");
+                let imported_name = imported["modules"][id.as_str()]["$moduleName"]
+                    .as_str()
+                    .unwrap_or_default();
+                let live_name = scene_store
+                    .state()
+                    .modules
+                    .get(&id)
+                    .map(|module| module.module_name.as_str())
+                    .unwrap_or_default();
+                if imported_name != canonical_name || live_name != canonical_name {
+                    load_mismatches.push(format!(
+                        "Scene {id}: imported {imported_name:?}, live {live_name:?}, expected {canonical_name:?}"
+                    ));
+                }
+            }
+        }
+        Err(error) => load_mismatches.push(format!("Scene import failed: {error:?}")),
+    }
+    check!(
+        alias_mismatches.is_empty(),
+        "C: {} of 52 registry aliases failed: {}",
+        alias_mismatches.len(),
+        summarize(&alias_mismatches)
+    );
+    check!(
+        load_mismatches.is_empty(),
+        "C: {} saved-document migrations failed: {}",
+        load_mismatches.len(),
+        summarize(&load_mismatches)
+    );
+
+    // D — the info panel reports the audited upstream version for every renamed
+    // effect, using the same exact label format as the Plane9 scenes.
+    let mut licence_mismatches = Vec::new();
+    for (suffix, version) in &renamed {
+        let name = format!("Plane9 {suffix}");
+        let module_type = if SHADER_EFFECTS
+            .iter()
+            .any(|(shader_suffix, _)| shader_suffix == suffix)
+        {
+            "shader"
+        } else {
+            "isf"
+        };
+        let expected =
+            format!("CC BY-NC-SA {version} (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)");
+        let licence = module_license(&ModuleMetaView {
+            name: name.clone(),
+            module_type: module_type.to_string(),
+            kind: module_type.to_string(),
+            ..ModuleMetaView::default()
+        });
+        if licence != expected {
+            licence_mismatches.push(format!("{name}: got {licence:?}, expected {expected:?}"));
+        }
+    }
+    check!(
+        licence_mismatches.is_empty(),
+        "D: {} licence mismatches: {}",
+        licence_mismatches.len(),
+        summarize(&licence_mismatches)
+    );
+
+    // E — every effect has a provenance row with the exact licence version and
+    // source path. The two effects with additional upstream credits keep them.
+    let notices = notices_section("Point10 scenes");
+    let mut notice_mismatches = Vec::new();
+    for (suffix, version) in &renamed {
+        let name = format!("Plane9 {suffix}");
+        let rows: Vec<&str> = notices
+            .lines()
+            .filter(|line| line.starts_with(&format!("| {suffix} |")))
+            .collect();
+        let source = if SHADER_EFFECTS
+            .iter()
+            .any(|(shader_suffix, _)| shader_suffix == suffix)
+        {
+            "crates/modv-renderers/src/shader/modules/point10_effects.rs".to_string()
+        } else {
+            format!("resources/isf/{name}.fs")
+        };
+        match rows.as_slice() {
+            [row] if row.contains(&format!("CC BY-NC-SA {version}")) && row.contains(&source) => {}
+            [row] => notice_mismatches.push(format!("{name}: wrong provenance row {row:?}")),
+            [] => notice_mismatches.push(format!("{name}: no provenance row")),
+            _ => notice_mismatches.push(format!("{name}: duplicate provenance rows")),
+        }
+    }
+    let crt_row = notices
+        .lines()
+        .find(|line| line.starts_with("| Crt |"))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    check!(
+        crt_row.contains("timothy lottes") && crt_row.contains("public domain"),
+        "E: Crt must retain Timothy Lottes' public-domain credit"
+    );
+    let cubic_row = notices
+        .lines()
+        .find(|line| line.starts_with("| Cubic Lens Distortion |"))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    check!(
+        cubic_row.contains("codepen"),
+        "E: Cubic Lens Distortion must retain its CodePen credit"
+    );
+    check!(
+        notice_mismatches.is_empty(),
+        "E: {} notices provenance mismatches: {}",
+        notice_mismatches.len(),
+        summarize(&notice_mismatches)
+    );
+
+    // F — the ISF files themselves carry the new name/credit, the old filenames
+    // are gone, and the checked-in translation baseline still matches the corpus.
+    let mut source_mismatches = Vec::new();
+    for (suffix, _) in ISF_TRANSITIONS {
+        let name = format!("Plane9 {suffix}");
+        let new_path = corpus.join(format!("{name}.fs"));
+        let old_path = corpus.join(format!("Point10 {suffix}.fs"));
+        if !new_path.is_file() {
+            source_mismatches.push(format!("{name}: new ISF file missing"));
+        }
+        if old_path.exists() {
+            source_mismatches.push(format!("Point10 {suffix}: old ISF file still exists"));
+        }
+        match fs::read_to_string(&new_path) {
+            Ok(source) => match modv_renderers::isf::parse_isf(&source, None) {
+                Ok(document) => {
+                    if document.metadata.get("NAME").and_then(Value::as_str) != Some(name.as_str())
+                    {
+                        source_mismatches.push(format!("{name}: in-file NAME mismatch"));
+                    }
+                    if document.metadata.get("CREDIT").and_then(Value::as_str)
+                        != Some("Plane9 (Joakim Dahl)")
+                    {
+                        source_mismatches.push(format!("{name}: in-file CREDIT mismatch"));
+                    }
+                }
+                Err(error) => {
+                    source_mismatches.push(format!("{name}: ISF header does not parse: {error}"))
+                }
+            },
+            Err(_error) if !new_path.exists() => {}
+            Err(error) => source_mismatches.push(format!("{name}: unreadable: {error}")),
+        }
+    }
+    check!(
+        source_mismatches.is_empty(),
+        "F: {} ISF source mismatches: {}",
+        source_mismatches.len(),
+        summarize(&source_mismatches)
+    );
+
+    let baseline = modv_renderers::isf::translate::CorpusBaseline::from_json(
+        modv_renderers::isf::translate::CORPUS_BASELINE,
+    )
+    .expect("the checked-in ISF corpus baseline parses");
+    check!(
+        baseline.total == 402,
+        "F: baseline total is {}, expected 402",
+        baseline.total
+    );
+    let baseline_names: BTreeSet<&str> = baseline
+        .translated
+        .iter()
+        .chain(baseline.overridden.iter())
+        .chain(baseline.failed.iter())
+        .map(String::as_str)
+        .collect();
+    let missing_baseline_names: Vec<String> = ISF_TRANSITIONS
+        .iter()
+        .map(|(suffix, _)| format!("Plane9 {suffix}"))
+        .filter(|name| {
+            !baseline
+                .translated
+                .iter()
+                .any(|translated| translated == name)
+        })
+        .collect();
+    let stale_baseline_names: Vec<String> = ISF_TRANSITIONS
+        .iter()
+        .map(|(suffix, _)| format!("Point10 {suffix}"))
+        .filter(|name| baseline_names.contains(name.as_str()))
+        .collect();
+    check!(
+        missing_baseline_names.is_empty() && stale_baseline_names.is_empty(),
+        "F: baseline is missing {} canonical transitions and retains {} legacy transitions",
+        missing_baseline_names.len(),
+        stale_baseline_names.len()
+    );
+    let report = modv_renderers::isf::translate::corpus_report(&corpus);
+    let differences = baseline.differences(&report);
+    check!(
+        differences.is_empty(),
+        "F: corpus baseline no longer validates: {}",
+        differences.join("; ")
+    );
+
+    // G — the generator and both checked-in catalogue projections use the same
+    // canonical registry names and unchanged shader/ISF counts.
+    let generated = build_document(&corpus);
+    let (metadata, previews) = split_documents(&generated);
+    let committed_metadata: Value =
+        serde_json::from_str(include_str!("../../../docs/modules/modules.json"))
+            .expect("the committed module catalogue is valid JSON");
+    let committed_previews: Value =
+        serde_json::from_str(include_str!("../../../docs/modules/previews.json"))
+            .expect("the committed preview catalogue is valid JSON");
+    check!(
+        metadata == committed_metadata,
+        "G: docs/modules/modules.json does not match build_document()"
+    );
+    check!(
+        previews == committed_previews,
+        "G: docs/modules/previews.json does not match split_documents(build_document())"
+    );
+    check!(
+        generated["counts"]["shader"].as_u64() == Some(36)
+            && generated["counts"]["isf"].as_u64() == Some(402),
+        "G: generated catalogue shader/ISF counts changed"
+    );
+
+    let modules = generated["modules"]
+        .as_array()
+        .expect("catalogue modules array");
+    let catalogue_names: BTreeSet<String> = modules
+        .iter()
+        .filter_map(|module| module["name"].as_str().map(str::to_string))
+        .collect();
+    check!(
+        catalogue_names == unique_registered_names,
+        "G: generated catalogue names differ from the registry"
+    );
+    let mut catalogue_mismatches = Vec::new();
+    for (suffix, _) in &renamed {
+        let name = format!("Plane9 {suffix}");
+        let legacy_name = format!("Point10 {suffix}");
+        let matches: Vec<_> = modules
+            .iter()
+            .filter(|module| module["name"] == name)
+            .collect();
+        if matches.len() != 1 {
+            catalogue_mismatches.push(format!("{name}: found {} entries", matches.len()));
+        } else if matches[0]["author"] != "Plane9 (Joakim Dahl)" {
+            catalogue_mismatches.push(format!("{name}: wrong catalogue author"));
+        }
+        if modules.iter().any(|module| module["name"] == legacy_name) {
+            catalogue_mismatches.push(format!("{legacy_name}: stale catalogue entry"));
+        }
+    }
+    check!(
+        catalogue_mismatches.is_empty(),
+        "G: {} generated catalogue mismatches: {}",
+        catalogue_mismatches.len(),
+        summarize(&catalogue_mismatches)
+    );
+
+    // The parity manifest is historical, like the Plane9 scene fixture: retain
+    // every old spelling so alias-normalising registry guards can keep using it.
+    let manifest: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
+            .expect("the historical parity manifest is valid JSON");
+    let mut manifest_mismatches = Vec::new();
+    for (suffix, _) in SHADER_EFFECTS {
+        let old_name = format!("Point10 {suffix}");
+        let new_name = format!("Plane9 {suffix}");
+        let names = manifest["shader"]
+            .as_array()
+            .expect("shader manifest array");
+        if !names
+            .iter()
+            .any(|name| name.as_str() == Some(old_name.as_str()))
+        {
+            manifest_mismatches.push(format!("shader manifest lost {old_name}"));
+        }
+        if names
+            .iter()
+            .any(|name| name.as_str() == Some(new_name.as_str()))
+        {
+            manifest_mismatches.push(format!("shader manifest rewrote {new_name}"));
+        }
+    }
+    for (suffix, _) in ISF_TRANSITIONS {
+        let old_name = format!("Point10 {suffix}");
+        let new_name = format!("Plane9 {suffix}");
+        let names = manifest["isf"].as_array().expect("ISF manifest array");
+        if !names
+            .iter()
+            .any(|name| name.as_str() == Some(old_name.as_str()))
+        {
+            manifest_mismatches.push(format!("ISF manifest lost {old_name}"));
+        }
+        if names
+            .iter()
+            .any(|name| name.as_str() == Some(new_name.as_str()))
+        {
+            manifest_mismatches.push(format!("ISF manifest rewrote {new_name}"));
+        }
+    }
+    check!(
+        manifest_mismatches.is_empty(),
+        "G: {} historical parity manifest mismatches: {}",
+        manifest_mismatches.len(),
+        summarize(&manifest_mismatches)
+    );
+
+    assert!(
+        failures.is_empty(),
+        "Plane9 effect rename contract failed ({} checks):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

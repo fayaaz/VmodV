@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Random Circle",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -83,14 +84,18 @@ float _bump(float value, float start, float end, float width) {
 
 void main()
 {
-	float slideAmount = 1.0;
-	float u = isf_FragNormCoord.x+smoothstep(0.0, 1.0, progress);
-	if(abs(saturate(u)-u) > 0.0)
-	{	
-		u = fract(u);
-		gl_FragColor = texture2D(endImage, vec2(u, isf_FragNormCoord.y));
+	float radius = progress * 0.70710678;
+	vec2 fromCenter = isf_FragNormCoord - vec2(0.5,0.5);
+	float len = length(fromCenter);
+	vec2 toUV = normalize(fromCenter);
+	float angle = (atan(toUV.y, toUV.x) + PI) / PI2;
+	radius += progress * _turbulencefast(vec2(angle, fract(0.5 + progress*0.1))*5.0, 5.0);
+	
+	if(len < radius)
+	{
+		gl_FragColor = texture2D(endImage, isf_FragNormCoord);
 		return;
 	}
-	gl_FragColor = texture2D(startImage, vec2(u, isf_FragNormCoord.y));
+	gl_FragColor = texture2D(startImage, isf_FragNormCoord);
 }
 

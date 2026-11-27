@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Close Horizontal",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,50 +81,14 @@ float _bump(float value, float start, float end, float width) {
 
 
 
-vec4 SampleWithBorder(vec4 border, sampler2D tex, vec2 uv)
-{
-	vec2 t = abs(saturate(uv) - uv);
-	if (t.x > 0.0 || t.y > 0.0)
-		return border;
-	return texture2D(tex, uv);
-}
-
 
 void main()
 {
-	float twistAmount = 50.0;
-	float cellcount = 10.0;
-	float cellsize = 1.0 / cellcount;
-	
-	vec2 cell = floor(isf_FragNormCoord * cellcount);
-	vec2 oddeven = mod(cell, 2.0);
-	float cellTwistAmount = twistAmount;
-	if (oddeven.x < 1.0)
-	{
-		cellTwistAmount *= -1.0;
-	}
-	if (oddeven.y < 1.0)
-	{
-		cellTwistAmount *= -1.0;
-	}
-	
-	vec2 center = vec2(0.5,0.5);
-	vec2 toUV = fract(isf_FragNormCoord * cellcount) - center;
-	float distanceFromCenter = length(toUV);
-	vec2 normToUV = toUV / distanceFromCenter;
-	float angle = atan(normToUV.y, normToUV.x);
-	angle += max(0.0, 0.5-distanceFromCenter) * cellTwistAmount * smoothstep(0.0, 1.0, progress);
-	
-	vec2 tex = vec2(cos(angle), sin(angle));
-	tex *= distanceFromCenter;
-	tex += center;
-	
-	tex *= cellsize;
-	tex += cell * cellsize;
-	
-	vec4 c1 = texture2D(startImage, tex);
+	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
+	vec4 c1 = texture2D(startImage, isf_FragNormCoord);
 	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-
-	gl_FragColor = mix(c1,c2, smoothstep(0.0, 1.0, progress));
+	float t = progress;
+	vec4 c = mix(c2,c1,saturate(_bump(isf_FragNormCoord.x, 0.0+t*0.55, 1.0-t*0.55, 0.05)));
+	gl_FragColor = vec4(c.rgb, c.a);
 }
 

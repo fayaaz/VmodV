@@ -179,6 +179,69 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 | Mirror Tunnel | `crates/modv-renderers/src/point10/scenes/mirror_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Cloud Flight | `crates/modv-renderers/src/point10/scenes/cloud_flight.rs` | CC BY-NC-SA 3.0 (stated in file; after Inigo Quilez's Shadertoy "XslGRr") |
 
+### Plane9 effects (Joakim Dahl — CC BY-NC-SA)
+
+These fifty-two shader effects and ISF transitions are Plane9 presets by
+**Joakim Dahl**, audited as Plane9 originals and registered as `Plane9 <Name>`
+(the historical `Point10 <Name>` names remain load aliases). The version is
+stated in the ported source or notices below. The five effects without a
+Plane9 preset (`Pixelation`, `RGB Shift`, `Digital Glitch`, `Vignette`,
+`Bloom`) keep their `Point10 ` names and `Point10` author.
+
+| Effect | Source | License |
+| --- | --- | --- |
+| Gray | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Invert | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Posterization | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Film Grain | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| BlackAndWhite | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Gray Stripes | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Invert Gray | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Crosshatching | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Blocks | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| 3d Blocks | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl) |
+| Bayer 8 Matrix Dithering BW | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl) |
+| Bayer Matrix Dithering Color | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl) |
+| Fuzzy Pixels | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Fractured | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Bathroom Window | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Contrast | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl) |
+| Color Distort | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Crt | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl; the CRT post-process adapts Timothy Lottes' public domain "CRT" shader) |
+| Cubic Lens Distortion | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl; lens-distortion reference from a public CodePen sample (https://codepen.io)) |
+| Hexagons | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Led Display | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Led Display Curved | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Limit Hue | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Embos Merge | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
+| Embos | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl) |
+| Banded Swirl | `resources/isf/Plane9 Banded Swirl.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Blinds | `resources/isf/Plane9 Blinds.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Block | `resources/isf/Plane9 Block.fs` | CC BY-NC-SA 4.0 (Plane9 ISF transition by Joakim Dahl) |
+| Circle Reveal | `resources/isf/Plane9 Circle Reveal.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Circle Stretch | `resources/isf/Plane9 Circle Stretch.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Clock Swipe | `resources/isf/Plane9 Clock Swipe.fs` | CC BY-NC-SA 4.0 (Plane9 ISF transition by Joakim Dahl) |
+| Close Horizontal | `resources/isf/Plane9 Close Horizontal.fs` | CC BY-NC-SA 4.0 (Plane9 ISF transition by Joakim Dahl) |
+| Crossfade | `resources/isf/Plane9 Crossfade.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Crumble | `resources/isf/Plane9 Crumble.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Disolve | `resources/isf/Plane9 Disolve.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Dropfade | `resources/isf/Plane9 Dropfade.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Erode | `resources/isf/Plane9 Erode.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Line Reveal | `resources/isf/Plane9 Line Reveal.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Lines | `resources/isf/Plane9 Lines.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Pixelate | `resources/isf/Plane9 Pixelate.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Pour | `resources/isf/Plane9 Pour.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Radial Blur | `resources/isf/Plane9 Radial Blur.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Random Circle | `resources/isf/Plane9 Random Circle.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Ripple | `resources/isf/Plane9 Ripple.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Shockwave | `resources/isf/Plane9 Shockwave.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Shrink | `resources/isf/Plane9 Shrink.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| SlideIn | `resources/isf/Plane9 SlideIn.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Smooth Swirl Grid | `resources/isf/Plane9 Smooth Swirl Grid.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Swirl | `resources/isf/Plane9 Swirl.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Swirl Grid | `resources/isf/Plane9 Swirl Grid.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Water | `resources/isf/Plane9 Water.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
+| Wave | `resources/isf/Plane9 Wave.fs` | CC BY-NC-SA 4.0 (Plane9 ISF transition by Joakim Dahl) |
 ### three.js examples and other permissive sources (MIT)
 
 These scenes are adaptations of permissively licensed third-party demos, not

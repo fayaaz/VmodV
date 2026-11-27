@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Dropfade",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,46 +81,28 @@ float _bump(float value, float start, float end, float width) {
 
 
 
-float DistanceFromCenterToSquareEdge(vec2 dir)
+
+vec4 SampleWithBorder(vec4 border, vec2 uv)
 {
-	dir = abs(dir);
-	float dist = dir.x > dir.y ? dir.x : dir.y;
-	return dist;
+	vec2 t = abs(saturate(uv) - uv);
+	if (t.x > 0.99 || t.y > 0.99)
+		return border;
+	return vec4(texture2D(startImage, uv).rgb, 1.0);
 }
 
 
 void main()
 {
-	vec2 center = vec2(0.5,0.5);
-	float radius = progress * 0.70710678;
-	vec2 toUV = isf_FragNormCoord - center;
-	float len = length(toUV);
-	vec2 normToUV = toUV / len;
+	float offset = 0.1+(_noise(vec2(isf_FragNormCoord.x * 5.0, 0.5))*0.5+0.5);
+	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
 	
-	if(len < radius)
+	if ((1.0-isf_FragNormCoord.y) < offset * progress)
 	{
-		float distFromCenterToEdge = DistanceFromCenterToSquareEdge(normToUV) / 2.0;
-		vec2 edgePoint = center + distFromCenterToEdge * normToUV;
+		gl_FragColor = c2;	
+		return;
+	}
 	
-		float minRadius = min(radius, distFromCenterToEdge);
-		float percentFromCenterToRadius = len / minRadius;
-		
-		vec2 newUV = mix(center, edgePoint, percentFromCenterToRadius);
-		gl_FragColor = texture2D(endImage, newUV);
-	}
-	else
-	{
-		float distFromCenterToEdge = DistanceFromCenterToSquareEdge(normToUV);
-		vec2 edgePoint = center + distFromCenterToEdge * normToUV;
-		float distFromRadiusToEdge = distFromCenterToEdge - radius;
-		
-		vec2 radiusPoint = center + radius * normToUV;
-		vec2 radiusToUV = isf_FragNormCoord - radiusPoint;
-		
-		float percentFromRadiusToEdge = length(radiusToUV) / distFromRadiusToEdge;
-		
-		vec2 newUV = mix(center, edgePoint, percentFromRadiusToEdge);
-		gl_FragColor = texture2D(startImage, newUV);
-	}
+	vec4 c1 = SampleWithBorder(vec4(0.0), vec2(isf_FragNormCoord.x, isf_FragNormCoord.y + offset * progress));
+	gl_FragColor = mix(c1, c2, progress);
 }
 

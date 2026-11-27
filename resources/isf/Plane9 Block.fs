@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Block",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,28 +81,17 @@ float _bump(float value, float start, float end, float width) {
 
 
 
-float Curve(float t)
-{
-	//return t;
-	return 1.0*t*t*t + 0.0;
-	//t -= 1.0;
-	//return 1.0*(t*t*t + 1.0) + 0.0;
-}
-
 
 void main()
 {
 	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
-	float t = Curve(progress);
-	float offset = 1.0-min(t + t * _turbulence(vec2(isf_FragNormCoord.x*3.0, 0.5*10.0), 5.0), 1.0);
-	vec2 uv = isf_FragNormCoord;
-	uv.y -= offset;
-
-	if(uv.y > 0.0)
-	{
-		gl_FragColor = texture2D(endImage, isf_FragNormCoord);
-		return;
-	}
-	gl_FragColor = texture2D(startImage, fract(uv));
+	vec2 size = 30.0*vec2((RENDERSIZE.x/RENDERSIZE.y), 1.0);
+	float r = _rand(floor(isf_FragNormCoord*size));
+	//float r = _noise(floor(isf_FragNormCoord*size))*0.5+0.5;
+	float v = smoothstep(0.0, -0.05, r - (progress*1.05));
+	
+	vec4 c1 = texture2D(startImage, isf_FragNormCoord);
+	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
+	gl_FragColor = mix(c1,c2, v);
 }
 

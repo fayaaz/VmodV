@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Blinds",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -83,21 +84,11 @@ float _bump(float value, float start, float end, float width) {
 
 void main()
 {
-	float segment_progress;
-	if (progress < 0.5)
+	if(fract(isf_FragNormCoord.y * 10.0) < progress)
 	{
-		segment_progress = 1.0 - progress * 2.0;
+		gl_FragColor = texture2D(endImage, isf_FragNormCoord);
+		return;
 	}
-	else
-	{		
-		segment_progress = (progress - 0.5) * 2.0;
-	}
-	
-	float pixels = 5.0 + 1000.0 * segment_progress * segment_progress;
-	vec2 newUV = floor(isf_FragNormCoord * pixels + 0.5) / pixels;
-	vec4 c1 = texture2D(startImage, newUV);
-	vec4 c2 = texture2D(endImage, newUV);
-	float lerp_progress = saturate((progress - 0.4) / 0.2);
-	gl_FragColor = mix(c1,c2, lerp_progress);
+	gl_FragColor = texture2D(startImage, isf_FragNormCoord);
 }
 

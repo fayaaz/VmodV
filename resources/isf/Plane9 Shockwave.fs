@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Shockwave",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,26 +81,16 @@ float _bump(float value, float start, float end, float width) {
 
 
 
-vec4 SampleWithBorder(vec4 border, sampler2D tex, vec2 uv)
-{
-	vec2 t = abs(saturate(uv) - uv);
-	if (t.x > 0.0 || t.y > 0.0)
-		return border;
-	return texture2D(tex, uv);
-}
-
 
 void main()
 {
-	float mag = 0.1;
-	float phase = 14.0;
-	float freq = 20.0;
-	
-	vec2 newUV = isf_FragNormCoord + vec2(mag * progress * sin(freq * isf_FragNormCoord.y + phase * progress), 0.0);
-	
-	vec4 c1 = SampleWithBorder(vec4(0.0), startImage, newUV);
+	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
+	float v = _turbulencefast(vec3(isf_FragNormCoord*50.0, progress*0.5), 3.0);
+	float t = pow(progress,20.0);
+	float x = _bump(p.y, -t, t, v*smoothstep(0.0, 0.4, progress)*0.1);
+	vec4 c1 = texture2D(startImage, isf_FragNormCoord);
 	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-
-	gl_FragColor = mix(c1,c2, progress);
+	c2 = mix(c2, vec4(1.0,1.0,1.0,1.0), 1.0-pow(t,3.0));
+	gl_FragColor = mix(c1,c2,x);
 }
 

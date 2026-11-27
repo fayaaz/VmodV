@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Circle Stretch",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,27 +81,46 @@ float _bump(float value, float start, float end, float width) {
 
 
 
+float DistanceFromCenterToSquareEdge(vec2 dir)
+{
+	dir = abs(dir);
+	float dist = dir.x > dir.y ? dir.x : dir.y;
+	return dist;
+}
+
 
 void main()
 {
-	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
-
-	float speed = 20.0;
-	vec2 center = vec2(0.5);
+	vec2 center = vec2(0.5,0.5);
+	float radius = progress * 0.70710678;
 	vec2 toUV = isf_FragNormCoord - center;
-	float distanceFromCenter = length(toUV);
-	vec2 normToUV = toUV / distanceFromCenter;
-	vec2 newUV = center + normToUV * (distanceFromCenter * (progress * speed + 1.0));
-	vec4 c1 = vec4(0.0,0.0,0.0,0.0); 
-	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-	vec2 t = abs(saturate(newUV) - newUV);
-	if (t.x > 0.0 || t.y > 0.0)
+	float len = length(toUV);
+	vec2 normToUV = toUV / len;
+	
+	if(len < radius)
 	{
-		gl_FragColor = c2;
-		return;
+		float distFromCenterToEdge = DistanceFromCenterToSquareEdge(normToUV) / 2.0;
+		vec2 edgePoint = center + distFromCenterToEdge * normToUV;
+	
+		float minRadius = min(radius, distFromCenterToEdge);
+		float percentFromCenterToRadius = len / minRadius;
+		
+		vec2 newUV = mix(center, edgePoint, percentFromCenterToRadius);
+		gl_FragColor = texture2D(endImage, newUV);
 	}
-	c1 = texture2D(startImage,newUV); 
-	gl_FragColor = mix(c1, c2, progress);
+	else
+	{
+		float distFromCenterToEdge = DistanceFromCenterToSquareEdge(normToUV);
+		vec2 edgePoint = center + distFromCenterToEdge * normToUV;
+		float distFromRadiusToEdge = distFromCenterToEdge - radius;
+		
+		vec2 radiusPoint = center + radius * normToUV;
+		vec2 radiusToUV = isf_FragNormCoord - radiusPoint;
+		
+		float percentFromRadiusToEdge = length(radiusToUV) / distFromRadiusToEdge;
+		
+		vec2 newUV = mix(center, edgePoint, percentFromRadiusToEdge);
+		gl_FragColor = texture2D(startImage, newUV);
+	}
 }
-
 

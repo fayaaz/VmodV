@@ -761,6 +761,10 @@ impl Store {
             .cloned()
             .unwrap_or_default();
         let row_indexes = assign_scene_row_indexes(&group_snapshots, &row_names);
+        let preserve_module_ids = params
+            .get("preserveModuleIds")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         // `applySceneNow` finishes any in-flight transition first, then keeps
         // the outgoing Groups alive when the change crossfades
@@ -784,11 +788,22 @@ impl Store {
             .cloned()
             .collect();
         let old_ids: HashSet<String> = old_groups.iter().map(|group| group.id.clone()).collect();
+        // Only Groups that survive this apply own ids an imported Module must
+        // not reuse. The outgoing Scene-stamped Groups are replaced below, so
+        // their ids may be reused by the imported document.
+        let surviving_module_ids: HashSet<String> = self
+            .state
+            .groups
+            .iter()
+            .filter(|group| !old_ids.contains(&group.id))
+            .flat_map(|group| group.modules.iter().cloned())
+            .collect();
         self.state
             .groups
             .retain(|group| !old_ids.contains(&group.id));
 
         let mut input_map: HashMap<String, String> = HashMap::new();
+        let mut used_module_ids: HashSet<String> = HashSet::new();
         let mut created: Vec<CreatedGroup> = Vec::new();
 
         for (index, snapshot) in group_snapshots.iter().enumerate() {
@@ -825,7 +840,17 @@ impl Store {
                 let Some(module_snapshot) = module_snapshots.get(key) else {
                     continue;
                 };
-                if let Some(module_id) = self.build_live_module(module_snapshot, &mut input_map) {
+                // A document id is safe to keep only when no surviving Group
+                // owns it and this apply has not already used it. Otherwise
+                // the import falls back to a fresh id, like a direct apply.
+                let preserve_id = preserve_module_ids
+                    && Self::scene_module_document_id(module_snapshot).is_some_and(|id| {
+                        !surviving_module_ids.contains(id) && used_module_ids.insert(id.to_string())
+                    });
+                if let Some(module_id) =
+                    self.build_live_module(module_snapshot, &mut input_map, preserve_id)
+                {
+                    used_module_ids.insert(module_id.clone());
                     group.modules.push(module_id.clone());
                     self.deltas.push(
                         "groups/ADD_MODULE_TO_GROUP",
@@ -1083,7 +1108,8 @@ impl Store {
             let Some(module_snapshot) = module_snapshots.get(key) else {
                 continue;
             };
-            if let Some(module_id) = self.build_live_module(module_snapshot, &mut input_map) {
+            if let Some(module_id) = self.build_live_module(module_snapshot, &mut input_map, false)
+            {
                 new_modules.push(module_id);
             }
         }
@@ -2161,9 +2187,9 @@ impl Store {
             Some(value) => value.clone(),
             None => return Err(invalid(action, "missing \"scene\" or \"json\"")),
         };
-        // Migrate historical `Point10 <Name>` references (the twelve Plane9
-        // ports) before normalising, so both the stored Scene and its re-save
-        // carry the canonical `Plane9 <Name>` name.
+        // Migrate historical `Point10 <Name>` references (the Plane9 scenes
+        // and effects) before normalising, so both the stored Scene and its
+        // re-save carry the canonical `Plane9 <Name>` name.
         modv_renderers::point10::rename_legacy_scene_names(&mut document);
         let Some(normalized) = modv_engine::scenes_playlist::normalize_scene_document(&document)
         else {
@@ -2191,6 +2217,10 @@ impl Store {
         if params.get("apply").and_then(Value::as_bool) != Some(false) {
             let mut apply_params = Map::new();
             apply_params.insert("sceneId".to_string(), json!(scene_id));
+            // An imported Scene keeps its document module ids on the live stack
+            // so the returned document, the stored Scene and the live Modules
+            // stay addressable by the same id.
+            apply_params.insert("preserveModuleIds".to_string(), json!(true));
             self.apply_scene_action(&apply_params)?;
         }
         if params.get("persist").and_then(Value::as_bool) != Some(false) {
@@ -2733,6 +2763,14 @@ impl Store {
         group
     }
 
+    /// The document id a Module snapshot carries, when it has a usable one.
+    fn scene_module_document_id(snapshot: &Value) -> Option<&str> {
+        snapshot
+            .get("$id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    }
+
     /// Build one live Module from a Scene Module snapshot.
     ///
     /// Prop values are applied **on top of** the registry defaults and the
@@ -2743,6 +2781,7 @@ impl Store {
         &mut self,
         snapshot: &Value,
         input_map: &mut HashMap<String, String>,
+        preserve_id: bool,
     ) -> Option<String> {
         let object = snapshot.as_object()?;
         let module_name = object
@@ -2761,7 +2800,16 @@ impl Store {
         // even when the Scene document was not re-imported.
         let module_name =
             modv_renderers::point10::resolve_scene_name(module_name.as_str()).to_string();
-        let id = crate::ids::uuid_v4();
+        let module_name =
+            modv_renderers::point10::resolve_effect_name(module_name.as_str()).to_string();
+        // Direct applies mint fresh ids (JS `makeActiveModule`); a JSON import
+        // keeps the Scene's own id when the caller has checked it is free.
+        let id = if preserve_id {
+            Self::scene_module_document_id(snapshot).map(str::to_string)
+        } else {
+            None
+        }
+        .unwrap_or_else(crate::ids::uuid_v4);
 
         let (mut meta, defaults, registered) = match self.registry.meta_fields(&module_name) {
             Some(meta) => (

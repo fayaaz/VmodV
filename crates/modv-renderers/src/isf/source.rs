@@ -1739,7 +1739,7 @@ fn find_calls(source: &str, name: &str) -> Vec<(usize, usize, usize)> {
 /// parameter. Every call site of such a function is rewritten to a clone with
 /// the parameter removed and the actual texture's `texture`/`sampler` pair
 /// substituted into the body; a sampler function with no call sites (dead
-/// template code, as in `Point10 Banded Swirl`) is deleted. Functions that
+/// template code, as in `Plane9 Banded Swirl`) is deleted. Functions that
 /// cannot be resolved statically (recursion, a call before the definition, an
 /// overloaded name, or an argument that is not a texture) are left untouched
 /// rather than guessed at.

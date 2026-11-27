@@ -1,11 +1,14 @@
 //! The 30 Point10 effects — port of
 //! `src/renderer/src/application/renderers/shader/modules/Point10Effects.js`.
 //!
-//! Every effect is registered with the `Point10 ` name prefix,
-//! `author = "Point10"`, `version = "1.0.0"`, `previewWithOutput = true`,
-//! and `category = None` (type-based Gallery fallback), exactly as the
-//! `effect()` helper in `Point10Effects.js:1-11` does. None of them declare
-//! props; they consume only the built-in uniforms.
+//! Twenty-five are Plane9 presets by Joakim Dahl and register as
+//! `Plane9 <Name>` with `author = "Plane9 (Joakim Dahl)"`; the five without a
+//! Plane9 preset (`Pixelation`, `RGB Shift`, `Digital Glitch`, `Vignette`,
+//! `Bloom`) keep the `Point10 ` prefix and `author = "Point10"`. Every effect
+//! uses `version = "1.0.0"`, `previewWithOutput = true`, and
+//! `category = None` (type-based Gallery fallback), exactly as the `effect()`
+//! helper in `Point10Effects.js:1-11` does. None of them declare props; they
+//! consume only the built-in uniforms.
 //!
 //! The four effects with `audioFeatures: ["bass", "mid", "treble"]`
 //! (Contrast, Color Distort, RGB Shift, Digital Glitch) set
@@ -119,8 +122,8 @@ enum P10Chunk {
 }
 
 struct P10Effect {
-    /// Registration name — the `Point10 ` prefix is part of the name, as in
-    /// the JS `effect()` helper.
+    /// Registration name — the `Plane9 ` / `Point10 ` prefix is part of the
+    /// name, as in the JS `effect()` helper.
     name: &'static str,
     /// WGSL fragment body (the `mainImage` function and any locals/consts).
     body: &'static str,
@@ -133,7 +136,7 @@ struct P10Effect {
 const P10_EFFECTS: &[P10Effect] = &[
     // Point10Effects.js:64-72 — Gray
     P10Effect {
-        name: "Point10 Gray",
+        name: "Plane9 Gray",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -146,7 +149,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:74-82 — Invert
     P10Effect {
-        name: "Point10 Invert",
+        name: "Plane9 Invert",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -159,7 +162,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:84-96 — Posterization
     P10Effect {
-        name: "Point10 Posterization",
+        name: "Plane9 Posterization",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -176,7 +179,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:98-118 — Film Grain
     P10Effect {
-        name: "Point10 Film Grain",
+        name: "Plane9 Film Grain",
         chunks: &[P10Chunk::ModF],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -199,7 +202,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:120-130 — BlackAndWhite
     P10Effect {
-        name: "Point10 BlackAndWhite",
+        name: "Plane9 BlackAndWhite",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -216,7 +219,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:132-143 — Gray Stripes
     P10Effect {
-        name: "Point10 Gray Stripes",
+        name: "Plane9 Gray Stripes",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -232,7 +235,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:145-154 — Invert Gray
     P10Effect {
-        name: "Point10 Invert Gray",
+        name: "Plane9 Invert Gray",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -246,7 +249,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:156-177 — Crosshatching
     P10Effect {
-        name: "Point10 Crosshatching",
+        name: "Plane9 Crosshatching",
         chunks: &[P10Chunk::ModF],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -272,7 +275,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:179-191 — Blocks
     P10Effect {
-        name: "Point10 Blocks",
+        name: "Plane9 Blocks",
         chunks: &[P10Chunk::ModV2],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -286,7 +289,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:193-219 — 3d Blocks
     P10Effect {
-        name: "Point10 3d Blocks",
+        name: "Plane9 3d Blocks",
         chunks: &[P10Chunk::ModV2],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -329,7 +332,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:221-231 — Bayer 8 Matrix Dithering BW
     P10Effect {
-        name: "Point10 Bayer 8 Matrix Dithering BW",
+        name: "Plane9 Bayer 8 Matrix Dithering BW",
         chunks: &[P10Chunk::Bayer],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -345,7 +348,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:233-246 — Bayer Matrix Dithering Color
     P10Effect {
-        name: "Point10 Bayer Matrix Dithering Color",
+        name: "Plane9 Bayer Matrix Dithering Color",
         chunks: &[P10Chunk::Bayer],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -364,7 +367,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:248-255 — Fuzzy Pixels
     P10Effect {
-        name: "Point10 Fuzzy Pixels",
+        name: "Plane9 Fuzzy Pixels",
         chunks: &[P10Chunk::Noise],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -376,7 +379,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:257-268 — Fractured
     P10Effect {
-        name: "Point10 Fractured",
+        name: "Plane9 Fractured",
         chunks: &[P10Chunk::Noise],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -392,7 +395,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:270-284 — Bathroom Window
     P10Effect {
-        name: "Point10 Bathroom Window",
+        name: "Plane9 Bathroom Window",
         chunks: &[P10Chunk::Noise],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -412,7 +415,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:286-295 — Contrast (audioFeatures: bass, mid, treble)
     P10Effect {
-        name: "Point10 Contrast",
+        name: "Plane9 Contrast",
         chunks: &[],
         audio: true,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -425,7 +428,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:297-312 — Color Distort (audioFeatures: bass, mid, treble)
     P10Effect {
-        name: "Point10 Color Distort",
+        name: "Plane9 Color Distort",
         chunks: &[P10Chunk::Noise],
         audio: true,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -444,7 +447,7 @@ const P10_EFFECTS: &[P10Effect] = &[
     },
     // Point10Effects.js:314-395 — Crt
     P10Effect {
-        name: "Point10 Crt",
+        name: "Plane9 Crt",
         chunks: &[],
         audio: false,
         body: r#"const CRT_HARD_SCAN: f32 = -8.0;
@@ -535,7 +538,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
     // Point10Effects.js:397-428 — Cubic Lens Distortion
     P10Effect {
-        name: "Point10 Cubic Lens Distortion",
+        name: "Plane9 Cubic Lens Distortion",
         chunks: &[],
         audio: false,
         body: r#"fn cubicRand(p: vec2<f32>) -> f32 {
@@ -569,7 +572,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
     // Point10Effects.js:430-469 — Hexagons
     P10Effect {
-        name: "Point10 Hexagons",
+        name: "Plane9 Hexagons",
         chunks: &[],
         audio: false,
         body: r#"fn downsample36(p: vec2<f32>) -> vec4<f32> {
@@ -613,7 +616,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
     // Point10Effects.js:471-489 — Led Display
     P10Effect {
-        name: "Point10 Led Display",
+        name: "Plane9 Led Display",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -636,7 +639,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
     // Point10Effects.js:491-508 — Led Display Curved
     P10Effect {
-        name: "Point10 Led Display Curved",
+        name: "Plane9 Led Display Curved",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -661,7 +664,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
     // Point10Effects.js:510-549 — Limit Hue
     P10Effect {
-        name: "Point10 Limit Hue",
+        name: "Plane9 Limit Hue",
         chunks: &[],
         audio: false,
         body: r#"fn minChannel(v: vec3<f32>) -> f32 {
@@ -717,7 +720,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
     // Point10Effects.js:567-578 — Embos Merge
     P10Effect {
-        name: "Point10 Embos Merge",
+        name: "Plane9 Embos Merge",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -733,7 +736,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
     // Point10Effects.js:580-591 — Embos
     P10Effect {
-        name: "Point10 Embos",
+        name: "Plane9 Embos",
         chunks: &[],
         audio: false,
         body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
@@ -839,7 +842,8 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
 ];
 
-/// All 30 Point10 effect modules, in `Point10Effects.js` registration order.
+/// All 30 effect modules (25 Plane9, 5 Point10), in `Point10Effects.js`
+/// registration order.
 pub(crate) fn modules() -> Vec<ShaderModule> {
     P10_EFFECTS
         .iter()
@@ -857,7 +861,11 @@ pub(crate) fn modules() -> Vec<ShaderModule> {
             ShaderModule {
                 name: effect.name.into(),
                 fragment_wgsl: main_image_fragment(&source),
-                meta_author: "Point10".into(),
+                meta_author: if effect.name.starts_with("Plane9 ") {
+                    "Plane9 (Joakim Dahl)".into()
+                } else {
+                    "Point10".into()
+                },
                 meta_version: "1.0.0".into(),
                 category: None,
                 audio: effect.audio,

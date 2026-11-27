@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Line Reveal",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -83,21 +84,17 @@ float _bump(float value, float start, float end, float width) {
 
 void main()
 {
-	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
+	vec2 lineOrigin = vec2(-0.2, -0.2);
+	vec2 lineOffset = vec2(1.4, 1.4);
+	vec2 lineNormal = vec2(1.0, 0.0);
+	float fuzzyAmount = 0.1;
+	vec2 currentLineOrigin = mix(lineOrigin, lineOffset, progress);
+	vec2 normLineNormal = normalize(lineNormal);
 	vec4 c1 = texture2D(startImage, isf_FragNormCoord);
 	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-
-	float v = _turbulencefast(vec2(isf_FragNormCoord*4.0+0.5), 6.0)*1.7;
-	v = smoothstep(0.0+progress, progress-0.01, v);
 	
-	vec4 c = mix(c1,c2,v);
-
-	// Bump
-	float v2 = _turbulencefast(vec2(isf_FragNormCoord*4.0+0.5+vec2(0.0, -(1.0 / RENDERSIZE.y))), 6.0)*1.7;
-	v2 = smoothstep(0.0+progress, progress-0.01, v2);
-	float e = v2-v;
-	c.rgb += e*0.2;
-	
-	gl_FragColor = c;
+	float distFromLine = dot(normLineNormal,isf_FragNormCoord-currentLineOrigin);
+	float p = saturate((distFromLine + fuzzyAmount) / (2.0 * fuzzyAmount));
+	gl_FragColor = mix(c2, c1, p);
 }
 

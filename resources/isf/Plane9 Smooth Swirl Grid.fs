@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Smooth Swirl Grid",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,18 +81,50 @@ float _bump(float value, float start, float end, float width) {
 
 
 
+vec4 SampleWithBorder(vec4 border, sampler2D tex, vec2 uv)
+{
+	vec2 t = abs(saturate(uv) - uv);
+	if (t.x > 0.0 || t.y > 0.0)
+		return border;
+	return texture2D(tex, uv);
+}
+
 
 void main()
 {
-	float fuzzyAmount = (_noise(isf_FragNormCoord*100.0)*0.5+0.5)*0.05;
-	float radius = -fuzzyAmount + progress * (0.70710678 + 2.0 * fuzzyAmount);
-	float fromCenter = length(isf_FragNormCoord - vec2(0.5,0.5));
-	float distFromCircle = fromCenter - radius;
+	float twistAmount = 50.0;
+	float cellcount = 10.0;
+	float cellsize = 1.0 / cellcount;
 	
-	vec4 c1 = texture2D(startImage, isf_FragNormCoord); 
+	vec2 cell = floor(isf_FragNormCoord * cellcount);
+	vec2 oddeven = mod(cell, 2.0);
+	float cellTwistAmount = twistAmount;
+	if (oddeven.x < 1.0)
+	{
+		cellTwistAmount *= -1.0;
+	}
+	if (oddeven.y < 1.0)
+	{
+		cellTwistAmount *= -1.0;
+	}
+	
+	vec2 center = vec2(0.5,0.5);
+	vec2 toUV = fract(isf_FragNormCoord * cellcount) - center;
+	float distanceFromCenter = length(toUV);
+	vec2 normToUV = toUV / distanceFromCenter;
+	float angle = atan(normToUV.y, normToUV.x);
+	angle += max(0.0, 0.5-distanceFromCenter) * cellTwistAmount * smoothstep(0.0, 1.0, progress);
+	
+	vec2 tex = vec2(cos(angle), sin(angle));
+	tex *= distanceFromCenter;
+	tex += center;
+	
+	tex *= cellsize;
+	tex += cell * cellsize;
+	
+	vec4 c1 = texture2D(startImage, tex);
 	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-	
-	float p = saturate((distFromCircle + fuzzyAmount) / (2.0 * fuzzyAmount));
-	gl_FragColor = mix(c2, c1, p);
+
+	gl_FragColor = mix(c1,c2, smoothstep(0.0, 1.0, progress));
 }
 

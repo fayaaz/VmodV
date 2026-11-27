@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Ripple",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -79,48 +80,28 @@ float _bump(float value, float start, float end, float width) {
 }
 
 
-/*
-vec4 SampleWithBorder(vec4 border, sampler2D tex, vec2 uv)
-{
-	if (any(saturate(uv) - uv))
-	{
-		return border;
-	}
-	else
-	{
-		return texture2D(tex, uv);
-	}
-}
-*/
+
 
 void main()
 {
-	float cellcount = 10.0;
-	float cellsize = 1.0 / cellcount;
-	
-	vec2 cell = floor(isf_FragNormCoord * cellcount);
-	vec2 oddeven = mod(cell, 2.0);
-	float cellTwistAmount = PI*4.0;
-	if (oddeven.x < 1.0)	cellTwistAmount *= -1.0;
-	if (oddeven.y < 1.0)	cellTwistAmount *= -1.0;
-		
-	vec2 newUV = fract(isf_FragNormCoord * cellcount);
+	float frequency = 20.0;
+	float speed = 10.0;
+	float amplitude = 0.1;
 	vec2 center = vec2(0.5,0.5);
-	vec2 toUV = newUV - center;
+	vec2 toUV = isf_FragNormCoord - center;
 	float distanceFromCenter = length(toUV);
 	vec2 normToUV = toUV / distanceFromCenter;
-	float angle = atan(normToUV.y, normToUV.x);
+
+	float wave = cos(frequency * distanceFromCenter - speed * progress);
+	float offset1 = progress * wave * amplitude;
+	float offset2 = (1.0 - progress) * wave * amplitude;
 	
-	angle += distanceFromCenter * distanceFromCenter * cellTwistAmount * progress;
-	vec2 newUV2 = vec2(cos(angle), sin(angle));
-	newUV2 *= distanceFromCenter;
-	newUV2 += center;
+	vec2 newUV1 = center + normToUV * (distanceFromCenter + offset1);
+	vec2 newUV2 = center + normToUV * (distanceFromCenter + offset2);
 	
-	newUV2 *= cellsize;
-	newUV2 += cell * cellsize;
-	
-	vec4 c1 = texture2D(startImage, newUV2);
-	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-	gl_FragColor = mix(c1,c2, progress);
+	vec4 c1 = texture2D(startImage, newUV1); 
+	vec4 c2 = texture2D(endImage, newUV2);
+
+	gl_FragColor = mix(c1, c2, progress);
 }
 

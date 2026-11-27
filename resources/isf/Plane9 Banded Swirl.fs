@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Banded Swirl",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -80,14 +81,33 @@ float _bump(float value, float start, float end, float width) {
 
 
 
+vec4 SampleWithBorder(vec4 border, sampler2D tex, vec2 uv)
+{
+	vec2 t = abs(saturate(uv) - uv);
+	if (t.x > 0.0 || t.y > 0.0)
+		return border;
+	return texture2D(tex, uv);
+}
+
 
 void main()
 {
-	vec2 offset;
-	offset.x = _turbulencefast(vec2(isf_FragNormCoord.x / 10.0, isf_FragNormCoord.y /10.0 + min(0.9, 0.5))*10.0, 5.0);
-	offset.y = _turbulencefast(vec2(isf_FragNormCoord.x / 10.0+PI, isf_FragNormCoord.y /10.0 + min(0.9, 0.5))*10.0, 5.0);
-	vec4 c1 = texture2D(startImage, fract(isf_FragNormCoord + offset * progress));
+	float frequency = 15.0;
+	float twistAmount = 4.0;
+	vec2 center = vec2(0.5,0.5);
+	vec2 toUV = isf_FragNormCoord- center;
+	float distanceFromCenter = length(toUV);
+	vec2 normToUV = toUV / distanceFromCenter;
+	float angle = atan(normToUV.y, normToUV.x);
+	
+	angle += sin(distanceFromCenter * frequency) * twistAmount * progress;
+	vec2 newUV = vec2(cos(angle), sin(angle));
+	//sincos(angle, newUV.y, newUV.x);
+	newUV = newUV * distanceFromCenter + center;
+	
+	vec4 c1 = texture2D(startImage, fract(newUV));
 	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
-	gl_FragColor = mix(c1, c2, progress);	
+
+	gl_FragColor = mix(c1,c2, progress);
 }
 

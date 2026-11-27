@@ -1,6 +1,7 @@
 /*{
-  "CREDIT": "Point10",
-  "DESCRIPTION": "Transition imported from Point10",
+  "NAME": "Plane9 Clock Swipe",
+  "CREDIT": "Plane9 (Joakim Dahl)",
+  "DESCRIPTION": "Transition imported from Plane9",
   "ISFVSN": "2",
   "CATEGORIES": ["Transition"],
   "INPUTS": [
@@ -83,18 +84,11 @@ float _bump(float value, float start, float end, float width) {
 
 void main()
 {
-	float radius = progress * 0.70710678;
-	vec2 fromCenter = isf_FragNormCoord - vec2(0.5,0.5);
-	float len = length(fromCenter);
-	vec2 toUV = normalize(fromCenter);
-	float angle = (atan(toUV.y, toUV.x) + PI) / PI2;
-	radius += progress * _turbulencefast(vec2(angle, fract(0.5 + progress*0.1))*5.0, 5.0);
-	
-	if(len < radius)
-	{
-		gl_FragColor = texture2D(endImage, isf_FragNormCoord);
-		return;
-	}
-	gl_FragColor = texture2D(startImage, isf_FragNormCoord);
+	vec2 p = isf_FragNormCoord*vec2(2.0)-vec2(1.0);
+	float a = (atan(p.x,-p.y)+PI)/PI2;
+	vec4 c1 = texture2D(startImage, isf_FragNormCoord);
+	vec4 c2 = texture2D(endImage, isf_FragNormCoord);
+	vec4 c = mix(c2,c1,saturate(_bump(a, 0.0, 1.0-(progress+0.05), 0.05)));
+	gl_FragColor = vec4(c.rgb, c.a);
 }
 
