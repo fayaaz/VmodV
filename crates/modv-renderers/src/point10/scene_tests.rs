@@ -856,8 +856,8 @@ fn quality_visible_radius(pixels: &[u8], width: u32, height: u32) -> f32 {
 }
 
 /// Angularly averaged luma profile outside the direct cube. The normalized
-/// mean absolute radial slope measures profile shape independently of peak
-/// brightness, so merely dimming the waves cannot satisfy diffuseness.
+/// mean absolute radial slope measures wavefront definition independently of
+/// peak brightness, distinguishing distinct streaks from a washed-out halo.
 fn quality_radial_trail(
     pixels: &[u8],
     width: u32,
@@ -931,25 +931,31 @@ fn quality_radial_trail(
 }
 
 /// Regression contract for the accidental 256-square Sound Cube port: the
-/// cube must be sharp at scene resolution while its feedback remains a small,
-/// diffuse buffer. This is deliberately pixel-based; no production target-size
-/// accessor is required.
+/// cube must remain sharp at scene resolution while its feedback keeps the
+/// original vendor trail constants. This is deliberately pixel-based; no
+/// production target-size accessor is required.
 #[test]
-fn sound_cube_uses_scene_resolution_for_cube_and_diffuses_the_trail() {
+fn sound_cube_uses_scene_resolution_and_vendor_trail() {
     use std::cmp::Ordering;
 
-    use crate::point10::scenes::sound_cube::{RTT_SIZE, SCALE_AUDIO, SCALE_BASE, sound_cube_drive};
+    use crate::point10::scenes::sound_cube::{
+        BLUR_RADIUS, BLUR_WIDTH, RTT_SIZE, SCALE_AUDIO, SCALE_BASE, TRAIL_BRIGHTNESS,
+        sound_cube_drive,
+    };
 
     // The native image must not prefer a 5 px sample phase. The deterministic
     // 256-square downscale/upscale control must strongly prefer one, proving
     // that this metric detects the old low-resolution capture path.
     const CUBE_KINK_RATIO_MAX: f32 = 2.0;
     const UPSCALE_CONTROL_KINK_RATIO_MIN: f32 = 2.0;
-    // RED trail baselines: require a 30% reduction in profile slope
-    // (independent of peak), and a 10% lower peak that remains clearly visible.
-    const TRAIL_NORMALIZED_SLOPE_MAX: f32 = 0.003212 * 0.7;
-    const TRAIL_PEAK_MAX: f32 = 0.287752 * 0.9;
-    const TRAIL_PEAK_MIN: f32 = 0.02;
+    // Original-trail RED baselines: peak 0.287752, normalized slope 0.003212.
+    // Require bright, distinct wavefronts (within 10% of the baseline) and cap
+    // runaway feedback at twice the baseline peak, not at 1.0 (the maximum a
+    // u8-derived luma can ever reach, which is no cap at all).
+    const TRAIL_PEAK_MIN: f32 = 0.26;
+    const TRAIL_PEAK_MAX: f32 = 0.287752 * 2.0;
+    const TRAIL_VISIBILITY_FLOOR: f32 = 0.02;
+    const TRAIL_NORMALIZED_SLOPE_MIN: f32 = 0.0028;
 
     let mut failures = Vec::new();
 
@@ -975,6 +981,42 @@ fn sound_cube_uses_scene_resolution_for_cube_and_diffuses_the_trail() {
         scene_source.contains("sound_cube_drive(self.audio.band(-1, 1, 0, 0.0), self.pulse_scale)"),
         "Sound Cube must keep reading the existing smoothed bass lane"
     );
+
+    // The trail is part of the vendor contract, not a diffusion tuning knob.
+    // Keep these checks accumulated so the rendered peak/slope diagnostics are
+    // still reported when the vendor trail constants are wrong.
+    match TRAIL_BRIGHTNESS.partial_cmp(&0.8) {
+        Some(Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "TRAIL_BRIGHTNESS must be the vendor 0.8, got {TRAIL_BRIGHTNESS}"
+        )),
+    }
+    match BLUR_WIDTH.partial_cmp(&4.0) {
+        Some(Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "BLUR_WIDTH must be the vendor 4.0, got {BLUR_WIDTH}"
+        )),
+    }
+    if BLUR_RADIUS != 4 {
+        failures.push(format!(
+            "BLUR_RADIUS must be the vendor 4, got {BLUR_RADIUS}"
+        ));
+    }
+    if let Some(declaration) = scene_source
+        .lines()
+        .find(|line| line.trim_start().starts_with("pub const BLUR_SPREAD"))
+    {
+        let spread = declaration
+            .split_once('=')
+            .and_then(|(_, value)| value.trim().trim_end_matches(';').parse::<f32>().ok());
+        match spread.and_then(|value| value.partial_cmp(&1.0)) {
+            Some(Ordering::Equal) => {}
+            _ => failures.push(format!(
+                "BLUR_SPREAD must be absent or 1.0, got {declaration:?}"
+            )),
+        }
+    }
+
     let audio_source = include_str!("audio_bridge.rs");
     for needle in [
         "let src_lanes = if levers.use_agc {",
@@ -1028,9 +1070,10 @@ fn sound_cube_uses_scene_resolution_for_cube_and_diffuses_the_trail() {
          (max {CUBE_KINK_RATIO_MAX:.6}); simulated_256_5px_kink_ratio={control_kink_ratio:.6} \
          (min {UPSCALE_CONTROL_KINK_RATIO_MIN:.6}); direct_radius={direct_radius:.3}; \
          trail_annulus={inner}..={outer}; trail_peak={trail_peak:.6} \
-         (min {TRAIL_PEAK_MIN:.6}, max {TRAIL_PEAK_MAX:.6}); \
-         radial_mean_abs_slope={radial_slope:.6}; radial_max_abs_slope={radial_max_slope:.6}; \
-         radial_normalized_slope={normalized_slope:.6} (max {TRAIL_NORMALIZED_SLOPE_MAX:.6})"
+         (bright min {TRAIL_PEAK_MIN:.6}, visibility floor {TRAIL_VISIBILITY_FLOOR:.6}, \
+         max {TRAIL_PEAK_MAX:.6}); radial_mean_abs_slope={radial_slope:.6}; \
+         radial_max_abs_slope={radial_max_slope:.6}; radial_normalized_slope={normalized_slope:.6} \
+         (min {TRAIL_NORMALIZED_SLOPE_MIN:.6})"
     );
 
     match cube_kink_ratio.partial_cmp(&CUBE_KINK_RATIO_MAX) {
@@ -1050,28 +1093,34 @@ fn sound_cube_uses_scene_resolution_for_cube_and_diffuses_the_trail() {
     match trail_peak.partial_cmp(&TRAIL_PEAK_MAX) {
         Some(Ordering::Less | Ordering::Equal) => {}
         _ => failures.push(format!(
-            "trail peak {trail_peak:.6} exceeds {TRAIL_PEAK_MAX:.6}; the waves are still too harsh/bright"
+            "trail peak {trail_peak:.6} exceeds {TRAIL_PEAK_MAX:.6}; feedback is running away"
         )),
     }
     match trail_peak.partial_cmp(&TRAIL_PEAK_MIN) {
         Some(Ordering::Greater | Ordering::Equal) => {}
         _ => failures.push(format!(
-            "trail peak {trail_peak:.6} is below {TRAIL_PEAK_MIN:.6}; the waves are no longer clearly visible"
+            "trail peak {trail_peak:.6} is below {TRAIL_PEAK_MIN:.6}; the waves are too dim to blow out like Plane9"
         )),
     }
-    match normalized_slope.partial_cmp(&TRAIL_NORMALIZED_SLOPE_MAX) {
-        Some(Ordering::Less | Ordering::Equal) => {}
+    match trail_peak.partial_cmp(&TRAIL_VISIBILITY_FLOOR) {
+        Some(Ordering::Greater | Ordering::Equal) => {}
         _ => failures.push(format!(
-            "radial normalized slope {normalized_slope:.6} exceeds {TRAIL_NORMALIZED_SLOPE_MAX:.6}; \
-             the feedback waves are still too sharp"
+            "trail peak {trail_peak:.6} is below {TRAIL_VISIBILITY_FLOOR:.6}; the waves are no longer clearly visible"
+        )),
+    }
+    match normalized_slope.partial_cmp(&TRAIL_NORMALIZED_SLOPE_MIN) {
+        Some(Ordering::Greater | Ordering::Equal) => {}
+        _ => failures.push(format!(
+            "radial normalized slope {normalized_slope:.6} is below {TRAIL_NORMALIZED_SLOPE_MIN:.6}; \
+             the feedback waves are washed out instead of distinct streaks"
         )),
     }
 
     if failures.is_empty() {
-        eprintln!("Sound Cube resolution/diffuse-trail contract passed");
+        eprintln!("Sound Cube resolution/vendor-trail contract passed");
     } else {
         panic!(
-            "Sound Cube resolution/diffuse-trail contract failed ({} checks):\n{}",
+            "Sound Cube resolution/vendor-trail contract failed ({} checks):\n{}",
             failures.len(),
             failures.join("\n")
         );
