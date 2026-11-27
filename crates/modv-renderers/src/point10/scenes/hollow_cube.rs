@@ -17,8 +17,8 @@
 //!   `mod(id, 50)` / `mod(id / 50, 50)` and the six face branches, `p = o/50`,
 //!   `up = (p - 0.5) * 0.5`, `pulse = _cubicpulse(mod(p.x+p.y+p.z+t, 1.5),
 //!   0.6, 0.4)` with `t = gIn2.x * 0.1`, the dead interior branch, the
-//!   axis-angle rotation `pulse * 6 * gIn1.z`, the constant `nv` noise
-//!   direction (`d = 0.0001` in the JS — see the shader note), the
+//!   axis-angle rotation `pulse * 6 * gIn1.z`, the per-instance `nv` noise
+//!   direction (sampled from `dt = gl_InstanceID / 15000.0`), the
 //!   `up * gIn2.y` offset and the per-instance `vDiffuse` (HSV 0/0.9/0.8 times
 //!   `0.1 + 0.9 * _rand(vec2(id))`);
 //! * the fragment (`:207-264`): `vDiffuse * gIn1.y`, the two
@@ -63,10 +63,9 @@
 //! * **`_rand3(vec2)` is local.** `P9Glsl.js:44` declares a `vec2` overload of
 //!   `_rand3` that the shared WGSL subset does not carry (batch 2 only needed
 //!   the scalar form). The scene keeps it as `hollow_rand3_vec2`, verbatim.
-//! * **`nv` is computed per vertex, not per instance.** The JS writes
-//!   `_noise(vec3(d * 50, axis, 0))` with `d = 0.0001`, which is a *constant*
-//!   (the instance id never enters), so this is the same number with the same
-//!   `sign(up.axis)` multiplier.
+//! * **The dead `float d = 0.0001;` local is dropped.** It never reaches an
+//!   output: `nv` samples `dt = gl_InstanceID / 15000.0`, so every instance
+//!   gets its own noise direction, exactly as the vendor shader does.
 //! * **`PreviousLayer1.Color` is transparent black.** The vendor `Texture3`
 //!   read is dead output; the compositor's alpha blend over the layers below
 //!   carries the transparency instead (`CLEAR_ALPHA = 0`).
@@ -1203,7 +1202,6 @@ fn vs_main(
 ) -> VsOut {
   var out: VsOut;
   let instance_id = f32(instance);
-  let d = 0.0001;
   let dt = instance_id / 15000.0;
   let obj_count = 50.0;
   let t = u.in2.x * 0.1;
@@ -1250,11 +1248,12 @@ fn vs_main(
   let q_rotation = p9_axis_angle_to_quaternion(rotation.xyz, pulse * 6.0 * u.in1.z);
   var v = p9_rotate_vector(vec4<f32>(position, 1.0).xyz, q_rotation);
 
-  // `nv` is a constant: `d * 50.0` never depends on the instance.
+  // `nv` is a per-instance noise direction sampled from `dt` (the instance id
+  // divided by 15000), so every cube scatters along its own axis.
   var nv = vec3<f32>(
-    (p9_noise(vec3<f32>(d * 50.0, 0.0, 0.0)) * 0.5 + 0.5) * sign(up.x),
-    (p9_noise(vec3<f32>(d * 50.0, 1.0, 0.0)) * 0.5 + 0.5) * sign(up.y),
-    (p9_noise(vec3<f32>(d * 50.0, 2.0, 0.0)) * 0.5 + 0.5) * sign(up.z),
+    (p9_noise(vec3<f32>(dt * 50.0, 0.0, 0.0)) * 0.5 + 0.5) * sign(up.x),
+    (p9_noise(vec3<f32>(dt * 50.0, 1.0, 0.0)) * 0.5 + 0.5) * sign(up.y),
+    (p9_noise(vec3<f32>(dt * 50.0, 2.0, 0.0)) * 0.5 + 0.5) * sign(up.z),
   );
 
   v = v + nv * pulse * u.in1.x;
@@ -1584,6 +1583,250 @@ mod tests {
             assert!(program.contains(needle), "cube shader lost {needle}");
         }
         assert!(!program.contains("gl_InstanceID"));
+    }
+
+    #[test]
+    fn per_instance_noise_scatters_the_hollow_cube_explosion() {
+        let variants = [
+            PLANE9_HOLLOW_CUBE,
+            POINT10_HOLLOW_CUBOID,
+            POINT10_HOLLOW_CUBE_LAYERS,
+            POINT10_HOLLOW_CUBE_BLUR,
+        ];
+        let mut failures = Vec::new();
+
+        // A/C/D — all four presets are composed by the same builder. Each
+        // noise axis must sample the instance-unique `dt`, while the travelling
+        // diagonal pulse must continue to gate both spin and explosion.
+        for variant in variants {
+            let program = hollow_cube_cube_wgsl_for(&variant);
+            for axis in ["0.0", "1.0", "2.0"] {
+                let expected = format!("p9_noise(vec3<f32>(dt * 50.0, {axis}, 0.0)) * 0.5 + 0.5");
+                if program.matches(&expected).count() != 1 {
+                    failures.push(format!(
+                        "{}: nv axis {axis} must sample per-instance noise exactly once; missing {expected}",
+                        variant.name
+                    ));
+                }
+            }
+            if program.contains("d * 50.0") {
+                failures.push(format!(
+                    "{}: cube WGSL still contains the constant `d * 50.0` noise input",
+                    variant.name
+                ));
+            }
+            if program.contains("`nv` is a constant") {
+                failures.push(format!(
+                    "{}: cube WGSL still claims that nv is constant",
+                    variant.name
+                ));
+            }
+            for needle in [
+                "p9_cubicpulse(p9_mod(p.x + p.y + p.z + t, 1.5), 0.6, 0.4)",
+                &format!("pulse * {:.1} * u.in1.z", variant.pulse_angle),
+                "v = v + nv * pulse * u.in1.x;",
+            ] {
+                if !program.contains(needle) {
+                    failures.push(format!(
+                        "{}: pulse modulation lost `{needle}`",
+                        variant.name
+                    ));
+                }
+            }
+        }
+
+        let production = include_str!("hollow_cube.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source precedes the test module");
+        if production.contains("constant `nv`")
+            || production.contains("**`nv` is computed per vertex, not per instance.**")
+        {
+            failures.push(
+                "Hollow Cube documentation still describes nv as constant/per-vertex rather than per-instance"
+                    .to_string(),
+            );
+        }
+
+        // B — hold every uniform except in1.x fixed, render the real 64x64
+        // scene at explosion 0 and at the preset's 0.72 unscaled maximum, and
+        // compare alpha-weighted centroids in a 4x4 grid. The diagnostic camera
+        // sits at the lattice centre looking into the positive octant, so the
+        // visible cubes share `sign(up)` and octant sign-flips cannot masquerade
+        // as per-instance noise. Sixteen-pixel tiles retain ample samples from
+        // the 15,000 cubes; the inside view lights all 16 tiles densely.
+        if let Some((device, queue)) = gpu() {
+            let mut variant = PLANE9_HOLLOW_CUBE;
+            variant.camera_position = [0.0, 0.0, 0.0];
+            variant.camera_look_at = [1.0, 1.0, 1.0];
+            variant.camera_world_space = true;
+            let mut scene = HollowCube::new_with_variant(variant);
+            scene.in1 = [0.0, 1.0, 0.0, 0.0];
+            scene.in2 = [5.0, 1.0, 0.0, 0.0];
+            let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            ctx.resize(64, 64);
+            scene.init(&mut ctx);
+            scene.resize(64, 64);
+            // Keep the comparison geometric: bloom would otherwise move alpha
+            // weight between neighbouring tiles independently of the cubes.
+            scene
+                .gpu
+                .as_mut()
+                .expect("Hollow Cube initialises its GPU resources")
+                .composer
+                .disable_plane9_bloom();
+
+            let target = TestTarget::new(&device, 64, 64);
+            let render = |scene: &mut HollowCube, target: &TestTarget| {
+                scene.upload_cube_uniforms();
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("point10-hollow-cube-instance-scatter"),
+                });
+                scene.render(&mut encoder, &target.view);
+                queue.submit(Some(encoder.finish()));
+                target.read(&device, &queue)
+            };
+
+            let before = render(&mut scene, &target);
+            scene.in1[0] = 0.72;
+            let after = render(&mut scene, &target);
+            let measurement = tile_displacement_spread(&before, &after, 64, 4);
+            let changed_pixels = before
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(after.as_chunks::<4>().0)
+                .filter(|(before, after)| *before != *after)
+                .count();
+            eprintln!(
+                "Hollow Cube 4x4 tile displacement: spread={:.6}px mean=({:.6}, {:.6})px mean_length={:.6}px paired_tiles={} min_pixels={} changed_pixels={}",
+                measurement.spread,
+                measurement.mean[0],
+                measurement.mean[1],
+                measurement.mean_length,
+                measurement.paired_tiles,
+                measurement.min_pixels,
+                changed_pixels
+            );
+
+            if !any_lit(&before) || !any_lit(&after) {
+                failures.push("per-instance explosion rendered an empty frame".to_string());
+            }
+            if changed_pixels < 64 {
+                failures.push(format!(
+                    "explosion must change the rendered cloud; measured {changed_pixels} changed pixels"
+                ));
+            }
+            if measurement.paired_tiles < 12 {
+                failures.push(format!(
+                    "per-instance explosion needs at least 12 lit tile pairs, measured {}",
+                    measurement.paired_tiles
+                ));
+            }
+            if measurement.min_pixels < 8 {
+                failures.push(format!(
+                    "per-instance explosion tile centroids need at least 8 lit pixels each, measured minimum {}",
+                    measurement.min_pixels
+                ));
+            }
+            if measurement.spread <= 0.25 {
+                failures.push(format!(
+                    "per-instance explosion must not be a rigid translation: measured per-tile displacement spread {:.6}px (mean displacement {:.6}px, {} paired tiles), threshold > 0.25px",
+                    measurement.spread, measurement.mean_length, measurement.paired_tiles
+                ));
+            }
+        } else {
+            eprintln!("skipping Hollow Cube per-instance scatter GPU check: no fallback adapter");
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Hollow Cube per-instance explosion failures:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct TileDisplacementSpread {
+        spread: f64,
+        mean: [f64; 2],
+        mean_length: f64,
+        paired_tiles: usize,
+        min_pixels: usize,
+    }
+
+    fn alpha_centroid(
+        pixels: &[u8],
+        width: usize,
+        tile: usize,
+        grid: usize,
+    ) -> Option<(f64, f64, usize)> {
+        let tile_size = width / grid;
+        let x_start = (tile % grid) * tile_size;
+        let y_start = (tile / grid) * tile_size;
+        let mut weight_sum = 0.0;
+        let mut x_sum = 0.0;
+        let mut y_sum = 0.0;
+        let mut count = 0;
+        for y in y_start..y_start + tile_size {
+            for x in x_start..x_start + tile_size {
+                let alpha = f64::from(pixels[(y * width + x) * 4 + 3]);
+                if alpha > 0.0 {
+                    weight_sum += alpha;
+                    x_sum += (x as f64 + 0.5) * alpha;
+                    y_sum += (y as f64 + 0.5) * alpha;
+                    count += 1;
+                }
+            }
+        }
+        (count > 0).then(|| (x_sum / weight_sum, y_sum / weight_sum, count))
+    }
+
+    fn tile_displacement_spread(
+        before: &[u8],
+        after: &[u8],
+        width: usize,
+        grid: usize,
+    ) -> TileDisplacementSpread {
+        let mut displacements = Vec::new();
+        let mut min_pixels = usize::MAX;
+        for tile in 0..grid * grid {
+            let (Some(before), Some(after)) = (
+                alpha_centroid(before, width, tile, grid),
+                alpha_centroid(after, width, tile, grid),
+            ) else {
+                continue;
+            };
+            displacements.push((after.0 - before.0, after.1 - before.1));
+            min_pixels = min_pixels.min(before.2).min(after.2);
+        }
+        if displacements.is_empty() {
+            return TileDisplacementSpread {
+                spread: 0.0,
+                mean: [0.0; 2],
+                mean_length: 0.0,
+                paired_tiles: 0,
+                min_pixels: 0,
+            };
+        }
+        let count = displacements.len() as f64;
+        let mean = [
+            displacements.iter().map(|d| d.0).sum::<f64>() / count,
+            displacements.iter().map(|d| d.1).sum::<f64>() / count,
+        ];
+        let spread = (displacements
+            .iter()
+            .map(|d| (d.0 - mean[0]).powi(2) + (d.1 - mean[1]).powi(2))
+            .sum::<f64>()
+            / count)
+            .sqrt();
+        TileDisplacementSpread {
+            spread,
+            mean,
+            mean_length: mean[0].hypot(mean[1]),
+            paired_tiles: displacements.len(),
+            min_pixels,
+        }
     }
 
     #[test]
