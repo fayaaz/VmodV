@@ -249,6 +249,11 @@ fn p9_brightness_saturation_contrast(
 fn p9_mod_f(x: f32, y: f32) -> f32 {
   return x - y * floor(x / y);
 }
+
+// vec3 _blendScreen(vec3 src, vec3 dest) — `P9Glsl.js:408-411`.
+fn p9_blend_screen(src: vec3<f32>, dest: vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(1.0) - ((vec3<f32>(1.0) - src) * (vec3<f32>(1.0) - dest));
+}
 "#;
 
 /// `P9Glsl.js`'s ACES tone map, verbatim.

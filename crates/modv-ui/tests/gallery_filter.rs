@@ -465,7 +465,7 @@ fn module_with_kind(name: &str, kind: &str) -> ModuleMetaView {
 
 #[test]
 fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tiles() {
-    const PLANE9: [&str; 31] = [
+    const PLANE9: [&str; 32] = [
         "Plane9 Abstract Clouds",
         "Plane9 Blob Fade",
         "Plane9 Boxy",
@@ -484,6 +484,7 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
         "Plane9 Magic Smoke Box",
         "Plane9 Mirror Cube",
         "Plane9 Mirror Tunnel",
+        "Plane9 Music Waves",
         "Plane9 Noise Warp",
         "Plane9 Rorschach",
         "Plane9 Sound Cube",

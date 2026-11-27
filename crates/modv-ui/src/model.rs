@@ -2455,7 +2455,7 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             // Plane9 ports whose own headers state 4.0.
             "Boxy" | "Colors" | "Earth" | "Evil Box" | "Hollow Cube" | "Mirror Cube"
             | "Noise Warp" | "Rorschach" | "Sound Cube" | "Square Tunnel" | "Wormhole"
-            | "Color Beams" | "Mirror Tunnel" | "Spiky" => concat!(
+            | "Color Beams" | "Mirror Tunnel" | "Spiky" | "Music Waves" => concat!(
                 "CC BY-NC-",
                 "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),
@@ -4254,6 +4254,7 @@ mod tests {
             "Point10 Mirror Tunnel",
             "Point10 Spiky",
             "Point10 Evil Box",
+            "Point10 Music Waves",
         ] {
             check(name, v4, &[v3]);
         }
@@ -4310,7 +4311,7 @@ mod tests {
 
         assert_eq!(
             checked.len(),
-            49,
+            50,
             "every registered Point10 scene must have a provenance label"
         );
     }

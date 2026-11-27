@@ -2,9 +2,9 @@
   "schema": 1,
   "source": "ModuleRegistry + modv_renderers::isf (see tools/gen-module-docs.sh)",
   "counts": {
-    "total": 500,
+    "total": 501,
     "2d": 16,
-    "point10": 49,
+    "point10": 50,
     "shader": 33,
     "isf": 402
   },
@@ -21001,6 +21001,80 @@
     {
       "id": "plane9-mirror-tunnel",
       "name": "Plane9 Mirror Tunnel",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-music-waves",
+      "name": "Plane9 Music Waves",
       "kind": "point10",
       "category": "3d-scenes",
       "author": "Plane9 (Joakim Dahl)",

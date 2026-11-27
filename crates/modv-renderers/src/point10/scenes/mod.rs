@@ -27,6 +27,7 @@
 //! | [`the_cave`] | The Cave | `../Point10/public/plane9/xml/Nature/The Cave.xml` |
 //! | [`spiky`] | Spiky | `Things/Spiky.xml` (mesh-modifier chain) |
 //! | [`evil_box`] | Evil Box | `Cube/Evil Box.xml` (feedback RTT chain) |
+//! | [`music_waves`] | Music Waves | `Music/Music Waves.xml` (instanced wave RTT + bloom) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -46,6 +47,8 @@
 
 #[cfg(test)]
 mod evil_box_red_contract;
+#[cfg(test)]
+mod plane9_music_waves_fidelity_red_contract;
 
 pub mod abstract_clouds;
 pub mod around_plus;
@@ -74,6 +77,7 @@ pub mod magic_smoke_box;
 pub mod mesh_ops;
 pub mod mirror_cube;
 pub mod mirror_tunnel;
+pub mod music_waves;
 pub mod mycelium;
 pub mod noise_warp;
 pub mod particle_field;
