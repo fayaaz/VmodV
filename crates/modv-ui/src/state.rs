@@ -4,7 +4,7 @@
 //! interaction state (selection, focus, drag sources) and the command queues
 //! the app drains after drawing.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -295,6 +295,11 @@ pub struct UiState {
     pub show_bpm: bool,
     /// The module whose info/licence window is open, if any.
     pub module_info: Option<ModuleMetaView>,
+    /// Session-scoped tag overrides keyed by module name. An override replaces
+    /// the module's registered tags in the Gallery filter.
+    pub module_tag_overrides: HashMap<String, Vec<String>>,
+    /// The module info window's comma-separated tag draft.
+    pub module_tags_draft: String,
     pub show_search: bool,
     pub command_query: String,
     pub command_selection: usize,
@@ -1297,6 +1302,8 @@ impl UiState {
             draw_editor: None,
             show_bpm: false,
             module_info: None,
+            module_tag_overrides: HashMap::new(),
+            module_tags_draft: String::new(),
             show_search: false,
             command_query: String::new(),
             command_selection: 0,
@@ -1510,8 +1517,38 @@ impl UiState {
     }
 
     /// Show the info/licence window for a registered module.
+    ///
+    /// The tag editor starts from any session override, then the module's
+    /// registered tags, then its derived defaults.
     pub fn open_module_info(&mut self, module: ModuleMetaView) {
+        let tags = self
+            .module_tag_overrides
+            .get(&module.name)
+            .cloned()
+            .unwrap_or_else(|| module.effective_tags());
+        self.module_tags_draft = tags.join(", ");
         self.module_info = Some(module);
+    }
+
+    /// Commit the module info window's comma-separated tag draft.
+    ///
+    /// Empty entries are dropped, duplicates are removed case-insensitively,
+    /// and the result becomes this session's override for the module.
+    pub fn set_module_tags(&mut self, module_name: &str, draft: &str) {
+        let mut tags: Vec<String> = Vec::new();
+        for tag in draft.split(',') {
+            let tag = tag.trim();
+            if !tag.is_empty() && !tags.iter().any(|seen| seen.eq_ignore_ascii_case(tag)) {
+                tags.push(tag.to_string());
+            }
+        }
+        self.module_tag_overrides
+            .insert(module_name.to_string(), tags.clone());
+        if let Some(info) = self.module_info.as_mut()
+            && info.name == module_name
+        {
+            info.tags = tags;
+        }
     }
 
     /// Open the focused-input link editor.
@@ -1759,44 +1796,46 @@ impl GalleryCategory {
 
 /// The Gallery's visible modules for a category and search text.
 ///
-/// The remaining search terms match the module name or author,
-/// case-insensitively, and a whitespace-only query behaves like an empty one.
-/// A `type:<token>` directive restricts results to modules of that renderer
-/// kind (`shader`, `2d`, `point10`, `isf`, `milkdrop`), using the authoritative
-/// [`ModuleMetaView::kind`] rather than the legacy `module_type`. An unknown
-/// token matches nothing. There is deliberately no tile cap: the Gallery
-/// scrolls instead of truncating the registry.
+/// Every whitespace-separated term must match the module name, author, renderer
+/// kind (`shader`, `2d`, `point10`, `isf`, `milkdrop`), legacy module type or
+/// one of its tags, case-insensitively. There is no query language: `type:isf`
+/// is just ordinary text. A whitespace-only query behaves like an empty one.
+/// There is deliberately no tile cap: the Gallery scrolls instead of truncating
+/// the registry.
 pub fn filter_gallery_modules<'a>(
     registered: &'a [ModuleMetaView],
     category: GalleryCategory,
     search: &str,
 ) -> Vec<&'a ModuleMetaView> {
-    let mut type_terms: Vec<String> = Vec::new();
-    let mut text_terms: Vec<&str> = Vec::new();
-    for term in search.split_whitespace() {
-        let lowered = term.to_ascii_lowercase();
-        if let Some(token) = lowered.strip_prefix("type:") {
-            if !matches!(token, "shader" | "2d" | "point10" | "isf" | "milkdrop") {
-                return Vec::new();
-            }
-            type_terms.push(token.to_string());
-        } else {
-            text_terms.push(term);
-        }
-    }
-    let filter = text_terms.join(" ").to_ascii_lowercase();
+    let terms: Vec<String> = search
+        .split_whitespace()
+        .map(|term| term.to_ascii_lowercase())
+        .collect();
     registered
         .iter()
         .filter(|module| category.matches(module.gallery_category()))
         .filter(|module| {
-            type_terms
+            if terms.is_empty() {
+                return true;
+            }
+            let mut fields: Vec<String> = [
+                &module.name,
+                &module.author,
+                &module.kind,
+                &module.module_type,
+            ]
+            .into_iter()
+            .map(|field| field.to_ascii_lowercase())
+            .collect();
+            fields.extend(
+                module
+                    .effective_tags()
+                    .into_iter()
+                    .map(|tag| tag.to_ascii_lowercase()),
+            );
+            terms
                 .iter()
-                .all(|kind| module.kind.eq_ignore_ascii_case(kind))
-        })
-        .filter(|module| {
-            filter.is_empty()
-                || module.name.to_ascii_lowercase().contains(&filter)
-                || module.author.to_ascii_lowercase().contains(&filter)
+                .all(|term| fields.iter().any(|field| field.contains(term)))
         })
         .collect()
 }

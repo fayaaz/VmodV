@@ -4576,25 +4576,11 @@ fn registered_modules(registry: &crate::module_registry::ModuleRegistry) -> Vec<
     map.iter()
         .filter_map(|(name, entry)| {
             let meta = entry.get("meta").and_then(Value::as_object)?;
-            let get = |key: &str| {
-                meta.get(key)
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string()
-            };
             let kind = registry
                 .kind(name)
                 .map(|kind| kind.as_str().to_string())
                 .unwrap_or_default();
-            Some(ModuleMetaView {
-                name: name.clone(),
-                module_type: get("type"),
-                kind,
-                category: get("category"),
-                author: get("author"),
-                version: get("version"),
-                description: get("description"),
-            })
+            Some(ModuleMetaView::from_registry_meta(name, meta, &kind))
         })
         .collect()
 }

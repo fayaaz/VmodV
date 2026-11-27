@@ -20,6 +20,7 @@ fn meta(name: &str, module_type: &str, category: &str) -> ModuleMetaView {
         author: "modV".to_string(),
         version: "1.0".to_string(),
         description: String::new(),
+        tags: Vec::new(),
     }
 }
 
