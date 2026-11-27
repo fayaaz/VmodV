@@ -11,7 +11,9 @@ use crate::point10::scenes::plane9_common::{
     PLANE9_BATCH_WGSL, PLANE9_DUAL_TEXTURE_WGSL, PLANE9_TEXTURE_WGSL, PLANE9_UNIFORMS_WGSL,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
-use crate::point10::test_support::{TestTarget, any_lit, gpu};
+use crate::point10::test_support::{
+    TestTarget, any_lit, compact_contains, compact_ends_with, compact_match_count, gpu,
+};
 use crate::point10::{
     LENS_PROP, PLANE9_AUTHOR, PLANE9_SCENE_NAMES, Point10Scene, SceneContext, all_scenes,
     apply_lens, canonical_scene_name, gallery_kind, lens_value, plane9_scene_props,
@@ -21,13 +23,6 @@ use crate::point10::{
 const SCENE_NAME: &str = "Plane9 Evil Box";
 const LEGACY_NAME: &str = "Point10 Evil Box";
 const EVIL_BOX_LICENSE: &str = concat!("CC BY-", "NC-", "SA 4.0");
-
-fn compact(source: &str) -> String {
-    source
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect()
-}
 
 fn production_source(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok().map(|source| {
@@ -119,8 +114,8 @@ fn plane9_evil_box_fidelity_red_contract() {
     // A — XML lines 2-6: one new canonical Plane9/Dahl scene, with the
     // historical alias accepted even though this preset never shipped under it.
     check!(
-        scenes.len() == 50,
-        "A: expected 50 Point10 scenes, got {}",
+        scenes.len() == 51,
+        "A: expected 51 Point10 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -128,8 +123,8 @@ fn plane9_evil_box_fidelity_red_contract() {
         "A: duplicate registry names in {names:?}"
     );
     check!(
-        PLANE9_SCENE_NAMES.len() == 32,
-        "A: expected 32 Plane9 scene names, got {}",
+        PLANE9_SCENE_NAMES.len() == 33,
+        "A: expected 33 Plane9 scene names, got {}",
         PLANE9_SCENE_NAMES.len()
     );
     let matches: Vec<_> = scenes
@@ -187,20 +182,20 @@ fn plane9_evil_box_fidelity_red_contract() {
     }
 
     // A/G — the parity fixture and generated catalogue are data contracts, not
-    // implementation details. Both move from 49/500 to 50/501.
+    // implementation details. Both currently pin 51/502.
     let manifest: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
             .expect("read module-parity.json"),
     )
     .expect("parse module-parity.json");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(50),
-        "G: manifest point10 count is {:?}, expected 50",
+        manifest["counts"]["point10"].as_u64() == Some(51),
+        "G: manifest point10 count is {:?}, expected 51",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(501),
-        "G: manifest total is {:?}, expected 501",
+        manifest["counts"]["total"].as_u64() == Some(502),
+        "G: manifest total is {:?}, expected 502",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -210,8 +205,8 @@ fn plane9_evil_box_fidelity_red_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 50,
-        "G: manifest point10 array has {} names, expected 50",
+        manifest_names.len() == 51,
+        "G: manifest point10 array has {} names, expected 51",
         manifest_names.len()
     );
     check!(
@@ -229,13 +224,13 @@ fn plane9_evil_box_fidelity_red_contract() {
     )
     .expect("parse docs/modules/modules.json");
     check!(
-        catalogue["counts"]["point10"].as_u64() == Some(50),
-        "G: catalogue point10 count is {:?}, expected 50",
+        catalogue["counts"]["point10"].as_u64() == Some(51),
+        "G: catalogue point10 count is {:?}, expected 51",
         catalogue["counts"]["point10"]
     );
     check!(
-        catalogue["counts"]["total"].as_u64() == Some(501),
-        "G: catalogue total is {:?}, expected 501",
+        catalogue["counts"]["total"].as_u64() == Some(502),
+        "G: catalogue total is {:?}, expected 502",
         catalogue["counts"]["total"]
     );
     let catalogue_matches: Vec<_> = catalogue["modules"]
@@ -290,17 +285,16 @@ fn plane9_evil_box_fidelity_red_contract() {
         "G: module_license exact-4.0 arm is missing Evil Box"
     );
     check!(
-        compact(&ui_model).contains("checked.len(),50,"),
-        "G: UI licence provenance count must move from 49 to 50"
+        compact_contains(&ui_model, "checked.len(),51,"),
+        "G: UI licence provenance count must move from 50 to 51"
     );
 
     // A — the app wrapper must construct the same canonical/legacy names and
     // delegate every Point10Scene method plus apply_props.
     let app_registry = production_source(&repo_root.join("crates/modv-app/src/module_registry.rs"))
         .expect("read app module registry");
-    let compact_app = compact(&app_registry);
     check!(
-        compact_app.contains("EvilBox(EvilBox)"),
+        compact_contains(&app_registry, "EvilBox(EvilBox)"),
         "A: Point10SceneKind is missing EvilBox(EvilBox)"
     );
     check!(
@@ -308,9 +302,9 @@ fn plane9_evil_box_fidelity_red_contract() {
         "A: Point10SceneKind::create is missing Plane9 Evil Box"
     );
     check!(
-        compact_app.matches("Self::EvilBox(scene)").count() == 9,
+        compact_match_count(&app_registry, "Self::EvilBox(scene)") == 9,
         "A: Point10SceneKind must delegate apply_props plus all eight Point10Scene methods; got {} arms",
-        compact_app.matches("Self::EvilBox(scene)").count()
+        compact_match_count(&app_registry, "Self::EvilBox(scene)")
     );
 
     // F — sceneProps.js has no Evil Box entry (SCENE_PROP_CONFIGS lines 282-426
@@ -379,8 +373,6 @@ fn plane9_evil_box_fidelity_red_contract() {
         scene_path.display()
     );
     if let Some(source) = source {
-        let compact_source = compact(&source);
-
         // A — XML lines 3-6: provenance stays visible in the port's source.
         for needle in [
             "Cube/Evil Box.xml",
@@ -407,23 +399,26 @@ fn plane9_evil_box_fidelity_red_contract() {
             "build_box(1.0,1.0,1.0)",
             "permrand:1.0",
         ] {
-            check!(compact_source.contains(needle), "B: lost constant {needle}");
+            check!(
+                compact_contains(&source, needle),
+                "B: lost constant {needle}"
+            );
         }
         check!(
-            compact_source.contains("perspective(")
-                && compact_source.contains("CAMERA_FOV.to_radians()")
-                && compact_source.contains("apply_lens("),
+            compact_contains(&source, "perspective(")
+                && compact_contains(&source, "CAMERA_FOV.to_radians()")
+                && compact_contains(&source, "apply_lens("),
             "B: camera must use vertical-FOV perspective and apply Lens"
         );
         check!(
-            compact_source.contains("look_at(")
-                && compact_source.contains("CAMERA_POSITION[2]+CAMERA_LOOK_AT[2]"),
+            compact_contains(&source, "look_at(")
+                && compact_contains(&source, "CAMERA_POSITION[2]+CAMERA_LOOK_AT[2]"),
             "B: relative CamLookAt must be added to CamPos before look_at"
         );
         check!(
-            compact_source.contains("euler_xyz(")
-                && compact_source.contains(".to_radians()")
-                && compact_source.contains("MODEL_SCALE"),
+            compact_contains(&source, "euler_xyz(")
+                && compact_contains(&source, ".to_radians()")
+                && compact_contains(&source, "MODEL_SCALE"),
             "B: model must compose XYZ Euler radians with MODEL_SCALE"
         );
 
@@ -438,22 +433,22 @@ fn plane9_evil_box_fidelity_red_contract() {
             "out3=noise2(2,t)*720;",
         ] {
             check!(
-                compact_source.contains(&compact(expression)),
+                compact_contains(&source, expression),
                 "B: Expression1 lost {expression}"
             );
         }
         check!(
-            compact_source.contains("band(-1,0,0,0.03)")
-                && compact_source.contains("*0.3+0.001")
-                && compact_source.contains(".min(0.03)")
-                && compact_source.contains("permrand*10.0")
-                && compact_source.matches("value_noise2(").count() >= 3
-                && compact_source.matches("*720.0").count() >= 3,
+            compact_contains(&source, "band(-1,0,0,0.03)")
+                && compact_contains(&source, "*0.3+0.001")
+                && compact_contains(&source, ".min(0.03)")
+                && compact_contains(&source, "permrand*10.0")
+                && compact_match_count(&source, "value_noise2(") >= 3
+                && compact_match_count(&source, "*720.0") >= 3,
             "B: Rust drive must implement Expression1's damping-0 bass phase and three 720-degree noise axes"
         );
         for coordinate in ["0.0", "1.0", "2.0"] {
             check!(
-                compact_source.contains(&format!("value_noise2(t,{coordinate})")),
+                compact_contains(&source, &format!("value_noise2(t,{coordinate})")),
                 "B: Rust drive is missing noise2 axis {coordinate}"
             );
         }
@@ -465,15 +460,15 @@ fn plane9_evil_box_fidelity_red_contract() {
             "in1.y = 0.1+beat((noise1(time*5)*0.5+0.5)*0.1)*10;",
         ] {
             check!(
-                compact_source.contains(&compact(expression)),
+                compact_contains(&source, expression),
                 "D: Shader1 expression lost {expression}"
             );
         }
         check!(
-            compact_source.contains("beat(0)")
-                && compact_source.contains(".min(0.4)")
-                && compact_source.contains("noise1(time*5.0)")
-                && compact_source.contains("0.1+"),
+            compact_contains(&source, "beat(0)")
+                && compact_contains(&source, ".min(0.4)")
+                && compact_contains(&source, "noise1(time*5.0)")
+                && compact_contains(&source, "0.1+"),
             "D: Rust surface drive must implement both Shader1 expression lanes"
         );
 
@@ -489,7 +484,7 @@ fn plane9_evil_box_fidelity_red_contract() {
             "mip_level_count:1",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "C: RTT contract lost {needle}"
             );
         }
@@ -503,12 +498,12 @@ fn plane9_evil_box_fidelity_red_contract() {
             "C: RTT_MIPS must be documented as recorded from XML but inert under the single-mip/LOD-0 convention"
         );
         check!(
-            !compact_source.contains("rtt_mip_levels")
-                && !compact_source.contains("MipTarget")
-                && !compact_source.contains("fs_mip")
-                && !compact_source.contains("mip_pipeline")
-                && !compact_source.contains("mip_binds")
-                && !compact_source.contains("base_mip_level"),
+            !compact_contains(&source, "rtt_mip_levels")
+                && !compact_contains(&source, "MipTarget")
+                && !compact_contains(&source, "fs_mip")
+                && !compact_contains(&source, "mip_pipeline")
+                && !compact_contains(&source, "mip_binds")
+                && !compact_contains(&source, "base_mip_level"),
             "C: single-mip capture must not retain a mip helper, MipTarget, generation pass, or per-level views"
         );
         let level_samples = texture_sample_level_calls(&source);
@@ -518,14 +513,14 @@ fn plane9_evil_box_fidelity_red_contract() {
         );
         for sample in level_samples {
             check!(
-                compact(sample).ends_with(",0.0)"),
+                compact_ends_with(sample, ",0.0)"),
                 "C: capture sample must use LOD 0: {sample}"
             );
         }
         check!(
-            !compact_source.contains("RTT_SIZE:u32=256")
-                && !compact_source.contains("width:256")
-                && !compact_source.contains("height:256"),
+            !compact_contains(&source, "RTT_SIZE:u32=256")
+                && !compact_contains(&source, "width:256")
+                && !compact_contains(&source, "height:256"),
             "C: full-scene RTT must not use the vendor's inactive 256x256 custom size"
         );
 
@@ -541,20 +536,22 @@ fn plane9_evil_box_fidelity_red_contract() {
             "feedback_current=1-self.feedback_current",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "C: feedback contract lost {needle}"
             );
         }
         check!(
-            compact_source.contains("StoreTexture1")
-                && compact_source.contains("CopyTexture1")
-                && compact_source.contains("PreviousLayer1")
-                && compact_source.contains("Blur1"),
+            compact_contains(&source, "StoreTexture1")
+                && compact_contains(&source, "CopyTexture1")
+                && compact_contains(&source, "PreviousLayer1")
+                && compact_contains(&source, "Blur1"),
             "C: feedback graph node provenance is missing"
         );
         check!(
-            compact_source.contains("textureSampleLevel(g_texture1,g_sampler,tex,0.0).rgb,0.0")
-                || compact_source.contains("textureSample(g_texture1,g_sampler,tex).rgb,0.0"),
+            compact_contains(
+                &source,
+                "textureSampleLevel(g_texture1,g_sampler,tex,0.0).rgb,0.0"
+            ) || compact_contains(&source, "textureSample(g_texture1,g_sampler,tex).rgb,0.0"),
             "C: CopyTexture must copy RGB and force alpha zero (XML 277)"
         );
 
@@ -563,7 +560,6 @@ fn plane9_evil_box_fidelity_red_contract() {
         let cube = raw_const(&source, "EVIL_BOX_CUBE_WGSL");
         check!(cube.is_some(), "D: missing EVIL_BOX_CUBE_WGSL literal");
         if let Some(cube) = cube {
-            let compact_cube = compact(&cube);
             for needle in [
                 "u.view_proj",
                 "u.model",
@@ -576,7 +572,7 @@ fn plane9_evil_box_fidelity_red_contract() {
                 "vec4<f32>(vec3<f32>(v*2.0),1.0)",
             ] {
                 check!(
-                    compact_cube.contains(needle),
+                    compact_contains(&cube, needle),
                     "D: cube shader lost {needle}"
                 );
             }
@@ -591,7 +587,6 @@ fn plane9_evil_box_fidelity_red_contract() {
         let pass = raw_const(&source, "EVIL_BOX_PASS_WGSL");
         check!(pass.is_some(), "D: missing EVIL_BOX_PASS_WGSL literal");
         if let Some(pass) = pass {
-            let compact_pass = compact(&pass);
             for needle in [
                 "(p*0.95)*0.5+0.5",
                 "*0.85",
@@ -600,7 +595,7 @@ fn plane9_evil_box_fidelity_red_contract() {
                 "*u.in2.y",
             ] {
                 check!(
-                    compact_pass.contains(needle),
+                    compact_contains(&pass, needle),
                     "D: feedback shader lost {needle}"
                 );
             }
@@ -619,7 +614,6 @@ fn plane9_evil_box_fidelity_red_contract() {
             "D: missing EVIL_BOX_COMPOSITE_WGSL literal"
         );
         if let Some(ref composite_shader) = composite {
-            let compact_composite = compact(composite_shader);
             for needle in [
                 "textureSampleLevel(g_texture1,g_sampler,tex,0.0)",
                 "textureSampleLevel(g_texture2,g_sampler,tex,0.0)",
@@ -627,7 +621,7 @@ fn plane9_evil_box_fidelity_red_contract() {
                 "mix(bg,vec4<f32>(0.0),c.a)+c",
             ] {
                 check!(
-                    compact_composite.contains(needle),
+                    compact_contains(composite_shader, needle),
                     "D: composite shader lost {needle}"
                 );
             }
@@ -637,7 +631,7 @@ fn plane9_evil_box_fidelity_red_contract() {
             );
         }
         check!(
-            compact_source.contains("PLANE9_DUAL_TEXTURE_WGSL")
+            compact_contains(&source, "PLANE9_DUAL_TEXTURE_WGSL")
                 || composite
                     .as_ref()
                     .is_some_and(|shader| shader.contains("g_texture2")),
@@ -648,7 +642,7 @@ fn plane9_evil_box_fidelity_red_contract() {
         // is connected to RenderObject1.Render (319-320), so the cube chain
         // overrides it, exactly as in Sound Cube.
         check!(
-            !compact_source.contains("p9_fbm(") && !compact_source.contains("_fbm("),
+            !compact_contains(&source, "p9_fbm(") && !compact_contains(&source, "_fbm("),
             "D: dead RenderToTexture1 inline fbm pass must not be implemented"
         );
     }

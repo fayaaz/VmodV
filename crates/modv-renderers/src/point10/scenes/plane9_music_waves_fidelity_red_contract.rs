@@ -14,7 +14,9 @@ use crate::point10::scenes::plane9_common::{
     PLANE9_UNIFORMS_WGSL,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
-use crate::point10::test_support::{TestTarget, any_lit, gpu};
+use crate::point10::test_support::{
+    TestTarget, any_lit, compact, compact_contains, compact_match_count, gpu,
+};
 use crate::point10::{
     LENS_PROP, PLANE9_AUTHOR, PLANE9_SCENE_NAMES, Point10Scene, SceneContext, all_scenes,
     apply_lens, canonical_scene_name, gallery_kind, lens_value, plane9_scene_props,
@@ -25,13 +27,6 @@ const SCENE_NAME: &str = "Plane9 Music Waves";
 const LEGACY_NAME: &str = "Point10 Music Waves";
 const MUSIC_WAVES_LICENSE: &str = concat!("CC BY-", "NC-", "SA 4.0");
 const NC_SA_MARKER: &str = concat!("CC BY-", "NC-", "SA");
-
-fn compact(source: &str) -> String {
-    source
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect()
-}
 
 fn production_source(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok().map(|source| {
@@ -152,8 +147,8 @@ fn plane9_music_waves_fidelity_red_contract() {
 
     // A — XML lines 2-6 and 255-270: one new canonical Plane9/Dahl scene.
     check!(
-        scenes.len() == 50,
-        "A: expected 50 Point10 scenes, got {}",
+        scenes.len() == 51,
+        "A: expected 51 Point10 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -165,17 +160,21 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: all_scenes roster order is not deterministic"
     );
     check!(
-        names.last() == Some(&SCENE_NAME),
-        "A: Music Waves must be the deterministic sixth-batch roster tail, got {:?}",
+        names.last() == Some(&"Plane9 Hypno Toad"),
+        "A: Hypno Toad must be the deterministic roster tail, got {:?}",
         names.last()
     );
     check!(
-        names.get(names.len().saturating_sub(2)) == Some(&"Plane9 Evil Box"),
-        "A: Music Waves must follow Evil Box without reordering the existing roster"
+        names.get(names.len().saturating_sub(2)) == Some(&SCENE_NAME),
+        "A: Music Waves must be penultimate, after Evil Box without reordering the existing roster"
     );
     check!(
-        PLANE9_SCENE_NAMES.len() == 32,
-        "A: expected 32 Plane9 scene names, got {}",
+        names.get(names.len().saturating_sub(3)) == Some(&"Plane9 Evil Box"),
+        "A: Music Waves must still follow Evil Box"
+    );
+    check!(
+        PLANE9_SCENE_NAMES.len() == 33,
+        "A: expected 33 Plane9 scene names, got {}",
         PLANE9_SCENE_NAMES.len()
     );
     let mut unique_plane9_names = PLANE9_SCENE_NAMES.to_vec();
@@ -186,8 +185,12 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: duplicate names in PLANE9_SCENE_NAMES"
     );
     check!(
-        PLANE9_SCENE_NAMES.last() == Some(&SCENE_NAME),
-        "A: PLANE9_SCENE_NAMES must end with {SCENE_NAME}"
+        PLANE9_SCENE_NAMES.last() == Some(&"Plane9 Hypno Toad"),
+        "A: PLANE9_SCENE_NAMES must end with Plane9 Hypno Toad"
+    );
+    check!(
+        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(2)) == Some(&SCENE_NAME),
+        "A: PLANE9_SCENE_NAMES must place {SCENE_NAME} penultimate"
     );
     let matches: Vec<_> = scenes
         .iter()
@@ -239,21 +242,21 @@ fn plane9_music_waves_fidelity_red_contract() {
         );
     }
 
-    // A — the parity fixture and generated catalogue move from 49/500 to
-    // 50/501. XML line 6 is the 4.0 licence arm, not the 3.0 arm.
+    // A — the parity fixture and generated catalogue currently pin 51/502.
+    // XML line 6 is the 4.0 licence arm, not the 3.0 arm.
     let manifest: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
             .expect("read module-parity.json"),
     )
     .expect("parse module-parity.json");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(50),
-        "A: manifest point10 count is {:?}, expected 50",
+        manifest["counts"]["point10"].as_u64() == Some(51),
+        "A: manifest point10 count is {:?}, expected 51",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(501),
-        "A: manifest total is {:?}, expected 501",
+        manifest["counts"]["total"].as_u64() == Some(502),
+        "A: manifest total is {:?}, expected 502",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -263,8 +266,8 @@ fn plane9_music_waves_fidelity_red_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 50,
-        "A: manifest point10 array has {} names, expected 50",
+        manifest_names.len() == 51,
+        "A: manifest point10 array has {} names, expected 51",
         manifest_names.len()
     );
     check!(
@@ -275,6 +278,11 @@ fn plane9_music_waves_fidelity_red_contract() {
             == 1,
         "A: manifest must contain {SCENE_NAME} exactly once"
     );
+    check!(
+        manifest_names.last() == Some(&"Plane9 Hypno Toad")
+            && manifest_names.get(manifest_names.len().saturating_sub(2)) == Some(&SCENE_NAME),
+        "A: manifest must append Plane9 Hypno Toad after {SCENE_NAME}"
+    );
 
     let catalogue: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("docs/modules/modules.json"))
@@ -282,18 +290,18 @@ fn plane9_music_waves_fidelity_red_contract() {
     )
     .expect("parse docs/modules/modules.json");
     check!(
-        catalogue["counts"]["point10"].as_u64() == Some(50),
-        "A: catalogue point10 count is {:?}, expected 50",
+        catalogue["counts"]["point10"].as_u64() == Some(51),
+        "A: catalogue point10 count is {:?}, expected 51",
         catalogue["counts"]["point10"]
     );
     check!(
-        catalogue["counts"]["total"].as_u64() == Some(501),
-        "A: catalogue total is {:?}, expected 501",
+        catalogue["counts"]["total"].as_u64() == Some(502),
+        "A: catalogue total is {:?}, expected 502",
         catalogue["counts"]["total"]
     );
     check!(
-        catalogue["modules"].as_array().map(Vec::len) == Some(501),
-        "A: catalogue modules array must contain 501 entries"
+        catalogue["modules"].as_array().map(Vec::len) == Some(502),
+        "A: catalogue modules array must contain 502 entries"
     );
     let catalogue_matches: Vec<_> = catalogue["modules"]
         .as_array()
@@ -366,8 +374,8 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: module_license exact-4.0 arm is missing Music Waves"
     );
     check!(
-        compact(&ui_model).contains("checked.len(),50,"),
-        "A: UI licence provenance count must move from 49 to 50"
+        compact_contains(&ui_model, "checked.len(),51,"),
+        "A: UI licence provenance count must move from 50 to 51"
     );
 
     // A — the app wrapper must construct the canonical name and delegate every
@@ -375,13 +383,15 @@ fn plane9_music_waves_fidelity_red_contract() {
     // not-yet-existing Rust type.
     let app_registry = production_source(&repo_root.join("crates/modv-app/src/module_registry.rs"))
         .expect("read app module registry");
-    let compact_app = compact(&app_registry);
     check!(
-        compact_app.contains("usemodv_renderers::point10::scenes::music_waves::MusicWaves;"),
+        compact_contains(
+            &app_registry,
+            "usemodv_renderers::point10::scenes::music_waves::MusicWaves;"
+        ),
         "A: app registry is missing the MusicWaves import"
     );
     check!(
-        compact_app.contains("MusicWaves(MusicWaves)"),
+        compact_contains(&app_registry, "MusicWaves(MusicWaves)"),
         "A: Point10SceneKind is missing MusicWaves(MusicWaves)"
     );
     check!(
@@ -389,9 +399,9 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: Point10SceneKind::create is missing Plane9 Music Waves"
     );
     check!(
-        compact_app.matches("Self::MusicWaves(scene)").count() == 9,
+        compact_match_count(&app_registry, "Self::MusicWaves(scene)") == 9,
         "A: Point10SceneKind must delegate apply_props plus all eight Point10Scene methods; got {} arms",
-        compact_app.matches("Self::MusicWaves(scene)").count()
+        compact_match_count(&app_registry, "Self::MusicWaves(scene)")
     );
 
     // A/props — the vendor JS has generic clone machinery but no Music Waves
@@ -461,8 +471,6 @@ fn plane9_music_waves_fidelity_red_contract() {
         }
     }
     if let Some(source) = source {
-        let compact_source = compact(&source);
-
         // A — XML lines 3-6: provenance stays visible in the port's source.
         for needle in [
             "Music Waves.xml",
@@ -488,7 +496,7 @@ fn plane9_music_waves_fidelity_red_contract() {
             "A: the licence declaration must stay in the split concat! form"
         );
         check!(
-            !licence_declaration.contains(NC_SA_MARKER),
+            !compact_contains(licence_declaration, NC_SA_MARKER),
             "A: the licence declaration must not contain contiguous NC-SA scanner text"
         );
 
@@ -505,12 +513,11 @@ fn plane9_music_waves_fidelity_red_contract() {
             "SCALE_BY_ASPECT:bool=false;",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "B: lost camera constant {needle}"
             );
         }
         if let Some(body) = fn_body(&source, "view_proj") {
-            let compact_body = compact(body);
             let look = body.find("look_at(");
             let rotate = body.find("euler_xyz(");
             check!(
@@ -530,7 +537,7 @@ fn plane9_music_waves_fidelity_red_contract() {
                 "CAMERA_FOV.to_radians()",
                 "ifSCALE_BY_ASPECT",
             ] {
-                check!(compact_body.contains(needle), "B: view_proj lost {needle}");
+                check!(compact_contains(body, needle), "B: view_proj lost {needle}");
             }
         } else {
             check!(false, "B: missing view_proj implementation");
@@ -560,7 +567,7 @@ fn plane9_music_waves_fidelity_red_contract() {
             "trs(",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "C: lost geometry/clone constant {needle}"
             );
         }
@@ -570,21 +577,20 @@ fn plane9_music_waves_fidelity_red_contract() {
         );
         for constant in ["DISC_PHASE", "DISC_SCALE_U", "DISC_SCALE_V"] {
             check!(
-                compact_source.matches(constant).count() >= 2,
+                compact_match_count(&source, constant) >= 2,
                 "C: {constant} must be recorded and used, not merely documented"
             );
         }
         if let Some(body) = fn_body(&source, "clone_color") {
-            let compact_body = compact(body);
             for needle in ["letd=xasf32/CLONE_OBJECTS_Xasf32;", "[0.0,0.0,0.0,d]"] {
                 check!(
-                    compact_body.contains(needle),
+                    compact_contains(body, needle),
                     "C: clone_color lost {needle}"
                 );
             }
             for forbidden in ["in1", "out1", "perm", "rot", "scale"] {
                 check!(
-                    !compact_body.contains(forbidden),
+                    !compact_contains(body, forbidden),
                     "C: clone drive must not consume {forbidden}"
                 );
             }
@@ -635,14 +641,14 @@ fn plane9_music_waves_fidelity_red_contract() {
             );
         }
         check!(
-            !compact_source.contains("instance_scale"),
+            !compact_contains(&source, "instance_scale"),
             "C: clone scale must stay 1; no per-instance scale attribute is allowed"
         );
         check!(
-            compact_source.contains("VertexStepMode::Instance")
-                && compact_source.contains("VertexFormat::Float32x4")
-                && compact_source.contains("draw_indexed(")
-                && compact_source.contains("0..CLONE_OBJECTS_X"),
+            compact_contains(&source, "VertexStepMode::Instance")
+                && compact_contains(&source, "VertexFormat::Float32x4")
+                && compact_contains(&source, "draw_indexed(")
+                && compact_contains(&source, "0..CLONE_OBJECTS_X"),
             "C: 100 rings must be instanced with a per-instance RGBA colour attribute"
         );
 
@@ -652,7 +658,6 @@ fn plane9_music_waves_fidelity_red_contract() {
         let wave = raw_const(&source, "MUSIC_WAVES_WGSL");
         check!(wave.is_some(), "D: missing MUSIC_WAVES_WGSL literal");
         if let Some(wave) = wave {
-            let compact_wave = compact(&wave);
             for needle in [
                 "instance_color:vec4<f32>",
                 "varv=iPosition;",
@@ -672,27 +677,27 @@ fn plane9_music_waves_fidelity_red_contract() {
                 "returnin.diffuse;",
             ] {
                 check!(
-                    compact_wave.contains(needle),
+                    compact_contains(&wave, needle),
                     "D: wave shader lost {needle}"
                 );
             }
             check!(
-                compact_wave.contains("textureLoad(g_texture1,")
-                    || compact_wave.contains("textureSampleLevel(g_texture1,g_sampler,"),
+                compact_contains(&wave, "textureLoad(g_texture1,")
+                    || compact_contains(&wave, "textureSampleLevel(g_texture1,g_sampler,"),
                 "D: height must sample SoundTexture1"
             );
-            let without_p9_smoothstep = compact_wave.replace("p9_smoothstep(", "");
+            let without_p9_smoothstep = compact(&wave).replace("p9_smoothstep(", "");
             check!(
-                !without_p9_smoothstep.contains("smoothstep("),
+                !compact_contains(&without_p9_smoothstep, "smoothstep("),
                 "D: reversed-edge smoothstep must never use WGSL's builtin smoothstep"
             );
             check!(
-                !compact_wave.contains("p9_light_") && !compact_wave.contains("lighting"),
+                !compact_contains(&wave, "p9_light_") && !compact_contains(&wave, "lighting"),
                 "D: fragment must return diffuse with no lighting pass"
             );
             for forbidden in ["in1", "out1", "perm"] {
                 check!(
-                    !compact_wave.contains(forbidden),
+                    !compact_contains(&wave, forbidden),
                     "F: vestigial Expression1 term {forbidden} must not reach the wave shader"
                 );
             }
@@ -721,7 +726,7 @@ fn plane9_music_waves_fidelity_red_contract() {
             "CLEAR2:wgpu::Color=wgpu::Color{r:0.0,g:0.0,b:0.0,a:0.0};",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "D/I: lost render-state constant {needle}"
             );
         }
@@ -741,39 +746,40 @@ fn plane9_music_waves_fidelity_red_contract() {
             "SoundTexture::new",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "E: scene lost SoundTexture1 term {needle}"
             );
         }
         check!(
-            !compact_source.contains("fnsound_texture"),
+            !compact_contains(&source, "fnsound_texture"),
             "E: SoundTexture must be a reusable helper, not an inline scene function"
         );
         if let Some(body) = fn_body(&source, "rebuild") {
             let sound_sampler = block_body(body, "let sound_sampler");
             check!(
                 sound_sampler.is_some_and(|sampler| {
-                    let sampler = compact(sampler);
-                    sampler.contains("address_mode_u:wgpu::AddressMode::Repeat")
-                        && sampler.contains("address_mode_v:wgpu::AddressMode::Repeat")
-                        && sampler.contains("mag_filter:wgpu::FilterMode::Linear")
-                        && sampler.contains("min_filter:wgpu::FilterMode::Linear")
-                        && sampler.contains("mipmap_filter:wgpu::MipmapFilterMode::Nearest")
+                    compact_contains(sampler, "address_mode_u:wgpu::AddressMode::Repeat")
+                        && compact_contains(sampler, "address_mode_v:wgpu::AddressMode::Repeat")
+                        && compact_contains(sampler, "mag_filter:wgpu::FilterMode::Linear")
+                        && compact_contains(sampler, "min_filter:wgpu::FilterMode::Linear")
+                        && compact_contains(
+                            sampler,
+                            "mipmap_filter:wgpu::MipmapFilterMode::Nearest",
+                        )
                 }),
                 "E: SoundTexture1 needs a Repeat/Linear sampler with nearest mip filtering"
             );
             let wave_bind = block_body(body, "let wave_bind");
             check!(
                 wave_bind.is_some_and(|bind| {
-                    let bind = compact(bind);
-                    bind.contains("TextureView(sound.view())")
-                        && bind.contains("Sampler(&sound_sampler)")
+                    compact_contains(bind, "TextureView(sound.view())")
+                        && compact_contains(bind, "Sampler(&sound_sampler)")
                 }),
                 "E: the wave pass must bind sound_sampler specifically to SoundTexture1"
             );
             let composite_bind = block_body(body, "let composite_bind");
             check!(
-                composite_bind.is_some_and(|bind| compact(bind).contains("Sampler(&sampler)")),
+                composite_bind.is_some_and(|bind| compact_contains(bind, "Sampler(&sampler)")),
                 "E: the Repeat sampler must stay scoped to SoundTexture1, not the composite"
             );
         } else {
@@ -798,14 +804,13 @@ fn plane9_music_waves_fidelity_red_contract() {
             "MusicWavesDrive",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "F: Expression1 lost {needle}"
             );
         }
         if let Some(body) = fn_body(&source, "music_waves_drive") {
-            let compact_body = compact(body);
             for needle in ["(band*2.0+0.01)*dt", "permrand*10.0", "letout1=t*0.25;"] {
-                check!(compact_body.contains(needle), "F: drive lost {needle}");
+                check!(compact_contains(body, needle), "F: drive lost {needle}");
             }
         } else {
             check!(false, "F: missing music_waves_drive implementation");
@@ -821,7 +826,7 @@ fn plane9_music_waves_fidelity_red_contract() {
             "mip_level_count:1",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "G: RTT contract lost {needle}"
             );
         }
@@ -830,13 +835,13 @@ fn plane9_music_waves_fidelity_red_contract() {
             "G: Width/Height 0 and CreateMipMaps false must be documented"
         );
         check!(
-            !compact_source.contains("p9_fbm") && !compact_source.contains("_fbm"),
+            !compact_contains(&source, "p9_fbm") && !compact_contains(&source, "_fbm"),
             "G: dead RenderToTexture1 inline shader must not be implemented"
         );
         check!(
-            !compact_source.contains("RTT_SIZE:u32=256")
-                && !compact_source.contains("width:256")
-                && !compact_source.contains("height:256"),
+            !compact_contains(&source, "RTT_SIZE:u32=256")
+                && !compact_contains(&source, "width:256")
+                && !compact_contains(&source, "height:256"),
             "G: full-scene RTT must not use the inactive 256x256 custom size"
         );
 
@@ -853,13 +858,10 @@ fn plane9_music_waves_fidelity_red_contract() {
             "set_radius(BLOOM_RADIUS)",
             "set_threshold(BLOOM_THRESHOLD)",
         ] {
-            check!(compact_source.contains(needle), "H: Bloom1 lost {needle}");
+            check!(compact_contains(&source, needle), "H: Bloom1 lost {needle}");
         }
         check!(
-            compact_source
-                .matches("set_strength(BLOOM_STRENGTH)")
-                .count()
-                == 1,
+            compact_match_count(&source, "set_strength(BLOOM_STRENGTH)") == 1,
             "H: bloom intensity 0.2 must be set exactly once at construction"
         );
 
@@ -872,7 +874,6 @@ fn plane9_music_waves_fidelity_red_contract() {
             "I: missing MUSIC_WAVES_COMPOSITE_WGSL literal"
         );
         if let Some(composite) = composite {
-            let compact_composite = compact(&composite);
             for needle in [
                 "letp=in.tex*2.0-1.0;",
                 "letc1=textureSampleLevel(g_texture1,g_sampler,tex,0.0)*2.0;",
@@ -884,7 +885,7 @@ fn plane9_music_waves_fidelity_red_contract() {
                 "returnoColor;",
             ] {
                 check!(
-                    compact_composite.contains(needle),
+                    compact_contains(&composite, needle),
                     "I: composite shader lost {needle}"
                 );
             }
@@ -896,7 +897,7 @@ fn plane9_music_waves_fidelity_red_contract() {
                 "p9_blend_screen(bg.rgb,c.rgb)",
             ] {
                 check!(
-                    !compact_composite.contains(forbidden),
+                    !compact_contains(&composite, forbidden),
                     "I: composite shader retained non-vendor term {forbidden}"
                 );
             }
@@ -913,7 +914,7 @@ fn plane9_music_waves_fidelity_red_contract() {
             "RenderToTexture1",
         ] {
             check!(
-                compact_source.contains(needle),
+                compact_contains(&source, needle),
                 "I: composite binding lost {needle}"
             );
         }
@@ -935,7 +936,6 @@ fn plane9_music_waves_fidelity_red_contract() {
         helper_path.display()
     );
     if let Some(helper) = helper {
-        let compact_helper = compact(&helper);
         for needle in [
             "pubstructSoundTexture",
             "pubstructSoundTextureConfig",
@@ -964,7 +964,7 @@ fn plane9_music_waves_fidelity_red_contract() {
             "copy_from_slice(",
         ] {
             check!(
-                compact_helper.contains(needle),
+                compact_contains(&helper, needle),
                 "E: SoundTexture helper lost {needle}"
             );
         }
@@ -979,13 +979,12 @@ fn plane9_music_waves_fidelity_red_contract() {
 
     // I — `_blendScreen` from P9Glsl.js:408-411 belongs in the shared Plane9
     // prelude and must validate before Music Waves consumes it.
-    let compact_batch = compact(PLANE9_BATCH_WGSL);
     for needle in [
         "fnp9_blend_screen(src:vec3<f32>,dest:vec3<f32>)->vec3<f32>",
         "vec3<f32>(1.0)-((vec3<f32>(1.0)-src)*(vec3<f32>(1.0)-dest))",
     ] {
         check!(
-            compact_batch.contains(needle),
+            compact_contains(PLANE9_BATCH_WGSL, needle),
             "I: shared Plane9 prelude lost {needle}"
         );
     }

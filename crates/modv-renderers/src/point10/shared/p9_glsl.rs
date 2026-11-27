@@ -103,6 +103,11 @@ fn p9_hsv2rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
   return mix(vec3<f32>(1.0), p9_saturate3(ramp), vec3<f32>(p9_saturate(s))) * vec3<f32>(v);
 }
 
+// vec3 _tolinear(vec3 srgb) — `P9Glsl.js:29-30`, a linearisation polynomial.
+fn p9_tolinear(srgb: vec3<f32>) -> vec3<f32> {
+  return srgb * (srgb * (srgb * vec3<f32>(0.305306011) + vec3<f32>(0.682171111)) + vec3<f32>(0.012522878));
+}
+
 // vec4 _axisAngleToQuaternion(vec3 axis, float angle)
 fn p9_axis_angle_to_quaternion(axis: vec3<f32>, angle: f32) -> vec4<f32> {
   let half_angle = angle * 0.5;
@@ -311,6 +316,19 @@ mod tests {
         assert!((glsl(1.0, 0.9, 0.9) - 1.0).abs() < 1e-6);
         assert!((glsl(1.0, 0.9, 1.0) - 0.0).abs() < 1e-6);
         assert!((glsl(1.0, 0.9, 0.95) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tolinear_matches_the_glsl_polynomial_endpoints() {
+        // f64 intermediate so the literal precision is not linted as excessive
+        // for f32; the endpoints are what the WGSL polynomial must preserve.
+        let tolinear = |srgb: f32| {
+            let srgb = f64::from(srgb);
+            let value = srgb * (srgb * (srgb * 0.305_306_011 + 0.682_171_111) + 0.012_522_878);
+            value as f32
+        };
+        assert!(tolinear(0.0).abs() < 1.0e-7);
+        assert!((tolinear(1.0) - 1.0).abs() < 1.0e-6);
     }
 
     #[test]

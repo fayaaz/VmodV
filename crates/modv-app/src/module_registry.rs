@@ -62,8 +62,8 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 50 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 402 `.fs` shaders of the ISF corpus (501 total). Names match
+//! 51 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
+//! module and the 402 `.fs` shaders of the ISF corpus (502 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -149,6 +149,7 @@ use modv_renderers::point10::scenes::earth::Earth;
 use modv_renderers::point10::scenes::evil_box::EvilBox;
 use modv_renderers::point10::scenes::gradient::Gradient;
 use modv_renderers::point10::scenes::hollow_cube::HollowCube;
+use modv_renderers::point10::scenes::hypno_toad::HypnoToad;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
 use modv_renderers::point10::scenes::latent_backrooms::LatentBackrooms;
 use modv_renderers::point10::scenes::light_tunnel::LightTunnel;
@@ -427,6 +428,8 @@ pub enum Point10SceneKind {
     EvilBox(EvilBox),
     /// `Plane9 Music Waves` (`scenes/music_waves.rs`).
     MusicWaves(MusicWaves),
+    /// `Plane9 Hypno Toad` (`scenes/hypno_toad.rs`).
+    HypnoToad(HypnoToad),
 }
 
 impl Point10SceneKind {
@@ -512,6 +515,7 @@ impl Point10SceneKind {
             "Plane9 Spiky" => Self::Spiky(Spiky::new()),
             "Plane9 Evil Box" => Self::EvilBox(EvilBox::new()),
             "Plane9 Music Waves" => Self::MusicWaves(MusicWaves::new()),
+            "Plane9 Hypno Toad" => Self::HypnoToad(HypnoToad::new()),
             _ => return None,
         })
     }
@@ -574,6 +578,7 @@ impl Point10SceneKind {
             Self::Spiky(scene) => scene.apply_props(|key| get(key)),
             Self::EvilBox(scene) => scene.apply_props(|key| get(key)),
             Self::MusicWaves(scene) => scene.apply_props(|key| get(key)),
+            Self::HypnoToad(scene) => scene.apply_props(|key| get(key)),
         }
     }
 }
@@ -632,6 +637,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.name(),
             Self::EvilBox(scene) => scene.name(),
             Self::MusicWaves(scene) => scene.name(),
+            Self::HypnoToad(scene) => scene.name(),
         }
     }
 
@@ -687,6 +693,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.init(ctx),
             Self::EvilBox(scene) => scene.init(ctx),
             Self::MusicWaves(scene) => scene.init(ctx),
+            Self::HypnoToad(scene) => scene.init(ctx),
         }
     }
 
@@ -742,6 +749,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.resize(width, height),
             Self::EvilBox(scene) => scene.resize(width, height),
             Self::MusicWaves(scene) => scene.resize(width, height),
+            Self::HypnoToad(scene) => scene.resize(width, height),
         }
     }
 
@@ -797,6 +805,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.update(dt, audio),
             Self::EvilBox(scene) => scene.update(dt, audio),
             Self::MusicWaves(scene) => scene.update(dt, audio),
+            Self::HypnoToad(scene) => scene.update(dt, audio),
         }
     }
 
@@ -856,6 +865,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.render(encoder, target),
             Self::EvilBox(scene) => scene.render(encoder, target),
             Self::MusicWaves(scene) => scene.render(encoder, target),
+            Self::HypnoToad(scene) => scene.render(encoder, target),
         }
     }
 
@@ -911,6 +921,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.dispose(),
             Self::EvilBox(scene) => scene.dispose(),
             Self::MusicWaves(scene) => scene.dispose(),
+            Self::HypnoToad(scene) => scene.dispose(),
         }
     }
 
@@ -966,6 +977,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.props(),
             Self::EvilBox(scene) => scene.props(),
             Self::MusicWaves(scene) => scene.props(),
+            Self::HypnoToad(scene) => scene.props(),
         }
     }
 
@@ -1021,6 +1033,7 @@ impl Point10Scene for Point10SceneKind {
             Self::Spiky(scene) => scene.meta(),
             Self::EvilBox(scene) => scene.meta(),
             Self::MusicWaves(scene) => scene.meta(),
+            Self::HypnoToad(scene) => scene.meta(),
         }
     }
 }
@@ -2673,7 +2686,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 33 + 16 + 50, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 33 + 16 + 51, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2693,7 +2706,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 50);
+        assert_eq!(registry.point10_definitions().len(), 51);
     }
 
     #[test]
@@ -2757,6 +2770,7 @@ mod tests {
                 "Plane9 Spiky",
                 "Plane9 Evil Box",
                 "Plane9 Music Waves",
+                "Plane9 Hypno Toad",
             ]
         );
 
@@ -3834,7 +3848,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 50 + 402 + milkdrop_count,
+            33 + 16 + 51 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3910,12 +3924,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 50 + 402 + milkdrop_count,
+            33 + 16 + 51 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(501),
+            Some(502),
             "manifest total"
         );
     }

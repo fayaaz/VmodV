@@ -28,6 +28,7 @@
 //! | [`spiky`] | Spiky | `Things/Spiky.xml` (mesh-modifier chain) |
 //! | [`evil_box`] | Evil Box | `Cube/Evil Box.xml` (feedback RTT chain) |
 //! | [`music_waves`] | Music Waves | `Music/Music Waves.xml` (instanced wave RTT + bloom) |
+//! | [`hypno_toad`] | Hypno Toad | `Psychedelic/HypnoToad.xml` (single-pass instanced spirograph) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -47,6 +48,8 @@
 
 #[cfg(test)]
 mod evil_box_red_contract;
+#[cfg(test)]
+mod plane9_hypno_toad_fidelity_red_contract;
 #[cfg(test)]
 mod plane9_music_waves_fidelity_red_contract;
 
@@ -70,6 +73,7 @@ pub mod evil_box;
 pub mod fire_common;
 pub mod gradient;
 pub mod hollow_cube;
+pub mod hypno_toad;
 pub mod it_is_coming_for_you;
 pub mod latent_backrooms;
 pub mod light_tunnel;

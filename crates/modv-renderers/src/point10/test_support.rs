@@ -11,6 +11,32 @@
 #![cfg(test)]
 #![forbid(unsafe_code)]
 
+/// Whitespace-insensitive substring test. Compacts BOTH sides, so a needle
+/// containing spaces inside string literals still matches. Never compare a raw
+/// needle against a compacted source — see the
+/// `no_contract_compacts_only_one_side` guard.
+pub(crate) fn compact_contains(source: &str, needle: &str) -> bool {
+    compact(source).contains(&compact(needle))
+}
+
+/// The single whitespace-compaction implementation shared by test contracts.
+pub(crate) fn compact(source: &str) -> String {
+    source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
+/// Count whitespace-insensitive, non-overlapping substring matches.
+pub(crate) fn compact_match_count(source: &str, needle: &str) -> usize {
+    compact(source).matches(&compact(needle)).count()
+}
+
+/// Whitespace-insensitive suffix test for contracts that pin shader endings.
+pub(crate) fn compact_ends_with(source: &str, suffix: &str) -> bool {
+    compact(source).ends_with(&compact(suffix))
+}
+
 /// Minimal `std`-only `block_on`, same approach as `modv-render/src/device.rs`.
 pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::task::{Context, Poll};
@@ -255,4 +281,113 @@ pub(crate) fn check_bloom_brightness(
             "{detail}bloom-enabled frame must be at least 5% brighter overall"
         ));
     }
+}
+
+/// Return semicolon-delimited statements that compact one side and then call
+/// `.contains(` on it.
+///
+/// This is deliberately a pragmatic line/statement heuristic: it recognises
+/// direct `compact(...).contains(...)` chains, locals assigned from `compact`
+/// or an explicit whitespace filter, and manual `is_whitespace()` compaction.
+/// It can miss aliases hidden behind macros or unrelated helper names, so it is
+/// a recurrence guard rather than a Rust parser.
+fn unsafe_compacted_contains(source: &str) -> Vec<(usize, String)> {
+    let mut compacted_locals = std::collections::BTreeSet::new();
+    for line in source.lines() {
+        let Some((lhs, rhs)) = line.split_once('=') else {
+            continue;
+        };
+        if (rhs.contains("compact(") || rhs.contains("is_whitespace()"))
+            && let Some(identifier) = lhs.split_whitespace().next_back()
+        {
+            compacted_locals.insert(identifier.to_string());
+        }
+    }
+
+    let mut failures = Vec::new();
+    let mut statement = String::new();
+    let mut statement_line = 1usize;
+    for (index, line) in source.lines().enumerate() {
+        if statement.is_empty() {
+            statement_line = index + 1;
+        }
+        statement.push_str(line);
+        statement.push(' ');
+        if !line.contains(';') {
+            continue;
+        }
+        let has_contains = statement.contains(".contains(");
+        let has_compaction = statement.contains("compact(")
+            || statement.contains("is_whitespace()")
+            || statement
+                .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+                .any(|token| compacted_locals.contains(token));
+        if has_contains && has_compaction {
+            failures.push((statement_line, statement.trim().to_string()));
+        }
+        statement.clear();
+    }
+    failures
+}
+
+#[test]
+fn no_contract_compacts_only_one_side() {
+    use std::path::Path;
+
+    let scenes_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/point10/scenes");
+    let mut contract_paths = Vec::new();
+    for entry in std::fs::read_dir(&scenes_dir).expect("read Point10 scenes directory") {
+        let path = entry.expect("read scene directory entry").path();
+        let is_contract = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains("contract") && name.ends_with(".rs"));
+        if is_contract {
+            contract_paths.push(path);
+        }
+    }
+    contract_paths.sort();
+    assert!(
+        contract_paths.len() >= 3,
+        "contract compaction guard found only {} contract files in {}; the scan must not be vacuous",
+        contract_paths.len(),
+        scenes_dir.display()
+    );
+
+    // Prove the detector is exercised in both supported bad shapes and does
+    // not flag the safe helper that compacts both sides.
+    let local_bad =
+        "let compact_source = compact(&source);\ncompact_source.contains(\"1x1 plane\");";
+    let direct_bad = "compact(&source).contains(\"1x1 plane\");";
+    let safe = "compact_contains(source, \"1x1 plane\");";
+    assert_eq!(
+        unsafe_compacted_contains(local_bad).len(),
+        1,
+        "guard must detect a compacted local followed by contains"
+    );
+    assert_eq!(
+        unsafe_compacted_contains(direct_bad).len(),
+        1,
+        "guard must detect a direct compact(...).contains(...) chain"
+    );
+    assert!(
+        unsafe_compacted_contains(safe).is_empty(),
+        "guard must accept compact_contains"
+    );
+
+    let mut failures = Vec::new();
+    for path in contract_paths {
+        let source = std::fs::read_to_string(&path).expect("read Plane9 contract");
+        for (line, statement) in unsafe_compacted_contains(&source) {
+            failures.push(format!(
+                "{}:{line}: {statement}\n  use compact_contains(source, needle): it compacts both sides, so a needle containing spaces can match",
+                path.display()
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "Plane9 contracts still compact only one side:\n{}",
+        failures.join("\n")
+    );
 }
