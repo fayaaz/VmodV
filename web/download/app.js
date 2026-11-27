@@ -152,10 +152,7 @@ function showRelease(release) {
 
   const assets = Array.isArray(release.assets) ? release.assets : [];
   renderAll(assets);
-  setStatus(
-    `${assets.length} build${assets.length === 1 ? '' : 's'} attached to this release. ` +
-      'Buttons link straight to the asset files.'
-  );
+  setStatus('');
 }
 
 function showFailure(error) {

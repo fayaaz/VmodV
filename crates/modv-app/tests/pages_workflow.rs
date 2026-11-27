@@ -139,6 +139,89 @@ fn download_page_links_the_latest_release_for_every_platform() {
 }
 
 #[test]
+fn download_page_lede_does_not_repeat_the_platform_cards() {
+    let page = download_page()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        !page.contains(
+            "Grab an AppImage or a Debian package below, or pick up a best-effort \
+             portable build for Windows and macOS."
+        ),
+        "PAGES-02: the hero lede must stay short; the platform cards already \
+         describe the available builds"
+    );
+}
+
+#[test]
+fn download_page_does_not_use_platform_taglines() {
+    let page = download_page();
+    assert!(
+        !page.contains("class=\"card-sub\""),
+        "PAGES-02: the platform cards must not carry taglines under their headings"
+    );
+    for tagline in [
+        "Full feature set — the primary target.",
+        "Best-effort portable ZIP — no installer.",
+        "Best-effort portable app bundle — no installer.",
+    ] {
+        assert!(
+            !page.contains(tagline),
+            "PAGES-02: remove the platform tagline {tagline:?}"
+        );
+    }
+}
+
+#[test]
+fn download_page_has_platform_specific_requirements() {
+    // Collapse HTML wrapping so a sentence split across lines still matches.
+    let page = download_page()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    // One "What you need" block per download choice, not a single generic
+    // paragraph that pretends every format has the same prerequisites.
+    for id in [
+        "needs-linux-appimage",
+        "needs-linux-deb",
+        "needs-windows",
+        "needs-macos",
+    ] {
+        assert!(
+            page.contains(&format!("id=\"{id}\"")),
+            "PAGES-02: the download page must have a per-platform requirements block ({id})"
+        );
+    }
+    assert!(
+        !page.contains("Either way you need a Vulkan driver"),
+        "PAGES-02: the one-size-fits-all requirements paragraph must be gone"
+    );
+    assert!(
+        page.contains("installs the runtime dependencies"),
+        "PAGES-02: the .deb card must say installing the package pulls in its dependencies"
+    );
+    assert!(
+        page.contains("libfuse2"),
+        "PAGES-02: the AppImage card must cover FUSE separately from the .deb card"
+    );
+}
+
+#[test]
+fn download_page_does_not_show_an_asset_count_status_line() {
+    let page = download_page();
+    assert!(
+        !page.contains("attached to this release."),
+        "PAGES-02: the download page must not render an asset-count status line; \
+         the buttons already speak for themselves"
+    );
+    assert!(
+        !page.contains("Buttons link straight to the asset files"),
+        "PAGES-02: remove the redundant status sentence after the assets load"
+    );
+}
+
+#[test]
 fn download_page_uses_the_app_ui_palette() {
     let page = download_page().to_lowercase();
     // These are read from the app's theme.rs, so a palette change in the UI

@@ -38,11 +38,7 @@
       <section class="hero">
         <p class="eyebrow">LATEST STABLE BUILD</p>
         <h1>Get VmodV.</h1>
-        <p class="lede">
-          Modular audio visualisation for Linux. Grab an AppImage or a Debian
-          package below, or pick up a best-effort portable build for Windows
-          and macOS.
-        </p>
+        <p class="lede">Modular audio visualisation for Linux.</p>
         <div class="release-line">
           <span class="version" id="version">checking GitHub…</span>
           <a id="release-notes" class="text-link" href="https://github.com/fayaaz/VmodV/releases/latest">Release notes ↗</a>
@@ -59,10 +55,7 @@
         <article class="card card-linux">
           <div class="card-head">
             <span class="card-icon" aria-hidden="true">🐧</span>
-            <div>
-              <h2>Linux</h2>
-              <p class="card-sub">Full feature set — the primary target.</p>
-            </div>
+            <h2>Linux</h2>
           </div>
 
           <div class="tabs" role="tablist" aria-label="Linux package format">
@@ -91,61 +84,93 @@
           </div>
 
           <div class="tabpanel" id="panel-appimage" role="tabpanel" aria-labelledby="tab-appimage">
-            <p class="panel-note">
-              One file, no install. Needs FUSE (<code>libfuse2</code>) or run with
-              <code>--appimage-extract-and-run</code>.
-            </p>
+            <p class="panel-note">One file, no install.</p>
             <div class="assets" id="assets-linux-appimage"></div>
+            <div class="needs" id="needs-linux-appimage">
+              <h3>What you need</h3>
+              <ul>
+                <li><code>libfuse2</code>, or run with <code>--appimage-extract-and-run</code>.</li>
+                <li>
+                  A Vulkan driver — a modern GPU driver, or
+                  <code>mesa-vulkan-drivers</code> for the lavapipe software fallback.
+                </li>
+                <li>PipeWire or PulseAudio for audio capture, and ALSA.</li>
+                <li>
+                  GStreamer base/good/bad plugin sets for video capture; the image
+                  bundles its own plugins, but host codecs vary.
+                </li>
+              </ul>
+            </div>
           </div>
 
           <div class="tabpanel" id="panel-deb" role="tabpanel" aria-labelledby="tab-deb" hidden>
-            <p class="panel-note">
-              Pick the package built for your Ubuntu base; it declares its
-              runtime dependencies.
-            </p>
+            <p class="panel-note">Pick the package built for your Ubuntu base.</p>
             <div class="assets" id="assets-linux-deb"></div>
+            <div class="needs" id="needs-linux-deb">
+              <h3>What you need</h3>
+              <ul>
+                <li>Ubuntu, or a compatible Debian-based distro, with <code>apt</code>.</li>
+                <li>
+                  <code>sudo apt install ./VmodV-*-amd64*.deb</code> — apt installs the
+                  runtime dependencies (PipeWire, ALSA, GStreamer, Vulkan loader,
+                  XKB) for you.
+                </li>
+                <li>
+                  A Vulkan driver; <code>mesa-vulkan-drivers</code> is recommended for
+                  the lavapipe fallback if your GPU has no driver.
+                </li>
+                <li>Wayland is preferred; X11/XWayland works too.</li>
+              </ul>
+            </div>
           </div>
         </article>
 
         <article class="card">
           <div class="card-head">
             <span class="card-icon" aria-hidden="true">▣</span>
-            <div>
-              <h2>Windows</h2>
-              <p class="card-sub">Best-effort portable ZIP — no installer.</p>
-            </div>
+            <h2>Windows</h2>
           </div>
-          <p class="panel-note">
-            Unzip and run <code>VmodV.cmd</code>. GStreamer ships inside the ZIP.
-            Camera, screen and system-audio capture are Linux-only.
-          </p>
+          <p class="panel-note">Unzip and run <code>VmodV.cmd</code>.</p>
           <div class="assets" id="assets-windows"></div>
+          <div class="needs" id="needs-windows">
+            <h3>What you need</h3>
+            <ul>
+              <li>Nothing extra for video — GStreamer ships inside the ZIP.</li>
+              <li>A working graphics driver; wgpu picks the best available backend.</li>
+              <li>
+                Camera, screen and system-audio capture are Linux-only; rendering,
+                audio input and MIDI work.
+              </li>
+            </ul>
+          </div>
         </article>
 
         <article class="card">
           <div class="card-head">
             <span class="card-icon" aria-hidden="true">◈</span>
-            <div>
-              <h2>macOS</h2>
-              <p class="card-sub">Best-effort portable app bundle — no installer.</p>
-            </div>
+            <h2>macOS</h2>
           </div>
-          <p class="panel-note">
-            Install GStreamer (<code>brew install gstreamer gst-plugins-base</code>)
-            and run <code>VmodV.command</code>. If Gatekeeper blocks it, clear the
-            quarantine attribute.
-          </p>
+          <p class="panel-note">Unzip and run <code>VmodV.command</code>.</p>
           <div class="assets" id="assets-macos"></div>
+          <div class="needs" id="needs-macos">
+            <h3>What you need</h3>
+            <ul>
+              <li>
+                GStreamer from Homebrew:
+                <code>brew install gstreamer gst-plugins-base</code>.
+              </li>
+              <li>A working graphics driver; wgpu picks Metal or Vulkan as available.</li>
+              <li>
+                If Gatekeeper blocks the ad-hoc signed bundle:
+                <code>xattr -dr com.apple.quarantine VmodV.app VmodV.command</code>.
+              </li>
+              <li>Camera, screen and system-audio capture are Linux-only.</li>
+            </ul>
+          </div>
         </article>
       </section>
 
-      <section class="requirements">
-        <h2>What you need</h2>
-        <p>
-          A Vulkan driver (a modern GPU driver, or <code>mesa-vulkan-drivers</code>
-          for the lavapipe software fallback), PipeWire or PulseAudio for audio
-          capture, ALSA and GStreamer. Wayland is preferred; X11 works too.
-        </p>
+      <section class="notes">
         <p class="footnote">
           VmodV's own code is MIT; bundled modules and assets carry their own
           licences — see
