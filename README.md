@@ -19,6 +19,9 @@
   <a href="https://fayaaz.github.io/VmodV/">
     <img alt="Open the VmodV browser app" src="https://img.shields.io/badge/browser%20app-open-blueviolet" />
   </a>
+  <a href="https://fayaaz.github.io/VmodV/download/">
+    <img alt="Download the latest release for Linux, Windows and macOS" src="https://img.shields.io/badge/download-latest%20release-00E676?style=flat-square" />
+  </a>
 </p>
 
 *Modular audio visualisation for Linux*
@@ -26,7 +29,9 @@
 VmodV is a vjing app — with a timeline, **Scenes** and **Performance**.
 
 **tl;dr:** grab the latest AppImage or `.deb` from
-[Releases](https://github.com/fayaaz/VmodV/releases) and start vjing.
+[Releases](https://github.com/fayaaz/VmodV/releases), or use the
+[download page](https://fayaaz.github.io/VmodV/download/) for direct links to
+the newest build on each platform, then start vjing.
 
 <p align="center">
   <img src="docs/images/vmodv-ui.png" alt="The VmodV UI: Groups panel, live output preview, module Gallery, Scenes grid and Inspector" width="900" />

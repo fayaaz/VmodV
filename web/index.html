@@ -58,6 +58,16 @@
         color: var(--accent);
       }
       #boot p { margin: 6px 0; color: var(--muted); }
+      #boot .download {
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px solid #1C3A28;
+      }
+      #boot .download a {
+        color: #00E676;
+        text-decoration: none;
+      }
+      #boot .download a:hover { text-decoration: underline; }
       #boot .err {
         color: #ff7b7b;
         white-space: pre-wrap;
@@ -113,6 +123,7 @@
         <h1>VMODV / WEB</h1>
         <p id="boot-status">Starting the WebGPU compositor…</p>
         <p class="err" id="boot-error"></p>
+        <p class="download"><a href="./download/">Download the desktop app →</a></p>
       </div>
     </div>
     <script type="module" src="./main.js"></script>

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Download the latest VmodV release: AppImage or .deb for Linux, portable builds for Windows and macOS."
+    />
+    <title>VmodV — Download</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="../" aria-label="VmodV browser app">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">VMODV</span>
+          <span class="brand-slash">/</span>
+          <span class="brand-sub">DOWNLOAD</span>
+        </a>
+        <nav class="topnav">
+          <a href="../">Browser app</a>
+          <a href="https://github.com/fayaaz/VmodV">Source</a>
+          <a href="https://github.com/fayaaz/VmodV/releases">All releases</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">LATEST STABLE BUILD</p>
+        <h1>Get VmodV.</h1>
+        <p class="lede">
+          Modular audio visualisation for Linux. Grab an AppImage or a Debian
+          package below, or pick up a best-effort portable build for Windows
+          and macOS.
+        </p>
+        <div class="release-line">
+          <span class="version" id="version">checking GitHub…</span>
+          <a id="release-notes" class="text-link" href="https://github.com/fayaaz/VmodV/releases/latest">Release notes ↗</a>
+          <span class="dot" aria-hidden="true">·</span>
+          <span id="published" class="published"></span>
+        </div>
+        <p class="status" id="status" role="status" aria-live="polite">
+          Fetching the latest release assets…
+        </p>
+      </section>
+
+      <section class="platforms" aria-label="Downloads by platform">
+        <!-- Linux: a real choice between the two distribution formats. -->
+        <article class="card card-linux">
+          <div class="card-head">
+            <span class="card-icon" aria-hidden="true">🐧</span>
+            <div>
+              <h2>Linux</h2>
+              <p class="card-sub">Full feature set — the primary target.</p>
+            </div>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="Linux package format">
+            <button
+              type="button"
+              class="tab is-active"
+              id="tab-appimage"
+              role="tab"
+              aria-selected="true"
+              aria-controls="panel-appimage"
+              data-linux-tab="appimage"
+            >
+              AppImage
+            </button>
+            <button
+              type="button"
+              class="tab"
+              id="tab-deb"
+              role="tab"
+              aria-selected="false"
+              aria-controls="panel-deb"
+              data-linux-tab="deb"
+            >
+              Debian / Ubuntu (.deb)
+            </button>
+          </div>
+
+          <div class="tabpanel" id="panel-appimage" role="tabpanel" aria-labelledby="tab-appimage">
+            <p class="panel-note">
+              One file, no install. Needs FUSE (<code>libfuse2</code>) or run with
+              <code>--appimage-extract-and-run</code>.
+            </p>
+            <div class="assets" id="assets-linux-appimage"></div>
+          </div>
+
+          <div class="tabpanel" id="panel-deb" role="tabpanel" aria-labelledby="tab-deb" hidden>
+            <p class="panel-note">
+              Pick the package built for your Ubuntu base; it declares its
+              runtime dependencies.
+            </p>
+            <div class="assets" id="assets-linux-deb"></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <span class="card-icon" aria-hidden="true">▣</span>
+            <div>
+              <h2>Windows</h2>
+              <p class="card-sub">Best-effort portable ZIP — no installer.</p>
+            </div>
+          </div>
+          <p class="panel-note">
+            Unzip and run <code>VmodV.cmd</code>. GStreamer ships inside the ZIP.
+            Camera, screen and system-audio capture are Linux-only.
+          </p>
+          <div class="assets" id="assets-windows"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <span class="card-icon" aria-hidden="true">◈</span>
+            <div>
+              <h2>macOS</h2>
+              <p class="card-sub">Best-effort portable app bundle — no installer.</p>
+            </div>
+          </div>
+          <p class="panel-note">
+            Install GStreamer (<code>brew install gstreamer gst-plugins-base</code>)
+            and run <code>VmodV.command</code>. If Gatekeeper blocks it, clear the
+            quarantine attribute.
+          </p>
+          <div class="assets" id="assets-macos"></div>
+        </article>
+      </section>
+
+      <section class="requirements">
+        <h2>What you need</h2>
+        <p>
+          A Vulkan driver (a modern GPU driver, or <code>mesa-vulkan-drivers</code>
+          for the lavapipe software fallback), PipeWire or PulseAudio for audio
+          capture, ALSA and GStreamer. Wayland is preferred; X11 works too.
+        </p>
+        <p class="footnote">
+          VmodV's own code is MIT; bundled modules and assets carry their own
+          licences — see
+          <a href="https://github.com/fayaaz/VmodV/blob/main/THIRD_PARTY_NOTICES.md">third-party notices</a>.
+          Links always resolve against the latest published GitHub release, so
+          this page does not need updating for a new version.
+        </p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>VMODV / DOWNLOAD</span>
+      <a href="../">Open the browser app →</a>
+    </footer>
+  </body>
+</html>

@@ -63,6 +63,112 @@ fn pages_workflow_runs_the_wasm_compile_gate() {
     );
 }
 
+/// Text of the self-contained download page (HTML, styles and script).
+fn download_page() -> String {
+    let dir = repo_root().join("web/download");
+    let mut text = String::new();
+    // Missing files yield an empty string so the tests below fail with an
+    // assertion about the missing content rather than a file-read panic.
+    for name in ["index.html", "style.css", "app.js"] {
+        text.push_str(&fs::read_to_string(dir.join(name)).unwrap_or_default());
+    }
+    text
+}
+
+/// Read the hex colour of a named palette constant from the app's theme source.
+fn theme_hex(constant: &str) -> String {
+    let theme = fs::read_to_string(repo_root().join("crates/modv-ui/src/theme.rs"))
+        .expect("cannot read crates/modv-ui/src/theme.rs");
+    let marker = format!("pub const {constant}: Color32 = Color32::from_rgb(");
+    let start = theme
+        .find(&marker)
+        .unwrap_or_else(|| panic!("no from_rgb definition for {constant} in theme.rs"));
+    let args = &theme[start + marker.len()..];
+    let end = args.find(')').expect("unterminated from_rgb call");
+    let rgb = args[..end]
+        .split(',')
+        .map(|part| part.trim().parse::<u8>().expect("RGB channel"))
+        .collect::<Vec<_>>();
+    assert_eq!(rgb.len(), 3, "{constant} must have three RGB channels");
+    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
+}
+
+#[test]
+fn download_page_is_staged_by_the_pages_workflow() {
+    let page = repo_root().join("web/download/index.html");
+    assert!(
+        page.is_file(),
+        "PAGES-02: the download landing page must live at web/download/index.html \
+         so `cp -R web/. _site/` deploys it at /download/; {page:?} is missing"
+    );
+    assert!(
+        pages_workflow().contains("cp -R web/. _site/"),
+        "PAGES-02: pages.yml must copy all of web/ so /download/ ships with the shell"
+    );
+}
+
+#[test]
+fn download_page_links_the_latest_release_for_every_platform() {
+    let page = download_page();
+    for needle in [
+        // Always resolve to whatever the latest published release is.
+        "api.github.com/repos/fayaaz/VmodV/releases/latest",
+        "github.com/fayaaz/VmodV/releases/latest",
+        // Linux offers both formats and both AppImage architectures.
+        "-x86_64.AppImage",
+        "-aarch64.AppImage",
+        "-amd64",
+        "-ubuntu24.04.deb",
+        "-ubuntu26.04.deb",
+        "-ubuntu26.10.deb",
+        "-ubuntudevel.deb",
+        // Best-effort portable builds for the other platforms.
+        "-Windows-x86_64-portable-",
+        "-macOS-arm64-portable-",
+        "-macOS-x86_64-portable-",
+        // The Linux choice is an explicit AppImage/.deb switch.
+        "id=\"tab-appimage\"",
+        "id=\"tab-deb\"",
+    ] {
+        assert!(
+            page.contains(needle),
+            "PAGES-02: the download page must reference {needle:?} to link the \
+             latest release asset for its platform"
+        );
+    }
+}
+
+#[test]
+fn download_page_uses_the_app_ui_palette() {
+    let page = download_page().to_lowercase();
+    // These are read from the app's theme.rs, so a palette change in the UI
+    // fails this guard until the landing page is re-themed to match.
+    for constant in [
+        "BACKGROUND",
+        "PANEL_ALT",
+        "INPUT",
+        "FOREGROUND",
+        "MUTED",
+        "ACCENT",
+        "ACCENT_DIM",
+        "BORDER",
+    ] {
+        let hex = theme_hex(constant);
+        assert!(
+            page.contains(&hex),
+            "PAGES-02: the download page must use the app's {constant} colour ({hex})"
+        );
+    }
+    assert!(
+        page.contains("ibm plex sans") && page.contains("ibm plex mono"),
+        "PAGES-02: the page must use the same IBM Plex family stack as the app UI"
+    );
+    assert!(
+        page.contains("border-radius: 0"),
+        "PAGES-02: the app UI uses square chrome, so the landing page must too"
+    );
+}
+
 #[test]
 fn pages_workflow_deploys_an_artifact_instead_of_pushing_gh_pages() {
     let workflow = pages_workflow();

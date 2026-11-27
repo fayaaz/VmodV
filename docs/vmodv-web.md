@@ -22,7 +22,10 @@ A plain static server is enough. `web/index.html` and `web/main.js` are served
 next to the generated `web/pkg/` directory. `web/pkg` is gitignored; CI rebuilds
 it on every push to `main` and deploys it at the GitHub Pages site root through
 GitHub Actions (`actions/deploy-pages`). The old `/modules/` and `/app/` links
-redirect to the root.
+redirect to the root. The static `/download/` landing page (`web/download/`)
+ships with the same artifact; it reads the GitHub releases API to link the
+latest AppImage/`.deb` and Windows/macOS portable ZIPs, and is linked from the
+shell's boot overlay.
 
 WebGPU is preferred. When the browser exposes no working WebGPU adapter (or
 the machine has none), eframe falls back to wgpu's WebGL2 backend and the shell
