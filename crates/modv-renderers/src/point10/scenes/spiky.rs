@@ -81,8 +81,8 @@ use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::shared::random::{value_noise1, value_noise2};
 use crate::point10::{
-    FULLSCREEN_TRIANGLE_WGSL, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt,
-    scene_props_with_levers,
+    FULLSCREEN_TRIANGLE_WGSL, Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens,
+    frame_dt, lens_value, plane9_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -449,6 +449,7 @@ pub struct Spiky {
     rotation: [f32; 3],
     shader_in1: [f32; 4],
     composite_in1: [f32; 4],
+    lens: f32,
     size: (u32, u32),
     aspect: f32,
     target_format: wgpu::TextureFormat,
@@ -474,6 +475,7 @@ impl Spiky {
             rotation: [0.0; 3],
             shader_in1: [0.0; 4],
             composite_in1: [0.0; 4],
+            lens: 1.0,
             size: (1, 1),
             aspect: 1.0,
             target_format: wgpu::TextureFormat::Rgba8Unorm,
@@ -515,9 +517,11 @@ impl Spiky {
         mat4_mul(&render, &transform_ex)
     }
 
-    /// Spiky's `sceneProps.js` entry has no scene-specific controls, so this
-    /// only satisfies the registry's prop binder.
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Spiky's `sceneProps.js` entry has no scene-specific controls; only the
+    /// shared Lens magnification is user-facing.
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+    }
 
     fn rotation_radians(&self) -> [f32; 3] {
         [
@@ -537,11 +541,14 @@ impl Spiky {
     }
 
     fn projection(&self) -> Mat4 {
-        perspective(
-            CAMERA_FOV.to_radians(),
-            self.aspect,
-            CAMERA_NEAR,
-            CAMERA_FAR,
+        apply_lens(
+            perspective(
+                CAMERA_FOV.to_radians(),
+                self.aspect,
+                CAMERA_NEAR,
+                CAMERA_FAR,
+            ),
+            self.lens,
         )
     }
 
@@ -910,7 +917,7 @@ impl Point10Scene for Spiky {
 
     fn props(&self) -> Vec<SceneProp> {
         // Spiky's `sceneProps.js` entry has no scene-specific controls.
-        scene_props_with_levers(&[])
+        plane9_scene_props(&[])
     }
 
     fn meta(&self) -> SceneMeta {
@@ -1147,7 +1154,7 @@ mod tests {
         assert_eq!(meta.category, "3d-scenes");
         // The levers are still in front of an empty scene schema.
         let props = scene.props();
-        assert_eq!(props.len(), 6);
+        assert_eq!(props.len(), 7);
         assert_eq!(props[0].name, "gain");
     }
 

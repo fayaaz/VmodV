@@ -160,8 +160,8 @@ use crate::point10::shared::assets::{ColourSpace, Wrap, load_texture};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::{
-    Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
-    scene_props_with_levers,
+    Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens, frame_dt, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -594,6 +594,8 @@ pub struct Earth {
     brightness_scale: f32,
     /// ModV magnification extension (`1.0` = the vendor framing).
     zoom: f64,
+    /// Shared Plane9 Lens magnification (`1.0` = the vendor framing).
+    lens: f32,
     /// Last exposure written to the output pass (`set_exposure` re-uploads its
     /// uniform, so only write on change).
     exposure: f32,
@@ -624,6 +626,7 @@ impl Earth {
             atmosphere_scale: 1.0,
             brightness_scale: 1.0,
             zoom: 1.0,
+            lens: 1.0,
             exposure: 1.0,
             size: (1, 1),
             view_proj: cube_mesh::identity(),
@@ -637,8 +640,9 @@ impl Earth {
 
     /// Apply the resolved modV props (`sceneProps.js:289-295`) plus the ModV
     /// `zoom` extension.
-    pub fn apply_props(&mut self, get: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(EARTH_PROPS, get) {
+    pub fn apply_props(&mut self, mut get: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(get("lens"));
+        for (key, value) in read_scene_props(EARTH_PROPS, &mut get) {
             match key {
                 "spinSpeed" => self.spin_scale = value,
                 "sunSpeed" => self.sun_scale = value,
@@ -1190,7 +1194,10 @@ impl Point10Scene for Earth {
 
         // `camera.lookAt(...)` + `matrixWorldInverse` (`:609-617`).
         let aspect = self.aspect();
-        let projection = perspective(EARTH.fov.to_radians(), aspect, EARTH.near, EARTH.far);
+        let projection = apply_lens(
+            perspective(EARTH.fov.to_radians(), aspect, EARTH.near, EARTH.far),
+            self.lens,
+        );
         let view = look_at(cam, look, [0.0, 1.0, 0.0]);
         self.view_proj = mat4_mul(&projection, &view);
 
@@ -1273,7 +1280,7 @@ impl Point10Scene for Earth {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(EARTH_PROPS)
+        plane9_scene_props(EARTH_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {
@@ -2011,7 +2018,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            &names[6..],
+            &names[7..],
             &[
                 "spinSpeed",
                 "sunSpeed",
@@ -2021,7 +2028,7 @@ mod tests {
                 "zoom"
             ]
         );
-        let earth_props = &props[6..];
+        let earth_props = &props[7..];
         assert_eq!(
             earth_props
                 .iter()

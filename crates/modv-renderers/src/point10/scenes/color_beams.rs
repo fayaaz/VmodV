@@ -34,12 +34,13 @@ use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::postfx::{Plane9BloomParams, Plane9BloomPass};
 use crate::point10::scenes::plane9_common::{
     PLANE9_TONEMAP_WGSL, Plane9Pass, Plane9QuadInstance, Plane9QuadPass, Plane9QuadUniforms,
-    Plane9TextureBinding, Plane9Uniforms, create_colour_target, plane9_camera, plane9_sampler,
+    Plane9TextureBinding, Plane9Uniforms, create_colour_target, plane9_camera_lens, plane9_sampler,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::random::{seeded_rand, value_noise2, value_noise3};
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, lens_value,
+    plane9_scene_props,
 };
 
 /// `Screen1` camera position.
@@ -251,6 +252,7 @@ pub struct ColorBeams {
     audio: P10Audio,
     permrand: f32,
     elapsed: f32,
+    lens: f32,
     size: (u32, u32),
     target_format: wgpu::TextureFormat,
     device: Option<wgpu::Device>,
@@ -271,6 +273,7 @@ impl ColorBeams {
             audio: P10Audio::new(),
             permrand: 1.0,
             elapsed: 0.0,
+            lens: 1.0,
             size: (1, 1),
             target_format: HDR_FORMAT,
             device: None,
@@ -289,8 +292,22 @@ impl ColorBeams {
         CloneGrid::for_aspect(self.size.0 as f32 / self.size.1.max(1) as f32)
     }
 
-    /// Bind the modV props (this preset declares no `sceneProps`).
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Bind the shared Lens prop (this preset declares no other `sceneProps`).
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        if let Some(gpu) = &mut self.gpu {
+            gpu.clone_uniforms.view_proj = plane9_camera_lens(
+                self.size.0 as f32 / self.size.1.max(1) as f32,
+                CAMERA_POSITION,
+                CAMERA_LOOK,
+                45.0,
+                0.1,
+                1000.0,
+                self.lens,
+            );
+            gpu.clones.upload_uniforms(&gpu.clone_uniforms);
+        }
+    }
 
     fn rebuild(&mut self) {
         let (Some(device), Some(queue)) = (self.device.clone(), self.queue.clone()) else {
@@ -362,13 +379,14 @@ impl ColorBeams {
         );
 
         let mut clone_uniforms = Plane9QuadUniforms::new();
-        clone_uniforms.view_proj = plane9_camera(
+        clone_uniforms.view_proj = plane9_camera_lens(
             self.size.0 as f32 / self.size.1.max(1) as f32,
             CAMERA_POSITION,
             CAMERA_LOOK,
             45.0,
             0.1,
             1000.0,
+            self.lens,
         );
         let shafts_uniforms = Plane9Uniforms::new(self.size.0, self.size.1);
         let present_uniforms = Plane9Uniforms::new(self.size.0, self.size.1);
@@ -477,7 +495,7 @@ impl Point10Scene for ColorBeams {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(PROPS)
+        plane9_scene_props(PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

@@ -82,7 +82,7 @@ use crate::point10::shared::assets::{ColourSpace, LoadedTexture, Wrap, load_text
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::{
     FULLSCREEN_TRIANGLE_WGSL, HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp,
-    frame_dt, read_scene_props, scene_props_with_levers,
+    frame_dt, lens_value, plane9_scene_props, read_scene_props,
 };
 
 /// `Shader1` raymarch precision (`numit`).
@@ -267,7 +267,13 @@ struct CompositeUniforms {
     resolution: [f32; 2],
     /// Shader-side sRGB encode for plain UNORM destinations.
     srgb_encode: u32,
-    _pad: u32,
+    /// Shared Plane9 Lens magnification applied to the composite UV.
+    ///
+    /// The raymarch's distance fog and light falloff are non-linear, so
+    /// changing the ray/FOV by `lens` moved the lit area by ~6x/1.44x at
+    /// lens 2/0.5 instead of the intended 4x/0.25x. Zooming the composed
+    /// image measures 4.02x/0.246x, matching the lens² area contract.
+    lens: f32,
 }
 
 /// GPU resources, rebuilt on resize (the bind groups hold texture views).
@@ -280,6 +286,7 @@ struct CaveGpu {
     upsample_bind: wgpu::BindGroup,
     composite_pipeline: wgpu::RenderPipeline,
     composite_bind: wgpu::BindGroup,
+    composite_uniforms: wgpu::Buffer,
     _cave_texture: wgpu::Texture,
     cave_view: wgpu::TextureView,
     _up_texture: wgpu::Texture,
@@ -294,6 +301,7 @@ pub struct TheCave {
     speed_scale: f32,
     glow_scale: f32,
     bloom_scale: f32,
+    lens: f32,
     in1: [f32; 4],
     size: (u32, u32),
     device: Option<wgpu::Device>,
@@ -318,6 +326,7 @@ impl TheCave {
             speed_scale: 1.0,
             glow_scale: 1.0,
             bloom_scale: 1.0,
+            lens: 1.0,
             in1: [0.0; 4],
             size: (1, 1),
             device: None,
@@ -329,14 +338,26 @@ impl TheCave {
     }
 
     /// Bind the modV props (`sceneProps.js` equivalent).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(CAVE_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(CAVE_PROPS, &mut props) {
             match key {
                 "scrollSpeed" => self.speed_scale = value,
                 "glow" => self.glow_scale = value,
                 "bloom" => self.bloom_scale = value,
                 _ => {}
             }
+        }
+        if let Some(gpu) = &self.gpu {
+            gpu.queue.write_buffer(
+                &gpu.composite_uniforms,
+                0,
+                bytemuck::bytes_of(&CompositeUniforms {
+                    resolution: [self.size.0.max(1) as f32, self.size.1.max(1) as f32],
+                    srgb_encode: u32::from(!self.target_format.is_srgb()),
+                    lens: self.lens,
+                }),
+            );
         }
     }
 
@@ -573,7 +594,7 @@ impl TheCave {
             bytemuck::bytes_of(&CompositeUniforms {
                 resolution: [width.max(1) as f32, height.max(1) as f32],
                 srgb_encode: u32::from(!self.target_format.is_srgb()),
-                _pad: 0,
+                lens: self.lens,
             }),
         );
         let composite_pipeline_layout =
@@ -646,6 +667,7 @@ impl TheCave {
             upsample_bind,
             composite_pipeline,
             composite_bind,
+            composite_uniforms,
             _cave_texture,
             cave_view,
             _up_texture,
@@ -904,7 +926,7 @@ const COMPOSITE_WGSL: &str = r#"
 struct CompositeUniforms {
   resolution: vec2<f32>,
   srgb_encode: u32,
-  _pad: u32,
+  lens: f32,
 }
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
 @group(0) @binding(1) var bloom_tex: texture_2d<f32>;
@@ -929,7 +951,14 @@ fn srgb_transfer_oetf(value: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-  let uv = position.xy / u.resolution;
+  var uv = position.xy / u.resolution;
+  // Lens magnifies the composed frame around its centre. A ray/FOV zoom was
+  // rejected here: the tunnel's distance fog and light falloff are non-linear,
+  // so it did not produce the contract's lens² lit-area scaling. `lens == 1.0`
+  // skips the remap so the vendor framing stays bit-identical.
+  if (u.lens != 1.0) {
+    uv = (uv - vec2<f32>(0.5)) / u.lens + vec2<f32>(0.5);
+  }
   let c1 = textureSampleLevel(bloom_tex, linear_sampler, uv, 0.0).rgb;
   let c2 = textureSampleLevel(sharp_tex, linear_sampler, uv, 0.0).rgb;
   var color = cave_aces(c1 + c2);
@@ -1069,7 +1098,7 @@ impl Point10Scene for TheCave {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(CAVE_PROPS)
+        plane9_scene_props(CAVE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

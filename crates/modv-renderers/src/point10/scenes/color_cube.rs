@@ -81,8 +81,8 @@ use crate::point10::scenes::cube_mesh::{
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
-    scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens, frame_dt, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -356,6 +356,7 @@ pub struct ColorCube {
     spin_scale: f32,
     turbulence_scale: f32,
     brightness_scale: f32,
+    lens: f32,
     camera_aspect: f32,
     size: (u32, u32),
     gpu: Option<ColorCubeGpu>,
@@ -379,6 +380,7 @@ impl ColorCube {
             spin_scale: 1.0,
             turbulence_scale: 1.0,
             brightness_scale: 1.0,
+            lens: 1.0,
             camera_aspect: 1.0,
             size: (1, 1),
             gpu: None,
@@ -386,8 +388,9 @@ impl ColorCube {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:318-323`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(COLOR_CUBE_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(COLOR_CUBE_PROPS, &mut props) {
             match key {
                 "spinSpeed" => self.spin_scale = value,
                 "turbulence" => self.turbulence_scale = value,
@@ -429,11 +432,14 @@ impl ColorCube {
 
     fn view_proj(&self) -> Mat4 {
         mat4_mul(
-            &perspective(
-                CAMERA_FOV.to_radians(),
-                self.camera_aspect,
-                CAMERA_NEAR,
-                CAMERA_FAR,
+            &apply_lens(
+                perspective(
+                    CAMERA_FOV.to_radians(),
+                    self.camera_aspect,
+                    CAMERA_NEAR,
+                    CAMERA_FAR,
+                ),
+                self.lens,
             ),
             &look_at(CAMERA_POSITION, CAMERA_LOOK_AT, [0.0, 1.0, 0.0]),
         )
@@ -699,7 +705,7 @@ impl Point10Scene for ColorCube {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(COLOR_CUBE_PROPS)
+        plane9_scene_props(COLOR_CUBE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

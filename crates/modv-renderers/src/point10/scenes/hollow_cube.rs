@@ -97,8 +97,8 @@ use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::shared::random::value_noise2;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
-    scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens, frame_dt, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -530,6 +530,7 @@ pub struct HollowCube {
     spin_scale: f32,
     explode_scale: f32,
     color_scale: f32,
+    lens: f32,
     camera_aspect: f32,
     size: (u32, u32),
     gpu: Option<HollowCubeGpu>,
@@ -561,6 +562,7 @@ impl HollowCube {
             spin_scale: 1.0,
             explode_scale: 1.0,
             color_scale: 1.0,
+            lens: 1.0,
             camera_aspect: 1.0,
             size: (1, 1),
             gpu: None,
@@ -568,8 +570,9 @@ impl HollowCube {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:312-317`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(HOLLOW_CUBE_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(HOLLOW_CUBE_PROPS, &mut props) {
             match key {
                 "spinSpeed" => self.spin_scale = value,
                 "explode" => self.explode_scale = value,
@@ -670,11 +673,14 @@ impl HollowCube {
             ]
         };
         mat4_mul(
-            &perspective(
-                CAMERA_FOV.to_radians(),
-                self.camera_aspect,
-                CAMERA_NEAR,
-                CAMERA_FAR,
+            &apply_lens(
+                perspective(
+                    CAMERA_FOV.to_radians(),
+                    self.camera_aspect,
+                    CAMERA_NEAR,
+                    CAMERA_FAR,
+                ),
+                self.lens,
             ),
             &look_at(position, look_at_target, [0.0, 1.0, 0.0]),
         )
@@ -1033,7 +1039,7 @@ impl Point10Scene for HollowCube {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(HOLLOW_CUBE_PROPS)
+        plane9_scene_props(HOLLOW_CUBE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

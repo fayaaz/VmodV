@@ -1405,13 +1405,30 @@ pub fn plane9_camera(
     near: f32,
     far: f32,
 ) -> Mat4 {
+    plane9_camera_lens(aspect, position, look, fov_degrees, near, far, 1.0)
+}
+
+/// [`plane9_camera`] with a Lens magnification applied to the projection's
+/// x/y scale. `lens == 1.0` is bit-identical to [`plane9_camera`].
+pub fn plane9_camera_lens(
+    aspect: f32,
+    position: [f32; 3],
+    look: [f32; 3],
+    fov_degrees: f32,
+    near: f32,
+    far: f32,
+    lens: f32,
+) -> Mat4 {
     let target = [
         position[0] + look[0],
         position[1] + look[1],
         position[2] + look[2],
     ];
     mat4_mul(
-        &perspective(fov_degrees.to_radians(), aspect, near, far),
+        &crate::point10::apply_lens(
+            perspective(fov_degrees.to_radians(), aspect, near, far),
+            lens,
+        ),
         &look_at(position, target, [0.0, 1.0, 0.0]),
     )
 }

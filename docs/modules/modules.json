@@ -18907,6 +18907,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19037,6 +19045,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "scrollSpeed",
           "label": "Scroll Speed",
           "type": "float",
@@ -19125,6 +19141,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19375,6 +19399,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19441,6 +19473,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19507,6 +19547,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19573,6 +19621,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         },
         {
           "name": "spinSpeed",
@@ -20003,6 +20059,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -20341,6 +20405,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -20461,6 +20533,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         },
         {
           "name": "speed",
@@ -20817,6 +20897,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -20897,6 +20985,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -21527,6 +21623,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -21623,6 +21727,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -21839,6 +21951,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "surfaceSpeed",
           "label": "Surface Speed",
           "type": "float",
@@ -22029,6 +22149,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "scrollSpeed",
           "label": "Scroll Speed",
           "type": "float",
@@ -22117,6 +22245,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -22183,6 +22319,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -22407,6 +22551,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         },
         {
           "name": "warpSpeed",
@@ -23578,6 +23730,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -23668,6 +23828,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -23756,6 +23924,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         },
         {
           "name": "spinSpeed",

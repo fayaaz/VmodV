@@ -39,7 +39,8 @@ use crate::point10::scenes::plane9_common::{
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, lens_value,
+    plane9_scene_props,
 };
 
 /// `Screen1` camera position.
@@ -82,6 +83,7 @@ pub struct TruchetTentacles {
     perm: f32,
     permrand: f32,
     elapsed: f32,
+    lens: f32,
     size: (u32, u32),
     target_format: wgpu::TextureFormat,
     device: Option<wgpu::Device>,
@@ -104,6 +106,7 @@ impl TruchetTentacles {
             perm: 1.0,
             permrand: 1.0,
             elapsed: 0.0,
+            lens: 1.0,
             size: (1, 1),
             target_format: HDR_FORMAT,
             device: None,
@@ -123,9 +126,10 @@ impl TruchetTentacles {
         &self.uniforms
     }
 
-    /// Bind the modV props. These presets declare no `sceneProps` of their
-    /// own, so this only exists to satisfy the registry's prop binder.
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Bind the shared Lens prop (this preset declares no other `sceneProps`).
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+    }
 
     fn rebuild(&mut self) {
         let (Some(device), Some(queue)) = (self.device.clone(), self.queue.clone()) else {
@@ -286,8 +290,10 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   );
   let m = m0 * m0 * m0 * m0;
 
+  // `in2.x` carries the shared Lens; only the ray direction narrows, so the
+  // `coords` reused by the vignette keep the vendor framing.
   let dir = normalize(vec3<f32>(
-    1.4 * coords,
+    1.4 * coords / u.in2.x,
     -1.0 + 0.5 * (coords.x * coords.x + coords.y * coords.y),
   ));
   let ray_dir = m * dir;
@@ -345,6 +351,7 @@ impl Point10Scene for TruchetTentacles {
         self.target_format = ctx.target_format;
         self.size = (ctx.width.max(1), ctx.height.max(1));
         self.uniforms = Plane9Uniforms::new(self.size.0, self.size.1);
+        self.uniforms.in2 = [self.lens, 0.0, 0.0, 0.0];
         self.rebuild();
     }
 
@@ -367,6 +374,7 @@ impl Point10Scene for TruchetTentacles {
         self.perm += (beat * 20.0 + 0.5) * dt;
         self.uniforms.time = self.elapsed;
         self.uniforms.in1 = [self.permrand + self.perm, 0.0, 0.0, 0.0];
+        self.uniforms.in2 = [self.lens, 0.0, 0.0, 0.0];
         self.upload_uniforms();
     }
 
@@ -400,7 +408,7 @@ impl Point10Scene for TruchetTentacles {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(TRUCHET_PROPS)
+        plane9_scene_props(TRUCHET_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

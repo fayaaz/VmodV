@@ -81,8 +81,8 @@ use crate::point10::postfx::{Composer, ToneMapping};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::random::seeded_rand;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, UnitQuad, read_scene_props,
-    scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, UnitQuad, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 /// `Wormhole.js: export const POINT_COUNT = 100000`.
@@ -206,6 +206,8 @@ pub struct Wormhole {
     speed_scale: f32,
     /// `this.bloomScale` (`bloom`).
     bloom_scale: f32,
+    /// Shared Plane9 Lens magnification (`1.0` = the vendor framing).
+    lens: f32,
     /// `gIn1` as last uploaded.
     in1: [f32; 4],
     size: (u32, u32),
@@ -226,6 +228,7 @@ impl Wormhole {
             perm: make_perm(1.0),
             speed_scale: 1.0,
             bloom_scale: 1.0,
+            lens: 1.0,
             in1: [0.0; 4],
             size: (1, 1),
             gpu: None,
@@ -233,8 +236,9 @@ impl Wormhole {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:436-439`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(WORMHOLE_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(WORMHOLE_PROPS, &mut props) {
             match key {
                 "warpSpeed" => self.speed_scale = value,
                 "bloom" => self.bloom_scale = value,
@@ -451,7 +455,7 @@ impl Point10Scene for Wormhole {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(WORMHOLE_PROPS)
+        plane9_scene_props(WORMHOLE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {
@@ -465,11 +469,10 @@ impl Wormhole {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
-        gpu.queue.write_buffer(
-            &gpu.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&WormholeUniforms::new(self.size.0, self.size.1, self.in1)),
-        );
+        let mut uniforms = WormholeUniforms::new(self.size.0, self.size.1, self.in1);
+        uniforms.fov_scale *= self.lens;
+        gpu.queue
+            .write_buffer(&gpu.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
 }
 

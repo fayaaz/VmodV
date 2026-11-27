@@ -527,6 +527,44 @@ pub fn scene_props_with_levers(schema: &[SceneProp]) -> Vec<SceneProp> {
     props
 }
 
+/// The user-facing Lens magnification prop the Plane9 camera scenes publish.
+///
+/// `2.0` doubles the rendered size, `0.5` halves it and `1.0` is the vendor
+/// framing. Only the Plane9 scenes declare it (see [`plane9_scene_props`]); the
+/// Point10-authored scenes must not gain a dead control.
+pub const LENS_PROP: SceneProp = SceneProp::float("lens", "Lens", 1.0, 0.25, 4.0, 0.01);
+
+/// Resolve an incoming Lens value exactly like [`SceneProp::read`]:
+/// non-finite falls back to `1.0`, then clamps into `[0.25, 4.0]`.
+pub fn lens_value(value: Option<f32>) -> f32 {
+    LENS_PROP.read(value)
+}
+
+/// A Plane9 scene's prop list: the responsiveness levers, then Lens, then the
+/// scene's own schema.
+///
+/// This is [`scene_props_with_levers`] plus Lens for the Plane9 presets only;
+/// the global helper stays Lens-free so the Point10-authored scenes keep their
+/// exact schemas.
+pub fn plane9_scene_props(schema: &[SceneProp]) -> Vec<SceneProp> {
+    let mut props = Vec::with_capacity(audio_bridge::RESPONSIVENESS_PROPS.len() + 1 + schema.len());
+    props.extend_from_slice(audio_bridge::RESPONSIVENESS_PROPS);
+    props.push(LENS_PROP);
+    props.extend_from_slice(schema);
+    props
+}
+
+/// Apply Lens magnification to an existing projection matrix.
+///
+/// Only the x/y scale entries change, so the clip-space depth rows are
+/// untouched. A `lens` of `1.0` multiplies by exactly `1.0`, which preserves
+/// every element bit-for-bit.
+pub fn apply_lens(mut projection: scenes::cube_mesh::Mat4, lens: f32) -> scenes::cube_mesh::Mat4 {
+    projection[0][0] *= lens;
+    projection[1][1] *= lens;
+    projection
+}
+
 /// Resolve a whole schema against a prop getter.
 ///
 /// Returns `(key, value)` pairs in schema order — the order the binder in

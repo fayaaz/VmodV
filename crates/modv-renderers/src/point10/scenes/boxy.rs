@@ -97,8 +97,8 @@ use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::shared::random::seeded_rand;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
-    scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens, frame_dt, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -239,6 +239,7 @@ pub struct Boxy {
     scroll_scale: f32,
     glow_scale: f32,
     roughness_floor: f32,
+    lens: f32,
     camera_aspect: f32,
     size: (u32, u32),
     gpu: Option<BoxyGpu>,
@@ -261,6 +262,7 @@ impl Boxy {
             scroll_scale: 1.0,
             glow_scale: 1.0,
             roughness_floor: ROUGHNESS_FLOOR,
+            lens: 1.0,
             camera_aspect: 1.0,
             size: (1, 1),
             gpu: None,
@@ -268,8 +270,9 @@ impl Boxy {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:363-368`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(BOXY_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(BOXY_PROPS, &mut props) {
             match key {
                 "scrollSpeed" => self.scroll_scale = value,
                 "glow" => self.glow_scale = value,
@@ -316,11 +319,14 @@ impl Boxy {
 
     fn view_proj(&self) -> Mat4 {
         mat4_mul(
-            &perspective(
-                CAMERA_FOV.to_radians(),
-                self.camera_aspect,
-                CAMERA_NEAR,
-                CAMERA_FAR,
+            &apply_lens(
+                perspective(
+                    CAMERA_FOV.to_radians(),
+                    self.camera_aspect,
+                    CAMERA_NEAR,
+                    CAMERA_FAR,
+                ),
+                self.lens,
             ),
             // Screen1: CamPos 0 0 0, lookAt 0 0 -1.
             &look_at([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
@@ -667,7 +673,7 @@ impl Point10Scene for Boxy {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(BOXY_PROPS)
+        plane9_scene_props(BOXY_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

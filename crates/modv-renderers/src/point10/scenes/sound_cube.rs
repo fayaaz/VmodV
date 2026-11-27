@@ -72,7 +72,7 @@ use crate::point10::scenes::cube_mesh::{
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::{
     FULLSCREEN_TRIANGLE_WGSL, HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp,
-    frame_dt, read_scene_props, scene_props_with_levers,
+    frame_dt, lens_value, plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -295,6 +295,7 @@ pub struct SoundCube {
     brightness_scale: f32,
     spin_scale: f32,
     pulse_scale: f32,
+    lens: f32,
     /// Which target the next frame reads (`_readRT`).
     read_index: usize,
     /// Which target the next frame writes (`_writeRT`).
@@ -321,6 +322,7 @@ impl SoundCube {
             brightness_scale: 1.0,
             spin_scale: 1.0,
             pulse_scale: 1.0,
+            lens: 1.0,
             read_index: 0,
             write_index: 1,
             camera_aspect: 1.0,
@@ -330,8 +332,9 @@ impl SoundCube {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:306-311`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(SOUND_CUBE_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(SOUND_CUBE_PROPS, &mut props) {
             match key {
                 "spinSpeed" => self.spin_scale = value,
                 "pulse" => self.pulse_scale = value,
@@ -428,7 +431,13 @@ impl SoundCube {
                 } else {
                     1.0
                 },
-                _pad: 0.0,
+                // `_pad` carries the shared Lens magnification into the
+                // composite, which zooms the composed frame around its centre.
+                // A projection zoom was rejected: the cube is rendered into a
+                // fixed 256x256 RTT whose texel quantisation made that zoom
+                // step uneven. The image-space zoom measures 1.963x/0.481x
+                // at lens 2/0.5.
+                _pad: self.lens,
                 resolution: [self.size.0 as f32, self.size.1 as f32],
                 step: [0.0; 2],
                 _pad2: [0.0; 2],
@@ -931,7 +940,7 @@ impl Point10Scene for SoundCube {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(SOUND_CUBE_PROPS)
+        plane9_scene_props(SOUND_CUBE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {
@@ -1031,7 +1040,14 @@ fn fs_trail(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 // glow as the alpha, so empty space stays transparent.
 @fragment
 fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-  let uv = position.xy / u.resolution;
+  var uv = position.xy / u.resolution;
+  // Lens magnifies the composed frame around its centre. The cube itself is
+  // rendered into a fixed 256x256 RTT, so a projection zoom quantised badly;
+  // zooming the composed image gives an even magnification instead.
+  // `lens == 1.0` skips the remap so the vendor framing stays bit-identical.
+  if (u._pad != 1.0) {
+    uv = (uv - vec2<f32>(0.5)) / u._pad + vec2<f32>(0.5);
+  }
   // PreviousLayer is transparent black in standalone playback.
   let bg = vec4<f32>(0.0);
   let c = textureSample(source, source_sampler, uv);
