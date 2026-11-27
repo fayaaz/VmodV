@@ -2518,17 +2518,36 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
                 let imported_name = imported["modules"][id.as_str()]["$moduleName"]
                     .as_str()
                     .unwrap_or_default();
-                let live_name = scene_store
-                    .state()
-                    .modules
-                    .get(&id)
-                    .map(|module| module.module_name.as_str())
-                    .unwrap_or_default();
-                if imported_name != canonical_name || live_name != canonical_name {
+                if imported_name != canonical_name {
                     load_mismatches.push(format!(
-                        "Scene {id}: imported {imported_name:?}, live {live_name:?}, expected {canonical_name:?}"
+                        "Scene {id}: imported {imported_name:?}, expected {canonical_name:?}"
                     ));
                 }
+            }
+
+            // Live Module ids are intentionally fresh on Scene import. Find the
+            // stable Group and compare its live Modules in draw order instead of
+            // assuming the live ids still match the stored document's ids.
+            let live_names: Vec<&str> = scene_store
+                .state()
+                .groups
+                .iter()
+                .find(|group| group.name == "Legacy")
+                .map(|group| {
+                    group
+                        .modules
+                        .iter()
+                        .filter_map(|id| scene_store.state().modules.get(id))
+                        .map(|module| module.module_name.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let expected_live_names: Vec<&str> =
+                canonical_names.iter().map(String::as_str).collect();
+            if live_names != expected_live_names {
+                load_mismatches.push(format!(
+                    "Scene Legacy: live {live_names:?}, expected {canonical_names:?}"
+                ));
             }
         }
         Err(error) => load_mismatches.push(format!("Scene import failed: {error:?}")),
