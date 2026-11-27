@@ -54,8 +54,11 @@
 //! - A looped tween records frames `0..=framesRequired` and then `-1` back to
 //!   `1` (the ping-pong is done by the frame recorder, not by anime's
 //!   `direction`), giving `2 × framesRequired` frames per cycle. The native
-//!   extension `loopMode: "restart"` opts into a single forward leg instead,
-//!   so the play head wraps to frame 0 and replays the same pattern.
+//!   extension `loopMode: "pingpong"` names that recorder explicitly (what the
+//!   editors write for a ticked ping-pong checkbox); an absent key means the
+//!   same thing for legacy presets. `loopMode: "restart"` opts into a single
+//!   forward leg instead, so the play head wraps to frame 0 and replays the
+//!   same pattern.
 //! - Each channel is sampled the way anime normalises a property array. A
 //!   two-row tween is anime's `[from, to]` shorthand (one tween over the whole
 //!   duration). Three or more rows become one tween per keyframe, each
@@ -194,10 +197,12 @@ pub struct TweenDescriptor {
     pub looping: bool,
     /// Optional native extension: how a looping tween restarts (`loopMode`).
     ///
-    /// Absent or any value other than `"restart"` keeps the legacy ping-pong
-    /// recorder. `"restart"` records a single forward leg, so
-    /// [`TweenRuntime::advance`](TweenRuntime::advance) wraps to frame 0 and
-    /// replays the drawn pattern beat-for-beat.
+    /// `"pingpong"` is the canonical explicit value: it keeps the legacy
+    /// mirrored-frame recorder, which is also what an absent key means for
+    /// presets written before this extension existed. `"restart"` records a
+    /// single forward leg, so [`TweenRuntime::advance`](TweenRuntime::advance)
+    /// wraps to frame 0 and replays the drawn pattern beat-for-beat. Any other
+    /// value keeps the legacy recorder as well.
     pub loop_mode: Option<String>,
     /// Whether the duration follows the tempo (`useBpm: true`).
     pub use_bpm: bool,
@@ -2080,6 +2085,40 @@ mod tests {
             build_tween_frames(&legacy, 10.0, 120.0).len(),
             80,
             "without loopMode the recorded ping-pong is unchanged"
+        );
+    }
+
+    #[test]
+    fn pingpong_loop_mode_records_the_legacy_mirrored_leg() {
+        let legacy_document = json!({
+            "id": "pingpong-link",
+            "data": [[0.0], [1.0]],
+            "duration": 1000.0,
+            "direction": "normal",
+            "easing": "linear",
+            "loop": true,
+            "useBpm": false,
+            "bpmDivision": 16.0,
+            "durationAsTotalTime": false,
+            "steps": 0.0,
+        });
+        let mut pingpong_document = legacy_document.clone();
+        pingpong_document["loopMode"] = json!("pingpong");
+        let legacy = descriptor_from(&legacy_document);
+        let pingpong = descriptor_from(&pingpong_document);
+        assert_eq!(pingpong.loop_mode.as_deref(), Some("pingpong"));
+
+        let legacy_frames = build_tween_frames(&legacy, 10.0, 120.0);
+        let pingpong_frames = build_tween_frames(&pingpong, 10.0, 120.0);
+        assert_eq!(pingpong_frames.len(), 10);
+        assert_eq!(
+            pingpong_frames, legacy_frames,
+            "the canonical pingpong token must keep the legacy mirrored recorder"
+        );
+        let values: Vec<f64> = pingpong_frames.iter().map(|frame| frame[0]).collect();
+        assert_eq!(
+            values,
+            vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 0.8, 0.6, 0.4, 0.2]
         );
     }
 

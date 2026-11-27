@@ -4360,6 +4360,14 @@ fn tween_view_from_json(tween: &Value, bpm: f64) -> Option<TweenView> {
             .map(|descriptor| descriptor.looping)
             .or_else(|| field("loop").and_then(Value::as_bool))
             .unwrap_or(true),
+        loop_mode: descriptor
+            .as_ref()
+            .and_then(|descriptor| descriptor.loop_mode.clone())
+            .or_else(|| {
+                field("loopMode")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
         use_bpm,
         bpm_division: descriptor
             .as_ref()
@@ -6742,6 +6750,52 @@ module.exports = {
         assert_eq!(view.frames, 6);
         // 3+ rows divide the 1000 ms duration into one leg per row.
         assert!((view.cycle_seconds - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn tween_view_from_json_preserves_loop_mode_and_legacy_pingpong() {
+        let legacy = tween_view_from_json(
+            &serde_json::json!({
+                "id": "legacy",
+                "data": [[0], [1]],
+                "loop": true,
+                "useBpm": false,
+            }),
+            120.0,
+        )
+        .expect("legacy view");
+        assert_eq!(
+            legacy.loop_mode, None,
+            "a legacy looping descriptor has no restart opt-in and must display as ping-pong"
+        );
+        assert!(legacy.looping, "the legacy loop checkbox stays ticked");
+
+        for mode in ["restart", "pingpong"] {
+            let view = tween_view_from_json(
+                &serde_json::json!({
+                    "id": mode,
+                    "data": [[0], [1]],
+                    "loop": true,
+                    "loopMode": mode,
+                    "useBpm": false,
+                }),
+                120.0,
+            )
+            .expect("view");
+            assert_eq!(view.loop_mode.as_deref(), Some(mode));
+        }
+
+        // A malformed descriptor still exposes the raw mode to the compact UI.
+        let raw = tween_view_from_json(
+            &serde_json::json!({
+                "id": "broken",
+                "data": [["nope"]],
+                "loopMode": "pingpong",
+            }),
+            120.0,
+        )
+        .expect("raw view");
+        assert_eq!(raw.loop_mode.as_deref(), Some("pingpong"));
     }
 
     #[test]

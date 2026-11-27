@@ -25,6 +25,7 @@ fn palette_view() -> TweenView {
         direction: "alternate".to_string(),
         easing: "linear".to_string(),
         looping: true,
+        loop_mode: None,
         use_bpm: true,
         bpm_division: 16.0,
         duration_as_total_time: false,

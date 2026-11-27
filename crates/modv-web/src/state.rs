@@ -2054,6 +2054,7 @@ impl WebState {
                         direction: descriptor.direction.clone(),
                         easing: descriptor.easing.clone(),
                         looping: descriptor.looping,
+                        loop_mode: descriptor.loop_mode.clone(),
                         use_bpm: descriptor.use_bpm,
                         bpm_division: descriptor.bpm_division,
                         duration_as_total_time: descriptor.duration_as_total_time,

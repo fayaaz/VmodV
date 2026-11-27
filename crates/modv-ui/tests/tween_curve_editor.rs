@@ -22,6 +22,7 @@ fn view() -> TweenView {
         direction: "alternate".to_string(),
         easing: "easeInOutSine".to_string(),
         looping: true,
+        loop_mode: None,
         use_bpm: true,
         bpm_division: 16.0,
         duration_as_total_time: false,
@@ -44,7 +45,10 @@ fn editor_state() -> UiState {
 }
 
 fn harness(state: UiState) -> Harness<'static, UiState> {
-    let view = view();
+    harness_with_view(state, view())
+}
+
+fn harness_with_view(state: UiState, view: TweenView) -> Harness<'static, UiState> {
     let harness = Harness::builder()
         .with_size([900.0, 700.0])
         .with_accessibility_check(false)
@@ -73,6 +77,14 @@ fn harness(state: UiState) -> Harness<'static, UiState> {
         );
     modv_ui::theme::apply(&harness.ctx);
     harness
+}
+
+fn loop_mode_view(looping: bool, loop_mode: Option<String>) -> TweenView {
+    TweenView {
+        looping,
+        loop_mode,
+        ..view()
+    }
 }
 
 #[test]
@@ -145,4 +157,49 @@ fn dragging_a_handle_queues_the_full_descriptor_once() {
         (editor.curve.value(1, 0) - 0.9).abs() < 0.02,
         "local curve mirrored the drag"
     );
+}
+
+#[test]
+fn ticking_pingpong_enables_loop_and_dispatches_pingpong() {
+    let mut harness = harness_with_view(
+        UiState::new(),
+        loop_mode_view(false, Some("restart".to_string())),
+    );
+    harness.run();
+
+    let pingpong = harness.query_by_label("ping-pong");
+    assert!(
+        pingpong.is_some(),
+        "the tween editor exposes a ping-pong checkbox"
+    );
+    pingpong.expect("ping-pong checkbox").click();
+    harness.run();
+
+    let actions = harness.state_mut().take_actions();
+    assert_eq!(actions.len(), 2, "one descriptor update plus its link");
+    assert_eq!(actions[0].action, "tweens/createTween");
+    assert_eq!(actions[0].payload["loop"], true);
+    assert_eq!(actions[0].payload["loopMode"], "pingpong");
+}
+
+#[test]
+fn unticking_loop_clears_pingpong_and_dispatches_restart() {
+    let mut harness = harness_with_view(
+        UiState::new(),
+        loop_mode_view(true, Some("pingpong".to_string())),
+    );
+    harness.run();
+    assert!(
+        harness.query_by_label("ping-pong").is_some(),
+        "the ping-pong mode is represented by its own checkbox"
+    );
+
+    harness.get_by_label("loop").click();
+    harness.run();
+
+    let actions = harness.state_mut().take_actions();
+    assert_eq!(actions.len(), 2, "one descriptor update plus its link");
+    assert_eq!(actions[0].action, "tweens/createTween");
+    assert_eq!(actions[0].payload["loop"], false);
+    assert_eq!(actions[0].payload["loopMode"], "restart");
 }

@@ -190,12 +190,17 @@ impl DrawControl {
                         }
                     }
                     let mut looping = edited.looping;
-                    if ui
+                    let mut ping_pongs = edited.ping_pongs();
+                    let loop_changed = ui
                         .checkbox(&mut looping, "loop")
-                        .on_hover_text("Ping-pong the curve; off restarts from the left")
-                        .changed()
-                    {
-                        edited.looping = looping;
+                        .on_hover_text("Repeat the drawn curve; off plays it once")
+                        .changed();
+                    let pingpong_changed = ui
+                        .checkbox(&mut ping_pongs, TweenView::PING_PONG_LABEL)
+                        .on_hover_text(TweenView::PING_PONG_HOVER)
+                        .changed();
+                    if loop_changed || pingpong_changed {
+                        edited.apply_loop_edit(looping, ping_pongs, loop_changed, pingpong_changed);
                         changed = true;
                     }
                     if changed {
@@ -435,6 +440,7 @@ fn draw_view(input_id: String, curve: DrawCurve, bpm: f64) -> TweenView {
         direction: "normal".to_string(),
         easing: "linear".to_string(),
         looping: true,
+        loop_mode: Some("restart".to_string()),
         use_bpm: true,
         bpm_division: beats_to_division(DEFAULT_DRAW_BEATS),
         duration_as_total_time: true,
@@ -471,8 +477,9 @@ fn cycle_seconds(view: &TweenView, bpm: f64) -> f64 {
 /// `keyframeTimes` is emitted for a curve with more than two points: without
 /// it anime's 3+ row handling would hold the first sample for a whole segment
 /// instead of joining the clicked points. A two-point curve uses the plain
-/// `[from, to]` shorthand. `loopMode: "restart"` opts into replaying the drawn
-/// cycle each time instead of ping-ponging it (what `loop: true` alone does).
+/// `[from, to]` shorthand. `loopMode` is always emitted: `"pingpong"` keeps
+/// the legacy mirrored recorder, `"restart"` replays the drawn cycle each
+/// time.
 fn descriptor_payload(view: &TweenView) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "id": view.id,
@@ -481,7 +488,7 @@ fn descriptor_payload(view: &TweenView) -> serde_json::Value {
         "direction": view.direction,
         "easing": view.easing,
         "loop": view.looping,
-        "loopMode": "restart",
+        "loopMode": view.loop_mode_token(),
         "useBpm": view.use_bpm,
         "bpmDivision": view.bpm_division,
         "durationAsTotalTime": true,
@@ -735,6 +742,7 @@ mod tests {
         assert_eq!(payload["direction"], "normal");
         assert_eq!(payload["easing"], "linear");
         assert_eq!(payload["loop"], true);
+        assert_eq!(payload["loopMode"], "restart");
         assert_eq!(payload["useBpm"], true);
         assert_eq!(payload["durationAsTotalTime"], true);
         assert_eq!(
@@ -761,6 +769,14 @@ mod tests {
         assert_eq!(actions[1].payload["min"], 0);
         assert_eq!(actions[1].payload["max"], 1);
         assert!(control.curve.is_some());
+        assert_eq!(
+            control
+                .curve
+                .as_ref()
+                .and_then(|view| view.loop_mode.as_deref()),
+            Some("restart"),
+            "a new draw defaults to a restart loop"
+        );
         assert!(
             state.draw_editor.is_some(),
             "starting a draw opens the curve canvas"
@@ -782,6 +798,7 @@ mod tests {
         // restart semantics.
         let mut view = two_row();
         view.looping = true;
+        view.loop_mode = Some("restart".to_string());
         let mut state = UiState::new();
         let mut control = DrawControl::new(
             "gain",
@@ -801,6 +818,51 @@ mod tests {
         let actions = state.take_actions();
         assert_eq!(actions[0].action, "tweens/createTween");
         assert_eq!(actions[0].payload["loopMode"], "restart");
+    }
+
+    #[test]
+    fn pingpong_draw_dispatch_and_redraw_keep_the_pingpong_mode() {
+        let mut view = two_row();
+        view.looping = true;
+        view.loop_mode = Some("pingpong".to_string());
+        let mut control = DrawControl::new(
+            "gain",
+            Some("input-1".to_string()),
+            Some(view.clone()),
+            0.0,
+            1.0,
+        );
+        let mut editor = DrawCurveEditor::new(
+            "input-1",
+            "gain",
+            DrawCurve::from_view(&view, 0.0, 1.0).expect("curve"),
+        );
+        editor.curve.paint((0.25, 0.1), (0.75, 0.9));
+        let mut state = UiState::new();
+
+        control.apply_curve(&mut state, &mut editor, 120.0);
+
+        let actions = state.take_actions();
+        assert_eq!(actions[0].action, "tweens/createTween");
+        assert_eq!(actions[0].payload["loop"], true);
+        assert_eq!(actions[0].payload["loopMode"], "pingpong");
+        assert_eq!(
+            control
+                .curve
+                .as_ref()
+                .and_then(|view| view.loop_mode.as_deref()),
+            Some("pingpong"),
+            "repainting must not silently turn a ping-pong draw into a restart loop"
+        );
+    }
+
+    #[test]
+    fn restart_and_unset_draw_modes_emit_restart() {
+        for loop_mode in [Some("restart".to_string()), None] {
+            let mut view = two_row();
+            view.loop_mode = loop_mode;
+            assert_eq!(descriptor_payload(&view)["loopMode"], "restart");
+        }
     }
 
     #[test]

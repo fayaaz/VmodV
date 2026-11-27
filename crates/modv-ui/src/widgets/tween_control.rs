@@ -1,8 +1,8 @@
 //! Tween control: create/edit the descriptor that drives a prop's input link.
 //!
 //! The compact rows edit the descriptor fields the legacy `TweenControl.vue`
-//! exposed (easing, direction, BPM division, loop, steps) plus the fields the
-//! VmodV editor needed (duration, BPM, total time). "Edit curve" opens a
+//! exposed (easing, direction, BPM division, loop, ping-pong, steps) plus the
+//! fields the VmodV editor needed (duration, BPM, total time). "Edit curve" opens a
 //! keyframe editor window: overlaid channel polylines with draggable handles,
 //! a beats-or-seconds axis driven by the engine's real cycle length, and the
 //! Electron-style JSON underneath.
@@ -146,7 +146,12 @@ impl TweenControl {
                         )
                         .changed();
                     let mut looping = view.looping;
+                    let mut ping_pongs = view.ping_pongs();
                     let loop_changed = ui.checkbox(&mut looping, "loop").changed();
+                    let pingpong_changed = ui
+                        .checkbox(&mut ping_pongs, TweenView::PING_PONG_LABEL)
+                        .on_hover_text(TweenView::PING_PONG_HOVER)
+                        .changed();
                     let mut steps = view.steps;
                     let steps_changed = ui
                         .add(
@@ -160,13 +165,14 @@ impl TweenControl {
                         || direction != view.direction
                         || division_changed
                         || loop_changed
+                        || pingpong_changed
                         || steps_changed
                     {
                         let mut edited = view.clone();
                         edited.easing = easing;
                         edited.direction = direction;
                         edited.bpm_division = division;
-                        edited.looping = looping;
+                        edited.apply_loop_edit(looping, ping_pongs, loop_changed, pingpong_changed);
                         edited.steps = steps;
                         edit = Some(edited);
                     }
@@ -259,6 +265,7 @@ impl TweenControl {
             direction: "alternate".to_string(),
             easing: "easeInOutSine".to_string(),
             looping: true,
+            loop_mode: Some("restart".to_string()),
             use_bpm: true,
             bpm_division: 16.0,
             duration_as_total_time: false,
@@ -851,9 +858,8 @@ fn draw_curve(
 ///
 /// `keyframeTimes` is emitted only for explicit times (three or more rows);
 /// a two-row `[0, 1]` list would be redundant with anime's shorthand.
-/// `loopMode: "restart"` is emitted alongside `loop`: when looping is enabled
-/// it replays the drawn cycle from frame 0 instead of ping-ponging it (what
-/// `loop: true` alone does).
+/// `loopMode` is always emitted: `"pingpong"` keeps the legacy mirrored
+/// recorder, `"restart"` replays the drawn cycle from frame 0.
 fn descriptor_payload(view: &TweenView) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "id": view.id,
@@ -862,7 +868,7 @@ fn descriptor_payload(view: &TweenView) -> serde_json::Value {
         "direction": view.direction,
         "easing": view.easing,
         "loop": view.looping,
-        "loopMode": "restart",
+        "loopMode": view.loop_mode_token(),
         "useBpm": view.use_bpm,
         "bpmDivision": view.bpm_division,
         "durationAsTotalTime": view.duration_as_total_time,
@@ -977,11 +983,20 @@ mod tests {
             "tweens.tweens['input-1'].value[0]"
         );
         assert!(control.tween.is_some());
+        assert_eq!(
+            control
+                .tween
+                .as_ref()
+                .and_then(|view| view.loop_mode.as_deref()),
+            Some("restart"),
+            "a new tween defaults to a restart loop"
+        );
     }
 
     #[test]
-    fn looping_tween_updates_request_restart_instead_of_ping_pong() {
-        let view = two_row();
+    fn restart_loop_edit_keeps_the_explicit_restart_mode() {
+        let mut view = two_row();
+        view.loop_mode = Some("restart".to_string());
         let mut control = TweenControl::new(
             "gain",
             Some("input-1".to_string()),
@@ -997,8 +1012,46 @@ mod tests {
         assert_eq!(actions[0].payload["loop"], true);
         assert_eq!(
             actions[0].payload["loopMode"], "restart",
-            "a checked loop must replay the forward leg instead of ping-ponging"
+            "ping-pong off replays the forward leg on every cycle"
         );
+    }
+
+    #[test]
+    fn pingpong_tween_dispatches_the_pingpong_loop_mode() {
+        let mut view = two_row();
+        view.loop_mode = Some("pingpong".to_string());
+        let mut control = TweenControl::new(
+            "gain",
+            Some("input-1".to_string()),
+            Some(view.clone()),
+            0.0,
+            1.0,
+        );
+        let mut state = UiState::new();
+
+        control.update(&mut state, view);
+
+        let actions = state.take_actions();
+        assert_eq!(actions[0].action, "tweens/createTween");
+        assert_eq!(actions[0].payload["loop"], true);
+        assert_eq!(actions[0].payload["loopMode"], "pingpong");
+        assert_eq!(
+            control
+                .tween
+                .as_ref()
+                .and_then(|view| view.loop_mode.as_deref()),
+            Some("pingpong")
+        );
+    }
+
+    #[test]
+    fn restart_and_unset_tween_modes_emit_restart() {
+        for loop_mode in [Some("restart".to_string()), None] {
+            let mut view = two_row();
+            view.loop_mode = loop_mode;
+            let payload = descriptor_payload(&view);
+            assert_eq!(payload["loopMode"], "restart");
+        }
     }
 
     #[test]

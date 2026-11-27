@@ -2266,6 +2266,7 @@ pub struct TweenView {
     pub direction: String,
     pub easing: String,
     pub looping: bool,
+    pub loop_mode: Option<String>,
     pub use_bpm: bool,
     pub bpm_division: f64,
     /// Treat `duration` as the whole cycle instead of per-row time.
@@ -2275,6 +2276,72 @@ pub struct TweenView {
     /// One animation leg in seconds at the live tempo, from the engine's
     /// `TweenDescriptor::effective_duration` (the axis must match playback).
     pub cycle_seconds: f64,
+}
+
+impl TweenView {
+    /// Label of the ping-pong checkbox in both curve editors.
+    pub const PING_PONG_LABEL: &'static str = "ping-pong";
+    /// Hover text of the ping-pong checkbox in both curve editors.
+    pub const PING_PONG_HOVER: &'static str =
+        "Bounce back through the curve instead of restarting from the start";
+
+    /// Whether a looping cycle bounces back through the curve instead of
+    /// restarting from its first keyframe.
+    ///
+    /// Reads an unset `loopMode` as ping-pong: every preset written before
+    /// `loopMode` existed relied on the legacy mirrored recorder, so the
+    /// checkbox must appear ticked for those descriptors. Only an explicit
+    /// `"restart"` opts out. This is deliberately not the inverse of
+    /// [`Self::loop_mode_token`] — see its docs.
+    pub fn ping_pongs(&self) -> bool {
+        self.loop_mode.as_deref() != Some("restart")
+    }
+
+    /// The `loopMode` token written with a descriptor payload.
+    ///
+    /// This deliberately does not round-trip [`Self::ping_pongs`]: an unset
+    /// mode reads as ping-pong for display, but only an explicit `"pingpong"`
+    /// keeps the mirrored recorder when a payload is serialised from the view
+    /// itself; an unset mode (or `"restart"`, or an unknown value) writes
+    /// `"restart"` rather than inheriting the recorder from an absent key.
+    /// Do not "fix" this into a round trip: the checkbox pair is the explicit
+    /// opt-in and writes its token through [`Self::apply_loop_edit`].
+    pub fn loop_mode_token(&self) -> &'static str {
+        Self::mode_token(self.loop_mode.as_deref() == Some("pingpong"))
+    }
+
+    /// Apply the shared loop / ping-pong checkbox edit to this view.
+    ///
+    /// `looping` and `ping_pongs` are the values the two checkboxes now show;
+    /// the change flags say which one the user actually clicked. Ping-pong
+    /// needs a repeat to bounce through, so ticking it also ticks loop;
+    /// unticking loop clears ping-pong, returning the mode to a restart. Both
+    /// widgets call this on a checkbox edit (the tween editor also calls it
+    /// for its other descriptor edits), so an edited legacy descriptor no
+    /// longer carries an absent `loopMode`.
+    pub fn apply_loop_edit(
+        &mut self,
+        looping: bool,
+        ping_pongs: bool,
+        loop_changed: bool,
+        pingpong_changed: bool,
+    ) {
+        let mut looping = looping;
+        let mut ping_pongs = ping_pongs;
+        if loop_changed && !looping {
+            ping_pongs = false;
+        }
+        if pingpong_changed && ping_pongs {
+            looping = true;
+        }
+        self.looping = looping;
+        self.loop_mode = Some(Self::mode_token(ping_pongs && looping).to_string());
+    }
+
+    /// Descriptor token for an explicit ping-pong choice.
+    fn mode_token(ping_pongs: bool) -> &'static str {
+        if ping_pongs { "pingpong" } else { "restart" }
+    }
 }
 
 /// One saved Scene.
@@ -2701,6 +2768,36 @@ mod tests {
             out[channel] = ((value * alpha + 127) / 255).min(255) as u8;
         }
         out
+    }
+
+    #[test]
+    fn loop_checkbox_edits_keep_loop_and_ping_pong_consistent() {
+        // The policy shared by the tween and draw editors: ping-pong implies
+        // loop, unticking loop clears ping-pong, and each edit writes a token.
+        let mut view = TweenView {
+            looping: false,
+            loop_mode: Some("restart".to_string()),
+            ..Default::default()
+        };
+        assert!(!view.ping_pongs());
+        view.apply_loop_edit(false, true, false, true);
+        assert!(view.looping, "ticking ping-pong must tick loop");
+        assert_eq!(view.loop_mode.as_deref(), Some("pingpong"));
+
+        view.apply_loop_edit(false, false, true, false);
+        assert!(!view.looping);
+        assert_eq!(view.loop_mode.as_deref(), Some("restart"));
+
+        // A legacy looping descriptor reads as ping-pong and an edit makes
+        // that choice explicit rather than leaving the key absent.
+        let mut legacy = TweenView {
+            looping: true,
+            ..Default::default()
+        };
+        assert!(legacy.ping_pongs());
+        assert_eq!(legacy.loop_mode_token(), "restart");
+        legacy.apply_loop_edit(true, true, false, false);
+        assert_eq!(legacy.loop_mode.as_deref(), Some("pingpong"));
     }
 
     #[test]
