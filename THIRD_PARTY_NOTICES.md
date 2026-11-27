@@ -182,7 +182,7 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 
 ### Plane9 effects (Joakim Dahl — CC BY-NC-SA)
 
-These fifty-two shader effects and ISF transitions are Plane9 presets by
+These forty-nine shader effects and ISF transitions are Plane9 presets by
 **Joakim Dahl**, audited as Plane9 originals and registered as `Plane9 <Name>`
 (the historical `Point10 <Name>` names remain load aliases). The version is
 stated in the ported source or notices below. The five effects without a
@@ -211,11 +211,8 @@ Plane9 preset (`Pixelation`, `RGB Shift`, `Digital Glitch`, `Vignette`,
 | Crt | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl; the CRT post-process adapts Timothy Lottes' public domain "CRT" shader) |
 | Cubic Lens Distortion | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl; lens-distortion reference from a public CodePen sample (https://codepen.io)) |
 | Hexagons | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
-| Led Display | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
-| Led Display Curved | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
 | Limit Hue | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
 | Embos Merge | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 4.0 (Plane9 shader effect by Joakim Dahl) |
-| Embos | `crates/modv-renderers/src/shader/modules/point10_effects.rs` | CC BY-NC-SA 3.0 (Plane9 shader effect by Joakim Dahl) |
 | Banded Swirl | `resources/isf/Plane9 Banded Swirl.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
 | Blinds | `resources/isf/Plane9 Blinds.fs` | CC BY-NC-SA 3.0 (Plane9 ISF transition by Joakim Dahl) |
 | Block | `resources/isf/Plane9 Block.fs` | CC BY-NC-SA 4.0 (Plane9 ISF transition by Joakim Dahl) |

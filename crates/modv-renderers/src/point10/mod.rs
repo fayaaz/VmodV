@@ -209,7 +209,7 @@ pub const POINT10_PREFIX: &str = "Point10 ";
 /// The prefix of the renamed Plane9 ports.
 pub const PLANE9_PREFIX: &str = "Plane9 ";
 
-/// The fifty-two Plane9 (Joakim Dahl) shader effects and ISF transitions that
+/// The forty-nine Plane9 (Joakim Dahl) shader effects and ISF transitions that
 /// were audited as Plane9 originals and moved from the historical `Point10 `
 /// prefix to their canonical `Plane9 <Name>` registry names.
 ///
@@ -241,11 +241,8 @@ pub const PLANE9_EFFECT_NAMES: &[&str] = &[
     "Plane9 Crt",
     "Plane9 Cubic Lens Distortion",
     "Plane9 Hexagons",
-    "Plane9 Led Display",
-    "Plane9 Led Display Curved",
     "Plane9 Limit Hue",
     "Plane9 Embos Merge",
-    "Plane9 Embos",
     // ISF transitions (`resources/isf/Plane9 *.fs`).
     "Plane9 Banded Swirl",
     "Plane9 Blinds",
@@ -328,7 +325,7 @@ pub fn resolve_effect_name(name: &str) -> &str {
 
 /// The authoritative Gallery renderer kind for a registry module named `name`.
 ///
-/// The thirty Plane9 preset ports and the fifty-two renamed Plane9
+/// The thirty Plane9 preset ports and the forty-nine renamed Plane9
 /// effects share the Point10 runtime renderer but are surfaced to the Gallery
 /// as their own kind (`plane9`, matched as free text); every other module keeps
 /// `default_kind` (its engine renderer kind). Using this helper in both snapshot
@@ -345,7 +342,7 @@ pub fn gallery_kind(name: &str, default_kind: &str) -> String {
 /// Rewrite every legacy `Point10 <Name>` alias string in a JSON document to its
 /// canonical `Plane9 <Name>` name.
 ///
-/// Covers both the thirty Plane9 preset scenes and the fifty-two audited
+/// Covers both the thirty Plane9 preset scenes and the forty-nine audited
 /// Plane9 shader effects/ISF transitions. Walks arrays and objects so nested
 /// Scene cells, Groups and module records are migrated; every other value is
 /// left untouched. Idempotent: canonical names never match the legacy prefix.
@@ -1236,9 +1233,9 @@ mod tests {
         let repo_root = manifest_dir.join("../..");
         let point10_root = manifest_dir.join("src/point10");
 
-        // D — committed parity and generated catalogue data move 47 -> 48 and
-        // 501 -> 502. The catalogue is checked as data; this RED phase does not
-        // regenerate or edit it.
+        // D — committed parity and generated catalogue data retain 48 Point10
+        // scenes and total 499 after three shader effects were retired. The
+        // catalogue is checked as data.
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
                 .expect("read module-parity.json"),
@@ -1250,8 +1247,8 @@ mod tests {
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(502),
-            "manifest: total is {:?}, expected 502",
+            manifest["counts"]["total"].as_u64() == Some(499),
+            "manifest: total is {:?}, expected 499",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -1285,8 +1282,8 @@ mod tests {
             catalogue["counts"]["point10"]
         );
         check!(
-            catalogue["counts"]["total"].as_u64() == Some(502),
-            "catalogue: total is {:?}, expected 502",
+            catalogue["counts"]["total"].as_u64() == Some(499),
+            "catalogue: total is {:?}, expected 499",
             catalogue["counts"]["total"]
         );
         let catalogue_modules = catalogue["modules"].as_array().expect("catalogue modules");

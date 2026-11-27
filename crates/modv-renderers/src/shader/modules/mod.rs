@@ -1,18 +1,18 @@
 //! The built-in shader module registry — every module the Gallery ships,
 //! ported from `src/renderer/src/application/renderers/shader/modules/`.
 //!
-//! # Count (36)
+//! # Count (33)
 //!
 //! | Flavour | Count | Modules |
 //! |---------|-------|---------|
 //! | direct (`gl_FragColor` → own `fs_main`) | 5 | Bands, Fisheye, MattiasCRT, Plasma, Wobble |
-//! | mainImage shim (`mainImage` + wrapper) | 32 | Chromatic Abberation, 25 × Plane9, 5 × Point10 |
+//! | mainImage shim (`mainImage` + wrapper) | 28 | Chromatic Abberation, 22 × Plane9, 5 × Point10 |
 //!
 //! # Registration order
 //!
 //! [`all_modules`] preserves the JS registration order: the six
 //! single-effect modules first (in `modules/` directory listing order),
-//! then the 25 Plane9 and five Point10 effects in the order they appear in
+//! then the 22 Plane9 and five Point10 effects in the order they appear in
 //! `Point10Effects.js`. Gallery order changes only deliberately.
 //!
 //! # Prop-buffer contract
@@ -103,12 +103,12 @@ pub struct ShaderModule {
     pub props: Vec<ShaderProp>,
 }
 
-/// All 36 built-in shader modules, in registration order.
+/// All 33 built-in shader modules, in registration order.
 ///
 /// Always returns freshly built values (the fragment sources are
 /// `format!`-expanded at call time — cheap, once per activation).
 pub fn all_modules() -> Vec<ShaderModule> {
-    let mut modules = Vec::with_capacity(36);
+    let mut modules = Vec::with_capacity(33);
     modules.push(bands::module());
     modules.push(chromatic_abberation::module());
     modules.push(fisheye::module());
@@ -120,7 +120,7 @@ pub fn all_modules() -> Vec<ShaderModule> {
 }
 
 /// The number of built-in modules; asserted by the tests below.
-pub const MODULE_COUNT: usize = 36;
+pub const MODULE_COUNT: usize = 33;
 
 /// Compose a module's fragment body with its generated `ModuleProps`
 /// declaration (or nothing, for prop-less modules). Keeps the WGSL member
@@ -140,8 +140,9 @@ mod tests {
     use crate::shader::default_shader::validate_wgsl;
 
     #[test]
-    fn module_count_is_36() {
-        assert_eq!(all_modules().len(), MODULE_COUNT);
+    fn module_count_is_33() {
+        assert_eq!(all_modules().len(), 33);
+        assert_eq!(MODULE_COUNT, 33);
     }
 
     #[test]
@@ -178,8 +179,8 @@ mod tests {
             .filter(|module| module.fragment_wgsl.contains("mainImage"));
         assert_eq!(
             with_main_image.count(),
-            31,
-            "exactly the 30 Point10 effects and Chromatic Abberation use the mainImage shim"
+            28,
+            "exactly the 27 Point10 effects and Chromatic Abberation use the mainImage shim"
         );
     }
 
@@ -206,7 +207,7 @@ mod tests {
 
     #[test]
     fn point10_modules_consume_builtins_only() {
-        // The 25 audited Plane9 effects and the five Point10-only effects
+        // The 22 audited Plane9 effects and the five Point10-only effects
         // request no props, all opt into preview-with-output, and carry the
         // per-name provenance author.
         let modules = all_modules();
@@ -216,13 +217,13 @@ mod tests {
                 module.name.starts_with("Point10 ") || module.name.starts_with("Plane9 ")
             })
             .collect();
-        assert_eq!(effects.len(), 30);
+        assert_eq!(effects.len(), 27);
         assert_eq!(
             effects
                 .iter()
                 .filter(|module| module.name.starts_with("Plane9 "))
                 .count(),
-            25
+            22
         );
         assert_eq!(
             effects

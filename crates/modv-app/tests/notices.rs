@@ -1724,8 +1724,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(502),
-        "manifest: total is {:?}, expected 502",
+        manifest["counts"]["total"].as_u64() == Some(499),
+        "manifest: total is {:?}, expected 499",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -1773,8 +1773,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         generated["counts"]["point10"]
     );
     check!(
-        generated["counts"]["total"].as_u64() == Some(502),
-        "catalogue: total is {:?}, expected 502",
+        generated["counts"]["total"].as_u64() == Some(499),
+        "catalogue: total is {:?}, expected 499",
         generated["counts"]["total"]
     );
     let modules = generated["modules"]
@@ -2026,8 +2026,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(502),
-        "manifest: total is {:?}, expected 502",
+        manifest["counts"]["total"].as_u64() == Some(499),
+        "manifest: total is {:?}, expected 499",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -2080,8 +2080,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         generated["counts"]["point10"]
     );
     check!(
-        generated["counts"]["total"].as_u64() == Some(502),
-        "catalogue: total is {:?}, expected 502",
+        generated["counts"]["total"].as_u64() == Some(499),
+        "catalogue: total is {:?}, expected 499",
         generated["counts"]["total"]
     );
     let modules = generated["modules"]
@@ -2178,11 +2178,8 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
         ("Crt", "4.0"),
         ("Cubic Lens Distortion", "3.0"),
         ("Hexagons", "4.0"),
-        ("Led Display", "4.0"),
-        ("Led Display Curved", "4.0"),
         ("Limit Hue", "4.0"),
         ("Embos Merge", "4.0"),
-        ("Embos", "3.0"),
     ];
     const ISF_TRANSITIONS: &[(&str, &str)] = &[
         ("Banded Swirl", "3.0"),
@@ -2254,7 +2251,7 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
         .map(|(suffix, _)| format!("Plane9 {suffix}"))
         .collect();
 
-    // A — exactly the audited effects move prefix, with unchanged bucket sizes
+    // A — exactly the audited effects move prefix, with expected bucket sizes
     // and no duplicate registration inside or across renderer buckets.
     let expected_shader_plane9: BTreeSet<String> = SHADER_EFFECTS
         .iter()
@@ -2290,8 +2287,8 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
         .collect();
 
     check!(
-        registry.shader_modules().len() == 36,
-        "A: shader bucket has {} modules, expected 36",
+        registry.shader_modules().len() == 33,
+        "A: shader bucket has {} modules, expected 33",
         registry.shader_modules().len()
     );
     check!(
@@ -2440,7 +2437,7 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
     );
 
     // C — the shared JSON rewrite covers nested saved documents, and both preset
-    // restore and Scene import persist the canonical spelling for all 52 names.
+    // restore and Scene import persist the canonical spelling for all 49 names.
     let mut nested_legacy = json!({"scene": {"modules": {"$moduleName": legacy_names}}});
     modv_renderers::point10::rename_legacy_scene_names(&mut nested_legacy);
     check!(
@@ -2554,7 +2551,7 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
     }
     check!(
         alias_mismatches.is_empty(),
-        "C: {} of 52 registry aliases failed: {}",
+        "C: {} of 49 registry aliases failed: {}",
         alias_mismatches.len(),
         summarize(&alias_mismatches)
     );
@@ -2734,7 +2731,7 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
     );
 
     // G — the generator and both checked-in catalogue projections use the same
-    // canonical registry names and unchanged shader/ISF counts.
+    // canonical registry names and expected shader/ISF counts.
     let generated = build_document(&corpus);
     let (metadata, previews) = split_documents(&generated);
     let committed_metadata: Value =
@@ -2752,9 +2749,10 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
         "G: docs/modules/previews.json does not match split_documents(build_document())"
     );
     check!(
-        generated["counts"]["shader"].as_u64() == Some(36)
-            && generated["counts"]["isf"].as_u64() == Some(402),
-        "G: generated catalogue shader/ISF counts changed"
+        generated["counts"]["shader"].as_u64() == Some(33)
+            && generated["counts"]["isf"].as_u64() == Some(402)
+            && generated["counts"]["total"].as_u64() == Some(499),
+        "G: generated catalogue shader/ISF/total counts changed"
     );
 
     let modules = generated["modules"]
@@ -2793,7 +2791,8 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
     );
 
     // The parity manifest is historical, like the Plane9 scene fixture: retain
-    // every old spelling so alias-normalising registry guards can keep using it.
+    // the surviving old spellings so alias-normalising registry guards can keep
+    // using it.
     let manifest: Value =
         serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
             .expect("the historical parity manifest is valid JSON");

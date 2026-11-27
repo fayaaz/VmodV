@@ -2,10 +2,10 @@
   "schema": 1,
   "source": "ModuleRegistry + modv_renderers::isf (see tools/gen-module-docs.sh)",
   "counts": {
-    "total": 502,
+    "total": 499,
     "2d": 16,
     "point10": 48,
-    "shader": 36,
+    "shader": 33,
     "isf": 402
   },
   "modules": [
@@ -20055,22 +20055,6 @@
       "preview": null
     },
     {
-      "id": "plane9-embos",
-      "name": "Plane9 Embos",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Plane9 (Joakim Dahl)",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
       "id": "plane9-embos-merge",
       "name": "Plane9 Embos Merge",
       "kind": "shader",
@@ -20505,38 +20489,6 @@
       ],
       "source": null,
       "preview": null
-    },
-    {
-      "id": "plane9-led-display",
-      "name": "Plane9 Led Display",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Plane9 (Joakim Dahl)",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "plane9-led-display-curved",
-      "name": "Plane9 Led Display Curved",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Plane9 (Joakim Dahl)",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
     },
     {
       "id": "plane9-light-tunnel",

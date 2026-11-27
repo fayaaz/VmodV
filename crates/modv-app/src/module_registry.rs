@@ -62,8 +62,8 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 48 Point10 scenes and 36 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 402 `.fs` shaders of the ISF corpus (502 total). Names match
+//! 48 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
+//! module and the 402 `.fs` shaders of the ISF corpus (499 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -1055,7 +1055,7 @@ pub struct ModuleRegistry {
 }
 
 impl ModuleRegistry {
-    /// The 36 built-in shader modules, the 16 2D modules (15 ported plus the
+    /// The 33 built-in shader modules, the 16 2D modules (15 ported plus the
     /// VmodV-only `Video`) and the ported Point10 scenes, with no ISF corpus.
     ///
     /// Used by unit tests and the headless benchmark, which must not depend on
@@ -2489,7 +2489,7 @@ mod tests {
         assert_eq!(registry.kind("Bands"), Some(ModuleKind::Shader));
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Not A Module"), None);
-        assert_eq!(registry.shader_modules().len(), 36);
+        assert_eq!(registry.shader_modules().len(), 33);
         assert_eq!(registry.two_d_definitions().len(), 16);
     }
 
@@ -2647,7 +2647,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 36 + 16 + 48, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 33 + 16 + 48, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -3806,7 +3806,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 48 + 402 + milkdrop_count,
+            33 + 16 + 48 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3882,12 +3882,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 48 + 402 + milkdrop_count,
+            33 + 16 + 48 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(502),
+            Some(499),
             "manifest total"
         );
     }

@@ -3,10 +3,10 @@
   "counts": {
     "twoD": 16,
     "point10": 48,
-    "shader": 36,
+    "shader": 33,
     "isf": 402,
     "milkdrop": 0,
-    "total": 502
+    "total": 499
   },
   "milkdrop": [],
   "twoD": [
@@ -96,7 +96,6 @@
     "Point10 Crt",
     "Point10 Cubic Lens Distortion",
     "Point10 Digital Glitch",
-    "Point10 Embos",
     "Point10 Embos Merge",
     "Point10 Film Grain",
     "Point10 Fractured",
@@ -106,8 +105,6 @@
     "Point10 Hexagons",
     "Point10 Invert",
     "Point10 Invert Gray",
-    "Point10 Led Display",
-    "Point10 Led Display Curved",
     "Point10 Limit Hue",
     "Point10 Pixelation",
     "Point10 Posterization",

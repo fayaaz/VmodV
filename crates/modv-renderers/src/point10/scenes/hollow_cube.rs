@@ -38,7 +38,8 @@
 //! * `Expression1` (`:351-361`): a second phase,
 //!   `perm += min(0.15, band + 0.02) * 0.08 * dt`, then
 //!   `out*.x/y/z = noise2(perm, 0|1|2) * (1 + band * 0.1) * 500` degrees of
-//!   whole-object rotation;
+//!   whole-object rotation. The `spinSpeed` prop scales the phase step (and so
+//!   the whole-object spin rate; `0` freezes the phase);
 //! * the camera (`:44-51`): `PerspectiveCamera(50, aspect, 0.01, 100)` at
 //!   `(0, 0, 2.2)` looking at `(0, 0, -1)`;
 //! * the bloom: Plane9 `Radius 6, Threshold 0, ThresholdSmoothness 0.5,
@@ -294,6 +295,19 @@ fn band_value(value: f32) -> f32 {
     }
 }
 
+/// The `spinSpeed` prop, shared by the binder and the direct-field sanitiser.
+const SPIN_SPEED_PROP: SceneProp = SceneProp::float("spinSpeed", "Spin Speed", 1.0, 0.0, 4.0, 0.01);
+
+/// Sanitise `Expression1`'s `spinSpeed` scale.
+///
+/// The prop binder reads [`HOLLOW_CUBE_PROPS`], but `spin_scale` can be set
+/// directly. Reusing the same schema keeps the non-finite fallback (`1.0`) and
+/// the clamp (`0.0..=4.0`) in lockstep with the published prop: `0` freezes the
+/// phase and the upper bound is the vendor maximum.
+fn spin_speed_value(spin: f32) -> f32 {
+    SPIN_SPEED_PROP.read(Some(spin))
+}
+
 /// Pure `Expression1`.
 ///
 /// `perm_band` is the damping-1 bass read that advances the phase,
@@ -337,6 +351,10 @@ pub fn hollow_cube_drive(
 /// gain/scale and `in1.z` weight. The Plane9 variant reproduces that function
 /// exactly. The two implementations are kept side by side because the fidelity
 /// contract pins the original function's literal constants in source.
+///
+/// `spin` is the sanitised `spinSpeed` prop ([`spin_speed_value`]); it scales
+/// the phase step that the orbit is derived from, so `1.0` is the vendor rate
+/// and `0.0` freezes the whole-object orientation.
 fn hollow_cube_variant_drive(
     variant: &HollowCubeVariant,
     perm_band: f32,
@@ -344,13 +362,14 @@ fn hollow_cube_variant_drive(
     orbit_band: f32,
     dt: f32,
     perm: f32,
+    spin: f32,
 ) -> HollowCubeDrive {
     let p = band_value(perm_band);
     let l = band_value(level_band);
     let orbit = band_value(orbit_band);
     let step = band_value(dt).min(MAX_DT);
     let base = if perm.is_finite() { perm } else { 1.0 };
-    let next = base + (p + 0.02).min(variant.perm_min) * 0.08 * step;
+    let next = base + (p + 0.02).min(variant.perm_min) * 0.08 * step * spin;
     let amplitude = 1.0 + orbit * variant.noise_gain;
 
     HollowCubeDrive {
@@ -416,7 +435,7 @@ pub fn hollow_cube_pos(index: u32, count: u32) -> [f32; 3] {
 
 /// `HOLLOW_CUBE_PROPS` (`sceneProps.js:172-177`).
 const HOLLOW_CUBE_PROPS: &[SceneProp] = &[
-    SceneProp::float("spinSpeed", "Spin Speed", 1.0, 0.0, 4.0, 0.01),
+    SPIN_SPEED_PROP,
     SceneProp::float("explode", "Explosion", 1.0, 0.0, 3.0, 0.01),
     SceneProp::float("color", "Color", 1.0, 0.0, 3.0, 0.01),
 ];
@@ -911,6 +930,7 @@ impl Point10Scene for HollowCube {
         // `Shader1`'s own Expression keeps the vendor damping-0 phase.
         self.shader_perm = shader_perm_step(self.shader_perm, self.audio.band(-1, 0, 0, 0.1), dt);
 
+        let spin = spin_speed_value(self.spin_scale);
         let drive = hollow_cube_variant_drive(
             &self.variant,
             self.audio.band(-1, 1, 0, 0.1),
@@ -918,6 +938,7 @@ impl Point10Scene for HollowCube {
             self.audio.band(-1, 1, 0, 0.15),
             dt,
             self.perm,
+            spin,
         );
         self.perm = drive.perm;
         self.orbit = drive.orbit;
@@ -925,7 +946,7 @@ impl Point10Scene for HollowCube {
         self.in1 = [
             drive.in1[0] * self.explode_scale,
             drive.in1[1] * self.color_scale,
-            drive.in1[2] * self.spin_scale,
+            drive.in1[2] * spin,
             0.0,
         ];
         // `drive.in2.x` is the Expression1 phase (the pure-function contract);
@@ -1367,6 +1388,7 @@ mod tests {
     use crate::point10::all_scenes;
     use crate::point10::audio_bridge::BandPayload;
     use crate::point10::postfx::Plane9BloomParams;
+    use crate::point10::shared::random::value_noise2;
     use crate::point10::test_support::{TestTarget, any_lit, gpu};
 
     // Port of tests/unit/point10-hollow-cube.test.js.
@@ -1514,8 +1536,208 @@ mod tests {
         // `scene.perm()`.
         assert!((scene.in2()[0] - scene.shader_perm()).abs() < 1e-6);
         assert!((scene.shader_perm() - (1.0 + 0.11 * 40.0 * 0.1)).abs() < 1e-5);
-        assert!((scene.perm() - (1.0 + 0.15 * 0.08 * 0.1)).abs() < 1e-6);
+        let expected_perm_step = (0.2_f32 + 0.02).min(0.15) * 0.08 * 0.1;
+        assert!(
+            (scene.perm() - (1.0 + expected_perm_step * 2.0)).abs() < 1e-6,
+            "spinSpeed 2 must double the one-frame Expression1 phase advance: expected {}, got {}",
+            1.0 + expected_perm_step * 2.0,
+            scene.perm()
+        );
         assert!((scene.in2()[1] - 1.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn spin_speed_scales_expression1_phase_rate_across_all_variants() {
+        const DT: f32 = 1.0 / 60.0;
+        const FRAMES: usize = 120;
+        const BAND: f32 = 0.2;
+
+        fn expected_perm(variant: &HollowCubeVariant, spin_speed: f32, frames: usize) -> f32 {
+            let step = (BAND + 0.02).min(variant.perm_min) * 0.08 * DT;
+            let mut perm = 1.0;
+            for _ in 0..frames {
+                perm += step * spin_speed;
+            }
+            perm
+        }
+
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+
+        let variants = [
+            PLANE9_HOLLOW_CUBE,
+            POINT10_HOLLOW_CUBOID,
+            POINT10_HOLLOW_CUBE_LAYERS,
+            POINT10_HOLLOW_CUBE_BLUR,
+        ];
+        let mut payload = BandPayload::silent(44_100.0);
+        payload.lanes[3] = BAND;
+        let mut bridge = AudioBridge::new();
+
+        for variant in variants {
+            // The unprop'd scene is the live vendor reference: spinSpeed 1.0
+            // must preserve both its phase and orbit bit-for-bit.
+            let mut vendor = HollowCube::new_with_variant(variant);
+            for _ in 0..FRAMES {
+                bridge.update(DT, Some(&payload), &Default::default());
+                vendor.update(DT, &bridge);
+            }
+
+            for spin_speed in [0.0_f32, 1.0, 2.0, 4.0] {
+                let mut scene = HollowCube::new_with_variant(variant);
+                scene.apply_props(|key| match key {
+                    "spinSpeed" => Some(spin_speed),
+                    _ => None,
+                });
+                let mut frame_zero_orbit = None;
+                for frame in 0..FRAMES {
+                    bridge.update(DT, Some(&payload), &Default::default());
+                    scene.update(DT, &bridge);
+                    if spin_speed == 0.0 && frame == 0 {
+                        frame_zero_orbit = Some(scene.orbit());
+                    }
+                }
+
+                // Pin the exact f32 accumulator. Comparing `perm - 1.0` with
+                // `frames * step` would introduce rounding at the seed rather
+                // than test the vendor recurrence.
+                let expected = expected_perm(&variant, spin_speed, FRAMES);
+                check!(
+                    scene.perm().to_bits() == expected.to_bits(),
+                    "{}: spinSpeed {spin_speed:.1} after {FRAMES} frames must advance Expression1 by the scaled rate; expected {expected:.9} ({:08x}), got {:.9} ({:08x})",
+                    variant.name,
+                    expected.to_bits(),
+                    scene.perm(),
+                    scene.perm().to_bits()
+                );
+
+                if spin_speed == 0.0 {
+                    check!(
+                        scene.perm() == 1.0,
+                        "{}: spinSpeed 0 must freeze Expression1 at its seed; got {}",
+                        variant.name,
+                        scene.perm()
+                    );
+                    if let Some(frame_zero) = frame_zero_orbit {
+                        check!(
+                            scene.orbit() == frame_zero,
+                            "{}: spinSpeed 0 must hold the frame-zero orientation; expected {frame_zero:?}, got {:?}",
+                            variant.name,
+                            scene.orbit()
+                        );
+                    } else {
+                        failures.push(format!(
+                            "{}: spinSpeed 0 did not record a frame-zero orbit",
+                            variant.name
+                        ));
+                    }
+                }
+
+                if spin_speed == 1.0 {
+                    check!(
+                        scene.perm().to_bits() == vendor.perm().to_bits(),
+                        "{}: spinSpeed 1 must keep the vendor phase bit-identical; expected {:.9}, got {:.9}",
+                        variant.name,
+                        vendor.perm(),
+                        scene.perm()
+                    );
+                    for axis in 0..3 {
+                        check!(
+                            scene.orbit()[axis].to_bits() == vendor.orbit()[axis].to_bits(),
+                            "{}: spinSpeed 1 must keep vendor orbit axis {axis} bit-identical; expected {:.9}, got {:.9}",
+                            variant.name,
+                            vendor.orbit()[axis],
+                            scene.orbit()[axis]
+                        );
+                    }
+                }
+
+                // The model consumes this orbit directly, so the accelerated
+                // phase must reach all three Euler axes rather than only perm.
+                let amplitude = 1.0 + BAND * variant.noise_gain;
+                for axis in 0..3 {
+                    let expected_orbit =
+                        value_noise2(scene.perm(), axis as f32) * amplitude * variant.orbit_scale;
+                    check!(
+                        scene.orbit()[axis].to_bits() == expected_orbit.to_bits(),
+                        "{}: spinSpeed {spin_speed:.1} orbit axis {axis} must be the pure noise function of perm {:.9}; expected {expected_orbit:.9} ({:08x}), got {:.9} ({:08x})",
+                        variant.name,
+                        scene.perm(),
+                        expected_orbit.to_bits(),
+                        scene.orbit()[axis],
+                        scene.orbit()[axis].to_bits()
+                    );
+                }
+
+                // The per-instance pulse keeps its existing vendor wiring;
+                // spinSpeed scales it in addition to the whole-object rate.
+                let expected_in1_z = (BAND * variant.in1_z_weight).min(1.0) * spin_speed;
+                check!(
+                    scene.in1()[2].to_bits() == expected_in1_z.to_bits(),
+                    "{}: spinSpeed {spin_speed:.1} must preserve in1.z wiring; expected {expected_in1_z:.9}, got {:.9}",
+                    variant.name,
+                    scene.in1()[2]
+                );
+                check!(
+                    scene.in2()[0].to_bits() == scene.shader_perm().to_bits(),
+                    "{}: spinSpeed {spin_speed:.1} must leave Shader1's independent gIn2.x phase wired",
+                    variant.name
+                );
+                check!(
+                    scene.in2()[1].to_bits() == (1.0 + BAND.min(0.2)).to_bits(),
+                    "{}: spinSpeed {spin_speed:.1} must leave the cube-size lane unchanged",
+                    variant.name
+                );
+            }
+        }
+
+        // Measurement report: central difference of the Plane9 orbit over a
+        // one-second interval, in degrees/second for each Euler axis. The
+        // orbit-vector magnitude is reported alongside the signed components.
+        fn orbit_at(phase: f32, band: f32) -> [f32; 3] {
+            let amplitude = 1.0 + band * PLANE9_HOLLOW_CUBE.noise_gain;
+            std::array::from_fn(|axis| {
+                value_noise2(phase, axis as f32) * amplitude * PLANE9_HOLLOW_CUBE.orbit_scale
+            })
+        }
+
+        println!("Hollow Cube whole-object orbit derivative (central difference over 1 s; deg/s)");
+        for band in [0.1_f32, 0.15, 0.5, 1.0] {
+            for phase in [1.0_f32, 1.5, 2.0, 3.0] {
+                for spin_speed in [1.0_f32, 4.0] {
+                    let phase_rate =
+                        (band + 0.02).min(PLANE9_HOLLOW_CUBE.perm_min) * 0.08 * spin_speed;
+                    let before = orbit_at(phase - phase_rate * 0.5, band);
+                    let after = orbit_at(phase + phase_rate * 0.5, band);
+                    let degrees_per_second: [f32; 3] =
+                        std::array::from_fn(|axis| after[axis] - before[axis]);
+                    let orbit_speed = (degrees_per_second[0].powi(2)
+                        + degrees_per_second[1].powi(2)
+                        + degrees_per_second[2].powi(2))
+                    .sqrt();
+                    let plateau = if orbit_speed < 1.0 { " NEAR-ZERO" } else { "" };
+                    println!(
+                        "band={band:.2} phase={phase:.1} spin={spin_speed:.1} phase_rate={phase_rate:.6}/s orbit_deg_s=[{:+.6}, {:+.6}, {:+.6}] orbit_speed={:.6}{plateau}",
+                        degrees_per_second[0],
+                        degrees_per_second[1],
+                        degrees_per_second[2],
+                        orbit_speed
+                    );
+                }
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Hollow Cube spin-speed failures:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -1846,7 +2068,8 @@ mod tests {
         }
 
         // Expression1 reads bass on damping lane 1. Changing only lanes 0/2
-        // must not move the explosion, and `perm` uses the documented creep.
+        // must not move the explosion. spinSpeed 0 freezes the whole-object
+        // phase without changing the vendor damping-1 explosion lane.
         let mut scene = HollowCube::new();
         scene.apply_props(|key| match key {
             "spinSpeed" => Some(0.0),
@@ -1863,7 +2086,7 @@ mod tests {
         scene.update(0.1, &bridge);
 
         let expected_explosion = (0.2_f32 * 2.2).min(1.2) * 0.6;
-        let expected_perm = 1.0 + (0.2_f32 + 0.02).min(0.15) * 0.08 * 0.1;
+        let expected_perm = 1.0;
         check!(
             (scene.in1()[0] - expected_explosion).abs() < 1e-6,
             "explosion must read damping-1 bass: expected {expected_explosion}, got {}",
@@ -1871,7 +2094,7 @@ mod tests {
         );
         check!(
             (scene.perm() - expected_perm).abs() < 1e-6,
-            "Expression1 perm must use damping-1 bass and the 0.08 creep: expected {expected_perm}, got {}",
+            "spinSpeed 0 must freeze Expression1 perm at its seed: expected {expected_perm}, got {}",
             scene.perm()
         );
 
@@ -2272,8 +2495,8 @@ mod tests {
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(502),
-            "G: module-parity total must be 502, got {:?}",
+            manifest["counts"]["total"].as_u64() == Some(499),
+            "G: module-parity total must be 499, got {:?}",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -2307,8 +2530,8 @@ mod tests {
             docs["counts"]["point10"]
         );
         check!(
-            docs["counts"]["total"].as_u64() == Some(502),
-            "G: generated catalogue total must be 502, got {:?}",
+            docs["counts"]["total"].as_u64() == Some(499),
+            "G: generated catalogue total must be 499, got {:?}",
             docs["counts"]["total"]
         );
         let doc_point10: Vec<&str> = docs["modules"]
