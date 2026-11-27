@@ -157,7 +157,7 @@ fn fullscreen_uv(position: vec2<f32>, resolution: vec2<f32>) -> vec2<f32> {
 /// frame at 0.1 s ("a tab-suspend catch-up cannot jump the pattern").
 pub const MAX_FRAME_SECONDS: f32 = 0.1;
 
-/// The twenty-nine Plane9 (Joakim Dahl) preset ports, under their current
+/// The thirty Plane9 (Joakim Dahl) preset ports, under their current
 /// canonical `Plane9 <Name>` registry names.
 ///
 /// Twelve were originally registered as `Point10 <Name>`. Saved Scenes and
@@ -197,6 +197,8 @@ pub const PLANE9_SCENE_NAMES: &[&str] = &[
     "Plane9 Color Beams",
     "Plane9 Mirror Tunnel",
     "Plane9 Cloud Flight",
+    // The fourth XML batch (mesh-modifier preset).
+    "Plane9 Spiky",
 ];
 
 /// The prefix of the scenes that kept their `Point10 ` registry name, and of
@@ -274,7 +276,7 @@ pub const PLANE9_EFFECT_NAMES: &[&str] = &[
     "Plane9 Wave",
 ];
 
-/// Author credit for the twenty-nine Plane9 preset ports.
+/// Author credit for the thirty Plane9 preset ports.
 pub const PLANE9_AUTHOR: &str = "Plane9 (Joakim Dahl)";
 
 /// Resolve `name` against one canonical roster, rewriting the legacy
@@ -326,7 +328,7 @@ pub fn resolve_effect_name(name: &str) -> &str {
 
 /// The authoritative Gallery renderer kind for a registry module named `name`.
 ///
-/// The twenty-nine Plane9 preset ports and the fifty-two renamed Plane9
+/// The thirty Plane9 preset ports and the fifty-two renamed Plane9
 /// effects share the Point10 runtime renderer but are surfaced to the Gallery
 /// as their own kind (`type:plane9`); every other module keeps `default_kind`
 /// (its engine renderer kind). Using this helper in both snapshot builders
@@ -343,7 +345,7 @@ pub fn gallery_kind(name: &str, default_kind: &str) -> String {
 /// Rewrite every legacy `Point10 <Name>` alias string in a JSON document to its
 /// canonical `Plane9 <Name>` name.
 ///
-/// Covers both the twenty-nine Plane9 preset scenes and the fifty-two audited
+/// Covers both the thirty Plane9 preset scenes and the fifty-two audited
 /// Plane9 shader effects/ISF transitions. Walks arrays and objects so nested
 /// Scene cells, Groups and module records are migrated; every other value is
 /// left untouched. Idempotent: canonical names never match the legacy prefix.
@@ -548,7 +550,7 @@ pub struct SceneMeta {
     /// Display + registration name, e.g. `"Point10 Particle Field"` or
     /// `"Plane9 Light Tunnel"`.
     pub name: &'static str,
-    /// Module author: `"Point10"`, or [`PLANE9_AUTHOR`] for the twenty-nine
+    /// Module author: `"Point10"`, or [`PLANE9_AUTHOR`] for the thirty
     /// Plane9 preset ports.
     pub author: &'static str,
     /// Module version (`"1.0.0"`).
@@ -582,7 +584,7 @@ impl SceneMeta {
         }
     }
 
-    /// Meta for one of the twenty-nine Plane9 (Joakim Dahl) preset ports.
+    /// Meta for one of the thirty Plane9 (Joakim Dahl) preset ports.
     pub const fn for_plane9_scene(name: &'static str, category: &'static str) -> Self {
         Self {
             name,
@@ -872,17 +874,24 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::color_beams::ColorBeams::new()),
         Box::new(scenes::mirror_tunnel::MirrorTunnel::new()),
         Box::new(scenes::cloud_flight::CloudFlight::new()),
+        // The fourth Plane9 XML batch (mesh-modifier preset).
+        Box::new(scenes::spiky::Spiky::new()),
     ]
 }
 
 #[cfg(test)]
 mod tests {
+    // The fidelity contract accumulates messages from `!(float < float)`
+    // checks and compares the audio-feature slice directly.
+    #![allow(clippy::neg_cmp_op_on_partial_ord)]
+    #![allow(clippy::op_ref)]
+
     use super::*;
 
     #[test]
     fn registry_has_the_port_order_scenes() {
         let scenes = all_scenes();
-        assert_eq!(scenes.len(), 47);
+        assert_eq!(scenes.len(), 48);
 
         assert_eq!(scenes[0].name(), "Point10 Chromatic Line");
         assert_eq!(scenes[1].name(), "Point10 Chromatic Wave");
@@ -941,6 +950,7 @@ mod tests {
         assert_eq!(scenes[44].name(), "Plane9 Color Beams");
         assert_eq!(scenes[45].name(), "Plane9 Mirror Tunnel");
         assert_eq!(scenes[46].name(), "Plane9 Cloud Flight");
+        assert_eq!(scenes[47].name(), "Plane9 Spiky");
         assert!(
             scenes
                 .iter()
@@ -1101,5 +1111,515 @@ mod tests {
         let c = (vertices[2][0], vertices[2][1]);
         let cross = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
         assert!(cross > 0.0, "expected CCW winding, cross = {cross}");
+    }
+
+    /// RED contract for `Things/Spiky.xml`. This deliberately resolves the
+    /// not-yet-existing scene through `all_scenes()` and reads not-yet-existing
+    /// source files at runtime, so it compiles against today's API and fails on
+    /// the missing behaviour rather than on missing Rust symbols.
+    #[test]
+    fn plane9_spiky_red_contract() {
+        use std::collections::BTreeSet;
+        use std::fs;
+        use std::path::{Path, PathBuf};
+
+        use crate::point10::audio_bridge::{AudioBridge, BandPayload};
+        use crate::point10::postfx::Plane9BloomParams;
+        use crate::point10::scenes::cube_mesh::build_box;
+        use crate::point10::scenes::plane9_common::PLANE9_BATCH_WGSL;
+        use crate::point10::scenes::spiky::build_spiky_mesh;
+        use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
+        use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
+        use crate::point10::test_support::{TestTarget, any_lit, gpu};
+
+        fn find_source(root: &Path, filename_fragment: &str) -> Option<PathBuf> {
+            let mut pending = vec![root.to_path_buf()];
+            while let Some(dir) = pending.pop() {
+                for entry in fs::read_dir(dir).ok()? {
+                    let entry = entry.ok()?;
+                    let path = entry.path();
+                    if path.is_dir() {
+                        pending.push(path);
+                    } else if path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.to_ascii_lowercase().contains(filename_fragment))
+                    {
+                        return Some(path);
+                    }
+                }
+            }
+            None
+        }
+
+        fn compact(source: &str) -> String {
+            source.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+
+        // D — exactly one new canonical scene, with the standard Plane9 meta.
+        let mut scenes = all_scenes();
+        let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
+        let unique_names: BTreeSet<&str> = names.iter().copied().collect();
+        check!(
+            scenes.len() == 48,
+            "roster: expected 48 scenes, got {}",
+            scenes.len()
+        );
+        check!(
+            unique_names.len() == names.len(),
+            "roster: duplicate names in {names:?}"
+        );
+        check!(
+            PLANE9_SCENE_NAMES.len() == 30,
+            "Plane9 alias roster: expected 30 names, got {}",
+            PLANE9_SCENE_NAMES.len()
+        );
+        let spiky_matches: Vec<_> = scenes
+            .iter()
+            .filter(|scene| scene.name() == "Plane9 Spiky")
+            .collect();
+        check!(
+            spiky_matches.len() == 1,
+            "Plane9 Spiky: expected exactly one registration, got {}",
+            spiky_matches.len()
+        );
+        if let Some(scene) = spiky_matches.first() {
+            let meta = scene.meta();
+            check!(meta.name == scene.name(), "Spiky: meta/name mismatch");
+            check!(
+                meta.author == "Plane9 (Joakim Dahl)",
+                "Spiky: author is {:?}",
+                meta.author
+            );
+            check!(
+                meta.version == "1.0.0",
+                "Spiky: version is {:?}",
+                meta.version
+            );
+            check!(
+                meta.module_type == "2d",
+                "Spiky: type is {:?}",
+                meta.module_type
+            );
+            check!(
+                meta.audio_features == &["bass", "mid", "treble"],
+                "Spiky: audio features are {:?}",
+                meta.audio_features
+            );
+        }
+        check!(
+            PLANE9_SCENE_NAMES.contains(&"Plane9 Spiky"),
+            "Plane9 Spiky: missing from the alias/Gallery roster"
+        );
+        check!(
+            canonical_scene_name("Point10 Spiky") == Some("Plane9 Spiky"),
+            "Point10 Spiky: legacy alias does not resolve"
+        );
+        check!(
+            gallery_kind("Plane9 Spiky", "point10") == "plane9",
+            "Plane9 Spiky: Gallery kind is not plane9"
+        );
+        let spiky_index = scenes
+            .iter()
+            .position(|scene| scene.name() == "Plane9 Spiky");
+
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir.join("../..");
+        let point10_root = manifest_dir.join("src/point10");
+
+        // D — committed parity and generated catalogue data move 47 -> 48 and
+        // 501 -> 502. The catalogue is checked as data; this RED phase does not
+        // regenerate or edit it.
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
+                .expect("read module-parity.json"),
+        )
+        .expect("parse module-parity.json");
+        check!(
+            manifest["counts"]["point10"].as_u64() == Some(48),
+            "manifest: point10 count is {:?}, expected 48",
+            manifest["counts"]["point10"]
+        );
+        check!(
+            manifest["counts"]["total"].as_u64() == Some(502),
+            "manifest: total is {:?}, expected 502",
+            manifest["counts"]["total"]
+        );
+        let manifest_names: Vec<&str> = manifest["point10"]
+            .as_array()
+            .expect("manifest point10 array")
+            .iter()
+            .map(|name| name.as_str().expect("manifest module name"))
+            .collect();
+        check!(
+            manifest_names.len() == 48,
+            "manifest: expected 48 Point10 names, got {}",
+            manifest_names.len()
+        );
+        check!(
+            manifest_names
+                .iter()
+                .filter(|name| **name == "Plane9 Spiky")
+                .count()
+                == 1,
+            "manifest: Plane9 Spiky must appear exactly once"
+        );
+
+        let catalogue: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(repo_root.join("docs/modules/modules.json"))
+                .expect("read docs/modules/modules.json"),
+        )
+        .expect("parse docs/modules/modules.json");
+        check!(
+            catalogue["counts"]["point10"].as_u64() == Some(48),
+            "catalogue: point10 count is {:?}, expected 48",
+            catalogue["counts"]["point10"]
+        );
+        check!(
+            catalogue["counts"]["total"].as_u64() == Some(502),
+            "catalogue: total is {:?}, expected 502",
+            catalogue["counts"]["total"]
+        );
+        let catalogue_modules = catalogue["modules"].as_array().expect("catalogue modules");
+        let catalogue_spiky: Vec<_> = catalogue_modules
+            .iter()
+            .filter(|module| module["name"] == "Plane9 Spiky")
+            .collect();
+        check!(
+            catalogue_spiky.len() == 1,
+            "catalogue: Plane9 Spiky must appear exactly once, got {}",
+            catalogue_spiky.len()
+        );
+        if let Some(module) = catalogue_spiky.first() {
+            check!(
+                module["kind"] == "point10"
+                    && module["author"] == "Plane9 (Joakim Dahl)"
+                    && module["version"] == "1.0.0"
+                    && module["audioFeatures"] == serde_json::json!(["bass", "mid", "treble"]),
+                "catalogue: Plane9 Spiky metadata is {:?}",
+                module
+            );
+        }
+
+        // D — provenance row and the UI's exact 4.0 licence label mapping.
+        let notices = fs::read_to_string(repo_root.join("THIRD_PARTY_NOTICES.md"))
+            .expect("read THIRD_PARTY_NOTICES.md");
+        let notice_rows: Vec<_> = notices
+            .lines()
+            .filter(|line| line.starts_with("| Spiky |"))
+            .collect();
+        match notice_rows.as_slice() {
+            [row]
+                if row.contains("CC BY-NC-SA 4.0")
+                    && row.to_ascii_lowercase().contains("spiky") => {}
+            [row] => check!(false, "notices: wrong Spiky provenance row {row:?}"),
+            [] => check!(false, "notices: missing Spiky provenance row"),
+            _ => check!(
+                false,
+                "notices: duplicate Spiky provenance rows {notice_rows:?}"
+            ),
+        }
+        let ui_model = fs::read_to_string(repo_root.join("crates/modv-ui/src/model.rs"))
+            .expect("read modv-ui model.rs");
+        let v4_arm = ui_model
+            .split("// Plane9 ports whose own headers state 4.0.")
+            .nth(1)
+            .and_then(|arm| arm.split("// Point10 variants").next())
+            .unwrap_or_default();
+        check!(
+            v4_arm.contains("\"Spiky\""),
+            "UI licence map: Spiky is missing from the exact CC BY-NC-SA 4.0 arm"
+        );
+        check!(
+            compact(&ui_model).contains("checked.len(), 48,"),
+            "UI licence provenance test: expected count must move from 47 to 48"
+        );
+
+        // A/B — the existing box primitive is only the 24-vertex/12-triangle
+        // starting point. It cannot itself supply the >1.175 spike radius; the
+        // reusable mesh_ops module and Spiky chain must exist alongside it.
+        let cube = build_box(1.0, 1.0, 1.0);
+        check!(cube.vertices.len() == 24, "Cube1: expected 24 vertices");
+        check!(cube.indices.len() == 36, "Cube1: expected 12 triangles");
+        let cube_max_radius = cube
+            .vertices
+            .iter()
+            .map(|vertex| {
+                vertex.position[0]
+                    .hypot(vertex.position[1])
+                    .hypot(vertex.position[2])
+            })
+            .fold(0.0_f32, f32::max);
+        check!(
+            (cube_max_radius - (3.0_f32 / 4.0).sqrt()).abs() < 1e-6,
+            "Cube1: unexpected local radius {cube_max_radius}"
+        );
+        check!(
+            cube_max_radius < 1.175,
+            "plain cube cannot be the spike mesh: radius {cube_max_radius} must stay below 1.175"
+        );
+
+        let mesh_ops_path = find_source(&point10_root, "mesh_ops");
+        let mesh_ops_source = mesh_ops_path
+            .as_ref()
+            .and_then(|path| fs::read_to_string(path).ok());
+        check!(
+            mesh_ops_source.is_some(),
+            "mesh_ops: reusable CPU mesh-modifier module is missing"
+        );
+        if let Some(source) = &mesh_ops_source {
+            let source = source.to_ascii_lowercase();
+            for operation in [
+                "subdivide",
+                "select",
+                "extrude",
+                "randomize",
+                "local_scale",
+                "invert",
+            ] {
+                check!(
+                    source.contains(operation),
+                    "mesh_ops: missing {operation} support required by the Spiky chain"
+                );
+            }
+        }
+
+        let spiky_path = find_source(&point10_root, "spiky");
+        let spiky_source = spiky_path
+            .as_ref()
+            .and_then(|path| fs::read_to_string(path).ok());
+        check!(
+            spiky_source.is_some(),
+            "Plane9 Spiky scene source is missing"
+        );
+        if let Some(source) = &spiky_source {
+            let source = compact(source);
+            let lower = source.to_ascii_lowercase();
+            check!(
+                lower.contains("mesh_ops"),
+                "Spiky: scene does not use mesh_ops"
+            );
+
+            // E — camera, render state, targets and bloom pinned to the XML.
+            for needle in [
+                "[0.0, 0.0, 1.0]",
+                "[0.0, 0.0, -1.0]",
+                "70.0",
+                "0.1",
+                "1000.0",
+                "[0.5, 0.5, 0.5]",
+                "Rgba16Float",
+                "mip_level_count: 1",
+                "Plane9BloomParams::new(5.0, 0.0, 0.5, 1.0, false)",
+                "build_box(1.0, 1.0, 1.0)",
+                "load_stormy_cube",
+                "depth_write_enabled: Some(true)",
+                "CompareFunction::Less",
+                "CullMode::Back",
+            ] {
+                check!(source.contains(needle), "Spiky constants: lost {needle}");
+            }
+            for needle in [
+                "0.88",
+                "local_scale: 0.0",
+                "amount: 0.1",
+                "random_seed: 1",
+                "num_steps: 2",
+                "smoothness: 1.0",
+                "selection_type: 4",
+                "logic: 1",
+                "invert: false",
+                "output: 1",
+                "random_factor: 1.0",
+                "direction: 0",
+                "input_component: 0",
+                "output_component: 3",
+                "[2.0, 2.0, 1.0]",
+            ] {
+                check!(
+                    lower.contains(&needle.to_ascii_lowercase()),
+                    "Spiky mesh chain: lost {needle}"
+                );
+            }
+
+            // B/C/E — local positions feed the tip distance; 2,2,1 remains a
+            // model transform. The scalar noise displacement broadcasts on XYZ.
+            for needle in [
+                "opos",
+                "vpos",
+                "wpos",
+                "wnormal",
+                "viewdir",
+                "(length(position) - 0.5) / 0.75",
+                "d * (p9_noise",
+                "g_time * 0.5",
+                "u.model",
+                "[2.0, 2.0, 1.0]",
+                "p9_perturb_normal",
+                "dHdxy_fwd",
+                "* 0.002",
+                "vec3<f32>(0.5, 0.48, 0.53) * 0.75",
+                "vec3<f32>(0.247059, 0.474510, 0.811765)",
+                "vec3<f32>(0.929412, 0.615686, 0.207843)",
+                "vec3<f32>(40.0, 50.0, -25.0)",
+                "vec3<f32>(-40.0, 50.0, 25.0)",
+                "0.2 * 0.2 * 8.0",
+                "vec3<f32>(0.03)",
+                "> 0.9",
+                "vec4<f32>(1.0, 0.0, 0.0, 1.0) * 10.0",
+                "let bg = vec4<f32>(0.0);",
+                "p9_tonemap_aces(c2.rgb * 0.5)",
+                "p9_tonemap_aces(c1.rgb * 0.75)",
+                "vec4<f32>(mix(bg.rgb",
+            ] {
+                check!(source.contains(needle), "Spiky shader: lost {needle}");
+            }
+            check!(
+                !lower.contains("p9_fbm") && !lower.contains("_fbm("),
+                "Spiky: dead RenderToTexture1 inline fbm shader must not be implemented"
+            );
+
+            // E — the three vendor expressions are retained verbatim.
+            for expression in [
+                "in1.x = min(0.5, band(-1, 1, 0, noise1(time*0.1)*0.7)*5);",
+                "in1.y = beat(0);",
+                "b = band(-1, 0, 0, 0)*1;",
+                "in1.x = min(0.01, b*b*b*5);",
+                "perm = perm+((beat(0.1)*0.1+0.001)*deltatime);",
+                "out1=noise2(perm, 0)*360;",
+                "out2=noise2(perm, 1)*360;",
+                "out3=noise2(perm, 2)*360;",
+            ] {
+                check!(
+                    source.contains(&compact(expression)),
+                    "Spiky expression: lost {expression}"
+                );
+            }
+        }
+
+        // C — shared helpers exist and a composed fragment calling both parses
+        // and validates with naga. The live scene initialisation below compiles
+        // the full production composition when the scene is present.
+        let shared = format!("{P9_COMMON_WGSL}\n{P9_SHADING_WGSL}\n{PLANE9_BATCH_WGSL}");
+        let has_ridged = shared.contains("fn p9_ridgedmf_fast(");
+        let has_perturb = shared.contains("fn p9_perturb_normal(");
+        check!(has_ridged, "shared WGSL: p9_ridgedmf_fast is missing");
+        check!(has_perturb, "shared WGSL: p9_perturb_normal is missing");
+        if has_ridged && has_perturb {
+            let program = format!(
+                "{shared}\n@fragment\nfn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {{\n  let p = vec3<f32>(position.xy * 0.01, 0.5);\n  let h = p9_ridgedmf_fast(p, 4u);\n  let n = p9_perturb_normal(p, vec3<f32>(0.0, 0.0, 1.0), vec2<f32>(h, 0.0));\n  return vec4<f32>(n, 1.0);\n}}\n"
+            );
+            match naga::front::wgsl::parse_str(&program) {
+                Ok(module) => {
+                    if let Err(error) = naga::valid::Validator::new(
+                        naga::valid::ValidationFlags::all(),
+                        naga::valid::Capabilities::all(),
+                    )
+                    .validate(&module)
+                    {
+                        check!(false, "shared Spiky WGSL failed validation: {error}");
+                    }
+                }
+                Err(error) => check!(false, "shared Spiky WGSL failed to parse: {error}"),
+            }
+        }
+
+        // Keep the bloom construction itself honest even before the scene
+        // constants can be referenced directly.
+        let bloom = Plane9BloomParams::new(5.0, 0.0, 0.5, 1.0, false);
+        check!(
+            (
+                bloom.radius(),
+                bloom.threshold(),
+                bloom.smoothness(),
+                bloom.intensity(),
+                bloom.antiflicker(),
+                bloom.mip_count(),
+            ) == (5.0, 0.0, 0.5, 1.0, false, 1),
+            "Plane9 bloom helper no longer matches (5,0,0.5,1,false)"
+        );
+
+        // F — 64x64 two-frame smoke plus a driven-frame render and a geometric
+        // tip-band check. A present-but-silent payload makes band(-1,1,0,...)
+        // exactly zero; the driven frame uses damping-1 bass and dt=0 so
+        // geometry/rotation stay put.
+        if let (Some(index), Some((device, queue))) = (spiky_index, gpu()) {
+            let mut scene = scenes.remove(index);
+            let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            ctx.resize(64, 64);
+            scene.init(&mut ctx);
+            scene.resize(64, 64);
+            let mut payload = BandPayload::silent(44_100.0);
+            let mut bridge = AudioBridge::new();
+            let target = TestTarget::new(&device, 64, 64);
+            for frame in 0..2 {
+                bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+                scene.update(1.0 / 60.0, &bridge);
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("point10-plane9-spiky-red-smoke"),
+                });
+                scene.render(&mut encoder, &target.view);
+                queue.submit(Some(encoder.finish()));
+                let pixels = target.read(&device, &queue);
+                check!(
+                    any_lit(&pixels),
+                    "Spiky GPU smoke frame {frame} is uniformly black"
+                );
+            }
+
+            payload.lanes[3] = 0.2; // damping-1 bass -> min(0.5, 0.2*5) == 0.5
+            bridge.update(0.0, Some(&payload), &Default::default());
+            scene.update(0.0, &bridge);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("point10-plane9-spiky-red-tips"),
+            });
+            scene.render(&mut encoder, &target.view);
+            queue.submit(Some(encoder.finish()));
+            let high = target.read(&device, &queue);
+            check!(any_lit(&high), "Spiky: driven frame is uniformly black");
+            // The Stormy Days cubemap is a warm sunset, so the silent frame
+            // legitimately has red-dominant grazing rims: "red pixel means
+            // beat" is not a fidelity property. With the vendor `Amount 0.88`
+            // the extreme apexes also fall outside this 64x64 camera frustum,
+            // so no rasterised tip is required here. What *is* contractually
+            // true is the mechanism the fragment uses: the geometry owns
+            // vertices in the `d > 0.9` tip band and the driven `in1.x`
+            // selects how much red those vertices receive (checked by the
+            // scene's own unit test).
+            let mesh = build_spiky_mesh();
+            let tip_vertices = mesh
+                .positions
+                .iter()
+                .filter(|p| (p[0].hypot(p[1]).hypot(p[2]) - 0.5) / 0.75 > 0.9)
+                .count();
+            check!(
+                tip_vertices > 0,
+                "Spiky: vendor mesh has no vertices in the fragment's d > 0.9 tip band"
+            );
+            scene.dispose();
+        } else if spiky_index.is_none() {
+            check!(
+                false,
+                "Spiky GPU smoke: cannot run until the scene is registered"
+            );
+        } else {
+            eprintln!("skipping Plane9 Spiky GPU smoke: no fallback adapter");
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Plane9 Spiky RED contract failed ({} checks):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 }

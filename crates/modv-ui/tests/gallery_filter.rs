@@ -374,7 +374,7 @@ fn module_with_kind(name: &str, kind: &str) -> ModuleMetaView {
 
 #[test]
 fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tiles() {
-    const PLANE9: [&str; 29] = [
+    const PLANE9: [&str; 30] = [
         "Plane9 Abstract Clouds",
         "Plane9 Blob Fade",
         "Plane9 Boxy",
@@ -395,6 +395,7 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
         "Plane9 Noise Warp",
         "Plane9 Rorschach",
         "Plane9 Sound Cube",
+        "Plane9 Spiky",
         "Plane9 Square Tunnel",
         "Plane9 Stargate Event Horizon",
         "Plane9 Sun",
@@ -453,7 +454,7 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
     modules.extend(PLANE9.iter().map(|name| module_with_kind(name, "plane9")));
     modules.extend(POINT10.iter().map(|name| module_with_kind(name, "point10")));
 
-    // B — Plane9 is exactly the twenty-nine renamed/imported preset ports.
+    // B — Plane9 is exactly the thirty renamed/imported preset ports.
     let plane9 = filter_gallery_modules(&modules, GalleryCategory::All, "type:plane9");
     if names(&plane9) != PLANE9 {
         failures.push(format!(
@@ -471,12 +472,12 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
         ));
     }
 
-    // D — the All view still contains all 47 canonical scene entries.
+    // D — the All view still contains all 48 canonical scene entries.
     let all = filter_gallery_modules(&modules, GalleryCategory::All, "");
     let expected_all: Vec<&str> = PLANE9.iter().chain(POINT10.iter()).copied().collect();
     if names(&all) != expected_all {
         failures.push(format!(
-            "D: All selected {:?}, expected all 47 canonical scenes",
+            "D: All selected {:?}, expected all 48 canonical scenes",
             names(&all)
         ));
     }

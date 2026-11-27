@@ -25,6 +25,7 @@
 //! | [`smoke_room`] | Smoke Room | `scenes/SmokeRoom.js` |
 //! | [`latent_backrooms`] | Latent Backrooms | `scenes/LatentBackrooms.js` |
 //! | [`the_cave`] | The Cave | `../Point10/public/plane9/xml/Nature/The Cave.xml` |
+//! | [`spiky`] | Spiky | `Things/Spiky.xml` (mesh-modifier chain) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -38,7 +39,9 @@
 //! [`particle_quad`] is not a scene: it is the instanced billboard pipeline
 //! ParticleField and SpiralParticles share. [`cube_mesh`] is the batch-4
 //! counterpart — `BoxGeometry`, the matrix helpers and the depth attachment the
-//! five cube/lighting scenes share.
+//! five cube/lighting scenes share. [`mesh_ops`] is not a scene either: it is
+//! the CPU mesh-modifier chain (subdivide/select/extrude/randomize) that Spiky
+//! is the first preset to need.
 
 pub mod abstract_clouds;
 pub mod around_plus;
@@ -63,6 +66,7 @@ pub mod it_is_coming_for_you;
 pub mod latent_backrooms;
 pub mod light_tunnel;
 pub mod magic_smoke_box;
+pub mod mesh_ops;
 pub mod mirror_cube;
 pub mod mirror_tunnel;
 pub mod mycelium;
@@ -74,6 +78,7 @@ pub mod rolling_fire;
 pub mod rorschach;
 pub mod smoke_room;
 pub mod sound_cube;
+pub mod spiky;
 pub mod spiral_particles;
 pub mod square_tunnel;
 pub mod stargate_event_horizon;

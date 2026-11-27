@@ -13,6 +13,8 @@
 //! | `_lightDirectional(...)` | `p9_light_directional` | Boxy, ColorCube |
 //! | `_fresnelRoughness(...)` | `p9_fresnel_roughness` | Boxy |
 //! | `_texturePanoramicLod(tex, v, lod)` | `p9_texture_panoramic_lod` | Boxy |
+//! | `_ridgedmffast(p, octaves)` | `p9_ridgedmf_fast` | Spiky |
+//! | `_perturbNormal(pos, normal, dHdxy)` | `p9_perturb_normal` | Spiky |
 //! | GLSL `mod(x, y)` | `p9_mod` | Boxy |
 //!
 //! # Concatenation order
@@ -163,6 +165,45 @@ fn p9_light_directional(
   }
   return max(lighting, vec3<f32>(0.0));
 }
+
+// float _ridgedmffast(vec3 p, float octaves) — `P9Glsl.js:105-121`, verbatim.
+// The lacunarity/gain/offset constants are the vendor's.
+fn p9_ridgedmf_fast(p: vec3<f32>, octaves: u32) -> f32 {
+  let lacunarity = 2.13628142;
+  let gain = 0.5;
+  let offset = 1.0;
+  var sum = 0.0;
+  var amp_sum = 0.0;
+  var freq = 1.0;
+  var amp = 0.5;
+  var prev = 1.0;
+  for (var i = 0u; i < octaves; i = i + 1u) {
+    var n = offset - abs(p9_noise(p * freq));
+    n = n * n;
+    sum = sum + n * amp * prev;
+    amp_sum = amp_sum + amp;
+    prev = n;
+    freq = freq * lacunarity;
+    amp = amp * gain;
+  }
+  return sum / amp_sum;
+}
+
+// vec3 _perturbNormal(vec3 screenSpacePos, vec3 normal, vec2 dHdxy)
+//   — `P9Glsl.js:588-596` (Mikkelsen's surface-gradient normal perturbation).
+fn p9_perturb_normal(
+  screen_space_pos: vec3<f32>,
+  normal: vec3<f32>,
+  dhdxy: vec2<f32>,
+) -> vec3<f32> {
+  let v_sigma_x = dpdx(screen_space_pos);
+  let v_sigma_y = dpdy(screen_space_pos);
+  let r1 = cross(v_sigma_y, normal);
+  let r2 = cross(normal, v_sigma_x);
+  let f_det = dot(v_sigma_x, r1);
+  let v_grad = sign(f_det) * (dhdxy.x * r1 + dhdxy.y * r2);
+  return normalize(abs(f_det) * normal - v_grad);
+}
 "#;
 
 #[cfg(test)]
@@ -220,6 +261,11 @@ mod tests {
             "let a = max(0.001, roughness * roughness);",
             "(diffuse_albedo * (1.0 / P9_PI) + specular * fresnel) * n_dot_l * light_color",
             "fn p9_light_directional(",
+            "fn p9_ridgedmf_fast(p: vec3<f32>, octaves: u32) -> f32",
+            "let lacunarity = 2.13628142;",
+            "prev = n;",
+            "fn p9_perturb_normal(",
+            "let v_grad = sign(f_det) * (dhdxy.x * r1 + dhdxy.y * r2);",
         ] {
             assert!(P9_SHADING_WGSL.contains(needle), "lost {needle}");
         }

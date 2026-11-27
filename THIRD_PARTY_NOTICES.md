@@ -121,8 +121,8 @@ multi-pass path without an override.
 
 ## Point10 scenes
 
-The 47 registered Point10-derived scenes do **not** share one provenance. Only
-the twenty-nine Plane9 (Joakim Dahl) presets are share-alike; they register as
+The 48 registered Point10-derived scenes do **not** share one provenance. Only
+the thirty Plane9 (Joakim Dahl) presets are share-alike; they register as
 `Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases for
 the twelve renamed ports).
 The three Hollow Cuboid/Layers/Blur variants re-parameterise the Plane9
@@ -178,6 +178,7 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 | Color Beams | `crates/modv-renderers/src/point10/scenes/color_beams.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Mirror Tunnel | `crates/modv-renderers/src/point10/scenes/mirror_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Cloud Flight | `crates/modv-renderers/src/point10/scenes/cloud_flight.rs` | CC BY-NC-SA 3.0 (stated in file; after Inigo Quilez's Shadertoy "XslGRr") |
+| Spiky | `crates/modv-renderers/src/point10/scenes/spiky.rs` | CC BY-NC-SA 4.0 (stated in file) |
 
 ### Plane9 effects (Joakim Dahl — CC BY-NC-SA)
 
