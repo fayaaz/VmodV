@@ -157,7 +157,7 @@ fn fullscreen_uv(position: vec2<f32>, resolution: vec2<f32>) -> vec2<f32> {
 /// frame at 0.1 s ("a tab-suspend catch-up cannot jump the pattern").
 pub const MAX_FRAME_SECONDS: f32 = 0.1;
 
-/// The twenty-two Plane9 (Joakim Dahl) preset ports, under their current
+/// The twenty-nine Plane9 (Joakim Dahl) preset ports, under their current
 /// canonical `Plane9 <Name>` registry names.
 ///
 /// Twelve were originally registered as `Point10 <Name>`. Saved Scenes and
@@ -189,6 +189,14 @@ pub const PLANE9_SCENE_NAMES: &[&str] = &[
     "Plane9 Tv Noise",
     "Plane9 Wormhole",
     "Plane9 Xor",
+    // The second XML batch (RTT/feedback/raymarch presets).
+    "Plane9 Abstract Clouds",
+    "Plane9 Magic Smoke Box",
+    "Plane9 Color Blob",
+    "Plane9 Stargate Event Horizon",
+    "Plane9 Color Beams",
+    "Plane9 Mirror Tunnel",
+    "Plane9 Cloud Flight",
 ];
 
 /// The prefix of the scenes that kept their `Point10 ` registry name, and of
@@ -199,7 +207,7 @@ pub const POINT10_PREFIX: &str = "Point10 ";
 /// The prefix of the renamed Plane9 ports.
 pub const PLANE9_PREFIX: &str = "Plane9 ";
 
-/// Author credit for the twenty-two Plane9 preset ports.
+/// Author credit for the twenty-nine Plane9 preset ports.
 pub const PLANE9_AUTHOR: &str = "Plane9 (Joakim Dahl)";
 
 /// Resolve a historical `Point10 <Name>` registry reference to its canonical
@@ -225,7 +233,7 @@ pub fn resolve_scene_name(name: &str) -> &str {
 
 /// The authoritative Gallery renderer kind for a registry module named `name`.
 ///
-/// The twenty-two Plane9 preset ports share the Point10 runtime renderer but
+/// The twenty-nine Plane9 preset ports share the Point10 runtime renderer but
 /// are surfaced to the Gallery as their own kind (`type:plane9`); every other
 /// module keeps `default_kind` (its engine renderer kind). Using this
 /// helper in both snapshot builders keeps the roster in one place so the
@@ -758,6 +766,15 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::though_the_noise::ThoughTheNoise::new()),
         Box::new(scenes::tv_noise::TvNoise::new()),
         Box::new(scenes::circle_crossover::CircleCrossover::new()),
+        // The third Plane9 XML batch (RTT/feedback/raymarch presets), in the
+        // order the RED contract names.
+        Box::new(scenes::abstract_clouds::AbstractClouds::new()),
+        Box::new(scenes::magic_smoke_box::MagicSmokeBox::new()),
+        Box::new(scenes::color_blob::ColorBlob::new()),
+        Box::new(scenes::stargate_event_horizon::StargateEventHorizon::new()),
+        Box::new(scenes::color_beams::ColorBeams::new()),
+        Box::new(scenes::mirror_tunnel::MirrorTunnel::new()),
+        Box::new(scenes::cloud_flight::CloudFlight::new()),
     ]
 }
 
@@ -768,7 +785,7 @@ mod tests {
     #[test]
     fn registry_has_the_port_order_scenes() {
         let scenes = all_scenes();
-        assert_eq!(scenes.len(), 40);
+        assert_eq!(scenes.len(), 47);
 
         assert_eq!(scenes[0].name(), "Point10 Chromatic Line");
         assert_eq!(scenes[1].name(), "Point10 Chromatic Wave");
@@ -819,6 +836,14 @@ mod tests {
         assert_eq!(scenes[37].name(), "Plane9 Though The Noise");
         assert_eq!(scenes[38].name(), "Plane9 Tv Noise");
         assert_eq!(scenes[39].name(), "Plane9 Circle Crossover");
+        // The third Plane9 XML batch.
+        assert_eq!(scenes[40].name(), "Plane9 Abstract Clouds");
+        assert_eq!(scenes[41].name(), "Plane9 Magic Smoke Box");
+        assert_eq!(scenes[42].name(), "Plane9 Color Blob");
+        assert_eq!(scenes[43].name(), "Plane9 Stargate Event Horizon");
+        assert_eq!(scenes[44].name(), "Plane9 Color Beams");
+        assert_eq!(scenes[45].name(), "Plane9 Mirror Tunnel");
+        assert_eq!(scenes[46].name(), "Plane9 Cloud Flight");
         assert!(
             scenes
                 .iter()

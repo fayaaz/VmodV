@@ -147,6 +147,7 @@ pub fn circle_crossover_instances(grid: CloneGrid) -> Vec<Plane9QuadInstance> {
                 ],
                 _pad: 0.0,
                 color: [random, 0.0, 0.0, (ix + iy * grid.nx as f32) / total],
+                scale: [1.0, 1.0],
             });
         }
     }

@@ -1020,9 +1020,13 @@ fn milkdrop_presets_guide_accepts_both_extensions_case_insensitively() {
 #[test]
 fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
     const PLANE9: &[(&str, &str)] = &[
+        ("Abstract Clouds", "3.0"),
         ("Blob Fade", "3.0"),
         ("Boxy", "4.0"),
         ("Circle Crossover", "3.0"),
+        ("Cloud Flight", "3.0"),
+        ("Color Beams", "4.0"),
+        ("Color Blob", "3.0"),
         ("Color Cube", "3.0"),
         ("Colors", "4.0"),
         ("Earth", "4.0"),
@@ -1030,11 +1034,14 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         ("Hollow Cube", "4.0"),
         ("It Is Coming For You", "3.0"),
         ("Light Tunnel", "3.0"),
+        ("Magic Smoke Box", "3.0"),
         ("Mirror Cube", "4.0"),
+        ("Mirror Tunnel", "4.0"),
         ("Noise Warp", "4.0"),
         ("Rorschach", "4.0"),
         ("Sound Cube", "4.0"),
         ("Square Tunnel", "4.0"),
+        ("Stargate Event Horizon", "3.0"),
         ("Sun", "3.0"),
         ("The Cave", "3.0"),
         ("Though The Noise", "3.0"),
@@ -1044,7 +1051,8 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         ("Xor", "3.0"),
     ];
     // Only these twelve were *renamed* from a historical `Point10 ` name;
-    // the ten imported presets never had a Point10 alias.
+    // the ten imported presets (and this third batch's seven) never had a
+    // Point10 alias.
     const RENAMED: &[(&str, &str)] = &[
         ("Boxy", "4.0"),
         ("Color Cube", "3.0"),
@@ -1106,10 +1114,10 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         .filter_map(|name| name.strip_prefix("Point10 ").map(str::to_string))
         .collect();
 
-    // A — the twenty-two Plane9 ports use the prefix; the other eighteen stay.
+    // A — the twenty-nine Plane9 ports use the prefix; the other eighteen stay.
     check!(
-        scene_names.len() == 40,
-        "A: expected 40 scenes, got {}",
+        scene_names.len() == 47,
+        "A: expected 47 scenes, got {}",
         scene_names.len()
     );
     check!(
@@ -1339,8 +1347,8 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         .map(|name| name.as_str().expect("module name").to_string())
         .collect();
     let mut manifest_mismatches = Vec::new();
-    if manifest_names.len() != 40 {
-        manifest_mismatches.push(format!("expected 40 names, got {}", manifest_names.len()));
+    if manifest_names.len() != 47 {
+        manifest_mismatches.push(format!("expected 47 names, got {}", manifest_names.len()));
     }
     for (suffix, _) in RENAMED {
         let old_name = format!("Point10 {suffix}");
@@ -1596,8 +1604,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
     let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
     let unique_names: BTreeSet<&str> = names.iter().copied().collect();
     check!(
-        scenes.len() == 40,
-        "roster: expected 40 scenes, got {}",
+        scenes.len() == 47,
+        "roster: expected 47 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -1605,8 +1613,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         "roster: duplicate names in {names:?}"
     );
     check!(
-        modv_renderers::point10::PLANE9_SCENE_NAMES.len() == 22,
-        "Plane9 alias roster: expected 22 names, got {}",
+        modv_renderers::point10::PLANE9_SCENE_NAMES.len() == 29,
+        "Plane9 alias roster: expected 29 names, got {}",
         modv_renderers::point10::PLANE9_SCENE_NAMES.len()
     );
 
@@ -1679,8 +1687,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
 
     let registry = ModuleRegistry::builtin();
     check!(
-        registry.point10_definitions().len() == 40,
-        "ModuleRegistry: expected 40 Point10 definitions, got {}",
+        registry.point10_definitions().len() == 47,
+        "ModuleRegistry: expected 47 Point10 definitions, got {}",
         registry.point10_definitions().len()
     );
     for (suffix, _) in PRESETS {
@@ -1707,13 +1715,13 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
             .expect("the parity manifest is valid JSON");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(40),
-        "manifest: point10 count is {:?}, expected 40",
+        manifest["counts"]["point10"].as_u64() == Some(47),
+        "manifest: point10 count is {:?}, expected 47",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(494),
-        "manifest: total is {:?}, expected 494",
+        manifest["counts"]["total"].as_u64() == Some(501),
+        "manifest: total is {:?}, expected 501",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -1723,8 +1731,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 40,
-        "manifest: expected 40 Point10 names, got {}",
+        manifest_names.len() == 47,
+        "manifest: expected 47 Point10 names, got {}",
         manifest_names.len()
     );
     for (suffix, _) in PRESETS {
@@ -1756,13 +1764,13 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         "docs/modules/previews.json does not match the preview projection of build_document()"
     );
     check!(
-        generated["counts"]["point10"].as_u64() == Some(40),
-        "catalogue: point10 count is {:?}, expected 40",
+        generated["counts"]["point10"].as_u64() == Some(47),
+        "catalogue: point10 count is {:?}, expected 47",
         generated["counts"]["point10"]
     );
     check!(
-        generated["counts"]["total"].as_u64() == Some(494),
-        "catalogue: total is {:?}, expected 494",
+        generated["counts"]["total"].as_u64() == Some(501),
+        "catalogue: total is {:?}, expected 501",
         generated["counts"]["total"]
     );
     let modules = generated["modules"]
@@ -1831,6 +1839,309 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
     assert!(
         failures.is_empty(),
         "Plane9 batch GPU smoke failed:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// The second XML batch: seven RTT/feedback/raymarch presets. Resolve scenes
+/// through the public registry instead of naming their future Rust constructors,
+/// so this RED contract compiles before any of the seven ports exists.
+#[test]
+#[allow(clippy::op_ref)]
+fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
+    const PRESETS: &[(&str, &str)] = &[
+        ("Abstract Clouds", "3.0"),
+        ("Magic Smoke Box", "3.0"),
+        ("Color Blob", "3.0"),
+        ("Stargate Event Horizon", "3.0"),
+        ("Color Beams", "4.0"),
+        ("Mirror Tunnel", "4.0"),
+        ("Cloud Flight", "3.0"),
+    ];
+
+    let mut failures = Vec::new();
+    macro_rules! check {
+        ($condition:expr, $($arg:tt)*) => {
+            if !$condition {
+                failures.push(format!($($arg)*));
+            }
+        };
+    }
+
+    let mut scenes = all_scenes();
+    let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
+    let unique_names: BTreeSet<&str> = names.iter().copied().collect();
+    check!(
+        scenes.len() == 47,
+        "roster: expected 47 scenes, got {}",
+        scenes.len()
+    );
+    check!(
+        unique_names.len() == names.len(),
+        "roster: duplicate names in {names:?}"
+    );
+
+    let aliases = modv_renderers::point10::PLANE9_SCENE_NAMES;
+    let unique_aliases: BTreeSet<&str> = aliases.iter().copied().collect();
+    check!(
+        aliases.len() == 29,
+        "Plane9 alias roster: expected 29 names, got {}",
+        aliases.len()
+    );
+    check!(
+        unique_aliases.len() == aliases.len(),
+        "Plane9 alias roster: duplicate names in {aliases:?}"
+    );
+
+    for (suffix, version) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        let matches: Vec<_> = scenes.iter().filter(|scene| scene.name() == name).collect();
+        check!(
+            matches.len() == 1,
+            "{name}: expected exactly one all_scenes registration, got {}",
+            matches.len()
+        );
+        if let Some(scene) = matches.first() {
+            let meta = scene.meta();
+            check!(
+                meta.name == scene.name(),
+                "{name}: meta.name does not match name()"
+            );
+            check!(
+                meta.author == "Plane9 (Joakim Dahl)",
+                "{name}: author {:?}, expected Plane9 (Joakim Dahl)",
+                meta.author
+            );
+            check!(
+                meta.version == "1.0.0",
+                "{name}: version {:?}",
+                meta.version
+            );
+            check!(
+                meta.module_type == "2d",
+                "{name}: type {:?}",
+                meta.module_type
+            );
+            check!(
+                meta.audio_features == &["bass", "mid", "treble"],
+                "{name}: audio features {:?}",
+                meta.audio_features
+            );
+        }
+        check!(
+            aliases
+                .iter()
+                .filter(|candidate| **candidate == name)
+                .count()
+                == 1,
+            "{name}: Plane9 alias/Gallery roster must contain the canonical name exactly once"
+        );
+        let legacy = format!("Point10 {suffix}");
+        check!(
+            modv_renderers::point10::canonical_scene_name(&legacy) == Some(name.as_str()),
+            "{legacy}: historical alias must resolve to {name}"
+        );
+        check!(
+            modv_renderers::point10::gallery_kind(&name, "point10") == "plane9",
+            "{name}: Gallery kind is not plane9"
+        );
+
+        let expected_license =
+            format!("CC BY-NC-SA {version} (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)");
+        let license = module_license(&ModuleMetaView {
+            name: name.clone(),
+            module_type: "2d".to_string(),
+            kind: "plane9".to_string(),
+            ..ModuleMetaView::default()
+        });
+        check!(
+            license == expected_license,
+            "{name}: UI license {license:?}, expected {expected_license:?}"
+        );
+        let notices = notices_section("Point10 scenes");
+        let rows: Vec<_> = notices
+            .lines()
+            .filter(|line| line.starts_with(&format!("| {suffix} |")))
+            .collect();
+        match rows.as_slice() {
+            [row] if row.contains(&format!("CC BY-NC-SA {version}")) => {}
+            [row] => check!(false, "{name}: wrong notices row {row:?}"),
+            [] => check!(false, "{name}: missing notices provenance row"),
+            _ => check!(false, "{name}: duplicate notices provenance rows {rows:?}"),
+        }
+    }
+
+    let registry = ModuleRegistry::builtin();
+    check!(
+        registry.point10_definitions().len() == 47,
+        "ModuleRegistry: expected 47 Point10 definitions, got {}",
+        registry.point10_definitions().len()
+    );
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        check!(
+            registry.kind(&name) == Some(ModuleKind::Point10),
+            "{name}: ModuleRegistry kind is not Point10"
+        );
+        match registry.point10_definition(&name) {
+            Some(definition) => {
+                check!(
+                    definition.meta.name == name
+                        && definition.meta.author == "Plane9 (Joakim Dahl)"
+                        && definition.meta.version == "1.0.0"
+                        && definition.meta.module_type == "2d"
+                        && definition.meta.audio_features == &["bass", "mid", "treble"],
+                    "{name}: ModuleRegistry metadata does not match the Plane9 contract"
+                );
+            }
+            None => check!(false, "{name}: missing from ModuleRegistry"),
+        }
+        check!(
+            registry
+                .create_point10_instance(&name)
+                .map(|scene| scene.name())
+                == Some(name.as_str()),
+            "{name}: ModuleRegistry cannot construct the canonical scene"
+        );
+        let legacy = format!("Point10 {suffix}");
+        check!(
+            registry
+                .create_point10_instance(&legacy)
+                .map(|scene| scene.name())
+                == Some(name.as_str()),
+            "{legacy}: ModuleRegistry alias cannot construct {name}"
+        );
+    }
+
+    let manifest: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
+            .expect("the parity manifest is valid JSON");
+    check!(
+        manifest["counts"]["point10"].as_u64() == Some(47),
+        "manifest: point10 count is {:?}, expected 47",
+        manifest["counts"]["point10"]
+    );
+    check!(
+        manifest["counts"]["total"].as_u64() == Some(501),
+        "manifest: total is {:?}, expected 501",
+        manifest["counts"]["total"]
+    );
+    let manifest_names: Vec<&str> = manifest["point10"]
+        .as_array()
+        .expect("manifest point10 array")
+        .iter()
+        .map(|name| name.as_str().expect("manifest module name"))
+        .collect();
+    check!(
+        manifest_names.len() == 47,
+        "manifest: expected 47 Point10 names, got {}",
+        manifest_names.len()
+    );
+    let unique_manifest_names: BTreeSet<&str> = manifest_names.iter().copied().collect();
+    check!(
+        unique_manifest_names.len() == manifest_names.len(),
+        "manifest: duplicate Point10 names"
+    );
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        check!(
+            manifest_names
+                .iter()
+                .filter(|candidate| **candidate == name)
+                .count()
+                == 1,
+            "{name}: parity manifest must contain the canonical name exactly once"
+        );
+    }
+
+    let corpus = repo_root().join("resources/isf");
+    let generated = build_document(&corpus);
+    let (metadata, previews) = split_documents(&generated);
+    let committed: Value = serde_json::from_str(include_str!("../../../docs/modules/modules.json"))
+        .expect("the committed module catalogue is valid JSON");
+    check!(
+        metadata == committed,
+        "docs/modules/modules.json does not match the metadata projection of build_document()"
+    );
+    let committed_previews: Value =
+        serde_json::from_str(include_str!("../../../docs/modules/previews.json"))
+            .expect("the committed preview catalogue is valid JSON");
+    check!(
+        previews == committed_previews,
+        "docs/modules/previews.json does not match the preview projection of build_document()"
+    );
+    check!(
+        generated["counts"]["point10"].as_u64() == Some(47),
+        "catalogue: point10 count is {:?}, expected 47",
+        generated["counts"]["point10"]
+    );
+    check!(
+        generated["counts"]["total"].as_u64() == Some(501),
+        "catalogue: total is {:?}, expected 501",
+        generated["counts"]["total"]
+    );
+    let modules = generated["modules"]
+        .as_array()
+        .expect("catalogue modules array");
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        let matches: Vec<_> = modules
+            .iter()
+            .filter(|module| module["name"] == name)
+            .collect();
+        check!(
+            matches.len() == 1,
+            "{name}: catalogue must contain the module exactly once, got {}",
+            matches.len()
+        );
+        if let Some(module) = matches.first() {
+            check!(
+                module["kind"] == "point10"
+                    && module["author"] == "Plane9 (Joakim Dahl)"
+                    && module["version"] == "1.0.0"
+                    && module["audioFeatures"] == serde_json::json!(["bass", "mid", "treble"]),
+                "{name}: catalogue metadata does not match the Plane9 contract"
+            );
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "Plane9 seven-scene batch contract failed ({} checks):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+
+    let engine = Engine::new(&EngineConfig {
+        force_fallback_adapter: true,
+    })
+    .expect("the Plane9 seven-scene GPU smoke requires the headless fallback adapter");
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        let index = scenes
+            .iter()
+            .position(|scene| scene.name() == name)
+            .expect("the registry contract above guarantees the scene exists");
+        let pixels = render_plane9_batch_smoke(scenes[index].as_mut(), &engine);
+        check!(
+            pixels.len() == 64 * 64 * 4,
+            "{name}: expected 64x64 RGBA8 readback, got {} bytes",
+            pixels.len()
+        );
+        let non_black = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] > 0 || pixel[1] > 0 || pixel[2] > 0);
+        let non_transparent = pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0);
+        check!(
+            non_black && non_transparent,
+            "{name}: two-frame 64x64 fallback-adapter render is empty or uniformly black"
+        );
+    }
+    assert!(
+        failures.is_empty(),
+        "Plane9 seven-scene GPU smoke failed:\n{}",
         failures.join("\n")
     );
 }

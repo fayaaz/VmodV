@@ -2450,7 +2450,8 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
         return match name {
             // Plane9 ports whose own headers state 4.0.
             "Boxy" | "Colors" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Noise Warp"
-            | "Rorschach" | "Sound Cube" | "Square Tunnel" | "Wormhole" => concat!(
+            | "Rorschach" | "Sound Cube" | "Square Tunnel" | "Wormhole" | "Color Beams"
+            | "Mirror Tunnel" => concat!(
                 "CC BY-NC-",
                 "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),
@@ -2473,7 +2474,12 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             | "Though The Noise"
             | "Truchet Tentacles"
             | "Tv Noise"
-            | "Xor" => concat!(
+            | "Xor"
+            | "Abstract Clouds"
+            | "Cloud Flight"
+            | "Color Blob"
+            | "Magic Smoke Box"
+            | "Stargate Event Horizon" => concat!(
                 "CC BY-NC-",
                 "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),
@@ -4131,6 +4137,8 @@ mod tests {
             "Point10 Sound Cube",
             "Point10 Square Tunnel",
             "Point10 Wormhole",
+            "Point10 Color Beams",
+            "Point10 Mirror Tunnel",
         ] {
             check(name, v4, &[v3]);
         }
@@ -4147,6 +4155,11 @@ mod tests {
             "Point10 Truchet Tentacles",
             "Point10 Tv Noise",
             "Point10 Xor",
+            "Point10 Abstract Clouds",
+            "Point10 Cloud Flight",
+            "Point10 Color Blob",
+            "Point10 Magic Smoke Box",
+            "Point10 Stargate Event Horizon",
         ] {
             check(name, v3, &[v4]);
         }
@@ -4182,7 +4195,7 @@ mod tests {
 
         assert_eq!(
             checked.len(),
-            40,
+            47,
             "every registered Point10 scene must have a provenance label"
         );
     }

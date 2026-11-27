@@ -62,8 +62,8 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 40 Point10 scenes and 36 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 402 `.fs` shaders of the ISF corpus (494 total). Names match
+//! 47 Point10 scenes and 36 shader modules, plus the VmodV-only `Video` 2D
+//! module and the 402 `.fs` shaders of the ISF corpus (501 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -133,11 +133,15 @@ use modv_renderers::milkdrop::{
 };
 use modv_renderers::point10::chromatic::line::ChromaticLine;
 use modv_renderers::point10::chromatic::wave::ChromaticWave;
+use modv_renderers::point10::scenes::abstract_clouds::AbstractClouds;
 use modv_renderers::point10::scenes::around_plus::AroundPlus;
 use modv_renderers::point10::scenes::attractor_particles::AttractorParticles;
 use modv_renderers::point10::scenes::blob_fade::BlobFade;
 use modv_renderers::point10::scenes::boxy::Boxy;
 use modv_renderers::point10::scenes::circle_crossover::CircleCrossover;
+use modv_renderers::point10::scenes::cloud_flight::CloudFlight;
+use modv_renderers::point10::scenes::color_beams::ColorBeams;
+use modv_renderers::point10::scenes::color_blob::ColorBlob;
 use modv_renderers::point10::scenes::color_cube::ColorCube;
 use modv_renderers::point10::scenes::colors::Colors;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
@@ -147,7 +151,9 @@ use modv_renderers::point10::scenes::hollow_cube::HollowCube;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
 use modv_renderers::point10::scenes::latent_backrooms::LatentBackrooms;
 use modv_renderers::point10::scenes::light_tunnel::LightTunnel;
+use modv_renderers::point10::scenes::magic_smoke_box::MagicSmokeBox;
 use modv_renderers::point10::scenes::mirror_cube::MirrorCube;
+use modv_renderers::point10::scenes::mirror_tunnel::MirrorTunnel;
 use modv_renderers::point10::scenes::mycelium::Mycelium;
 use modv_renderers::point10::scenes::noise_warp::NoiseWarp;
 use modv_renderers::point10::scenes::particle_field::ParticleField;
@@ -157,6 +163,7 @@ use modv_renderers::point10::scenes::smoke_room::SmokeRoom;
 use modv_renderers::point10::scenes::sound_cube::SoundCube;
 use modv_renderers::point10::scenes::spiral_particles::SpiralParticles;
 use modv_renderers::point10::scenes::square_tunnel::SquareTunnel;
+use modv_renderers::point10::scenes::stargate_event_horizon::StargateEventHorizon;
 use modv_renderers::point10::scenes::sun::Sun;
 use modv_renderers::point10::scenes::the_cave::TheCave;
 use modv_renderers::point10::scenes::though_the_noise::ThoughTheNoise;
@@ -397,6 +404,20 @@ pub enum Point10SceneKind {
     TvNoise(TvNoise),
     /// `Plane9 Circle Crossover` (`scenes/circle_crossover.rs`).
     CircleCrossover(CircleCrossover),
+    /// `Plane9 Abstract Clouds` (`scenes/abstract_clouds.rs`).
+    AbstractClouds(AbstractClouds),
+    /// `Plane9 Magic Smoke Box` (`scenes/magic_smoke_box.rs`).
+    MagicSmokeBox(MagicSmokeBox),
+    /// `Plane9 Color Blob` (`scenes/color_blob.rs`).
+    ColorBlob(ColorBlob),
+    /// `Plane9 Stargate Event Horizon` (`scenes/stargate_event_horizon.rs`).
+    StargateEventHorizon(StargateEventHorizon),
+    /// `Plane9 Color Beams` (`scenes/color_beams.rs`).
+    ColorBeams(ColorBeams),
+    /// `Plane9 Mirror Tunnel` (`scenes/mirror_tunnel.rs`).
+    MirrorTunnel(MirrorTunnel),
+    /// `Plane9 Cloud Flight` (`scenes/cloud_flight.rs`).
+    CloudFlight(CloudFlight),
 }
 
 impl Point10SceneKind {
@@ -470,6 +491,15 @@ impl Point10SceneKind {
             "Plane9 Though The Noise" => Self::ThoughTheNoise(ThoughTheNoise::new()),
             "Plane9 Tv Noise" => Self::TvNoise(TvNoise::new()),
             "Plane9 Circle Crossover" => Self::CircleCrossover(CircleCrossover::new()),
+            "Plane9 Abstract Clouds" => Self::AbstractClouds(AbstractClouds::new()),
+            "Plane9 Magic Smoke Box" => Self::MagicSmokeBox(MagicSmokeBox::new()),
+            "Plane9 Color Blob" => Self::ColorBlob(ColorBlob::new()),
+            "Plane9 Stargate Event Horizon" => {
+                Self::StargateEventHorizon(StargateEventHorizon::new())
+            }
+            "Plane9 Color Beams" => Self::ColorBeams(ColorBeams::new()),
+            "Plane9 Mirror Tunnel" => Self::MirrorTunnel(MirrorTunnel::new()),
+            "Plane9 Cloud Flight" => Self::CloudFlight(CloudFlight::new()),
             _ => return None,
         })
     }
@@ -522,6 +552,13 @@ impl Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.apply_props(|key| get(key)),
             Self::TvNoise(scene) => scene.apply_props(|key| get(key)),
             Self::CircleCrossover(scene) => scene.apply_props(|key| get(key)),
+            Self::AbstractClouds(scene) => scene.apply_props(|key| get(key)),
+            Self::MagicSmokeBox(scene) => scene.apply_props(|key| get(key)),
+            Self::ColorBlob(scene) => scene.apply_props(|key| get(key)),
+            Self::StargateEventHorizon(scene) => scene.apply_props(|key| get(key)),
+            Self::ColorBeams(scene) => scene.apply_props(|key| get(key)),
+            Self::MirrorTunnel(scene) => scene.apply_props(|key| get(key)),
+            Self::CloudFlight(scene) => scene.apply_props(|key| get(key)),
         }
     }
 }
@@ -570,6 +607,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.name(),
             Self::TvNoise(scene) => scene.name(),
             Self::CircleCrossover(scene) => scene.name(),
+            Self::AbstractClouds(scene) => scene.name(),
+            Self::MagicSmokeBox(scene) => scene.name(),
+            Self::ColorBlob(scene) => scene.name(),
+            Self::StargateEventHorizon(scene) => scene.name(),
+            Self::ColorBeams(scene) => scene.name(),
+            Self::MirrorTunnel(scene) => scene.name(),
+            Self::CloudFlight(scene) => scene.name(),
         }
     }
 
@@ -615,6 +659,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.init(ctx),
             Self::TvNoise(scene) => scene.init(ctx),
             Self::CircleCrossover(scene) => scene.init(ctx),
+            Self::AbstractClouds(scene) => scene.init(ctx),
+            Self::MagicSmokeBox(scene) => scene.init(ctx),
+            Self::ColorBlob(scene) => scene.init(ctx),
+            Self::StargateEventHorizon(scene) => scene.init(ctx),
+            Self::ColorBeams(scene) => scene.init(ctx),
+            Self::MirrorTunnel(scene) => scene.init(ctx),
+            Self::CloudFlight(scene) => scene.init(ctx),
         }
     }
 
@@ -660,6 +711,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.resize(width, height),
             Self::TvNoise(scene) => scene.resize(width, height),
             Self::CircleCrossover(scene) => scene.resize(width, height),
+            Self::AbstractClouds(scene) => scene.resize(width, height),
+            Self::MagicSmokeBox(scene) => scene.resize(width, height),
+            Self::ColorBlob(scene) => scene.resize(width, height),
+            Self::StargateEventHorizon(scene) => scene.resize(width, height),
+            Self::ColorBeams(scene) => scene.resize(width, height),
+            Self::MirrorTunnel(scene) => scene.resize(width, height),
+            Self::CloudFlight(scene) => scene.resize(width, height),
         }
     }
 
@@ -705,6 +763,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.update(dt, audio),
             Self::TvNoise(scene) => scene.update(dt, audio),
             Self::CircleCrossover(scene) => scene.update(dt, audio),
+            Self::AbstractClouds(scene) => scene.update(dt, audio),
+            Self::MagicSmokeBox(scene) => scene.update(dt, audio),
+            Self::ColorBlob(scene) => scene.update(dt, audio),
+            Self::StargateEventHorizon(scene) => scene.update(dt, audio),
+            Self::ColorBeams(scene) => scene.update(dt, audio),
+            Self::MirrorTunnel(scene) => scene.update(dt, audio),
+            Self::CloudFlight(scene) => scene.update(dt, audio),
         }
     }
 
@@ -754,6 +819,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.render(encoder, target),
             Self::TvNoise(scene) => scene.render(encoder, target),
             Self::CircleCrossover(scene) => scene.render(encoder, target),
+            Self::AbstractClouds(scene) => scene.render(encoder, target),
+            Self::MagicSmokeBox(scene) => scene.render(encoder, target),
+            Self::ColorBlob(scene) => scene.render(encoder, target),
+            Self::StargateEventHorizon(scene) => scene.render(encoder, target),
+            Self::ColorBeams(scene) => scene.render(encoder, target),
+            Self::MirrorTunnel(scene) => scene.render(encoder, target),
+            Self::CloudFlight(scene) => scene.render(encoder, target),
         }
     }
 
@@ -799,6 +871,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.dispose(),
             Self::TvNoise(scene) => scene.dispose(),
             Self::CircleCrossover(scene) => scene.dispose(),
+            Self::AbstractClouds(scene) => scene.dispose(),
+            Self::MagicSmokeBox(scene) => scene.dispose(),
+            Self::ColorBlob(scene) => scene.dispose(),
+            Self::StargateEventHorizon(scene) => scene.dispose(),
+            Self::ColorBeams(scene) => scene.dispose(),
+            Self::MirrorTunnel(scene) => scene.dispose(),
+            Self::CloudFlight(scene) => scene.dispose(),
         }
     }
 
@@ -844,6 +923,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.props(),
             Self::TvNoise(scene) => scene.props(),
             Self::CircleCrossover(scene) => scene.props(),
+            Self::AbstractClouds(scene) => scene.props(),
+            Self::MagicSmokeBox(scene) => scene.props(),
+            Self::ColorBlob(scene) => scene.props(),
+            Self::StargateEventHorizon(scene) => scene.props(),
+            Self::ColorBeams(scene) => scene.props(),
+            Self::MirrorTunnel(scene) => scene.props(),
+            Self::CloudFlight(scene) => scene.props(),
         }
     }
 
@@ -889,6 +975,13 @@ impl Point10Scene for Point10SceneKind {
             Self::ThoughTheNoise(scene) => scene.meta(),
             Self::TvNoise(scene) => scene.meta(),
             Self::CircleCrossover(scene) => scene.meta(),
+            Self::AbstractClouds(scene) => scene.meta(),
+            Self::MagicSmokeBox(scene) => scene.meta(),
+            Self::ColorBlob(scene) => scene.meta(),
+            Self::StargateEventHorizon(scene) => scene.meta(),
+            Self::ColorBeams(scene) => scene.meta(),
+            Self::MirrorTunnel(scene) => scene.meta(),
+            Self::CloudFlight(scene) => scene.meta(),
         }
     }
 }
@@ -2532,7 +2625,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 36 + 16 + 40, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 36 + 16 + 47, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2552,7 +2645,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 40);
+        assert_eq!(registry.point10_definitions().len(), 47);
     }
 
     #[test]
@@ -2606,6 +2699,13 @@ mod tests {
                 "Plane9 Though The Noise",
                 "Plane9 Tv Noise",
                 "Plane9 Circle Crossover",
+                "Plane9 Abstract Clouds",
+                "Plane9 Magic Smoke Box",
+                "Plane9 Color Blob",
+                "Plane9 Stargate Event Horizon",
+                "Plane9 Color Beams",
+                "Plane9 Mirror Tunnel",
+                "Plane9 Cloud Flight",
             ]
         );
 
@@ -3683,7 +3783,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 40 + 402 + milkdrop_count,
+            36 + 16 + 47 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3747,12 +3847,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 40 + 402 + milkdrop_count,
+            36 + 16 + 47 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(494),
+            Some(501),
             "manifest total"
         );
     }

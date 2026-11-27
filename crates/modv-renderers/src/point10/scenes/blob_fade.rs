@@ -134,6 +134,7 @@ pub fn blob_fade_instances(grid: CloneGrid, in1: f32, bass: f32) -> Vec<Plane9Qu
                 ],
                 _pad: 0.0,
                 color: [dd * 2.0 + 0.5, dd, dd, 1.0],
+                scale: [1.0, 1.0],
             });
         }
     }

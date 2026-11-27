@@ -40,12 +40,16 @@
 //! counterpart — `BoxGeometry`, the matrix helpers and the depth attachment the
 //! five cube/lighting scenes share.
 
+pub mod abstract_clouds;
 pub mod around_plus;
 pub mod attractor_particles;
 pub mod blob_fade;
 pub mod boxy;
 pub mod chromatic_wave;
 pub mod circle_crossover;
+pub mod cloud_flight;
+pub mod color_beams;
+pub mod color_blob;
 pub mod color_cube;
 pub mod colors;
 pub mod cube_mesh;
@@ -58,7 +62,9 @@ pub mod hollow_cube;
 pub mod it_is_coming_for_you;
 pub mod latent_backrooms;
 pub mod light_tunnel;
+pub mod magic_smoke_box;
 pub mod mirror_cube;
+pub mod mirror_tunnel;
 pub mod mycelium;
 pub mod noise_warp;
 pub mod particle_field;
@@ -70,6 +76,7 @@ pub mod smoke_room;
 pub mod sound_cube;
 pub mod spiral_particles;
 pub mod square_tunnel;
+pub mod stargate_event_horizon;
 pub mod sun;
 pub mod the_cave;
 pub mod though_the_noise;

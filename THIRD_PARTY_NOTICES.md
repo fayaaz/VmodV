@@ -121,8 +121,8 @@ multi-pass path without an override.
 
 ## Point10 scenes
 
-The 40 registered Point10-derived scenes do **not** share one provenance. Only
-the twenty-two Plane9 (Joakim Dahl) presets are share-alike; they register as
+The 47 registered Point10-derived scenes do **not** share one provenance. Only
+the twenty-nine Plane9 (Joakim Dahl) presets are share-alike; they register as
 `Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases for
 the twelve renamed ports).
 The three Hollow Cuboid/Layers/Blur variants re-parameterise the Plane9
@@ -171,6 +171,13 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 | Truchet Tentacles | `crates/modv-renderers/src/point10/scenes/truchet_tentacles.rs` | CC BY-NC-SA 3.0 (stated in file; after WAHa_06x36's Shadertoy, https://www.shadertoy.com/view/ldfGWn) |
 | Tv Noise | `crates/modv-renderers/src/point10/scenes/tv_noise.rs` | CC BY-NC-SA 3.0 (stated in file) |
 | Xor | `crates/modv-renderers/src/point10/scenes/xor.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Abstract Clouds | `crates/modv-renderers/src/point10/scenes/abstract_clouds.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Magic Smoke Box | `crates/modv-renderers/src/point10/scenes/magic_smoke_box.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Color Blob | `crates/modv-renderers/src/point10/scenes/color_blob.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Stargate Event Horizon | `crates/modv-renderers/src/point10/scenes/stargate_event_horizon.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Color Beams | `crates/modv-renderers/src/point10/scenes/color_beams.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Mirror Tunnel | `crates/modv-renderers/src/point10/scenes/mirror_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Cloud Flight | `crates/modv-renderers/src/point10/scenes/cloud_flight.rs` | CC BY-NC-SA 3.0 (stated in file; after Inigo Quilez's Shadertoy "XslGRr") |
 
 ### three.js examples and other permissive sources (MIT)
 
