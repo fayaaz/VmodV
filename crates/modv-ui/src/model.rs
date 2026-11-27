@@ -2429,10 +2429,13 @@ pub struct ModuleMetaView {
 /// has a version stated in its ported file, so an unlisted Point10 scene must
 /// not inherit the generic "Shadertoy default" fallback below.
 ///
-/// The labels are assembled with `concat!` so this first-party file does not
+/// Most labels are assembled with `concat!` so this first-party file does not
 /// trip the source scan in `crates/modv-app/tests/notices.rs`, which requires
 /// every file bearing the licence markers to be a listed third-party source.
-/// Splitting the literals renders the same text as a single literal would.
+/// The three Hollow Cube variants are the exception: their label is pinned as
+/// one literal by the renderer's sibling-preset contract, so this file is
+/// named in `THIRD_PARTY_NOTICES.md` as a labelling file, not a licensed source.
+/// The split literals render the same text as single literals would.
 pub fn module_license(meta: &ModuleMetaView) -> &'static str {
     // Point10 scenes are registered under their full `Point10 `- or `Plane9 `-
     // prefixed names (`Point10 <Name>` stays a load alias for the twelve Plane9
@@ -2451,6 +2454,12 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
                 "CC BY-NC-",
                 "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),
+            // Point10 variants of the Plane9 "Hollow Cube" preset. They remain
+            // Plane9/Dahl derivatives, so the 4.0 share-alike terms apply; the
+            // label names Point10 because that is the registered author.
+            "Hollow Cuboid" | "Hollow Cube Layers" | "Hollow Cube Blur" => {
+                "CC BY-NC-SA 4.0 (Point10 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
+            }
             // Plane9 ports whose own headers state 3.0 (The Cave included:
             // Plane9 by Joakim Dahl, itself based on BoyC's Shadertoy scene).
             "Color Cube" | "It Is Coming For You" | "Light Tunnel" | "Sun" | "The Cave" => concat!(
@@ -4101,6 +4110,9 @@ mod tests {
             "Point10 Boxy",
             "Point10 Earth",
             "Point10 Hollow Cube",
+            "Point10 Hollow Cuboid",
+            "Point10 Hollow Cube Layers",
+            "Point10 Hollow Cube Blur",
             "Point10 Mirror Cube",
             "Point10 Sound Cube",
             "Point10 Square Tunnel",
@@ -4149,7 +4161,7 @@ mod tests {
 
         assert_eq!(
             checked.len(),
-            27,
+            30,
             "every registered Point10 scene must have a provenance label"
         );
     }

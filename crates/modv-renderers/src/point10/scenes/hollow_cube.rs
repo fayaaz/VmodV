@@ -89,6 +89,7 @@ use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::postfx::{Composer, Plane9BloomParams, ToneMapping};
 use crate::point10::scenes::cube_mesh::{
     Mat4, MeshGpu, build_box, create_depth, depth_state, euler_xyz, look_at, mat4_mul, perspective,
+    translation,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
@@ -134,6 +135,131 @@ pub const CLEAR_ALPHA: f64 = 0.0;
 
 /// `MAX_DT` — Expression1's own 0.1 s step cap.
 pub const MAX_DT: f32 = 0.1;
+
+/// The `Shader2` composite the cube capture is tonemapped with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HollowCubeComposite {
+    /// `mix(bg.rgb, ACES(c2.rgb), c2.a)` — Plane9 Hollow Cube, Hollow Cuboid
+    /// and Hollow Cube Layers.
+    Mix,
+    /// `c2.rgb * 0.06 + ACES(c1.rgb * c1.rgb)` — Hollow Cube Blur.
+    Blur,
+}
+
+/// One preset of the `Plane9 Hollow Cube` family.
+///
+/// The four registered scenes share the lattice, the two lights, the cube
+/// shader and the bloom chain; only the camera, the Expression1 tuning, the
+/// `Bloom1` drive and the `Shader2` composite differ. Carrying them as data on
+/// one [`HollowCube`] avoids a copy of the whole port per preset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HollowCubeVariant {
+    /// Registry name (`"Plane9 Hollow Cube"`, `"Point10 Hollow Cuboid"`, …).
+    pub name: &'static str,
+    /// `CAMERA.position`.
+    pub camera_position: [f32; 3],
+    /// `CAMERA.lookAt`.
+    pub camera_look_at: [f32; 3],
+    /// Whether `lookAt` is a world-space point rather than one relative to
+    /// `camera_position`.
+    pub camera_world_space: bool,
+    /// `RenderObject1.position`.
+    pub model_translation: [f32; 3],
+    /// `Shader1`'s `pulse * <angle>` rotation.
+    pub pulse_angle: f32,
+    /// `Expression1`'s `min(1, band * <weight>)` scaling of `in1.z`.
+    pub in1_z_weight: f32,
+    /// `Expression1`'s `min(<min>, band + 0.02)` perm cap.
+    pub perm_min: f32,
+    /// `Expression1`'s `(1 + band * <gain>)` orbit amplitude gain.
+    pub noise_gain: f32,
+    /// `Expression1`'s degree scale for the noise orbit.
+    pub orbit_scale: f32,
+    /// Whether `Expression1`'s `out4` drives the `Bloom1` intensity.
+    pub out4_bloom: bool,
+    /// Whether `MeshInstancer` puts the lattice cell in each instance matrix.
+    ///
+    /// `P9Nodes.js:1867-1899` keeps identity matrices for Hollow Cube and
+    /// Hollow Cuboid, but sets the instance matrix to `hollowCubePos(i)` for
+    /// Layers, Streaks and Blur (the presets derived from "Hollow Cube Room").
+    /// `P9Glsl.js:1057-1059` applies that matrix to the incoming box corner
+    /// before the shader's own `up` lattice offset, so those three presets
+    /// deliberately show a doubled, larger cloud. The port adds the cell
+    /// directly to the instance position instead of rotating the translated
+    /// corner first; the resulting doubled placement is intentional, the exact
+    /// per-instance rotation of the extra cell is not reproduced.
+    pub instance_lattice: bool,
+    /// The `Shader2` composite form.
+    pub composite: HollowCubeComposite,
+}
+
+/// `"Plane9 Hollow Cube"` — the original `HollowCube.js` preset.
+pub const PLANE9_HOLLOW_CUBE: HollowCubeVariant = HollowCubeVariant {
+    name: "Plane9 Hollow Cube",
+    camera_position: [0.0, 0.0, 2.2],
+    camera_look_at: [0.0, 0.0, -1.0],
+    camera_world_space: false,
+    model_translation: [0.0, 0.0, 0.0],
+    pulse_angle: 6.0,
+    in1_z_weight: 1.5,
+    perm_min: 0.15,
+    noise_gain: 0.1,
+    orbit_scale: 500.0,
+    out4_bloom: false,
+    instance_lattice: false,
+    composite: HollowCubeComposite::Mix,
+};
+
+/// `"Point10 Hollow Cuboid"` — a closer camera and a wider pulse.
+pub const POINT10_HOLLOW_CUBOID: HollowCubeVariant = HollowCubeVariant {
+    name: "Point10 Hollow Cuboid",
+    camera_position: [0.0, 0.0, 1.8],
+    camera_look_at: [0.0, 0.0, -1.0],
+    camera_world_space: false,
+    model_translation: [0.0, 0.0, 0.0],
+    pulse_angle: 10.0,
+    in1_z_weight: 3.0,
+    perm_min: 0.25,
+    noise_gain: 0.2,
+    orbit_scale: 720.0,
+    out4_bloom: true,
+    instance_lattice: false,
+    composite: HollowCubeComposite::Mix,
+};
+
+/// `"Point10 Hollow Cube Layers"` — the camera sits inside the cloud.
+pub const POINT10_HOLLOW_CUBE_LAYERS: HollowCubeVariant = HollowCubeVariant {
+    name: "Point10 Hollow Cube Layers",
+    camera_position: [0.0, 0.0, 0.0],
+    camera_look_at: [1.0, 0.0, 0.0],
+    camera_world_space: true,
+    model_translation: [-0.5, -0.5, -0.5],
+    pulse_angle: 10.0,
+    in1_z_weight: 3.0,
+    perm_min: 0.25,
+    noise_gain: 0.2,
+    orbit_scale: 720.0,
+    out4_bloom: true,
+    instance_lattice: true,
+    composite: HollowCubeComposite::Mix,
+};
+
+/// `"Point10 Hollow Cube Blur"` — the inside view with the blurred composite.
+pub const POINT10_HOLLOW_CUBE_BLUR: HollowCubeVariant = HollowCubeVariant {
+    name: "Point10 Hollow Cube Blur",
+    camera_position: [0.0, 0.0, 0.0],
+    camera_look_at: [1.0, 0.0, 0.0],
+    camera_world_space: true,
+    model_translation: [-0.5, -0.5, -0.5],
+    pulse_angle: 10.0,
+    in1_z_weight: 3.0,
+    perm_min: 0.25,
+    noise_gain: 0.2,
+    orbit_scale: 720.0,
+    out4_bloom: true,
+    instance_lattice: true,
+    composite: HollowCubeComposite::Blur,
+};
 
 /// `makePerm(seed = 1)`.
 pub fn make_perm(seed: f32) -> f32 {
@@ -202,6 +328,53 @@ pub fn hollow_cube_drive(
         ],
         in2: [next, 1.0 + l.min(0.2), 0.0],
     }
+}
+
+/// Pure `Expression1`, tuned by one [`HollowCubeVariant`].
+///
+/// Same maths as [`hollow_cube_drive`], with the variant's perm cap, orbit
+/// gain/scale and `in1.z` weight. The Plane9 variant reproduces that function
+/// exactly. The two implementations are kept side by side because the fidelity
+/// contract pins the original function's literal constants in source.
+fn hollow_cube_variant_drive(
+    variant: &HollowCubeVariant,
+    perm_band: f32,
+    level_band: f32,
+    orbit_band: f32,
+    dt: f32,
+    perm: f32,
+) -> HollowCubeDrive {
+    let p = band_value(perm_band);
+    let l = band_value(level_band);
+    let orbit = band_value(orbit_band);
+    let step = band_value(dt).min(MAX_DT);
+    let base = if perm.is_finite() { perm } else { 1.0 };
+    let next = base + (p + 0.02).min(variant.perm_min) * 0.08 * step;
+    let amplitude = 1.0 + orbit * variant.noise_gain;
+
+    HollowCubeDrive {
+        perm: next,
+        orbit: [
+            value_noise2(next, 0.0) * amplitude * variant.orbit_scale,
+            value_noise2(next, 1.0) * amplitude * variant.orbit_scale,
+            value_noise2(next, 2.0) * amplitude * variant.orbit_scale,
+        ],
+        in1: [
+            (l * 2.2).min(1.2) * 0.6,
+            (l * 4.0 + 0.4).min(0.55),
+            (l * variant.in1_z_weight).min(1.0),
+        ],
+        in2: [next, 1.0 + l.min(0.2), 0.0],
+    }
+}
+
+/// `Expression1`'s `out4` — the Plane9 `Bloom1` intensity driver.
+///
+/// `out4 = min(0.9, 0.25 + band(-1, 1, 0, 0.1) * 0.75)`. At one bloom mip the
+/// Plane9 driver ignores `intensity`, so this is faithful but visually inert;
+/// it is wired anyway.
+fn out4_bloom_intensity(band: impl FnOnce(i32, i32, i32, f32) -> f32) -> f32 {
+    (0.25 + band(-1, 1, 0, 0.1) * 0.75).min(0.9)
 }
 
 /// `Shader1`'s own Expression phase, the vendor damping-0 `gIn2.x` creep.
@@ -323,6 +496,7 @@ struct HollowCubeGpu {
 
 /// HollowCube scene.
 pub struct HollowCube {
+    variant: HollowCubeVariant,
     audio: P10Audio,
     /// `Expression1`'s `perm` — the orbit phase.
     perm: f32,
@@ -350,9 +524,16 @@ impl Default for HollowCube {
 }
 
 impl HollowCube {
-    /// Create the scene (`HollowCube.js:334-384` defaults).
+    /// Create the original `Plane9 Hollow Cube` scene (`HollowCube.js:334-384`
+    /// defaults).
     pub fn new() -> Self {
+        Self::new_with_variant(PLANE9_HOLLOW_CUBE)
+    }
+
+    /// Create one of the registered `Plane9 Hollow Cube` family presets.
+    pub fn new_with_variant(variant: HollowCubeVariant) -> Self {
         Self {
+            variant,
             audio: P10Audio::new(),
             perm: make_perm(1.0),
             shader_perm: make_perm(1.0),
@@ -388,6 +569,11 @@ impl HollowCube {
         }
     }
 
+    /// The preset this scene was built from.
+    pub fn variant(&self) -> &HollowCubeVariant {
+        &self.variant
+    }
+
     /// `Expression1`'s `perm`.
     pub fn perm(&self) -> f32 {
         self.perm
@@ -421,27 +607,58 @@ impl HollowCube {
     /// Plane9's `Bloom1` node with the `bloom` prop folded into its intensity.
     ///
     /// `Plane9BloomParams` with `mip_count == 1` never applies `intensity`, so
-    /// the prop is preserved for parity but has no visual effect.
+    /// the prop is preserved for parity but has no visual effect. The sibling
+    /// presets drive that intensity from `Expression1`'s `out4`.
     fn plane9_bloom_params(&self) -> Plane9BloomParams {
+        let intensity = if self.variant.out4_bloom {
+            let out4 = out4_bloom_intensity(|c, d, b, n| self.audio.band(c, d, b, n));
+            out4 * self.bloom_scale
+        } else {
+            BLOOM_STRENGTH * self.bloom_scale
+        };
         Plane9BloomParams::new(
             BLOOM_RADIUS,
             BLOOM_THRESHOLD,
             BLOOM_SMOOTHNESS,
-            BLOOM_STRENGTH * self.bloom_scale,
+            intensity,
             false,
         )
     }
 
-    /// `RenderObject1.Rot` as a model matrix.
+    /// `RenderObject1`'s `Pos`/`Rot` as a model matrix.
+    ///
+    /// Matrices here are column-major and applied right-to-left, so this is
+    /// `R * T`: first centre the instance lattice with the preset's `Pos`
+    /// (Layers/Blur use `-0.5 -0.5 -0.5`, which moves the `[0,1]` shell onto
+    /// the origin), then apply Expression1's rotation about that pivot. That
+    /// keeps the inside presets' camera at the centre of the spinning shell.
+    /// This is a deliberate deviation from three.js, which composes the
+    /// wrapper as `T * R * S` (`P9Scene.js:778-780`): with the port's post-offset
+    /// lattice, applying `Pos` after the rotation swings the shell away from
+    /// the world-origin camera. At a zero `Pos` the two orders coincide and
+    /// this method is rotation-only, exactly as before.
     fn model(&self) -> Mat4 {
-        euler_xyz(
+        let rotation = euler_xyz(
             self.orbit[0].to_radians(),
             self.orbit[1].to_radians(),
             self.orbit[2].to_radians(),
-        )
+        );
+        let position = self.variant.model_translation;
+        let offset = translation(position[0], position[1], position[2]);
+        mat4_mul(&rotation, &offset)
     }
 
     fn view_proj(&self) -> Mat4 {
+        let position = self.variant.camera_position;
+        let look_at_target = if self.variant.camera_world_space {
+            self.variant.camera_look_at
+        } else {
+            [
+                position[0] + self.variant.camera_look_at[0],
+                position[1] + self.variant.camera_look_at[1],
+                position[2] + self.variant.camera_look_at[2],
+            ]
+        };
         mat4_mul(
             &perspective(
                 CAMERA_FOV.to_radians(),
@@ -449,7 +666,7 @@ impl HollowCube {
                 CAMERA_NEAR,
                 CAMERA_FAR,
             ),
-            &look_at(CAMERA_POSITION, CAMERA_LOOK_AT, [0.0, 1.0, 0.0]),
+            &look_at(position, look_at_target, [0.0, 1.0, 0.0]),
         )
     }
 
@@ -464,9 +681,9 @@ impl HollowCube {
                 view_proj: self.view_proj(),
                 model: self.model(),
                 camera_pos: [
-                    CAMERA_POSITION[0],
-                    CAMERA_POSITION[1],
-                    CAMERA_POSITION[2],
+                    self.variant.camera_position[0],
+                    self.variant.camera_position[1],
+                    self.variant.camera_position[2],
                     1.0,
                 ],
                 in1: self.in1,
@@ -510,7 +727,7 @@ impl HollowCube {
 
 impl Point10Scene for HollowCube {
     fn name(&self) -> &'static str {
-        "Plane9 Hollow Cube"
+        self.variant.name
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -528,7 +745,7 @@ impl Point10Scene for HollowCube {
         // --- cube capture --------------------------------------------------
         let cube_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("point10-hollow-cube-shader"),
-            source: wgpu::ShaderSource::Wgsl(hollow_cube_cube_wgsl().into()),
+            source: wgpu::ShaderSource::Wgsl(hollow_cube_cube_wgsl_for(&self.variant).into()),
         });
         let cube_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("point10-hollow-cube-layout"),
@@ -590,7 +807,9 @@ impl Point10Scene for HollowCube {
         // --- Shader2 composite --------------------------------------------
         let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("point10-hollow-cube-composite-shader"),
-            source: wgpu::ShaderSource::Wgsl(hollow_cube_composite_wgsl().into()),
+            source: wgpu::ShaderSource::Wgsl(
+                hollow_cube_composite_wgsl_for(self.variant.composite).into(),
+            ),
         });
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("point10-hollow-cube-composite-layout"),
@@ -701,7 +920,8 @@ impl Point10Scene for HollowCube {
         // `Shader1`'s own Expression keeps the vendor damping-0 phase.
         self.shader_perm = shader_perm_step(self.shader_perm, self.audio.band(-1, 0, 0, 0.1), dt);
 
-        let drive = hollow_cube_drive(
+        let drive = hollow_cube_variant_drive(
+            &self.variant,
             self.audio.band(-1, 1, 0, 0.1),
             self.audio.band(-1, 1, 0, 0.1),
             self.audio.band(-1, 1, 0, 0.15),
@@ -720,6 +940,17 @@ impl Point10Scene for HollowCube {
         // `drive.in2.x` is the Expression1 phase (the pure-function contract);
         // the shader's `gIn2.x` takes Shader1's own damping-0 phase instead.
         self.in2 = [self.shader_perm, drive.in2[1], 0.0, 0.0];
+
+        // The sibling presets' `Expression1` drives `Bloom1`'s intensity every
+        // frame. `enable_plane9_bloom` only rewrites the uniforms when the
+        // pass shape is unchanged.
+        if self.variant.out4_bloom {
+            let params = self.plane9_bloom_params();
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.composer.enable_plane9_bloom(params);
+            }
+        }
+
         self.upload_cube_uniforms();
     }
 
@@ -795,7 +1026,11 @@ impl Point10Scene for HollowCube {
 
     fn meta(&self) -> SceneMeta {
         // `Point10HollowCube.js` sets no category.
-        SceneMeta::for_plane9_scene("Plane9 Hollow Cube", "3d-scenes")
+        if self.variant.name.starts_with(crate::point10::PLANE9_PREFIX) {
+            SceneMeta::for_plane9_scene(self.variant.name, "3d-scenes")
+        } else {
+            SceneMeta::for_scene(self.variant.name, "3d-scenes")
+        }
     }
 }
 
@@ -867,12 +1102,47 @@ fn hollow_cube_cube_wgsl() -> String {
     format!("{P9_COMMON_WGSL}\n{P9_SHADING_WGSL}\n{HOLLOW_CUBE_CUBE_WGSL}")
 }
 
-/// `buildHollowCubeShader2Fragment`.
+/// The cube shader for one variant.
+///
+/// The port's canonical `HOLLOW_CUBE_CUBE_WGSL` carries the vendor `pulse * 6`
+/// rotation; the sibling presets only widen that angle.
+fn hollow_cube_cube_wgsl_for(variant: &HollowCubeVariant) -> String {
+    let mut program = hollow_cube_cube_wgsl();
+    if variant.pulse_angle != 6.0 {
+        program = program.replace(
+            "pulse * 6.0 * u.in1.z",
+            &format!("pulse * {:.1} * u.in1.z", variant.pulse_angle),
+        );
+    }
+    if variant.instance_lattice {
+        // The Layers/Blur presets' `MeshInstancer` matrices translate each
+        // instance onto its lattice cell; identity matrices are the other
+        // presets' default.
+        program = program.replace(
+            "  v = v + up * u.in2.y * xx;",
+            "  v = v + up * u.in2.y * xx;\n  v = v + p;",
+        );
+    }
+    program
+}
+
+/// `buildHollowCubeShader2Fragment` (the alpha-mix composite).
 fn hollow_cube_composite_wgsl() -> String {
     format!(
-        "{}\n{P9_ACES_WGSL}\n{HOLLOW_CUBE_COMPOSITE_WGSL}",
+        "{}\n{P9_ACES_WGSL}\n{HOLLOW_CUBE_COMPOSITE_WGSL}\n{HOLLOW_CUBE_COMPOSITE_MIX_BODY}",
         crate::point10::FULLSCREEN_TRIANGLE_WGSL
     )
+}
+
+/// `Shader2` for one composite variant.
+fn hollow_cube_composite_wgsl_for(composite: HollowCubeComposite) -> String {
+    match composite {
+        HollowCubeComposite::Mix => hollow_cube_composite_wgsl(),
+        HollowCubeComposite::Blur => format!(
+            "{}\n{P9_ACES_WGSL}\n{HOLLOW_CUBE_COMPOSITE_WGSL}\n{HOLLOW_CUBE_COMPOSITE_BLUR_BODY}",
+            crate::point10::FULLSCREEN_TRIANGLE_WGSL
+        ),
+    }
 }
 
 /// `_tonemapACES` (`P9Glsl.js:454-462`), verbatim.
@@ -1069,7 +1339,27 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   // `PreviousLayer1.Color` has no equivalent here: the compositor alpha-blends
   // over the layers below, so the vendor's third texture is transparent black.
   let bg = vec4<f32>(0.0);
+"#;
+
+/// `Shader2`'s alpha-mix composite (Plane9 Hollow Cube, Hollow Cuboid,
+/// Hollow Cube Layers).
+const HOLLOW_CUBE_COMPOSITE_MIX_BODY: &str = r#"
   let col = mix(bg.rgb, p9_tonemap_aces(c2.rgb), c2.a);
+  return vec4<f32>(col, c2.a);
+}
+"#;
+
+/// The Blur preset's composite (`Hollow Cube Blur.xml`, Shader2).
+///
+/// The vendor reads `c1 = bloom * 2` and `c2 = RenderToTexture1.Color`, then
+/// emits `c2.rgb * 0.06 + ACES(c1 * c1)`. In this port `c1` is the transparent
+/// `PreviousLayer1` proxy, so that in-shader term is zero, but the bloom is
+/// supplied once by [`Composer`]'s additive `base + bloom` combine after this
+/// pass. The 6% base therefore enters the combine before the bloom, matching
+/// the vendor's `dim base + bloom` order; see the GPU halo regression test.
+const HOLLOW_CUBE_COMPOSITE_BLUR_BODY: &str = r#"
+  let c1 = bg;
+  let col = c2.rgb * 0.06 + p9_tonemap_aces(c1.rgb * c1.rgb);
   return vec4<f32>(col, c2.a);
 }
 "#;
@@ -1079,8 +1369,11 @@ mod tests {
     // The fidelity contract accumulates messages from `!(float < float)`
     // checks; the negation is the readable form here.
     #![allow(clippy::neg_cmp_op_on_partial_ord)]
+    // The sibling contract compares `meta.audio_features == &[...]` directly.
+    #![allow(clippy::op_ref)]
 
     use super::*;
+    use crate::point10::all_scenes;
     use crate::point10::audio_bridge::BandPayload;
     use crate::point10::postfx::Plane9BloomParams;
     use crate::point10::test_support::{TestTarget, any_lit, gpu};
@@ -1605,6 +1898,554 @@ mod tests {
     }
 
     #[test]
+    fn hollow_cube_sibling_presets_contract() {
+        const NEW_NAMES: [&str; 3] = [
+            "Point10 Hollow Cuboid",
+            "Point10 Hollow Cube Layers",
+            "Point10 Hollow Cube Blur",
+        ];
+        const STREAKS: &str = "Point10 Hollow Cube Streaks";
+
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+
+        // A — the canonical roster gains exactly these three Point10 scenes.
+        // Keep this set-based: the implementation is free to choose a stable
+        // insertion order without weakening the registry contract.
+        let scenes = all_scenes();
+        let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
+        let mut expected_names = vec![
+            "Point10 Chromatic Line",
+            "Point10 Chromatic Wave",
+            "Point10 Particle Field",
+            "Point10 Spiral Particles",
+            "Point10 Waveform",
+            "Plane9 Square Tunnel",
+            "Plane9 Light Tunnel",
+            "Plane9 Wormhole",
+            "Plane9 It Is Coming For You",
+            "Point10 Water Ripple",
+            "Point10 Mycelium",
+            "Point10 Around Plus",
+            "Point10 Ultra HDR",
+            "Plane9 Mirror Cube",
+            "Plane9 Color Cube",
+            "Plane9 Boxy",
+            "Plane9 Sound Cube",
+            "Plane9 Hollow Cube",
+            "Point10 Attractor Particles",
+            "Point10 DVD Room",
+            "Point10 Rolling Fire",
+            "Point10 Ball Of Fire",
+            "Point10 Smoke Room",
+            "Point10 Latent Backrooms",
+            "Plane9 Sun",
+            "Plane9 Earth",
+            "Plane9 The Cave",
+        ];
+        expected_names.extend_from_slice(&NEW_NAMES);
+        expected_names.sort_unstable();
+        let mut actual_names = names.clone();
+        actual_names.sort_unstable();
+        check!(
+            actual_names == expected_names,
+            "A: Point10 roster must gain exactly {NEW_NAMES:?}; missing {:?}, unexpected {:?}",
+            expected_names
+                .iter()
+                .filter(|name| !actual_names.contains(name))
+                .collect::<Vec<_>>(),
+            actual_names
+                .iter()
+                .filter(|name| !expected_names.contains(name))
+                .collect::<Vec<_>>()
+        );
+        check!(
+            scenes.len() == 30,
+            "A: expected 30 Point10 scenes, got {}",
+            scenes.len()
+        );
+        let mut unique_names = names.clone();
+        unique_names.sort_unstable();
+        unique_names.dedup();
+        check!(
+            unique_names.len() == names.len(),
+            "A: Point10 registry names must be unique"
+        );
+        check!(
+            !names.contains(&STREAKS),
+            "A: Hollow Cube Streaks is a duplicate and must not be registered"
+        );
+
+        for name in NEW_NAMES {
+            let matches: Vec<_> = scenes.iter().filter(|scene| scene.name() == name).collect();
+            check!(
+                matches.len() == 1,
+                "A: {name} must be registered exactly once, found {}",
+                matches.len()
+            );
+            if let Some(scene) = matches.first() {
+                let meta = scene.meta();
+                check!(meta.name == scene.name(), "A: {name} meta/name mismatch");
+                check!(meta.author == "Point10", "A: {name} author must be Point10");
+                check!(meta.version == "1.0.0", "A: {name} version must be 1.0.0");
+                check!(meta.module_type == "2d", "A: {name} type must be 2d");
+                check!(
+                    meta.audio_features == &["bass", "mid", "treble"],
+                    "A: {name} must request bass/mid/treble"
+                );
+            }
+        }
+        for scene in &scenes {
+            check!(
+                scene.meta().name == scene.name(),
+                "A: {} has mismatched meta/name",
+                scene.name()
+            );
+        }
+
+        // G — the committed parity baseline and generated catalogue gain the
+        // same three canonical names and counts. These are intentionally data
+        // contracts so the RED run names the fixture/doc work explicitly.
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../tests/fixtures/module-parity.json"
+        ))
+        .expect("module-parity.json must parse");
+        check!(
+            manifest["counts"]["point10"].as_u64() == Some(30),
+            "G: module-parity point10 count must be 30, got {:?}",
+            manifest["counts"]["point10"]
+        );
+        check!(
+            manifest["counts"]["total"].as_u64() == Some(484),
+            "G: module-parity total must be 484, got {:?}",
+            manifest["counts"]["total"]
+        );
+        let manifest_names: Vec<&str> = manifest["point10"]
+            .as_array()
+            .expect("module-parity point10 array")
+            .iter()
+            .map(|name| name.as_str().expect("point10 name"))
+            .collect();
+        check!(
+            manifest_names.len() == 30,
+            "G: module-parity point10 array must contain 30 names, got {}",
+            manifest_names.len()
+        );
+        for name in NEW_NAMES {
+            check!(
+                manifest_names.contains(&name),
+                "G: module-parity is missing {name}"
+            );
+        }
+        check!(
+            !manifest_names.contains(&STREAKS),
+            "G: module-parity must not gain Hollow Cube Streaks"
+        );
+
+        let docs: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../../docs/modules/modules.json"))
+                .expect("generated module catalogue must parse");
+        check!(
+            docs["counts"]["point10"].as_u64() == Some(30),
+            "G: generated catalogue point10 count must be 30, got {:?}",
+            docs["counts"]["point10"]
+        );
+        check!(
+            docs["counts"]["total"].as_u64() == Some(484),
+            "G: generated catalogue total must be 484, got {:?}",
+            docs["counts"]["total"]
+        );
+        let doc_point10: Vec<&str> = docs["modules"]
+            .as_array()
+            .expect("generated catalogue modules array")
+            .iter()
+            .filter(|module| module["kind"] == "point10")
+            .map(|module| module["name"].as_str().expect("module name"))
+            .collect();
+        let mut expected_docs = expected_names.clone();
+        let mut actual_docs = doc_point10.clone();
+        expected_docs.sort_unstable();
+        actual_docs.sort_unstable();
+        check!(
+            actual_docs == expected_docs,
+            "G: generated catalogue Point10 roster differs: missing {:?}, unexpected {:?}",
+            expected_docs
+                .iter()
+                .filter(|name| !actual_docs.contains(name))
+                .collect::<Vec<_>>(),
+            actual_docs
+                .iter()
+                .filter(|name| !expected_docs.contains(name))
+                .collect::<Vec<_>>()
+        );
+
+        // C — pin the existing, unparameterised Hollow Cube through today's
+        // public constants/drive API and its current production source. These
+        // checks pass before GREEN and guard against changing the original.
+        let production = include_str!("hollow_cube.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source precedes the test module");
+        check!(
+            CAMERA_POSITION == [0.0, 0.0, 2.2],
+            "C: Hollow Cube camera position changed"
+        );
+        check!(
+            CAMERA_LOOK_AT == [0.0, 0.0, -1.0],
+            "C: Hollow Cube camera look-at changed"
+        );
+        let original = HollowCube::new();
+        check!(
+            original.in1() == [0.0, 1.1, 0.0, 0.0],
+            "C: Hollow Cube default In1 changed"
+        );
+        check!(
+            production.contains("fn model(&self) -> Mat4") && production.contains("euler_xyz("),
+            "C: Hollow Cube model must remain rotation-only at translation zero"
+        );
+        let original_drive = hollow_cube_drive(0.0, 0.2, 0.5, 0.0, 1.0);
+        check!(
+            (original_drive.in1[2] - 0.3).abs() < 1e-6,
+            "C: Hollow Cube In1.z weight must remain 1.5"
+        );
+        let capped_drive = hollow_cube_drive(1.0, 0.0, 0.0, 0.1, 1.0);
+        check!(
+            (capped_drive.perm - (1.0 + 0.15 * 0.08 * 0.1)).abs() < 1e-6,
+            "C: Hollow Cube Expression1 perm minimum must remain 0.15"
+        );
+        let expected_orbit = value_noise2(original_drive.perm, 0.0) * (1.0 + 0.5 * 0.1) * 500.0;
+        check!(
+            (original_drive.orbit[0] - expected_orbit).abs() < 1e-4,
+            "C: Hollow Cube noise gain/orbit scale must remain 0.1/500"
+        );
+        check!(
+            BLOOM_STRENGTH == 0.51,
+            "C: Hollow Cube must retain its fixed 0.51 bloom intensity (no out4 driver)"
+        );
+        check!(
+            production.contains("pulse * 6.0 * u.in1.z"),
+            "C: Hollow Cube pulse angle must remain 6.0"
+        );
+        check!(
+            production.contains("mix(bg.rgb, p9_tonemap_aces(c2.rgb), c2.a)"),
+            "C: Hollow Cube must retain the alpha-mix composite"
+        );
+
+        // B/D/E — `HollowCubeVariant` does not exist on today's API, so direct
+        // field assertions would not compile in RED. Pin the proposed pure-data
+        // seam and each variant literal in production source instead; the test
+        // module itself is excluded so these strings cannot satisfy the check.
+        check!(
+            production.contains("struct HollowCubeVariant"),
+            "B: variant parameters need a plain HollowCubeVariant data struct"
+        );
+
+        fn variant_block<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+            let needle = format!("\"{name}\"");
+            source.match_indices(&needle).find_map(|(start, _)| {
+                let tail = &source[start..];
+                let open_relative = tail.find('{')?;
+                if tail[..open_relative].len() > 256 {
+                    return None;
+                }
+                let open = start + open_relative;
+                let mut depth = 0usize;
+                for (offset, character) in source[open..].char_indices() {
+                    match character {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                let block = &source[open..open + offset + 1];
+                                return block.contains("camera_position").then_some(block);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            })
+        }
+
+        fn field_value<'a>(block: &'a str, field: &str) -> Option<&'a str> {
+            let marker = format!("{field}:");
+            let start = block.find(&marker)? + marker.len();
+            let tail = &block[start..];
+            let mut square = 0usize;
+            let mut paren = 0usize;
+            let mut brace_depth = 0usize;
+            for (index, character) in tail.char_indices() {
+                match character {
+                    '[' => square += 1,
+                    ']' => square = square.saturating_sub(1),
+                    '(' => paren += 1,
+                    ')' => paren = paren.saturating_sub(1),
+                    '{' => brace_depth += 1,
+                    '}' => brace_depth = brace_depth.saturating_sub(1),
+                    ',' if square == 0 && paren == 0 && brace_depth == 0 => {
+                        return Some(tail[..index].trim());
+                    }
+                    _ => {}
+                }
+            }
+            Some(tail.trim())
+        }
+
+        fn function_body<'a>(source: &'a str, marker: &str) -> Option<&'a str> {
+            let start = source.find(marker)?;
+            let open_relative = source[start..].find('{')?;
+            let open = start + open_relative;
+            let mut depth = 0usize;
+            for (offset, character) in source[open..].char_indices() {
+                match character {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return Some(&source[open..open + offset + 1]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        let variants = [
+            (
+                "Plane9 Hollow Cube",
+                "[0.0, 0.0, 2.2]",
+                "[0.0, 0.0, -1.0]",
+                "false",
+                "[0.0, 0.0, 0.0]",
+                "6.0",
+                "1.5",
+                "0.15",
+                "0.1",
+                "500.0",
+                "false",
+                "mix",
+            ),
+            (
+                "Point10 Hollow Cuboid",
+                "[0.0, 0.0, 1.8]",
+                "[0.0, 0.0, -1.0]",
+                "false",
+                "[0.0, 0.0, 0.0]",
+                "10.0",
+                "3.0",
+                "0.25",
+                "0.2",
+                "720.0",
+                "true",
+                "mix",
+            ),
+            (
+                "Point10 Hollow Cube Layers",
+                "[0.0, 0.0, 0.0]",
+                "[1.0, 0.0, 0.0]",
+                "true",
+                "[-0.5, -0.5, -0.5]",
+                "10.0",
+                "3.0",
+                "0.25",
+                "0.2",
+                "720.0",
+                "true",
+                "mix",
+            ),
+            (
+                "Point10 Hollow Cube Blur",
+                "[0.0, 0.0, 0.0]",
+                "[1.0, 0.0, 0.0]",
+                "true",
+                "[-0.5, -0.5, -0.5]",
+                "10.0",
+                "3.0",
+                "0.25",
+                "0.2",
+                "720.0",
+                "true",
+                "blur",
+            ),
+        ];
+        for (
+            name,
+            camera,
+            look_at,
+            world_space,
+            translation,
+            pulse,
+            weight,
+            perm_min,
+            gain,
+            scale,
+            out4,
+            composite,
+        ) in variants
+        {
+            let Some(block) = variant_block(production, name) else {
+                failures.push(format!("B: no HollowCubeVariant literal for {name}"));
+                continue;
+            };
+            let compact = block.split_whitespace().collect::<Vec<_>>().join(" ");
+            for (field, expected) in [
+                ("camera_position", camera),
+                ("camera_look_at", look_at),
+                ("model_translation", translation),
+            ] {
+                check!(
+                    compact.contains(&format!("{field}: {expected}")),
+                    "B: {name} {field} must be {expected}, got {:?}",
+                    field_value(block, field)
+                );
+            }
+            for (field, expected) in [
+                ("camera_world_space", world_space),
+                ("pulse_angle", pulse),
+                ("in1_z_weight", weight),
+                ("perm_min", perm_min),
+                ("noise_gain", gain),
+                ("orbit_scale", scale),
+                ("out4_bloom", out4),
+            ] {
+                check!(
+                    field_value(block, field) == Some(expected),
+                    "B: {name} {field} must be {expected}, got {:?}",
+                    field_value(block, field)
+                );
+            }
+            let composite_value = field_value(block, "composite")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            check!(
+                composite_value.contains(composite),
+                "E: {name} composite selector must select {composite}, got {composite_value:?}"
+            );
+        }
+
+        let compact_production: String =
+            production.chars().filter(|c| !c.is_whitespace()).collect();
+        let out4_math = "min(0.9,0.25+band(-1,1,0,0.1)*0.75)";
+        let rust_out4_math = "(0.25+band(-1,1,0,0.1)*0.75).min(0.9)";
+        check!(
+            compact_production.contains(out4_math) || compact_production.contains(rust_out4_math),
+            "D: out4 must compute min(0.9, 0.25 + band(-1,1,0,0.1)*0.75)"
+        );
+        check!(
+            function_body(production, "fn plane9_bloom_params").is_some_and(|body| {
+                body.contains("out4") && body.contains("Plane9BloomParams::new(")
+            }),
+            "D: out4 must feed the Plane9 bloom intensity parameter"
+        );
+        check!(
+            compact_production.contains("c2.rgb*0.06+p9_tonemap_aces(c1.rgb*c1.rgb)"),
+            "E: Blur must composite c2.rgb*0.06 + ACES(c1*c1)"
+        );
+        check!(
+            compact_production.contains("mix(bg.rgb,p9_tonemap_aces(c2.rgb),c2.a)"),
+            "E: Hollow Cube/Cuboid/Layers must retain mix(bg, ACES(c2), c2.a)"
+        );
+
+        // G — provenance is cross-crate. The renderer crate cannot call
+        // modv_ui::model::module_license, so assert the existing source/notice
+        // convention here; the UI's direct licence test is GREEN follow-up work.
+        let notices = include_str!("../../../../../THIRD_PARTY_NOTICES.md");
+        let model_source = include_str!("../../../../modv-ui/src/model.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("model production source precedes its tests");
+        let attributed_v4 = concat!("CC BY-NC-", "SA 4.0 (Point10 /");
+        for name in NEW_NAMES {
+            let suffix = name.strip_prefix("Point10 ").expect("Point10 prefix");
+            let row = notices
+                .lines()
+                .find(|line| line.starts_with(&format!("| {suffix} |")));
+            check!(
+                row.is_some_and(|row| {
+                    row.contains("CC BY-NC-SA 4.0")
+                        && row.contains("Point10")
+                        && row.contains("Dahl")
+                }),
+                "G: notices need a CC BY-NC-SA 4.0 Point10/Dahl provenance row for {suffix}"
+            );
+            check!(
+                model_source.contains(&format!("\"{suffix}\""))
+                    && model_source.contains(attributed_v4)
+                    && model_source.contains("Dahl; see THIRD_PARTY_NOTICES.md)"),
+                "G: module_license must resolve {name} to CC BY-NC-SA 4.0 attributed to Point10/Dahl"
+            );
+        }
+
+        // F — every registered sibling gets the real 64x64, two-frame,
+        // fallback-adapter smoke. Missing scenes are already failures above;
+        // once present, an empty/black inside-view for Layers or Blur fails here.
+        let mut siblings: Vec<Box<dyn Point10Scene>> = scenes
+            .into_iter()
+            .filter(|scene| NEW_NAMES.contains(&scene.name()))
+            .collect();
+        check!(
+            siblings.len() == NEW_NAMES.len(),
+            "F: expected three sibling scenes for GPU smoke, found {}",
+            siblings.len()
+        );
+        if !siblings.is_empty() {
+            if let Some((device, queue)) = gpu() {
+                for mut scene in siblings.drain(..) {
+                    let name = scene.name();
+                    let mut ctx =
+                        SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+                    ctx.resize(64, 64);
+                    scene.init(&mut ctx);
+                    scene.resize(64, 64);
+
+                    let mut payload = BandPayload::silent(44_100.0);
+                    payload.lanes = [0.6; 12];
+                    let mut bridge = AudioBridge::new();
+                    let target = TestTarget::new(&device, 64, 64);
+                    for frame in 0..2 {
+                        bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+                        scene.update(1.0 / 60.0, &bridge);
+                        let mut encoder =
+                            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("point10-hollow-cube-sibling-smoke"),
+                            });
+                        scene.render(&mut encoder, &target.view);
+                        queue.submit(Some(encoder.finish()));
+                        let pixels = target.read(&device, &queue);
+                        check!(
+                            pixels.len() == 64 * 64 * 4,
+                            "F: {name} frame {frame} returned {} bytes",
+                            pixels.len()
+                        );
+                        check!(
+                            any_lit(&pixels),
+                            "F: {name} 64x64 frame {frame} is empty or uniformly black"
+                        );
+                    }
+                }
+            } else {
+                failures.push(
+                    "F: a headless fallback adapter is required for sibling GPU smoke".to_string(),
+                );
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Hollow Cube sibling preset contract failed ({} checks):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = HollowCube::new();
         assert_eq!(scene.meta().name, "Plane9 Hollow Cube");
@@ -1615,5 +2456,135 @@ mod tests {
             &["spinSpeed", "explode", "color", "bloom"]
         );
         assert_eq!(names[0], "gain");
+    }
+
+    /// Rec. 709 luma of an RGBA8 read-back, normalised to 0..1.
+    fn luma(pixels: &[u8]) -> Vec<f32> {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0)
+            .collect()
+    }
+
+    struct BloomHalo {
+        name: &'static str,
+        mean: f32,
+        direct_mean: f32,
+        outside_count: usize,
+        outside_mean: f32,
+        gained_fraction: f32,
+    }
+
+    /// Render two frames, then re-render the same uniforms with the composer's
+    /// additive Plane9 combine disabled so the direct composite can be used as
+    /// a silhouette mask. Blur's in-shader `c1` is the transparent previous
+    /// layer proxy (`c1*c1 == 0`), so the halo below comes entirely from the
+    /// composer's `base + bloom` combine — the vendor's bloom term in this
+    /// architecture. The 6% base is applied *before* that combine, matching
+    /// the XML's `c2.rgb*0.06 + ACES(c1*c1)` order.
+    fn bloom_halo(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        variant: HollowCubeVariant,
+    ) -> BloomHalo {
+        let mut scene = HollowCube::new_with_variant(variant);
+        let mut ctx = SceneContext::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+        ctx.resize(64, 64);
+        scene.init(&mut ctx);
+        scene.resize(64, 64);
+        let target = TestTarget::new(device, 64, 64);
+        let mut payload = BandPayload::silent(44_100.0);
+        payload.lanes = [0.6; 12];
+        let mut bridge = AudioBridge::new();
+        for _ in 0..2 {
+            bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+            scene.update(1.0 / 60.0, &bridge);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("point10-hollow-cube-halo"),
+            });
+            scene.render(&mut encoder, &target.view);
+            queue.submit(Some(encoder.finish()));
+        }
+        let with_bloom = target.read(device, queue);
+
+        // No `update` here: only the composer's bloom is removed, so the scene
+        // uniforms and geometry are identical to the frame above.
+        scene.gpu.as_mut().unwrap().composer.disable_plane9_bloom();
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("point10-hollow-cube-no-bloom"),
+        });
+        scene.render(&mut encoder, &target.view);
+        queue.submit(Some(encoder.finish()));
+        let direct_only = target.read(device, queue);
+
+        let lit = luma(&with_bloom);
+        let direct = luma(&direct_only);
+        let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+        let outside: Vec<f32> = lit
+            .iter()
+            .zip(&direct)
+            .filter(|(_, d)| **d <= 1.0 / 255.0)
+            .map(|(v, _)| *v)
+            .collect();
+        let outside_count = outside.len();
+        let outside_mean = mean(&outside);
+        let gained_fraction = outside.iter().filter(|v| **v > 1.0 / 255.0).count() as f32
+            / outside_count.max(1) as f32;
+        BloomHalo {
+            name: variant.name,
+            mean: mean(&lit),
+            direct_mean: mean(&direct),
+            outside_count,
+            outside_mean,
+            gained_fraction,
+        }
+    }
+
+    #[test]
+    fn plane9_bloom_combine_supplies_the_halo_for_blur_and_cuboid() {
+        let Some((device, queue)) = gpu() else {
+            return;
+        };
+        let base = bloom_halo(&device, &queue, PLANE9_HOLLOW_CUBE);
+        let cuboid = bloom_halo(&device, &queue, POINT10_HOLLOW_CUBOID);
+        let blur = bloom_halo(&device, &queue, POINT10_HOLLOW_CUBE_BLUR);
+
+        for halo in [&cuboid, &blur] {
+            assert!(
+                halo.outside_count > 1000,
+                "{}: silhouette mask is vacuous ({} pixels)",
+                halo.name,
+                halo.outside_count
+            );
+            assert!(
+                halo.outside_mean > 0.003,
+                "{}: no halo outside the drawn geometry ({:.6})",
+                halo.name,
+                halo.outside_mean
+            );
+            assert!(
+                halo.gained_fraction > 0.4,
+                "{}: only {:.1}% of dark pixels gained bloom",
+                halo.name,
+                halo.gained_fraction * 100.0
+            );
+            assert!(
+                halo.mean > halo.direct_mean * 1.3,
+                "{}: additive bloom did not brighten the frame ({:.6} vs {:.6})",
+                halo.name,
+                halo.mean,
+                halo.direct_mean
+            );
+        }
+        // The Blur preset scales the base down to 6%; the composer's bloom
+        // must still lift the final frame materially above that dim base.
+        assert!(
+            blur.mean > base.mean * 0.06,
+            "Blur lost the composer's bloom: {:.6} <= 6% of {:.6}",
+            blur.mean,
+            base.mean
+        );
     }
 }

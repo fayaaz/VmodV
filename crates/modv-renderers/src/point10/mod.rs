@@ -693,7 +693,7 @@ impl UnitQuad {
 /// batch-5a scenes `HollowCube, AttractorParticles, DvdRoom`, and the batch-5b
 /// scenes `RollingFire, SmokeRoom, LatentBackrooms`, plus
 /// `BallOfFire` (the frozen RollingFire variant), `Sun`, `Earth` and `TheCave`
-/// (the Plane9 scene batch) — the complete 27-scene set. Glass Lens is not
+/// (the Plane9 scene batch) — the complete 30-scene set. Glass Lens is not
 /// registered: its upstream CodePen does not state a licence.
 pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
     vec![
@@ -715,6 +715,15 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::boxy::Boxy::new()),
         Box::new(scenes::sound_cube::SoundCube::new()),
         Box::new(scenes::hollow_cube::HollowCube::new()),
+        Box::new(scenes::hollow_cube::HollowCube::new_with_variant(
+            scenes::hollow_cube::POINT10_HOLLOW_CUBOID,
+        )),
+        Box::new(scenes::hollow_cube::HollowCube::new_with_variant(
+            scenes::hollow_cube::POINT10_HOLLOW_CUBE_LAYERS,
+        )),
+        Box::new(scenes::hollow_cube::HollowCube::new_with_variant(
+            scenes::hollow_cube::POINT10_HOLLOW_CUBE_BLUR,
+        )),
         Box::new(scenes::attractor_particles::AttractorParticles::new()),
         Box::new(scenes::dvd_room::DvdRoom::new()),
         Box::new(scenes::rolling_fire::RollingFire::new()),
@@ -734,7 +743,7 @@ mod tests {
     #[test]
     fn registry_has_the_port_order_scenes() {
         let scenes = all_scenes();
-        assert_eq!(scenes.len(), 27);
+        assert_eq!(scenes.len(), 30);
 
         assert_eq!(scenes[0].name(), "Point10 Chromatic Line");
         assert_eq!(scenes[1].name(), "Point10 Chromatic Wave");
@@ -760,17 +769,20 @@ mod tests {
         assert_eq!(scenes[16].name(), "Plane9 Sound Cube");
         // Batch 5a.
         assert_eq!(scenes[17].name(), "Plane9 Hollow Cube");
-        assert_eq!(scenes[18].name(), "Point10 Attractor Particles");
-        assert_eq!(scenes[19].name(), "Point10 DVD Room");
+        assert_eq!(scenes[18].name(), "Point10 Hollow Cuboid");
+        assert_eq!(scenes[19].name(), "Point10 Hollow Cube Layers");
+        assert_eq!(scenes[20].name(), "Point10 Hollow Cube Blur");
+        assert_eq!(scenes[21].name(), "Point10 Attractor Particles");
+        assert_eq!(scenes[22].name(), "Point10 DVD Room");
         // Batch 5b — the last four of the 25 vendored scenes, plus the
         // Ball of Fire wrapper (the frozen RollingFire subclass).
-        assert_eq!(scenes[20].name(), "Point10 Rolling Fire");
-        assert_eq!(scenes[21].name(), "Point10 Ball Of Fire");
-        assert_eq!(scenes[22].name(), "Point10 Smoke Room");
-        assert_eq!(scenes[23].name(), "Point10 Latent Backrooms");
-        assert_eq!(scenes[24].name(), "Plane9 Sun");
-        assert_eq!(scenes[25].name(), "Plane9 Earth");
-        assert_eq!(scenes[26].name(), "Plane9 The Cave");
+        assert_eq!(scenes[23].name(), "Point10 Rolling Fire");
+        assert_eq!(scenes[24].name(), "Point10 Ball Of Fire");
+        assert_eq!(scenes[25].name(), "Point10 Smoke Room");
+        assert_eq!(scenes[26].name(), "Point10 Latent Backrooms");
+        assert_eq!(scenes[27].name(), "Plane9 Sun");
+        assert_eq!(scenes[28].name(), "Plane9 Earth");
+        assert_eq!(scenes[29].name(), "Plane9 The Cave");
         assert!(
             scenes
                 .iter()

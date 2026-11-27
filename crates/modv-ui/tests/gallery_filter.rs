@@ -388,13 +388,16 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
         "Plane9 The Cave",
         "Plane9 Wormhole",
     ];
-    const POINT10: [&str; 15] = [
+    const POINT10: [&str; 18] = [
         "Point10 Around Plus",
         "Point10 Attractor Particles",
         "Point10 Ball Of Fire",
         "Point10 Chromatic Line",
         "Point10 Chromatic Wave",
         "Point10 DVD Room",
+        "Point10 Hollow Cube Blur",
+        "Point10 Hollow Cube Layers",
+        "Point10 Hollow Cuboid",
         "Point10 Latent Backrooms",
         "Point10 Mycelium",
         "Point10 Particle Field",
@@ -442,7 +445,7 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
         ));
     }
 
-    // C — Point10 is exactly the other fifteen scenes, with no Plane9 leakage.
+    // C — Point10 is exactly the other eighteen scenes, with no Plane9 leakage.
     let point10 = filter_gallery_modules(&modules, GalleryCategory::All, "type:point10");
     if names(&point10) != POINT10 {
         failures.push(format!(
@@ -451,12 +454,12 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
         ));
     }
 
-    // D — the All view still contains all 27 canonical scene entries.
+    // D — the All view still contains all 30 canonical scene entries.
     let all = filter_gallery_modules(&modules, GalleryCategory::All, "");
     let expected_all: Vec<&str> = PLANE9.iter().chain(POINT10.iter()).copied().collect();
     if names(&all) != expected_all {
         failures.push(format!(
-            "D: All selected {:?}, expected all 27 canonical scenes",
+            "D: All selected {:?}, expected all 30 canonical scenes",
             names(&all)
         ));
     }

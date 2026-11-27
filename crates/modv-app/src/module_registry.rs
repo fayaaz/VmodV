@@ -343,6 +343,12 @@ pub enum Point10SceneKind {
     SoundCube(SoundCube),
     /// `Plane9 Hollow Cube` (`scenes/hollow_cube.rs`).
     HollowCube(HollowCube),
+    /// `Point10 Hollow Cuboid` (`scenes/hollow_cube.rs`).
+    HollowCuboid(HollowCube),
+    /// `Point10 Hollow Cube Layers` (`scenes/hollow_cube.rs`).
+    HollowCubeLayers(HollowCube),
+    /// `Point10 Hollow Cube Blur` (`scenes/hollow_cube.rs`).
+    HollowCubeBlur(HollowCube),
     /// `Point10 Attractor Particles` (`scenes/attractor_particles.rs`).
     AttractorParticles(AttractorParticles),
     /// `Point10 DVD Room` (`scenes/dvd_room.rs`).
@@ -406,6 +412,15 @@ impl Point10SceneKind {
             "Plane9 Boxy" => Self::Boxy(Boxy::new()),
             "Plane9 Sound Cube" => Self::SoundCube(SoundCube::new()),
             "Plane9 Hollow Cube" => Self::HollowCube(HollowCube::new()),
+            "Point10 Hollow Cuboid" => Self::HollowCuboid(HollowCube::new_with_variant(
+                modv_renderers::point10::scenes::hollow_cube::POINT10_HOLLOW_CUBOID,
+            )),
+            "Point10 Hollow Cube Layers" => Self::HollowCubeLayers(HollowCube::new_with_variant(
+                modv_renderers::point10::scenes::hollow_cube::POINT10_HOLLOW_CUBE_LAYERS,
+            )),
+            "Point10 Hollow Cube Blur" => Self::HollowCubeBlur(HollowCube::new_with_variant(
+                modv_renderers::point10::scenes::hollow_cube::POINT10_HOLLOW_CUBE_BLUR,
+            )),
             "Point10 Attractor Particles" => Self::AttractorParticles(AttractorParticles::new()),
             "Point10 DVD Room" => Self::DvdRoom(DvdRoom::new()),
             "Point10 Rolling Fire" => Self::RollingFire(RollingFire::new()),
@@ -436,6 +451,9 @@ impl Point10SceneKind {
             Self::Earth(scene) => scene.apply_props(|key| get(key)),
             Self::TheCave(scene) => scene.apply_props(|key| get(key)),
             Self::HollowCube(scene) => scene.apply_props(|key| get(key)),
+            Self::HollowCuboid(scene) => scene.apply_props(|key| get(key)),
+            Self::HollowCubeLayers(scene) => scene.apply_props(|key| get(key)),
+            Self::HollowCubeBlur(scene) => scene.apply_props(|key| get(key)),
             Self::AttractorParticles(scene) => scene.apply_props(|key| get(key)),
             Self::DvdRoom(scene) => scene.apply_props(|key| get(key)),
             Self::UltraHdr(scene) => scene.apply_props(|key| get(key)),
@@ -471,6 +489,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.name(),
             Self::TheCave(scene) => scene.name(),
             Self::HollowCube(scene) => scene.name(),
+            Self::HollowCuboid(scene) => scene.name(),
+            Self::HollowCubeLayers(scene) => scene.name(),
+            Self::HollowCubeBlur(scene) => scene.name(),
             Self::AttractorParticles(scene) => scene.name(),
             Self::DvdRoom(scene) => scene.name(),
             Self::UltraHdr(scene) => scene.name(),
@@ -503,6 +524,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.init(ctx),
             Self::TheCave(scene) => scene.init(ctx),
             Self::HollowCube(scene) => scene.init(ctx),
+            Self::HollowCuboid(scene) => scene.init(ctx),
+            Self::HollowCubeLayers(scene) => scene.init(ctx),
+            Self::HollowCubeBlur(scene) => scene.init(ctx),
             Self::AttractorParticles(scene) => scene.init(ctx),
             Self::DvdRoom(scene) => scene.init(ctx),
             Self::UltraHdr(scene) => scene.init(ctx),
@@ -535,6 +559,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.resize(width, height),
             Self::TheCave(scene) => scene.resize(width, height),
             Self::HollowCube(scene) => scene.resize(width, height),
+            Self::HollowCuboid(scene) => scene.resize(width, height),
+            Self::HollowCubeLayers(scene) => scene.resize(width, height),
+            Self::HollowCubeBlur(scene) => scene.resize(width, height),
             Self::AttractorParticles(scene) => scene.resize(width, height),
             Self::DvdRoom(scene) => scene.resize(width, height),
             Self::UltraHdr(scene) => scene.resize(width, height),
@@ -567,6 +594,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.update(dt, audio),
             Self::TheCave(scene) => scene.update(dt, audio),
             Self::HollowCube(scene) => scene.update(dt, audio),
+            Self::HollowCuboid(scene) => scene.update(dt, audio),
+            Self::HollowCubeLayers(scene) => scene.update(dt, audio),
+            Self::HollowCubeBlur(scene) => scene.update(dt, audio),
             Self::AttractorParticles(scene) => scene.update(dt, audio),
             Self::DvdRoom(scene) => scene.update(dt, audio),
             Self::UltraHdr(scene) => scene.update(dt, audio),
@@ -603,6 +633,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.render(encoder, target),
             Self::TheCave(scene) => scene.render(encoder, target),
             Self::HollowCube(scene) => scene.render(encoder, target),
+            Self::HollowCuboid(scene) => scene.render(encoder, target),
+            Self::HollowCubeLayers(scene) => scene.render(encoder, target),
+            Self::HollowCubeBlur(scene) => scene.render(encoder, target),
             Self::AttractorParticles(scene) => scene.render(encoder, target),
             Self::DvdRoom(scene) => scene.render(encoder, target),
             Self::UltraHdr(scene) => scene.render(encoder, target),
@@ -635,6 +668,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.dispose(),
             Self::TheCave(scene) => scene.dispose(),
             Self::HollowCube(scene) => scene.dispose(),
+            Self::HollowCuboid(scene) => scene.dispose(),
+            Self::HollowCubeLayers(scene) => scene.dispose(),
+            Self::HollowCubeBlur(scene) => scene.dispose(),
             Self::AttractorParticles(scene) => scene.dispose(),
             Self::DvdRoom(scene) => scene.dispose(),
             Self::UltraHdr(scene) => scene.dispose(),
@@ -667,6 +703,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.props(),
             Self::TheCave(scene) => scene.props(),
             Self::HollowCube(scene) => scene.props(),
+            Self::HollowCuboid(scene) => scene.props(),
+            Self::HollowCubeLayers(scene) => scene.props(),
+            Self::HollowCubeBlur(scene) => scene.props(),
             Self::AttractorParticles(scene) => scene.props(),
             Self::DvdRoom(scene) => scene.props(),
             Self::UltraHdr(scene) => scene.props(),
@@ -699,6 +738,9 @@ impl Point10Scene for Point10SceneKind {
             Self::Earth(scene) => scene.meta(),
             Self::TheCave(scene) => scene.meta(),
             Self::HollowCube(scene) => scene.meta(),
+            Self::HollowCuboid(scene) => scene.meta(),
+            Self::HollowCubeLayers(scene) => scene.meta(),
+            Self::HollowCubeBlur(scene) => scene.meta(),
             Self::AttractorParticles(scene) => scene.meta(),
             Self::DvdRoom(scene) => scene.meta(),
             Self::UltraHdr(scene) => scene.meta(),
@@ -2360,7 +2402,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 36 + 16 + 27, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 36 + 16 + 30, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2380,7 +2422,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 27);
+        assert_eq!(registry.point10_definitions().len(), 30);
     }
 
     #[test]
@@ -2412,6 +2454,9 @@ mod tests {
                 "Plane9 Boxy",
                 "Plane9 Sound Cube",
                 "Plane9 Hollow Cube",
+                "Point10 Hollow Cuboid",
+                "Point10 Hollow Cube Layers",
+                "Point10 Hollow Cube Blur",
                 "Point10 Attractor Particles",
                 "Point10 DVD Room",
                 "Point10 Rolling Fire",
@@ -3498,7 +3543,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 27 + 402 + milkdrop_count,
+            36 + 16 + 30 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3562,12 +3607,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 27 + 402 + milkdrop_count,
+            36 + 16 + 30 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(481),
+            Some(484),
             "manifest total"
         );
     }

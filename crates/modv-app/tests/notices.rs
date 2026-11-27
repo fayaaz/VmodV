@@ -1045,6 +1045,9 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         "Ball Of Fire",
         "Smoke Room",
         "Latent Backrooms",
+        "Hollow Cuboid",
+        "Hollow Cube Layers",
+        "Hollow Cube Blur",
     ];
 
     let mut failures = Vec::new();
@@ -1075,8 +1078,8 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
 
     // A — exactly the twelve Plane9 ports move prefix; the other fifteen stay.
     check!(
-        scene_names.len() == 27,
-        "A: expected 27 scenes, got {}",
+        scene_names.len() == 30,
+        "A: expected 30 scenes, got {}",
         scene_names.len()
     );
     check!(
@@ -1306,8 +1309,8 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         .map(|name| name.as_str().expect("module name").to_string())
         .collect();
     let mut manifest_mismatches = Vec::new();
-    if manifest_names.len() != 27 {
-        manifest_mismatches.push(format!("expected 27 names, got {}", manifest_names.len()));
+    if manifest_names.len() != 30 {
+        manifest_mismatches.push(format!("expected 30 names, got {}", manifest_names.len()));
     }
     for (suffix, _) in PLANE9 {
         let old_name = format!("Point10 {suffix}");

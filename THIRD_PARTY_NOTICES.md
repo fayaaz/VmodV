@@ -121,13 +121,17 @@ multi-pass path without an override.
 
 ## Point10 scenes
 
-The 27 registered Point10-derived scenes do **not** share one provenance. Only
+The 30 registered Point10-derived scenes do **not** share one provenance. Only
 the twelve Plane9 (Joakim Dahl) presets are share-alike; they register as
 `Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases).
-The three.js/CodePen-derived scenes are MIT, and the visuals written for
-Point10 are first-party MIT. The licences below are keyed to the scene name
-suffix and are what the module info panel shows. Glass Lens is not shipped: its
-upstream CodePen states no licence.
+The three Hollow Cuboid/Layers/Blur variants re-parameterise the Plane9
+"Hollow Cube" preset and stay share-alike too. The three.js/CodePen-derived
+scenes are MIT, and the visuals written for Point10 are first-party MIT. The
+licences below are keyed to the scene name suffix and are what the module info
+panel shows (the labels are assembled in `crates/modv-ui/src/model.rs`; that
+first-party file is named here because the licence-marker scan finds the label
+strings, not because it contains licensed source). Glass Lens is not shipped:
+its upstream CodePen states no licence.
 
 ### Plane9 ports (Joakim Dahl — CC BY-NC-SA)
 
@@ -144,6 +148,9 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 | Color Cube | `crates/modv-renderers/src/point10/scenes/color_cube.rs` | CC BY-NC-SA 3.0 (stated in file) |
 | Earth | `crates/modv-renderers/src/point10/scenes/earth.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Hollow Cube | `crates/modv-renderers/src/point10/scenes/hollow_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Hollow Cuboid | `crates/modv-renderers/src/point10/scenes/hollow_cube.rs` | Point10 variant of the Plane9 "Hollow Cube" preset by Joakim Dahl — CC BY-NC-SA 4.0 (stated in file) |
+| Hollow Cube Layers | `crates/modv-renderers/src/point10/scenes/hollow_cube.rs` | Point10 variant of the Plane9 "Hollow Cube" preset by Joakim Dahl — CC BY-NC-SA 4.0 (stated in file) |
+| Hollow Cube Blur | `crates/modv-renderers/src/point10/scenes/hollow_cube.rs` | Point10 variant of the Plane9 "Hollow Cube" preset by Joakim Dahl — CC BY-NC-SA 4.0 (stated in file) |
 | It Is Coming For You | `crates/modv-renderers/src/point10/scenes/it_is_coming_for_you.rs` | CC BY-NC-SA 3.0 (stated in file) |
 | Light Tunnel | `crates/modv-renderers/src/point10/scenes/light_tunnel.rs` | CC BY-NC-SA 3.0 (stated in file) |
 | Mirror Cube | `crates/modv-renderers/src/point10/scenes/mirror_cube.rs` | CC BY-NC-SA 4.0 (stated in file) |
