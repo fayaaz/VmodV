@@ -3,12 +3,13 @@
 //!
 //! The Plane9 "Sound Cube" preset (Joakim Dahl, CC BY-NC-SA 4.0): one rotating
 //! unit cube seen through a camera at `z = 5` (fov 45), with `Shader1` drawing
-//! a bright ring on each face. `RenderToTexture1` holds the cube plus a
-//! blurred, zoomed copy of its previous frame — `StoreTexture1` snapshots the
-//! target between frames, `Blur1` blurs it on both axes and `Shader3` adds it
-//! back with alpha 0, a classic ping-pong feedback trail. `RenderRect1` then
-//! composites `Shader2`: `mix(bg, c, c.a) + c`, where `bg` is the layer beneath
-//! (transparent black in standalone playback).
+//! a bright ring on each face. The sharp cube is captured at the **scene
+//! resolution** (the vendor `RenderToTexture1` is `Width 0 / Height 0`, i.e.
+//! 100% of the render target) and composited over a low-resolution trail: the
+//! previous composed frame is stored in a 256-square buffer, blurred on both
+//! axes (`Blur1`) and added back with alpha 0, a classic ping-pong feedback
+//! trail. `RenderRect1` then composites `Shader2`: `mix(bg, c, c.a) + c`, where
+//! `bg` is the layer beneath (transparent black in standalone playback).
 //!
 //! # Ported exactly
 //!
@@ -17,15 +18,18 @@
 //! * `Rotator1` (`:101-115`): 1.5/1/0.5 deg/s accumulated in radians, scaled by
 //!   `spinScale`, with the 0.1 s frame cap;
 //! * the shaders (`:117-216`): the cube's `smoothstep(1, 0.5, |p|)` ring times
-//!   `smoothstep(0.4, 0.6, |p|)`, the 9-tap gaussian trail blur
-//!   (`width 4`, `sigma = max(0.5, width * 0.5)`, both axes), the trail's
+//!   `smoothstep(0.4, 0.6, |p|)`, the gaussian trail blur
+//!   (`sigma = max(0.5, width * 0.5)`, both axes), the trail's
 //!   `rgb * 0.8 * trailScale` at zoom 0.95, and the composite
 //!   `mix(bg, c, c.a) + c` with the `alpha = max(rgb)` transparency rule;
 //! * the feedback materials' blend states (`:295-312`): the trail adds RGB
-//!   (`ONE/ONE`) with the destination alpha kept (`ZERO/ONE`);
+//!   with the destination alpha kept;
 //! * the targets (`:229-240`, `:342-353`): 256² `HalfFloatType` with no depth
-//!   or stencil, linear + clamp-to-edge, `Rgba16Float` here; the composite
-//!   target is the canvas size;
+//!   or stencil, linear + clamp-to-edge, `Rgba16Float` here. In the vendor
+//!   preset `RenderToTexture1` is `Width 0 / Height 0` (100% of the render
+//!   target) and `WidthCustom 256` only applies in `-1` mode, so the cube is
+//!   captured at the scene resolution here and only the trail is 256². The
+//!   composite target is the canvas size;
 //! * the camera (`:34`): `PerspectiveCamera(45, aspect, 0.1, 100)` at
 //!   `(0, 0, 5)` looking at the origin;
 //! * the prop binder (`sceneProps.js:306-311`): `spinScale = spinSpeed`,
@@ -37,8 +41,8 @@
 //! | three.js | Rust |
 //! |----------|------|
 //! | `WebGLRenderTarget` ping-pong (`_readRT`/`_writeRT`) | two `Rgba16Float` targets + [`SoundCube::swap_feedback`] |
-//! | `StoreTexture1` snapshot | the ping-pong swap (the store node *is* the snapshot) |
-//! | `Blur1` (Dir 2 = H then V) | two full-screen gaussian passes |
+//! | `StoreTexture1` snapshot | the trail ping-pong swap (the store pass *is* the snapshot) |
+//! | `Blur1` (Dir 2 = H then V) | two full-screen gaussian passes, still at 256² |
 //! | `PlaneGeometry(2, 2)` + `OrthographicCamera` | the shared full-screen triangle |
 //! | `BoxGeometry` | [`build_box`](crate::point10::scenes::cube_mesh::build_box) |
 //! | `RenderRect1` → canvas | the composite writes the composer's scene target, `OutputPass` presents it |
@@ -51,6 +55,19 @@
 //!   composer's `Rgba16Float` scene target and lets `OutputPass` do the sRGB
 //!   step. Same values with more headroom (no 8-bit banding in the additive
 //!   trail).
+//! * **The cube capture and the trail split.** The port renders the sharp cube
+//!   into a scene-resolution `Rgba16Float` target and keeps only the feedback
+//!   at 256²: each frame the low target stores the cube (box-filtered down) plus
+//!   the blurred, zoomed, dimmed previous frame, and the composite samples the
+//!   sharp cube and the soft trail together. The vendor default is the same —
+//!   `Width 0 / Height 0` is a full-size capture, and `WidthCustom 256` is only
+//!   the `-1` mode override.
+//! * **The trail chain is tuned for diffuseness.** The vendor's 9-tap,
+//!   `width 4` blur at full resolution produced hard concentric rings. The port
+//!   keeps the gaussian shape but widens the effective kernel (more taps,
+//!   `BLUR_SPREAD` texels apart) and dims the trail (`TRAIL_BRIGHTNESS`), so
+//!   successive wavefronts overlap into a soft halo. The blur still runs only on
+//!   the 256² trail buffer, never at scene resolution.
 //! * **The depth test.** `cubeMaterial` sets `depthTest: false`, `depthWrite:
 //!   false`. With `FrontSide` culling that only ever shows the three
 //!   front-facing faces, so the port draws double-sided with a depth test: the
@@ -94,18 +111,27 @@ pub const CAMERA_DISTANCE: f32 = 5.0;
 /// `CLEAR_ALPHA` — the cube composites transparently.
 pub const CLEAR_ALPHA: f64 = 0.0;
 
-/// `RTT_SIZE` — `RenderToTexture1` WidthCustom/HeightCustom.
+/// `RTT_SIZE` — the lowest internal trail-buffer size. `RenderToTexture1` is
+/// `Width 0 / Height 0` (a full scene-size capture) in the vendor preset, so
+/// this is the floor for the feedback/trail only; the sharp cube is captured at
+/// the scene resolution.
 pub const RTT_SIZE: u32 = 256;
 
 /// `TRAIL_ZOOM`.
 pub const TRAIL_ZOOM: f32 = 0.95;
-/// `TRAIL_BRIGHTNESS`.
-pub const TRAIL_BRIGHTNESS: f32 = 0.8;
+/// `TRAIL_BRIGHTNESS`. Lowered from the vendor 0.8 so the outward waves read
+/// as diffuse light rather than harsh rings.
+pub const TRAIL_BRIGHTNESS: f32 = 0.55;
 
 /// `BLUR.width`.
-pub const BLUR_WIDTH: f32 = 4.0;
-/// The 9-tap kernel radius.
-pub const BLUR_RADIUS: i32 = 4;
+pub const BLUR_WIDTH: f32 = 24.0;
+/// The kernel radius, in taps.
+pub const BLUR_RADIUS: i32 = 24;
+/// The blur's tap spacing, in trail texels. `BLUR_WIDTH` fixes the gaussian's
+/// shape in tap units; spreading the taps widens the effective gaussian so
+/// successive wavefronts overlap and read as diffuse light instead of hard
+/// rings. The extra work stays on the 256² trail buffer.
+pub const BLUR_SPREAD: f32 = 6.0;
 
 /// `ROTATOR`, degrees per second.
 pub const ROTATOR: [f32; 3] = [1.5, 1.0, 0.5];
@@ -254,8 +280,44 @@ impl Target {
     }
 }
 
+/// One bind group for the shared pass layout: uniform block, source texture,
+/// sampler and the second (trail) texture. The blur passes bind their single
+/// source twice because they share the layout but only read binding 1.
+fn pass_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    uniforms: &wgpu::Buffer,
+    source: &wgpu::TextureView,
+    trail: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("point10-sound-cube-pass-bind-group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(trail),
+            },
+        ],
+    })
+}
+
 /// GPU resources built in `init`.
 struct SoundCubeGpu {
+    device: wgpu::Device,
     queue: wgpu::Queue,
     cube_pipeline: wgpu::RenderPipeline,
     cube_bind_group: wgpu::BindGroup,
@@ -271,18 +333,55 @@ struct SoundCubeGpu {
     blur_uniforms_v: wgpu::Buffer,
     blur_a: Target,
     blur_b: Target,
-    trail_pipeline: wgpu::RenderPipeline,
-    trail_bind_group: wgpu::BindGroup,
-    trail_uniforms: wgpu::Buffer,
+    /// Shared layout for the single-source blur and the two-source store /
+    /// composite passes.
+    pass_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    /// `store` writes the low-resolution trail: the downsampled cube plus the
+    /// blurred, zoomed, dimmed previous frame.
+    store_pipeline: wgpu::RenderPipeline,
+    store_bind: wgpu::BindGroup,
+    store_uniforms: wgpu::Buffer,
     composite_pipeline: wgpu::RenderPipeline,
-    /// `composite_bind[i]` samples read target `i`.
-    composite_bind: [wgpu::BindGroup; 2],
+    /// `composite_bind` reads the sharp scene-size cube and the 256² trail.
+    composite_bind: wgpu::BindGroup,
     composite_uniforms: wgpu::Buffer,
+    /// The sharp cube, captured at the scene resolution.
+    cube_target: Target,
+    /// The low-resolution trail ping-pong (`RTT_SIZE`).
     targets: [Target; 2],
-    _depth: wgpu::Texture,
+    depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     mesh: MeshGpu,
     composer: Composer,
+}
+
+impl SoundCubeGpu {
+    /// Recreate the scene-resolution capture (colour + depth) and rebind the
+    /// passes that sample it. The 256² trail targets are size-independent.
+    fn resize_capture(&mut self, width: u32, height: u32) {
+        self.cube_target = Target::new(&self.device, "point10-sound-cube-cube-rtt", width, height);
+        let (depth, depth_view) =
+            create_depth(&self.device, "point10-sound-cube-depth", width, height);
+        self.depth = depth;
+        self.depth_view = depth_view;
+        self.store_bind = pass_bind_group(
+            &self.device,
+            &self.pass_layout,
+            &self.sampler,
+            &self.store_uniforms,
+            &self.cube_target.view,
+            &self.blur_b.view,
+        );
+        self.composite_bind = pass_bind_group(
+            &self.device,
+            &self.pass_layout,
+            &self.sampler,
+            &self.composite_uniforms,
+            &self.cube_target.view,
+            &self.blur_b.view,
+        );
+    }
 }
 
 /// SoundCube scene.
@@ -412,7 +511,7 @@ impl SoundCube {
             }),
         );
         gpu.queue.write_buffer(
-            &gpu.trail_uniforms,
+            &gpu.store_uniforms,
             0,
             bytemuck::bytes_of(&PassUniforms {
                 value: sound_cube_feedback(self.trail_scale).brightness,
@@ -433,14 +532,13 @@ impl SoundCube {
                 },
                 // `_pad` carries the shared Lens magnification into the
                 // composite, which zooms the composed frame around its centre.
-                // A projection zoom was rejected: the cube is rendered into a
-                // fixed 256x256 RTT whose texel quantisation made that zoom
-                // step uneven. The image-space zoom measures 1.963x/0.481x
-                // at lens 2/0.5.
+                // The cube now renders at scene resolution, so the image-space
+                // zoom is smooth; lens 1.0 skips the remap bit-for-bit.
                 _pad: self.lens,
                 resolution: [self.size.0 as f32, self.size.1 as f32],
                 step: [0.0; 2],
-                _pad2: [0.0; 2],
+                // `_pad2.x` is the dimmed trail's brightness for Shader3.
+                _pad2: [sound_cube_feedback(self.trail_scale).brightness, 0.0],
             }),
         );
     }
@@ -454,7 +552,7 @@ impl SoundCube {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
-        let texel = 1.0 / RTT_SIZE as f32;
+        let texel = BLUR_SPREAD / RTT_SIZE as f32;
         for (buffer, step) in [
             (&gpu.blur_uniforms_h, [texel, 0.0]),
             (&gpu.blur_uniforms_v, [0.0, texel]),
@@ -600,6 +698,19 @@ impl Point10Scene for SoundCube {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // The second source: the store/composite passes read the sharp
+                // cube through binding 1 and the blurred trail through 3. The
+                // blur passes bind their single source to both.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let blur_uniforms_h = device.create_buffer(&wgpu::BufferDescriptor {
@@ -614,8 +725,8 @@ impl Point10Scene for SoundCube {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let trail_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("point10-sound-cube-trail-uniforms"),
+        let store_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("point10-sound-cube-store-uniforms"),
             size: std::mem::size_of::<PassUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -633,26 +744,23 @@ impl Point10Scene for SoundCube {
         ];
         let blur_a = Target::new(&device, "point10-sound-cube-blur-a", RTT_SIZE, RTT_SIZE);
         let blur_b = Target::new(&device, "point10-sound-cube-blur-b", RTT_SIZE, RTT_SIZE);
+        // The sharp capture is scene-sized (`Width 0 / Height 0` in the preset).
+        let cube_target = Target::new(
+            &device,
+            "point10-sound-cube-cube-rtt",
+            self.size.0,
+            self.size.1,
+        );
 
         let make_bind = |uniforms: &wgpu::Buffer, source: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("point10-sound-cube-pass-bind-group"),
-                layout: &pass_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniforms.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&blur_sampler),
-                    },
-                ],
-            })
+            pass_bind_group(
+                &device,
+                &pass_layout,
+                &blur_sampler,
+                uniforms,
+                source,
+                source,
+            )
         };
 
         let blur_h = [
@@ -660,21 +768,36 @@ impl Point10Scene for SoundCube {
             make_bind(&blur_uniforms_h, &targets[1].view),
         ];
         let blur_from_a = make_bind(&blur_uniforms_v, &blur_a.view);
-        let trail_bind_group = make_bind(&trail_uniforms, &blur_b.view);
+        // The store pass reconstructs the composed frame at 256² for the next
+        // frame's trail: the box-filtered sharp cube plus the blurred trail.
+        let store_bind = pass_bind_group(
+            &device,
+            &pass_layout,
+            &blur_sampler,
+            &store_uniforms,
+            &cube_target.view,
+            &blur_b.view,
+        );
         // The JS's PreviousLayer is the layer beneath the scene; in standalone
         // playback it is a 1x1 transparent placeholder, so the composite only
-        // needs the feedback target.
-        let composite_bind = [
-            make_bind(&composite_uniforms, &targets[0].view),
-            make_bind(&composite_uniforms, &targets[1].view),
-        ];
+        // needs the sharp cube and the trail.
+        let composite_bind = pass_bind_group(
+            &device,
+            &pass_layout,
+            &blur_sampler,
+            &composite_uniforms,
+            &cube_target.view,
+            &blur_b.view,
+        );
 
         let pass_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("point10-sound-cube-pass-pipeline-layout"),
             bind_group_layouts: &[Some(&pass_layout)],
             immediate_size: 0,
         });
-        let build_pass_pipeline = |label: &str, entry: &str, blend: Option<wgpu::BlendState>| {
+        // All three passes overwrite their target: the trail's additive blend
+        // was folded into the store/composite maths, so none needs a blend state.
+        let build_pass_pipeline = |label: &str, entry: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pass_pipeline_layout),
@@ -693,7 +816,7 @@ impl Point10Scene for SoundCube {
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: HDR_FORMAT,
-                        blend,
+                        blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -702,35 +825,17 @@ impl Point10Scene for SoundCube {
             })
         };
 
-        let blur_pipeline =
-            build_pass_pipeline("point10-sound-cube-blur-pipeline", "fs_blur", None);
-        // `trailMaterial`: `CustomBlending`, `AddEquation`, `OneFactor`/`OneFactor`,
-        // alpha `ZeroFactor`/`OneFactor` (`:302-312`).
-        let additive_preserve_alpha = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::Zero,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
-        let trail_pipeline = build_pass_pipeline(
-            "point10-sound-cube-trail-pipeline",
-            "fs_trail",
-            Some(additive_preserve_alpha),
-        );
-        let composite_pipeline = build_pass_pipeline(
-            "point10-sound-cube-composite-pipeline",
-            "fs_composite",
-            None,
-        );
+        let blur_pipeline = build_pass_pipeline("point10-sound-cube-blur-pipeline", "fs_blur");
+        let store_pipeline = build_pass_pipeline("point10-sound-cube-store-pipeline", "fs_store");
+        let composite_pipeline =
+            build_pass_pipeline("point10-sound-cube-composite-pipeline", "fs_composite");
 
-        let (depth, depth_view) =
-            create_depth(&device, "point10-sound-cube-depth", RTT_SIZE, RTT_SIZE);
+        let (depth, depth_view) = create_depth(
+            &device,
+            "point10-sound-cube-depth",
+            self.size.0,
+            self.size.1,
+        );
 
         // The JS renders straight to the canvas with `NoToneMapping`; the
         // composer only supplies the sRGB presentation step (and keeps the
@@ -746,6 +851,7 @@ impl Point10Scene for SoundCube {
         );
 
         self.gpu = Some(SoundCubeGpu {
+            device,
             queue,
             cube_pipeline,
             cube_bind_group,
@@ -757,14 +863,17 @@ impl Point10Scene for SoundCube {
             blur_uniforms_v,
             blur_a,
             blur_b,
-            trail_pipeline,
-            trail_bind_group,
-            trail_uniforms,
+            pass_layout,
+            sampler: blur_sampler,
+            store_pipeline,
+            store_bind,
+            store_uniforms,
             composite_pipeline,
             composite_bind,
             composite_uniforms,
+            cube_target,
             targets,
-            _depth: depth,
+            depth,
             depth_view,
             mesh,
             composer,
@@ -774,10 +883,15 @@ impl Point10Scene for SoundCube {
     }
 
     fn resize(&mut self, width: u32, height: u32) {
-        self.size = (width.max(1), height.max(1));
+        let size = (width.max(1), height.max(1));
+        let changed = size != self.size;
+        self.size = size;
         self.camera_aspect = self.size.0 as f32 / self.size.1 as f32;
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.composer.resize(self.size.0, self.size.1);
+            if changed {
+                gpu.resize_capture(self.size.0, self.size.1);
+            }
         }
         self.upload_uniforms();
     }
@@ -801,8 +915,9 @@ impl Point10Scene for SoundCube {
         };
         let (read, write) = self.feedback_order();
 
-        // `_renderFeedback()`: blur the previous frame (H then V), draw the cube
-        // into `write`, then add the blurred, zoomed trail back.
+        // `_renderFeedback()`: blur the previous trail (H then V), draw the
+        // sharp cube at the scene resolution, then store the composed frame at
+        // `RTT_SIZE` for the next frame's feedback.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("point10-sound-cube-blur-h"),
@@ -847,12 +962,14 @@ impl Point10Scene for SoundCube {
             pass.draw(0..3, 0..1);
         }
 
-        // `renderer.setRenderTarget(_writeRT)` + clear + `render(cubeGroup)`.
+        // `renderer.setRenderTarget(_writeRT)` + clear + `render(cubeGroup)`:
+        // the sharp cube is captured at the scene resolution, not into the
+        // small trail target.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("point10-sound-cube-cube"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &gpu.targets[write].view,
+                    view: &gpu.cube_target.view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -877,16 +994,18 @@ impl Point10Scene for SoundCube {
             gpu.mesh.draw(&mut pass);
         }
 
-        // Shader3: add the blurred, zoomed previous frame with alpha 0.
+        // `StoreTexture1`: next frame's trail source is the composed frame at
+        // `RTT_SIZE` — the box-filtered sharp cube plus the blurred, zoomed,
+        // dimmed trail (Shader3's `alpha = 0` add, folded into one write).
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("point10-sound-cube-trail"),
+                label: Some("point10-sound-cube-store"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &gpu.targets[write].view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -895,15 +1014,13 @@ impl Point10Scene for SoundCube {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&gpu.trail_pipeline);
-            pass.set_bind_group(0, &gpu.trail_bind_group, &[]);
+            pass.set_pipeline(&gpu.store_pipeline);
+            pass.set_bind_group(0, &gpu.store_bind, &[]);
             pass.draw(0..3, 0..1);
         }
 
-        // Swap: the target just written is the next frame's source.
-        let presented = write;
-
-        // `_renderComposite()`: `mix(bg, c, c.a) + c` into the presented frame.
+        // `_renderComposite()`: `mix(bg, c, c.a) + c`, with the sharp cube and
+        // the soft trail combined at the scene resolution.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("point10-sound-cube-composite"),
@@ -922,7 +1039,7 @@ impl Point10Scene for SoundCube {
                 multiview_mask: None,
             });
             pass.set_pipeline(&gpu.composite_pipeline);
-            pass.set_bind_group(0, &gpu.composite_bind[presented], &[]);
+            pass.set_bind_group(0, &gpu.composite_bind, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -998,7 +1115,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
 const SOUND_CUBE_PASS_WGSL: &str = r#"
 struct PassUniforms {
-  // Blur: the width. Trail: the trail scale. Composite: the brightness.
+  // Blur: the width. Store: the trail brightness. Composite: the brightness.
   value: f32,
   _pad: f32,
   // The target size, for `position.xy / resolution`.
@@ -1010,15 +1127,20 @@ struct PassUniforms {
 @group(0) @binding(0) var<uniform> u: PassUniforms;
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var source_sampler: sampler;
+// The store/composite second source: the blurred trail. The blur passes bind
+// their single source to this binding too and ignore it.
+@group(0) @binding(3) var trail_source: texture_2d<f32>;
 
-// `buildSoundCubeBlurFragment`: a 9-tap gaussian, one axis per pass.
+// `buildSoundCubeBlurFragment`: a gaussian widened for the diffuse trail, one
+// axis per pass. The taps are `BLUR_SPREAD` texels apart so the effective
+// kernel is broad while the maths stays a plain gaussian.
 @fragment
 fn fs_blur(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let uv = position.xy / u.resolution;
   let sigma = max(0.5, u.value * 0.5);
   var sum = vec3<f32>(0.0);
   var total = 0.0;
-  for (var i = -4; i <= 4; i = i + 1) {
+  for (var i = -24; i <= 24; i = i + 1) {
     let fi = f32(i);
     let weight = exp(-0.5 * fi * fi / (sigma * sigma));
     sum = sum + textureSample(source, source_sampler, uv + u.step * fi).rgb * weight;
@@ -1027,30 +1149,42 @@ fn fs_blur(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   return vec4<f32>(sum / total, 1.0);
 }
 
-// `buildSoundCubeTrailFragment`: the zoomed previous frame, dimmed, alpha 0.
+// `StoreTexture1` + Shader3 at the trail resolution: the sharp cube, box
+// filtered down, plus the blurred and zoomed previous frame with alpha 0.
 @fragment
-fn fs_trail(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+fn fs_store(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let uv = position.xy / u.resolution;
+  let t = vec2<f32>(0.5) / u.resolution;
+  let cube = 0.25 * (
+    textureSample(source, source_sampler, uv + vec2<f32>(-t.x, -t.y)) +
+    textureSample(source, source_sampler, uv + vec2<f32>( t.x, -t.y)) +
+    textureSample(source, source_sampler, uv + vec2<f32>(-t.x,  t.y)) +
+    textureSample(source, source_sampler, uv + vec2<f32>( t.x,  t.y))
+  );
   let p = uv * 2.0 - 1.0;
-  let c = textureSample(source, source_sampler, (p * 0.95) * 0.5 + 0.5);
-  return vec4<f32>(c.rgb * 0.8 * u.value, 0.0);
+  let c = textureSample(trail_source, source_sampler, (p * 0.95) * 0.5 + 0.5);
+  return vec4<f32>(cube.rgb + c.rgb * 0.8 * u.value, 1.0);
 }
 
-// `buildSoundCubeCompositeFragment`: `mix(bg, c, c.a) + c` with the visible
-// glow as the alpha, so empty space stays transparent.
+// `buildSoundCubeCompositeFragment`: the sharp cube plus the soft trail,
+// `mix(bg, c, c.a) + c` with the visible glow as the alpha, so empty space
+// stays transparent.
 @fragment
 fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   var uv = position.xy / u.resolution;
-  // Lens magnifies the composed frame around its centre. The cube itself is
-  // rendered into a fixed 256x256 RTT, so a projection zoom quantised badly;
-  // zooming the composed image gives an even magnification instead.
+  // Lens magnifies the composed frame around its centre. The cube is captured
+  // at the scene resolution, so the image-space zoom stays smooth.
   // `lens == 1.0` skips the remap so the vendor framing stays bit-identical.
   if (u._pad != 1.0) {
     uv = (uv - vec2<f32>(0.5)) / u._pad + vec2<f32>(0.5);
   }
+  let cube = textureSample(source, source_sampler, uv);
+  let p = uv * 2.0 - 1.0;
+  let trail = textureSample(trail_source, source_sampler, (p * 0.95) * 0.5 + 0.5);
+  // Shader3's additive, alpha-0 trail folded into the composite's source.
+  let c = vec4<f32>(cube.rgb + trail.rgb * 0.8 * u._pad2.x, cube.a);
   // PreviousLayer is transparent black in standalone playback.
   let bg = vec4<f32>(0.0);
-  let c = textureSample(source, source_sampler, uv);
   let col = mix(bg, c, c.a) + c;
   let rgb = col.rgb * u.value;
   let alpha = clamp(max(max(rgb.r, rgb.g), rgb.b), 0.0, 1.0);
@@ -1135,9 +1269,10 @@ mod tests {
         assert_eq!(CAMERA_DISTANCE, 5.0);
         assert_eq!(RTT_SIZE, 256);
         assert_eq!(TRAIL_ZOOM, 0.95);
-        assert_eq!(TRAIL_BRIGHTNESS, 0.8);
-        assert_eq!(BLUR_WIDTH, 4.0);
-        assert_eq!(BLUR_RADIUS, 4);
+        assert_eq!(TRAIL_BRIGHTNESS, 0.55);
+        assert_eq!(BLUR_WIDTH, 24.0);
+        assert_eq!(BLUR_RADIUS, 24);
+        assert_eq!(BLUR_SPREAD, 6.0);
         assert_eq!(ROTATOR, [1.5, 1.0, 0.5]);
         assert_eq!(SCALE_BASE, 0.3);
         assert_eq!(SCALE_AUDIO, 8.0);
@@ -1225,7 +1360,7 @@ mod tests {
         for needle in [
             "let sigma = max(0.5, u.value * 0.5);",
             "exp(-0.5 * fi * fi / (sigma * sigma))",
-            "for (var i = -4; i <= 4; i = i + 1)",
+            "for (var i = -24; i <= 24; i = i + 1)",
             "(p * 0.95) * 0.5 + 0.5",
             "c.rgb * 0.8 * u.value",
             "mix(bg, c, c.a) + c",
