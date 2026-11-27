@@ -20041,6 +20041,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 3.0
+        },
+        {
+          "name": "zoom",
+          "label": "Zoom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 2.0
         }
       ],
       "source": null,
