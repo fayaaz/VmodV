@@ -18,6 +18,12 @@
 //! 4. the dev fallback, the repo's own `resources/point10/textures` (via
 //!    `CARGO_MANIFEST_DIR`, so it only resolves inside a checkout).
 //!
+//! On wasm32 (the browser shell) `Path::is_file()` is always false, so the
+//! directories never resolve. There the loader falls back to the compiled-in
+//! texture bundle in `super::bundled` (all `resources/point10/textures`
+//! raster files, embedded with `include_bytes!`); unit tests use the same
+//! bundle so it stays covered on the native host.
+//!
 //! A missing file never fails a scene: [`load_texture`] builds a procedural
 //! checkerboard/gradient stand-in and logs one line, so the scene still
 //! renders (the SQL-style "asset absent" case is a packaging problem, not a
@@ -183,18 +189,40 @@ impl AssetLoader {
     }
 
     /// Decode `name` into RGBA8, or `None` when it is absent or undecodable.
+    ///
+    /// Filesystem directories win. When none holds the file (always the case
+    /// on wasm32, where `Path::is_file()` is false) the compiled-in bundle is
+    /// the last resort; unknown names still yield `None`.
     pub fn load(&self, name: &str) -> Option<DecodedImage> {
-        let path = self.resolve(name)?;
-        match decode_file(&path) {
-            Ok(image) => Some(image),
-            Err(error) => {
-                eprintln!(
-                    "point10 assets: \"{name}\" at {} could not be decoded ({error}); using the procedural stand-in",
-                    path.display()
-                );
-                None
+        if let Some(path) = self.resolve(name) {
+            return match decode_file(&path) {
+                Ok(image) => Some(image),
+                Err(error) => {
+                    eprintln!(
+                        "point10 assets: \"{name}\" at {} could not be decoded ({error}); using the procedural stand-in",
+                        path.display()
+                    );
+                    None
+                }
+            };
+        }
+
+        #[cfg(any(test, target_arch = "wasm32"))]
+        {
+            if let Some(bytes) = super::bundled::lookup(name) {
+                return match decode_bytes(bytes) {
+                    Ok(image) => Some(image),
+                    Err(error) => {
+                        eprintln!(
+                            "point10 assets: bundled \"{name}\" could not be decoded ({error}); using the procedural stand-in"
+                        );
+                        None
+                    }
+                };
             }
         }
+
+        None
     }
 }
 
@@ -203,13 +231,27 @@ pub fn decode_file(path: &Path) -> Result<DecodedImage, image::ImageError> {
     let image = image::ImageReader::open(path)?
         .with_guessed_format()?
         .decode()?;
+    Ok(into_decoded(image))
+}
+
+/// Decode an in-memory PNG/JPEG into RGBA8 (the compiled-in bundle path).
+#[cfg(any(test, target_arch = "wasm32"))]
+fn decode_bytes(bytes: &[u8]) -> Result<DecodedImage, image::ImageError> {
+    let image = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()?
+        .decode()?;
+    Ok(into_decoded(image))
+}
+
+/// Convert a decoded image into tightly packed RGBA8.
+fn into_decoded(image: image::DynamicImage) -> DecodedImage {
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
-    Ok(DecodedImage {
+    DecodedImage {
         width,
         height,
         rgba: rgba.into_raw(),
-    })
+    }
 }
 
 /// A texture plus its view, sampler and the metadata scenes need.
@@ -518,9 +560,67 @@ mod tests {
     }
 
     #[test]
+    fn bundled_textures_are_available_without_a_directory() {
+        let loader = AssetLoader::from_dirs(std::iter::empty());
+
+        for name in [
+            "earth.jpg",
+            "earthlights.jpg",
+            "earthcloud.jpg",
+            "wilkyway_panorama.jpg",
+            "steel_diffuse.jpg",
+            "stormy/posx.jpg",
+        ] {
+            let expected = decode_file(&dev_fallback_dir().join(name))
+                .unwrap_or_else(|error| panic!("decode repo texture {name}: {error}"));
+            let bundled = loader.load(name);
+            assert!(bundled.is_some(), "bundled load missing {name}");
+            assert_eq!(bundled, Some(expected), "bundled pixels differ for {name}");
+        }
+    }
+
+    #[test]
+    fn every_shipped_point10_texture_is_bundled() {
+        let loader = AssetLoader::from_dirs(std::iter::empty());
+        let root = dev_fallback_dir();
+        let stormy = root.join("stormy");
+
+        for (dir, prefix) in [(&root, ""), (&stormy, "stormy/")] {
+            for entry in std::fs::read_dir(dir)
+                .unwrap_or_else(|error| panic!("read texture directory {}: {error}", dir.display()))
+            {
+                let entry = entry.expect("read texture directory entry");
+                let path = entry.path();
+                if !matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("jpg" | "jpeg" | "png")
+                ) {
+                    continue;
+                }
+
+                let file_name = path
+                    .file_name()
+                    .and_then(|file_name| file_name.to_str())
+                    .expect("shipped texture file name must be UTF-8");
+                let rel_name = format!("{prefix}{file_name}");
+                assert!(
+                    loader.load(&rel_name).is_some(),
+                    "shipped Point10 texture missing from bundle: {rel_name}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn missing_asset_yields_none_so_the_loader_falls_back() {
         let loader = AssetLoader::from_dirs([std::env::temp_dir().join("modv-no-such-dir")]);
-        assert!(loader.load("concrete044c_col_1k.jpg").is_none());
+        // A genuine miss must yield None so load_texture builds the procedural
+        // fallback; real shipped textures now resolve from the compiled-in bundle.
+        assert!(
+            loader
+                .load("definitely-not-a-point10-texture.jpg")
+                .is_none()
+        );
     }
 
     #[test]
