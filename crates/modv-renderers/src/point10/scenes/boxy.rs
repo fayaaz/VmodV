@@ -27,17 +27,17 @@
 //! * the camera (`:58`): `PerspectiveCamera(70, aspect, 0.01, 100)` at the
 //!   origin looking down -z;
 //! * the render chain (`:346-369`): RenderPass → `preserveBloomAlpha`'d
-//!   UnrealBloomPass `(1, 0.85, 0)` → OutputPass, `NoToneMapping`, clear
+//!   Plane9 `Bloom` node (`Radius 5, Threshold 0, ThresholdSmoothness 0.5,
+//!   Intensity 1, Antiflicker false`) → OutputPass, `NoToneMapping`, clear
 //!   alpha 0;
 //! * the prop binder (`sceneProps.js:363-368`): `scrollScale = scrollSpeed`,
-//!   `glowScale = glow`, `roughnessFloor = roughness`,
-//!   `bloomScale = bloom`.
+//!   `glowScale = glow`, `roughnessFloor = roughness`.
 //!
 //! # `preserveBloomAlpha`
 //!
 //! Boxy *defines* the helper (`:73-86`), and every Point10 scene that blooms
-//! with `threshold: 0` imports it (Wormhole, ColorCube). three's additive bloom
-//! composite also adds the bloom RGB into the destination alpha; with
+//! with `threshold: 0` imports it (Wormhole, ColorCube). The additive bloom
+//! combine also adds the bloom RGB into the destination alpha; with
 //! `threshold: 0` every pixel receives bloom, so the transparent clear would
 //! become an opaque veil and the module's layer alpha would be lost. The helper
 //! rewrites the bloom blend to
@@ -63,10 +63,15 @@
 //! | `TextureLoader` (5 tinore maps) | [`load_texture`] with `Repeat` |
 //! | `CubeTexture` (6 Stormy Days faces) | the panorama path the JS already ships: `_texturePanoramicLod` over `stormy/posz.jpg` (`uEnvPanoramaMode = 1`) |
 //! | `_rand3`, `_palette`, `_lightDirectional`, `_fresnelRoughness` | [`P9_SHADING_WGSL`] |
-//! | `EffectComposer` + `preserveBloomAlpha` | [`Composer`] with `set_preserve_bloom_alpha(true)` |
+//! | `EffectComposer` + `preserveBloomAlpha` | [`Composer`] with [`Plane9BloomParams`] and `set_preserve_bloom_alpha(true)` |
 //!
 //! # Deviations
 //!
+//! * **Bloom driver.** The three.js `UnrealBloomPass(1, 0.85, 0)` is replaced
+//!   by the Plane9 `Bloom` node driven through [`Plane9BloomParams`]
+//!   (`Radius 5`, `Threshold 0`, `ThresholdSmoothness 0.5`, `Intensity 1`,
+//!   `Antiflicker false`), matching the vendor XML. The old `bloom` prop was
+//!   inert at this one-mip configuration and has been removed.
 //! * **The environment is the panorama, not the cubemap.** A six-face cube
 //!   upload is not something the shared asset loader does, and the JS itself
 //!   falls back to `texturePanoramicLod(posz)` when `ImageBitmap` cube faces
@@ -83,7 +88,7 @@
 #![forbid(unsafe_code)]
 
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
-use crate::point10::postfx::{Composer, ToneMapping};
+use crate::point10::postfx::{Composer, Plane9BloomParams, ToneMapping};
 use crate::point10::scenes::cube_mesh::{
     Mat4, MeshGpu, build_box, create_depth, depth_state, look_at, mat4_mul, perspective,
 };
@@ -112,12 +117,14 @@ pub const CAMERA_NEAR: f32 = 0.01;
 /// `CAMERA.far`.
 pub const CAMERA_FAR: f32 = 100.0;
 
-/// `BLOOM.strength`.
+/// Plane9 `Bloom` node `Intensity`.
 pub const BLOOM_STRENGTH: f32 = 1.0;
-/// `BLOOM.radius`.
-pub const BLOOM_RADIUS: f32 = 0.85;
-/// `BLOOM.threshold`.
+/// Plane9 `Bloom` node `Radius`.
+pub const BLOOM_RADIUS: f32 = 5.0;
+/// Plane9 `Bloom` node `Threshold`.
 pub const BLOOM_THRESHOLD: f32 = 0.0;
+/// Plane9 `Bloom` node `ThresholdSmoothness`.
+pub const BLOOM_SMOOTHNESS: f32 = 0.5;
 
 /// `CLEAR_ALPHA` — Boxy composites transparently over whatever is behind it.
 pub const CLEAR_ALPHA: f64 = 0.0;
@@ -194,7 +201,6 @@ const BOXY_PROPS: &[SceneProp] = &[
     SceneProp::float("scrollSpeed", "Scroll Speed", 1.0, 0.0, 4.0, 0.01),
     SceneProp::float("glow", "Glow", 1.0, 0.0, 3.0, 0.01),
     SceneProp::float("roughness", "Roughness Floor", 0.3, 0.0, 1.0, 0.01),
-    SceneProp::float("bloom", "Bloom", 1.0, 0.0, 3.0, 0.01),
 ];
 
 /// The uniform block (112 bytes).
@@ -233,7 +239,6 @@ pub struct Boxy {
     scroll_scale: f32,
     glow_scale: f32,
     roughness_floor: f32,
-    bloom_scale: f32,
     camera_aspect: f32,
     size: (u32, u32),
     gpu: Option<BoxyGpu>,
@@ -256,7 +261,6 @@ impl Boxy {
             scroll_scale: 1.0,
             glow_scale: 1.0,
             roughness_floor: ROUGHNESS_FLOOR,
-            bloom_scale: 1.0,
             camera_aspect: 1.0,
             size: (1, 1),
             gpu: None,
@@ -270,7 +274,6 @@ impl Boxy {
                 "scrollSpeed" => self.scroll_scale = value,
                 "glow" => self.glow_scale = value,
                 "roughness" => self.roughness_floor = value,
-                "bloom" => self.bloom_scale = value,
                 _ => {}
             }
         }
@@ -294,6 +297,21 @@ impl Boxy {
     /// The destination alpha the scene clears to (`CLEAR_ALPHA = 0`).
     pub fn clear_alpha(&self) -> f64 {
         CLEAR_ALPHA
+    }
+
+    /// The vendor XML's Plane9 `Bloom` node.
+    ///
+    /// `Radius 5`, `Threshold 0`, `ThresholdSmoothness 0.5`, `Intensity 1`
+    /// and `Antiflicker false`. `Plane9BloomParams` with `mip_count == 1` never
+    /// applies `intensity`, so the removed `bloom` prop was inert here.
+    fn plane9_bloom_params(&self) -> Plane9BloomParams {
+        Plane9BloomParams::new(
+            BLOOM_RADIUS,
+            BLOOM_THRESHOLD,
+            BLOOM_SMOOTHNESS,
+            BLOOM_STRENGTH,
+            false,
+        )
     }
 
     fn view_proj(&self) -> Mat4 {
@@ -537,10 +555,11 @@ impl Point10Scene for Boxy {
         let (depth, depth_view) =
             create_depth(&device, "point10-boxy-depth", self.size.0, self.size.1);
 
-        // `EffectComposer` + `preserveBloomAlpha` (`:346-369`).
+        // `EffectComposer` + `preserveBloomAlpha` (`:346-369`), driven by the
+        // vendor XML's Plane9 `Bloom` node.
         let mut composer =
             Composer::new(&device, &queue, self.size.0, self.size.1, ctx.target_format);
-        composer.enable_bloom(BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+        composer.enable_plane9_bloom(self.plane9_bloom_params());
         composer.set_preserve_bloom_alpha(true);
         composer.output_mut().set_tone_mapping(ToneMapping::None);
 
@@ -610,10 +629,6 @@ impl Point10Scene for Boxy {
         let Some(gpu) = self.gpu.as_mut() else {
             return;
         };
-
-        if let Some(bloom) = gpu.composer.bloom_mut() {
-            bloom.set_strength(BLOOM_STRENGTH * self.bloom_scale);
-        }
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -840,6 +855,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 mod tests {
     use super::*;
     use crate::point10::audio_bridge::BandPayload;
+    use crate::point10::postfx::Plane9BloomParams;
+    use crate::point10::test_support::{
+        TestTarget, any_lit, bloom_brightness, check_bloom_brightness, gpu,
+    };
 
     // Port of tests/unit/point10-boxy.test.js.
 
@@ -905,7 +924,7 @@ mod tests {
         assert_eq!((CAMERA_FOV, CAMERA_NEAR, CAMERA_FAR), (70.0, 0.01, 100.0));
         assert_eq!(
             (BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD),
-            (1.0, 0.85, 0.0)
+            (1.0, 5.0, 0.0)
         );
         assert_eq!(ROUGHNESS_FLOOR, 0.3);
         assert_eq!(MAX_DT, 0.1);
@@ -942,6 +961,167 @@ mod tests {
         // 0.1 s * 2.0 scrollSpeed still advances 0.1 s worth of tunnel.
         assert!((scene.perm() - (1.0 + (0.1_f32 * 20.0 + 0.2).min(2.0) * 0.1)).abs() < 1e-5);
         assert_eq!(scene.in2()[0], 0.6);
+
+        // B/C/D — the live composer must use the XML's Plane9 Bloom node, not
+        // three.js' UnrealBloomPass, and the orphaned bloom key must be inert.
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+        let Some((device, queue)) = gpu() else {
+            failures.push("B/C/D: a headless fallback adapter is required".to_string());
+            assert!(
+                failures.is_empty(),
+                "Boxy Plane9 bloom contract failed ({} checks):\n{}",
+                failures.len(),
+                failures.join("\n")
+            );
+            return;
+        };
+        let expected = Plane9BloomParams::new(5.0, 0.0, 0.5, 1.0, false);
+        let mut gpu_scene = Boxy::new();
+        let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        ctx.resize(64, 64);
+        gpu_scene.init(&mut ctx);
+        gpu_scene.resize(64, 64);
+        {
+            let gpu = gpu_scene.gpu.as_ref().expect("Boxy GPU resources");
+            check!(
+                gpu.composer.plane9_bloom().is_some(),
+                "B: Boxy composer has no Plane9 bloom pass"
+            );
+            if let Some(bloom) = gpu.composer.plane9_bloom() {
+                check!(
+                    bloom.params() == expected,
+                    "B: Boxy Plane9 params must be {expected:?}, got {:?}",
+                    bloom.params()
+                );
+                check!(
+                    bloom.params().mip_count() == 1,
+                    "B: Boxy Plane9 bloom must use one mip, got {}",
+                    bloom.params().mip_count()
+                );
+            } else {
+                failures.push("B: Boxy cannot report Plane9 mip_count without a pass".to_string());
+            }
+            check!(
+                gpu.composer.bloom().is_none(),
+                "B: Boxy must not construct the Unreal bloom pass"
+            );
+            check!(
+                gpu.composer.preserve_bloom_alpha(),
+                "D: Boxy must preserve the destination alpha"
+            );
+        }
+
+        gpu_scene.apply_props(|key| (key == "bloom").then_some(3.0));
+        check!(
+            gpu_scene
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.composer.plane9_bloom())
+                .map(|bloom| bloom.params())
+                == Some(expected),
+            "C: applying bloom=3.0 must leave Boxy Plane9 params unchanged at {expected:?}"
+        );
+
+        let target = TestTarget::new(&device, 64, 64);
+        let mut gpu_payload = BandPayload::silent(44_100.0);
+        gpu_payload.lanes = [0.6; 12];
+        let mut gpu_bridge = AudioBridge::new();
+        for _ in 0..2 {
+            gpu_bridge.update(1.0 / 60.0, Some(&gpu_payload), &Default::default());
+            gpu_scene.update(1.0 / 60.0, &gpu_bridge);
+            render_boxy_frame(
+                &mut gpu_scene,
+                &device,
+                &queue,
+                &target,
+                "point10-boxy-bloom-warmup",
+            );
+        }
+        check!(
+            gpu_scene
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.composer.plane9_bloom())
+                .map(|bloom| bloom.params())
+                == Some(expected),
+            "C: rendering after bloom=3.0 must leave Boxy Plane9 params unchanged at {expected:?}"
+        );
+
+        let with_bloom = render_boxy_frame(
+            &mut gpu_scene,
+            &device,
+            &queue,
+            &target,
+            "point10-boxy-bloom-on",
+        );
+        gpu_scene
+            .gpu
+            .as_mut()
+            .unwrap()
+            .composer
+            .disable_plane9_bloom();
+        let direct_only = render_boxy_frame(
+            &mut gpu_scene,
+            &device,
+            &queue,
+            &target,
+            "point10-boxy-bloom-off",
+        );
+        check!(any_lit(&with_bloom), "D: Boxy bloom frame is empty");
+        check!(any_lit(&direct_only), "D: Boxy direct frame is empty");
+        check_bloom_brightness(
+            &mut failures,
+            "D: Boxy live composer",
+            &bloom_brightness(&with_bloom, &direct_only),
+        );
+
+        // Measure the exact vendor driver independently of the scene's wiring,
+        // so the brightness thresholds stay calibrated against the Plane9
+        // parameters the scene must use.
+        {
+            let gpu = gpu_scene.gpu.as_mut().unwrap();
+            gpu.composer.disable_bloom();
+            gpu.composer.enable_plane9_bloom(expected);
+        }
+        let vendor_with_bloom = render_boxy_frame(
+            &mut gpu_scene,
+            &device,
+            &queue,
+            &target,
+            "point10-boxy-vendor-plane9-on",
+        );
+        gpu_scene
+            .gpu
+            .as_mut()
+            .unwrap()
+            .composer
+            .disable_plane9_bloom();
+        let vendor_direct_only = render_boxy_frame(
+            &mut gpu_scene,
+            &device,
+            &queue,
+            &target,
+            "point10-boxy-vendor-plane9-off",
+        );
+        check_bloom_brightness(
+            &mut failures,
+            "D: Boxy vendor Plane9 probe",
+            &bloom_brightness(&vendor_with_bloom, &vendor_direct_only),
+        );
+
+        assert!(
+            failures.is_empty(),
+            "Boxy Plane9 bloom contract failed ({} checks):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -1033,9 +1213,23 @@ mod tests {
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(
-            &names[names.len() - 4..],
-            &["scrollSpeed", "glow", "roughness", "bloom"]
+            &names[names.len() - 3..],
+            &["scrollSpeed", "glow", "roughness"]
         );
         assert_eq!(names[0], "gain");
+    }
+
+    fn render_boxy_frame(
+        scene: &mut Boxy,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &TestTarget,
+        label: &str,
+    ) -> Vec<u8> {
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        scene.render(&mut encoder, &target.view);
+        queue.submit(Some(encoder.finish()));
+        target.read(device, queue)
     }
 }

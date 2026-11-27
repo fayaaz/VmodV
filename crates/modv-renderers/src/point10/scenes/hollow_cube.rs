@@ -44,7 +44,9 @@
 //! * the bloom: Plane9 `Radius 6, Threshold 0, ThresholdSmoothness 0.5,
 //!   Intensity 0.51, Antiflicker false` via [`Plane9BloomParams`];
 //! * the prop binder (`sceneProps.js:312-317`): `spinScale = spinSpeed`,
-//!   `explodeScale = explode`, `colorScale = color`, `bloomScale = bloom`.
+//!   `explodeScale = explode`, `colorScale = color`. The old `bloomScale =
+//!   bloom` binding was inert at this one-mip bloom configuration and its prop
+//!   has been removed.
 //!
 //! # Replaced three.js machinery
 //!
@@ -417,7 +419,6 @@ const HOLLOW_CUBE_PROPS: &[SceneProp] = &[
     SceneProp::float("spinSpeed", "Spin Speed", 1.0, 0.0, 4.0, 0.01),
     SceneProp::float("explode", "Explosion", 1.0, 0.0, 3.0, 0.01),
     SceneProp::float("color", "Color", 1.0, 0.0, 3.0, 0.01),
-    SceneProp::float("bloom", "Bloom", 1.0, 0.0, 3.0, 0.01),
 ];
 
 /// The cube shader's uniform block (176 bytes).
@@ -510,7 +511,6 @@ pub struct HollowCube {
     spin_scale: f32,
     explode_scale: f32,
     color_scale: f32,
-    bloom_scale: f32,
     camera_aspect: f32,
     size: (u32, u32),
     gpu: Option<HollowCubeGpu>,
@@ -542,7 +542,6 @@ impl HollowCube {
             spin_scale: 1.0,
             explode_scale: 1.0,
             color_scale: 1.0,
-            bloom_scale: 1.0,
             camera_aspect: 1.0,
             size: (1, 1),
             gpu: None,
@@ -556,13 +555,6 @@ impl HollowCube {
                 "spinSpeed" => self.spin_scale = value,
                 "explode" => self.explode_scale = value,
                 "color" => self.color_scale = value,
-                "bloom" if (self.bloom_scale - value).abs() > f32::EPSILON => {
-                    self.bloom_scale = value;
-                    let params = self.plane9_bloom_params();
-                    if let Some(gpu) = self.gpu.as_mut() {
-                        gpu.composer.enable_plane9_bloom(params);
-                    }
-                }
                 _ => {}
             }
         }
@@ -603,17 +595,17 @@ impl HollowCube {
         CLEAR_ALPHA
     }
 
-    /// Plane9's `Bloom1` node with the `bloom` prop folded into its intensity.
+    /// Plane9's `Bloom1` node.
     ///
     /// `Plane9BloomParams` with `mip_count == 1` never applies `intensity`, so
-    /// the prop is preserved for parity but has no visual effect. The sibling
-    /// presets drive that intensity from `Expression1`'s `out4`.
+    /// the removed `bloom` prop had no visual effect. The sibling presets
+    /// still drive that intensity from `Expression1`'s `out4`, which is
+    /// vendor-faithful even though it is visually inert here.
     fn plane9_bloom_params(&self) -> Plane9BloomParams {
         let intensity = if self.variant.out4_bloom {
-            let out4 = out4_bloom_intensity(|c, d, b, n| self.audio.band(c, d, b, n));
-            out4 * self.bloom_scale
+            out4_bloom_intensity(|c, d, b, n| self.audio.band(c, d, b, n))
         } else {
-            BLOOM_STRENGTH * self.bloom_scale
+            BLOOM_STRENGTH
         };
         Plane9BloomParams::new(
             BLOOM_RADIUS,
@@ -1498,7 +1490,6 @@ mod tests {
             "spinSpeed" => Some(2.0),
             "explode" => Some(0.5),
             "color" => Some(1.5),
-            "bloom" => Some(3.0),
             _ => None,
         });
 
@@ -1861,7 +1852,6 @@ mod tests {
             "spinSpeed" => Some(0.0),
             "explode" => Some(1.0),
             "color" => Some(1.0),
-            "bloom" => Some(1.0),
             _ => None,
         });
         let mut payload = BandPayload::silent(44_100.0);
@@ -2047,10 +2037,9 @@ mod tests {
         );
 
         // Headless 64x64, two-frame smoke test. The same initialisation also
-        // proves the scene's live composer received the scaled Plane9 params.
+        // proves the scene's live composer received the vendor Plane9 params.
         if let Some((device, queue)) = gpu() {
             let mut gpu_scene = HollowCube::new();
-            gpu_scene.apply_props(|key| (key == "bloom").then_some(2.0));
             let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
             ctx.resize(64, 64);
             gpu_scene.init(&mut ctx);
@@ -2063,8 +2052,8 @@ mod tests {
                 );
                 if let Some(bloom) = gpu.composer.plane9_bloom() {
                     check!(
-                        bloom.params() == Plane9BloomParams::new(6.0, 0.0, 0.5, 0.51 * 2.0, false),
-                        "live scene bloom params must include the bloom prop scale"
+                        bloom.params() == Plane9BloomParams::new(6.0, 0.0, 0.5, 0.51, false),
+                        "live scene bloom params must be the unscaled vendor values"
                     );
                 }
             }
@@ -2713,8 +2702,8 @@ mod tests {
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(
-            &names[names.len() - 4..],
-            &["spinSpeed", "explode", "color", "bloom"]
+            &names[names.len() - 3..],
+            &["spinSpeed", "explode", "color"]
         );
         assert_eq!(names[0], "gain");
     }
@@ -2806,32 +2795,120 @@ mod tests {
     #[test]
     fn plane9_bloom_combine_supplies_the_halo_for_blur_and_cuboid() {
         let Some((device, queue)) = gpu() else {
-            return;
+            panic!("a headless fallback adapter is required for the Hollow Cube bloom contract");
         };
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+
+        // B/C — every Hollow variant stays on Plane9 bloom at one mip, with
+        // no Unreal pass and no bloom prop. Applying the orphaned key must not
+        // scale either the fixed 0.51 intensity or an out4-driven intensity.
+        for variant in [
+            PLANE9_HOLLOW_CUBE,
+            POINT10_HOLLOW_CUBOID,
+            POINT10_HOLLOW_CUBE_LAYERS,
+            POINT10_HOLLOW_CUBE_BLUR,
+        ] {
+            let mut scene = HollowCube::new_with_variant(variant);
+            check!(
+                !scene.props().iter().any(|prop| prop.name == "bloom"),
+                "A: {} still exposes the inert bloom prop",
+                variant.name
+            );
+            let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            ctx.resize(64, 64);
+            scene.init(&mut ctx);
+            scene.resize(64, 64);
+            {
+                let gpu = scene.gpu.as_ref().expect("Hollow Cube GPU resources");
+                check!(
+                    gpu.composer.plane9_bloom().is_some(),
+                    "B: {} composer has no Plane9 bloom pass",
+                    variant.name
+                );
+                if let Some(bloom) = gpu.composer.plane9_bloom() {
+                    check!(
+                        bloom.params().mip_count() == 1,
+                        "B: {} Plane9 bloom must use one mip, got {}",
+                        variant.name,
+                        bloom.params().mip_count()
+                    );
+                } else {
+                    failures.push(format!(
+                        "B: {} cannot report Plane9 mip_count without a pass",
+                        variant.name
+                    ));
+                }
+                check!(
+                    gpu.composer.bloom().is_none(),
+                    "B: {} must not construct the Unreal bloom pass",
+                    variant.name
+                );
+            }
+            let before = scene
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.composer.plane9_bloom())
+                .map(|bloom| bloom.params());
+            if !variant.out4_bloom {
+                check!(
+                    before == Some(Plane9BloomParams::new(6.0, 0.0, 0.5, 0.51, false)),
+                    "B: {} params must be the unscaled vendor values, got {before:?}",
+                    variant.name
+                );
+            }
+            scene.apply_props(|key| (key == "bloom").then_some(2.0));
+            let after = scene
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.composer.plane9_bloom())
+                .map(|bloom| bloom.params());
+            check!(
+                after == before,
+                "C: applying bloom=2.0 changed {} Plane9 params from {before:?} to {after:?}",
+                variant.name
+            );
+        }
+
         let base = bloom_halo(&device, &queue, PLANE9_HOLLOW_CUBE);
         let cuboid = bloom_halo(&device, &queue, POINT10_HOLLOW_CUBOID);
         let blur = bloom_halo(&device, &queue, POINT10_HOLLOW_CUBE_BLUR);
 
         for halo in [&cuboid, &blur] {
-            assert!(
+            eprintln!(
+                "{}: mean={:.6} direct_mean={:.6} outside_count={} outside_mean={:.6} gained_fraction={:.3}",
+                halo.name,
+                halo.mean,
+                halo.direct_mean,
+                halo.outside_count,
+                halo.outside_mean,
+                halo.gained_fraction
+            );
+            check!(
                 halo.outside_count > 1000,
                 "{}: silhouette mask is vacuous ({} pixels)",
                 halo.name,
                 halo.outside_count
             );
-            assert!(
+            check!(
                 halo.outside_mean > 0.003,
                 "{}: no halo outside the drawn geometry ({:.6})",
                 halo.name,
                 halo.outside_mean
             );
-            assert!(
+            check!(
                 halo.gained_fraction > 0.4,
                 "{}: only {:.1}% of dark pixels gained bloom",
                 halo.name,
                 halo.gained_fraction * 100.0
             );
-            assert!(
+            check!(
                 halo.mean > halo.direct_mean * 1.3,
                 "{}: additive bloom did not brighten the frame ({:.6} vs {:.6})",
                 halo.name,
@@ -2841,11 +2918,17 @@ mod tests {
         }
         // The Blur preset scales the base down to 6%; the composer's bloom
         // must still lift the final frame materially above that dim base.
-        assert!(
+        check!(
             blur.mean > base.mean * 0.06,
             "Blur lost the composer's bloom: {:.6} <= 6% of {:.6}",
             blur.mean,
             base.mean
+        );
+        assert!(
+            failures.is_empty(),
+            "Hollow Cube Plane9 bloom contract failed ({} checks):\n{}",
+            failures.len(),
+            failures.join("\n")
         );
     }
 }

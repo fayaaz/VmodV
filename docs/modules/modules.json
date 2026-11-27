@@ -19059,14 +19059,6 @@
           "default": 0.30000001192092896,
           "min": 0.0,
           "max": 1.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
         }
       ],
       "source": null,
@@ -19593,14 +19585,6 @@
         {
           "name": "turbulence",
           "label": "Turbulence",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,
@@ -20383,14 +20367,6 @@
         {
           "name": "color",
           "label": "Color",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,
@@ -23664,14 +23640,6 @@
           "default": 1.0,
           "min": 0.0,
           "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
         }
       ],
       "source": null,
@@ -23762,14 +23730,6 @@
           "default": 1.0,
           "min": 0.0,
           "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
         }
       ],
       "source": null,
@@ -23856,14 +23816,6 @@
         {
           "name": "color",
           "label": "Color",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,

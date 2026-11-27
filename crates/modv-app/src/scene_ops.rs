@@ -4882,6 +4882,42 @@ mod tests {
     }
 
     #[test]
+    fn applying_a_scene_tolerates_unknown_module_props() {
+        // Seeded Scenes keep orphan `bloom` keys on modules whose registry no
+        // longer declares them (the one-mip Plane9 bloom drivers ignore the
+        // intensity prop). Loading and applying such a Scene must not reject
+        // the key or drop the module's registered props.
+        let mut scene = two_row_scene("scene-unknown-prop");
+        scene["modules"]["doc-bands"]["props"]["bloom"] = json!(2.5);
+
+        let mut store = Store::new();
+        seed_scene(&mut store, scene);
+        store
+            .dispatch(
+                "scenes/applyScene",
+                json!({ "sceneId": "scene-unknown-prop" }),
+            )
+            .expect("a Scene with an unknown prop applies cleanly");
+
+        let bands = store
+            .state()
+            .modules
+            .values()
+            .find(|module| module.module_name == "Bands")
+            .expect("the module carrying the orphan key survives apply");
+        assert_eq!(
+            bands.props["bloom"],
+            json!(2.5),
+            "the orphan prop is carried verbatim, not rejected"
+        );
+        assert_eq!(
+            bands.props["u_ringWidth"],
+            json!(0.3),
+            "registered props still apply"
+        );
+    }
+
+    #[test]
     fn scene_apply_preserves_composition_inherit_target() {
         // A Scene group snapshot carrying the reserved `vmodv:composition`
         // sentinel (the Composed Output target) must survive apply: the
