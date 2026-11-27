@@ -264,7 +264,7 @@ impl Wormhole {
 
 impl Point10Scene for Wormhole {
     fn name(&self) -> &'static str {
-        "Point10 Wormhole"
+        "Plane9 Wormhole"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -456,7 +456,7 @@ impl Point10Scene for Wormhole {
 
     fn meta(&self) -> SceneMeta {
         // `Point10Wormhole.js` sets no category.
-        SceneMeta::for_scene("Point10 Wormhole", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Wormhole", "3d-scenes")
     }
 }
 
@@ -716,7 +716,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = Wormhole::new();
-        assert_eq!(scene.meta().name, "Point10 Wormhole");
+        assert_eq!(scene.meta().name, "Plane9 Wormhole");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(&names[names.len() - 2..], &["warpSpeed", "bloom"]);

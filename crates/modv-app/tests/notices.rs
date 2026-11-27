@@ -29,7 +29,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use modv_renderers::point10::all_scenes;
+use modv_app::module_registry::{ModuleKind, ModuleRegistry};
+use modv_app::store_ops::Store;
+use modv_renderers::point10::{Point10Scene, all_scenes};
+use modv_ui::model::{ModuleMetaView, module_license};
+use serde_json::{Value, json};
 
 const NOTICES: &str = include_str!("../../../THIRD_PARTY_NOTICES.md");
 const CARGO_LOCK: &str = include_str!("../../Cargo.lock");
@@ -762,7 +766,8 @@ fn point10_notices_classify_every_registered_scene_by_provenance() {
         .map(|scene| {
             scene
                 .name()
-                .strip_prefix("Point10 ")
+                .strip_prefix("Plane9 ")
+                .or_else(|| scene.name().strip_prefix("Point10 "))
                 .unwrap_or(scene.name())
         })
         .collect();
@@ -1001,5 +1006,418 @@ fn milkdrop_presets_guide_accepts_both_extensions_case_insensitively() {
         contains_ci(troubleshooting, "case-insensitiv"),
         "the Troubleshooting section must state that both .mlk and .milk are \
          accepted case-insensitively"
+    );
+}
+
+/// The twelve genuine Plane9 preset ports have canonical `Plane9 ` names,
+/// while their historical `Point10 ` names remain lookup aliases. This one
+/// cross-crate contract covers the registry, author metadata, document-load
+/// migration, historical parity fixture and licence provenance without a GPU.
+#[test]
+fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
+    const PLANE9: &[(&str, &str)] = &[
+        ("Boxy", "4.0"),
+        ("Color Cube", "3.0"),
+        ("Earth", "4.0"),
+        ("Hollow Cube", "4.0"),
+        ("It Is Coming For You", "3.0"),
+        ("Light Tunnel", "3.0"),
+        ("Mirror Cube", "4.0"),
+        ("Sound Cube", "4.0"),
+        ("Square Tunnel", "4.0"),
+        ("Sun", "3.0"),
+        ("The Cave", "3.0"),
+        ("Wormhole", "4.0"),
+    ];
+    const POINT10: &[&str] = &[
+        "Chromatic Line",
+        "Chromatic Wave",
+        "Particle Field",
+        "Spiral Particles",
+        "Waveform",
+        "Water Ripple",
+        "Mycelium",
+        "Around Plus",
+        "Ultra HDR",
+        "Attractor Particles",
+        "DVD Room",
+        "Rolling Fire",
+        "Ball Of Fire",
+        "Smoke Room",
+        "Latent Backrooms",
+    ];
+
+    let mut failures = Vec::new();
+    macro_rules! check {
+        ($condition:expr, $($arg:tt)*) => {
+            if !$condition {
+                failures.push(format!($($arg)*));
+            }
+        };
+    }
+
+    let scenes = all_scenes();
+    let scene_names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
+    let expected_plane9: BTreeSet<String> = PLANE9
+        .iter()
+        .map(|(suffix, _)| (*suffix).to_string())
+        .collect();
+    let expected_point10: BTreeSet<String> =
+        POINT10.iter().map(|suffix| (*suffix).to_string()).collect();
+    let actual_plane9: BTreeSet<String> = scene_names
+        .iter()
+        .filter_map(|name| name.strip_prefix("Plane9 ").map(str::to_string))
+        .collect();
+    let actual_point10: BTreeSet<String> = scene_names
+        .iter()
+        .filter_map(|name| name.strip_prefix("Point10 ").map(str::to_string))
+        .collect();
+
+    // A — exactly the twelve Plane9 ports move prefix; the other fifteen stay.
+    check!(
+        scene_names.len() == 27,
+        "A: expected 27 scenes, got {}",
+        scene_names.len()
+    );
+    check!(
+        actual_plane9 == expected_plane9,
+        "A: Plane9 registry suffixes differ: missing {:?}, unexpected {:?}",
+        expected_plane9
+            .difference(&actual_plane9)
+            .collect::<Vec<_>>(),
+        actual_plane9
+            .difference(&expected_plane9)
+            .collect::<Vec<_>>()
+    );
+    check!(
+        actual_point10 == expected_point10,
+        "A: Point10 registry suffixes differ: missing {:?}, unexpected {:?}",
+        expected_point10
+            .difference(&actual_point10)
+            .collect::<Vec<_>>(),
+        actual_point10
+            .difference(&expected_point10)
+            .collect::<Vec<_>>()
+    );
+
+    // B — author metadata follows the canonical per-name provenance.
+    let mut author_mismatches = Vec::new();
+    for (suffix, _) in PLANE9 {
+        let name = format!("Plane9 {suffix}");
+        match scenes.iter().find(|scene| scene.name() == name) {
+            Some(scene) if scene.meta().author == "Plane9 (Joakim Dahl)" => {}
+            Some(scene) => author_mismatches.push(format!(
+                "{name}: author {:?}, expected Plane9 (Joakim Dahl)",
+                scene.meta().author
+            )),
+            None => author_mismatches.push(format!("{name}: missing")),
+        }
+    }
+    for suffix in POINT10 {
+        let name = format!("Point10 {suffix}");
+        match scenes.iter().find(|scene| scene.name() == name) {
+            Some(scene) if scene.meta().author == "Point10" => {}
+            Some(scene) => author_mismatches.push(format!(
+                "{name}: author {:?}, expected Point10",
+                scene.meta().author
+            )),
+            None => author_mismatches.push(format!("{name}: missing")),
+        }
+    }
+    check!(
+        author_mismatches.is_empty(),
+        "B: author metadata mismatches: {}",
+        author_mismatches.join("; ")
+    );
+
+    // C — every historical name resolves to the same canonical definition and
+    // constructor result as its new Plane9 name.
+    let registry = ModuleRegistry::builtin();
+    let mut alias_mismatches = Vec::new();
+    for (suffix, _) in PLANE9 {
+        let old_name = format!("Point10 {suffix}");
+        let new_name = format!("Plane9 {suffix}");
+        let canonical = registry.point10_definition(&new_name);
+        let legacy = registry.point10_definition(&old_name);
+        let canonical_scene = registry
+            .create_point10_instance(&new_name)
+            .map(|scene| scene.name());
+        let legacy_scene = registry
+            .create_point10_instance(&old_name)
+            .map(|scene| scene.name());
+        let mut problems = Vec::new();
+        if canonical.is_none() {
+            problems.push("new definition missing");
+        }
+        if canonical != legacy {
+            problems.push("old/new definitions differ");
+        }
+        if registry.kind(&new_name) != Some(ModuleKind::Point10)
+            || registry.kind(&old_name) != Some(ModuleKind::Point10)
+        {
+            problems.push("old/new renderer kind is not Point10");
+        }
+        if canonical_scene != Some(new_name.as_str()) || legacy_scene != canonical_scene {
+            problems.push("old/new constructors do not produce the canonical scene");
+        }
+        if !problems.is_empty() {
+            alias_mismatches.push(format!("{suffix}: {}", problems.join(", ")));
+        }
+    }
+    check!(
+        alias_mismatches.is_empty(),
+        "C: legacy alias mismatches: {}",
+        alias_mismatches.join("; ")
+    );
+
+    // D — both preset restore and Scene import rewrite the persisted reference,
+    // not merely the live renderer lookup, so the next save uses the new name.
+    let legacy_document = json!({
+        "id": "scene-legacy-plane9",
+        "name": "Legacy Plane9",
+        "groups": [{
+            "id": "group-legacy",
+            "name": "Legacy",
+            "hidden": false,
+            "modules": ["light-tunnel"],
+            "enabled": 1,
+            "alpha": 1,
+            "inherit": true,
+            "inheritFrom": -1,
+            "pipeline": false,
+            "clearing": false,
+            "compositeOperation": "normal"
+        }],
+        "modules": {
+            "light-tunnel": {
+                "$id": "light-tunnel",
+                "$moduleName": "Point10 Light Tunnel",
+                "meta": {"name": "Point10 Light Tunnel"},
+                "props": {},
+                "data": {},
+                "$props": {}
+            }
+        },
+        "inputs": {},
+        "expressions": {},
+        "tweens": [],
+        "midi": {}
+    });
+
+    let mut preset_store = Store::new();
+    match preset_store.restore(&legacy_document) {
+        Ok(()) => {
+            if let Some(module) = preset_store.state().modules.get("light-tunnel") {
+                check!(
+                    module.module_name == "Plane9 Light Tunnel",
+                    "D: preset restore kept $moduleName {:?}",
+                    module.module_name
+                );
+                check!(
+                    module.status.is_empty(),
+                    "D: preset restore produced module status {:?}",
+                    module.status
+                );
+                check!(
+                    preset_store.registry_arc().kind(&module.module_name)
+                        == Some(ModuleKind::Point10),
+                    "D: restored preset module {:?} does not resolve as Point10",
+                    module.module_name
+                );
+            } else {
+                check!(false, "D: preset restore dropped light-tunnel");
+            }
+            let saved = preset_store.snapshot();
+            check!(
+                saved["modules"]["light-tunnel"]["$moduleName"] == "Plane9 Light Tunnel",
+                "D: preset re-save wrote $moduleName {:?}",
+                saved["modules"]["light-tunnel"]["$moduleName"]
+            );
+        }
+        Err(error) => check!(false, "D: preset restore failed: {error:?}"),
+    }
+
+    let mut scene_store = Store::new();
+    let scene_params = json!({"scene": legacy_document, "persist": false});
+    match scene_store.load_scene_from_json(scene_params.as_object().expect("Scene params")) {
+        Ok(imported) => {
+            check!(
+                imported["modules"]["light-tunnel"]["$moduleName"] == "Plane9 Light Tunnel",
+                "D: Scene import returned $moduleName {:?}",
+                imported["modules"]["light-tunnel"]["$moduleName"]
+            );
+            let stored = scene_store
+                .scenes_state()
+                .scenes
+                .iter()
+                .find(|scene| scene["id"] == "scene-legacy-plane9");
+            check!(stored.is_some(), "D: Scene import did not store the Scene");
+            if let Some(stored) = stored {
+                check!(
+                    stored["modules"]["light-tunnel"]["$moduleName"] == "Plane9 Light Tunnel",
+                    "D: stored Scene kept $moduleName {:?}",
+                    stored["modules"]["light-tunnel"]["$moduleName"]
+                );
+            }
+            let live_modules: Vec<_> = scene_store.state().modules.values().collect();
+            check!(
+                live_modules.len() == 1,
+                "D: Scene apply created {} modules, expected 1",
+                live_modules.len()
+            );
+            if let Some(module) = live_modules.first() {
+                check!(
+                    module.module_name == "Plane9 Light Tunnel",
+                    "D: Scene apply kept live $moduleName {:?}",
+                    module.module_name
+                );
+                check!(
+                    module.status.is_empty(),
+                    "D: Scene apply produced module status {:?}",
+                    module.status
+                );
+                check!(
+                    scene_store.registry_arc().kind(&module.module_name)
+                        == Some(ModuleKind::Point10),
+                    "D: Scene-applied module {:?} does not resolve as Point10",
+                    module.module_name
+                );
+            }
+            let sync = scene_store.sync_state();
+            check!(
+                sync["scenes"][0]["modules"]["light-tunnel"]["$moduleName"]
+                    == "Plane9 Light Tunnel",
+                "D: Scene sync/re-save wrote $moduleName {:?}",
+                sync["scenes"][0]["modules"]["light-tunnel"]["$moduleName"]
+            );
+        }
+        Err(error) => check!(false, "D: Scene import/apply failed: {error:?}"),
+    }
+
+    // E — the fixture remains the historical legacy inventory. Compare it to
+    // canonical registry names only after applying the legacy alias mapping.
+    let manifest: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
+            .expect("the historical parity manifest is valid JSON");
+    let manifest_names: BTreeSet<String> = manifest["point10"]
+        .as_array()
+        .expect("point10 manifest array")
+        .iter()
+        .map(|name| name.as_str().expect("module name").to_string())
+        .collect();
+    let mut manifest_mismatches = Vec::new();
+    if manifest_names.len() != 27 {
+        manifest_mismatches.push(format!("expected 27 names, got {}", manifest_names.len()));
+    }
+    for (suffix, _) in PLANE9 {
+        let old_name = format!("Point10 {suffix}");
+        let new_name = format!("Plane9 {suffix}");
+        if !manifest_names.contains(&old_name) {
+            manifest_mismatches.push(format!("historical {old_name} missing"));
+        }
+        if manifest_names.contains(&new_name) {
+            manifest_mismatches.push(format!("historical fixture was rewritten to {new_name}"));
+        }
+    }
+    check!(
+        manifest_mismatches.is_empty(),
+        "E: historical manifest mismatches: {}",
+        manifest_mismatches.join("; ")
+    );
+
+    let canonical_for_legacy = |name: &str| {
+        PLANE9
+            .iter()
+            .find_map(|(suffix, _)| {
+                (name == format!("Point10 {suffix}")).then(|| format!("Plane9 {suffix}"))
+            })
+            .unwrap_or_else(|| name.to_string())
+    };
+    let expected_canonical: BTreeSet<String> = manifest_names
+        .iter()
+        .map(|name| canonical_for_legacy(name))
+        .collect();
+    let actual_canonical: BTreeSet<String> = registry
+        .point10_definitions()
+        .iter()
+        .map(|definition| definition.meta.name.to_string())
+        .collect();
+    check!(
+        actual_canonical == expected_canonical,
+        "E: alias-normalised registry differs from historical manifest: missing {:?}, unexpected {:?}",
+        expected_canonical
+            .difference(&actual_canonical)
+            .collect::<Vec<_>>(),
+        actual_canonical
+            .difference(&expected_canonical)
+            .collect::<Vec<_>>()
+    );
+    let unresolved_legacy: Vec<_> = manifest_names
+        .iter()
+        .filter(|name| registry.point10_definition(name).is_none())
+        .collect();
+    check!(
+        unresolved_legacy.is_empty(),
+        "E: historical manifest aliases do not resolve: {unresolved_legacy:?}"
+    );
+
+    // F — the UI licence map and notices provenance rows keep the exact terms
+    // each port had before its display name changed.
+    let notices = notices_section("Point10 scenes");
+    let mut licence_mismatches = Vec::new();
+    let mut notice_mismatches = Vec::new();
+    for (suffix, version) in PLANE9 {
+        let name = format!("Plane9 {suffix}");
+        let expected =
+            format!("CC BY-NC-SA {version} (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)");
+        let licence = module_license(&ModuleMetaView {
+            name: name.clone(),
+            module_type: "2d".to_string(),
+            ..ModuleMetaView::default()
+        });
+        if licence != expected {
+            licence_mismatches.push(format!("{name}: got {licence:?}, expected {expected:?}"));
+        }
+        let row = notices
+            .lines()
+            .find(|line| line.starts_with(&format!("| {suffix} |")));
+        match row {
+            Some(row) if row.contains(&format!("CC BY-NC-SA {version}")) => {}
+            Some(row) => notice_mismatches.push(format!("{name}: wrong row {row:?}")),
+            None => notice_mismatches.push(format!("{name}: no provenance row")),
+        }
+    }
+    for scene in &scenes {
+        let suffix = scene
+            .name()
+            .strip_prefix("Plane9 ")
+            .or_else(|| scene.name().strip_prefix("Point10 "))
+            .unwrap_or(scene.name());
+        if !notices
+            .lines()
+            .any(|line| line.starts_with(&format!("| {suffix} |")))
+        {
+            notice_mismatches.push(format!(
+                "{}: no suffix-matched provenance row",
+                scene.name()
+            ));
+        }
+    }
+    check!(
+        licence_mismatches.is_empty(),
+        "F: licence mismatches: {}",
+        licence_mismatches.join("; ")
+    );
+    check!(
+        notice_mismatches.is_empty(),
+        "F: notices provenance mismatches: {}",
+        notice_mismatches.join("; ")
+    );
+
+    assert!(
+        failures.is_empty(),
+        "Plane9 rename contract failed ({} checks):\n{}",
+        failures.len(),
+        failures.join("\n")
     );
 }

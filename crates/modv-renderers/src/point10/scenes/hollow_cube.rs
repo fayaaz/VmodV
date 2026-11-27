@@ -6,9 +6,10 @@
 //! cubes on the six faces of a 50x50x50 lattice. `Shader1` positions every cube
 //! from its instance id (the hollow-shell mapping), rotates it by a random
 //! axis-angle quaternion and pulses it outward along the lattice normal; the
-//! fragment is lit with Plane9's half-Lambert/Blinn-Phong pair. The cube chain
-//! is captured into a `RenderToTexture`, bloomed, and `Shader2` composites the
-//! capture, the bloom and a 256x256 fbm capture.
+//! fragment is lit with Plane9's half-Lambert/Blinn-Phong pair. A separate
+//! `Expression1` rotates the whole object on three noise-driven axes. The cube
+//! chain is captured into a Plane9 Format 5 (`GL_RGBA16F`) target and `Shader2`
+//! composites it with Plane9 bloom through the [`Composer`].
 //!
 //! # Ported exactly
 //!
@@ -24,17 +25,24 @@
 //!   `_lightBlinnPhongHalfLambert` terms at `specularHardness = 10`, the
 //!   `(0, 1, 0)` sky light `(0.5, 0.8, 1.0)` * 1.15 at 0.04 and the
 //!   `(0, -1, 0)` ground light `(0.8, 0, 0)` / white specular at 0.025;
-//! * the fbm capture (`:266-277`): `_fbm(vec3(uv * 10, gTime * 0.1), 3)`;
-//! * `Shader2` (`:279-298`): `mix(bg.rgb, _tonemapACES(c2.rgb), c2.a) +
-//!   _tonemapACES(c1.rgb * c1.rgb)`, alpha `c2.a` (the cube capture's alpha);
-//! * Expression1 (`hollowCubeDrive`, `:71-100`): the three bass reads at
-//!   damping 0/1/2, `perm += min(0.5, band + 0.01) * 40 * dt` (0.1 s cap),
-//!   `in1 = (min(1.2, e*2.2)*0.6, min(0.55, l*4 + 0.4), min(1, l*1.5))`,
+//! * `Shader2` (`:279-298`): `mix(bg.rgb, _tonemapACES(c2.rgb), c2.a)`, alpha
+//!   `c2.a` (the cube capture's alpha). `PreviousLayer1.Color` is transparent
+//!   black here: this architecture has no previous layer, and the compositor's
+//!   own alpha blend over the layers below is the faithful equivalent;
+//! * `Shader1`'s own Expression: a private `perm` on damping-0 bass,
+//!   `perm += min(0.5, band + 0.01) * 40 * dt` (0.1 s cap), feeding `gIn2.x`.
+//!   The level reads are damping-1 bass (Point10's runtime override moves the
+//!   explosion from damping 2 to damping 1, `P9Overrides.js`),
+//!   `in1 = (min(1.2, l*2.2)*0.6, min(0.55, l*4 + 0.4), min(1, l*1.5))`,
 //!   `in2 = (perm, 1 + min(0.2, l))`;
+//! * `Expression1` (`:351-361`): a second phase,
+//!   `perm += min(0.15, band + 0.02) * 0.08 * dt`, then
+//!   `out*.x/y/z = noise2(perm, 0|1|2) * (1 + band * 0.1) * 500` degrees of
+//!   whole-object rotation;
 //! * the camera (`:44-51`): `PerspectiveCamera(50, aspect, 0.01, 100)` at
 //!   `(0, 0, 2.2)` looking at `(0, 0, -1)`;
-//! * the bloom (`:53-56`): `UnrealBloomPass(strength 0.51, radius 0.85,
-//!   threshold 0)`;
+//! * the bloom: Plane9 `Radius 6, Threshold 0, ThresholdSmoothness 0.5,
+//!   Intensity 0.51, Antiflicker false` via [`Plane9BloomParams`];
 //! * the prop binder (`sceneProps.js:312-317`): `spinScale = spinSpeed`,
 //!   `explodeScale = explode`, `colorScale = color`, `bloomScale = bloom`.
 //!
@@ -44,11 +52,11 @@
 //! |----------|------|
 //! | `InstancedBufferGeometry` + `aInstance` (15 000 floats) | `@builtin(instance_index)` — no attribute buffer |
 //! | `BoxGeometry(0.01)` | [`build_box`](crate::point10::scenes::cube_mesh::build_box) |
-//! | `projectionMatrix * modelViewMatrix` (identity model) | one view-projection uniform |
-//! | `WebGLRenderTarget` cube capture + fbm capture | two `Rgba16Float` targets |
-//! | `EffectComposer` (copy → bloom) | [`UnrealBloomPass`] fed from the cube target |
+//! | `projectionMatrix * modelViewMatrix` (identity model) | view-projection + model-rotation uniform |
+//! | `WebGLRenderTarget` cube capture | one `Rgba16Float` target (Plane9 Format 5) |
+//! | `EffectComposer` + bloom pass | [`Composer`] driven by [`Plane9BloomParams`] |
 //! | `ShaderPass` + `OutputPass` | the port's `fs_main` composite + [`Composer`]'s output pass |
-//! | `_fbm`, `_cubicpulse`, `_hsv2rgb`, `_rand`, `_rand3`, `_noise`, `_rotateVector`, `_axisAngleToQuaternion` | [`P9_COMMON_WGSL`] + [`P9_SHADING_WGSL`] (`p9_rand3`) |
+//! | `_cubicpulse`, `_hsv2rgb`, `_rand`, `_rand3`, `_noise`, `_rotateVector`, `_axisAngleToQuaternion` | [`P9_COMMON_WGSL`] + [`P9_SHADING_WGSL`] (`p9_rand3`) |
 //!
 //! # Deviations
 //!
@@ -59,31 +67,32 @@
 //!   `_noise(vec3(d * 50, axis, 0))` with `d = 0.0001`, which is a *constant*
 //!   (the instance id never enters), so this is the same number with the same
 //!   `sign(up.axis)` multiplier.
-//! * **The fbm capture is `Rgba16Float`, not `UnsignedByte`.** The JS
-//!   `RenderToTexture1` uses an 8-bit target; the port keeps the value in HDR
-//!   like every other composer target (one less format to bind around).
+//! * **`PreviousLayer1.Color` is transparent black.** The vendor `Texture3`
+//!   read is dead output; the compositor's alpha blend over the layers below
+//!   carries the transparency instead (`CLEAR_ALPHA = 0`).
 //! * `_tonemapACES` is not part of the shared WGSL subset yet; the scene carries
 //!   the exact Plane9 formula (`P9Glsl.js:454-462`).
-//! * `Renderer.setClearColor(0, 0)` for the cube capture and the fbm capture is
-//!   reproduced by the render-pass clears; the final `Shader2` alpha is the
-//!   cube capture's, so empty space stays transparent (`CLEAR_ALPHA = 0`).
+//! * `Renderer.setClearColor(0, 0)` for the cube capture is reproduced by the
+//!   render-pass clear; the final `Shader2` alpha is the cube capture's, so
+//!   empty space stays transparent.
 //! * `P9Audio` is `plane9/P9Audio.js` in the JS; the port reads [`P10Audio`]
-//!   over the shared [`AudioBridge`], and all three Expression reads are
-//!   `band(-1, damping, 0, 0.1)` — **bass** at damping lanes 0/1/2, not three
-//!   different bands.
+//!   over the shared [`AudioBridge`]. `Shader1`'s phase reads bass at damping
+//!   lane 0 (`band(-1, 0, 0, 0.1)`); its other lanes and all of `Expression1`
+//!   read damping lane 1 (`band(-1, 1, 0, fallback)`).
 //!
-//! [`UnrealBloomPass`]: crate::point10::postfx::UnrealBloomPass
+//! [`Plane9BloomParams`]: crate::point10::postfx::Plane9BloomParams
 //! [`Composer`]: crate::point10::postfx::Composer
 
 #![forbid(unsafe_code)]
 
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
-use crate::point10::postfx::{Composer, ToneMapping, UnrealBloomPass};
+use crate::point10::postfx::{Composer, Plane9BloomParams, ToneMapping};
 use crate::point10::scenes::cube_mesh::{
-    Mat4, MeshGpu, build_box, create_depth, depth_state, look_at, mat4_mul, perspective,
+    Mat4, MeshGpu, build_box, create_depth, depth_state, euler_xyz, look_at, mat4_mul, perspective,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
+use crate::point10::shared::random::value_noise2;
 use crate::point10::{
     HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
     scene_props_with_levers,
@@ -111,22 +120,17 @@ pub const CAMERA_POSITION: [f32; 3] = [0.0, 0.0, 2.2];
 /// `CAMERA.lookAt`.
 pub const CAMERA_LOOK_AT: [f32; 3] = [0.0, 0.0, -1.0];
 
-/// `BLOOM.strength`.
+/// `BLOOM.Intensity` (Plane9 `Intensity`).
 pub const BLOOM_STRENGTH: f32 = 0.51;
-/// `BLOOM.radius` (Plane9 Radius 6 normalised by `UnrealBloomPass`).
-pub const BLOOM_RADIUS: f32 = 0.85;
-/// `BLOOM.threshold`.
+/// `BLOOM.Radius` (Plane9 `Radius 6`).
+pub const BLOOM_RADIUS: f32 = 6.0;
+/// `BLOOM.Threshold`.
 pub const BLOOM_THRESHOLD: f32 = 0.0;
-/// `BLOOM_SMOOTHNESS` (kept for parity; `UnrealBloomPass` hard-codes 0.01).
+/// `BLOOM.ThresholdSmoothness`.
 pub const BLOOM_SMOOTHNESS: f32 = 0.5;
 
 /// `CLEAR_ALPHA` — Hollow Cube composites transparently over the layers below.
 pub const CLEAR_ALPHA: f64 = 0.0;
-
-/// `FBM_SIZE` — `RenderToTexture1` WidthCustom/HeightCustom.
-pub const FBM_SIZE: u32 = 256;
-/// `FBM_OCTAVES`.
-pub const FBM_OCTAVES: u32 = 3;
 
 /// `MAX_DT` — Expression1's own 0.1 s step cap.
 pub const MAX_DT: f32 = 0.1;
@@ -136,14 +140,21 @@ pub fn make_perm(seed: f32) -> f32 {
     if seed.is_finite() { seed } else { 1.0 }
 }
 
-/// One frame of Expression1.
+/// One frame of `Expression1` (`HollowCube.js:351-361`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HollowCubeDrive {
-    /// `perm` for the next frame.
+    /// `Expression1`'s `perm` for the next frame.
     pub perm: f32,
+    /// `out1..3` — whole-object rotation in degrees (X/Y/Z).
+    pub orbit: [f32; 3],
     /// `gIn1` (`x` explosion, `y` colour, `z` rotation).
     pub in1: [f32; 3],
-    /// `gIn2` (`x` phase, `y` cube scale).
+    /// The Expression1 phase (`x`) and the cube scale (`y`).
+    ///
+    /// The uploaded `gIn2.x` is instead [`HollowCube::shader_perm`]: the
+    /// vendor's `Shader1` advances its own phase on damping-0 bass. Keeping
+    /// both fields makes the two Expression nodes explicit rather than sharing
+    /// one phase across the shader and the object rotation.
     pub in2: [f32; 3],
 }
 
@@ -156,34 +167,51 @@ fn band_value(value: f32) -> f32 {
     }
 }
 
-/// Pure Expression1 (`HollowCube.js:80-100`).
+/// Pure `Expression1`.
 ///
-/// All three arguments are **bass** reads (`band(-1, damping, 0, 0.1)`) at
-/// damping 0, 1 and 2: lane 0 advances the phase, lane 2 explodes the shell and
-/// lane 1 drives colour/rotation/size.
+/// `perm_band` is the damping-1 bass read that advances the phase,
+/// `level_band` the damping-1 bass read that drives explosion/colour/rotation/
+/// size, and `orbit_band` the damping-1 read with the `0.15` fallback that
+/// scales the noise orbit.
 pub fn hollow_cube_drive(
     perm_band: f32,
     level_band: f32,
-    explode_band: f32,
+    orbit_band: f32,
     dt: f32,
     perm: f32,
 ) -> HollowCubeDrive {
     let p = band_value(perm_band);
     let l = band_value(level_band);
-    let e = band_value(explode_band);
+    let orbit = band_value(orbit_band);
     let step = band_value(dt).min(MAX_DT);
     let base = if perm.is_finite() { perm } else { 1.0 };
-    let next = base + (p + 0.01).min(0.5) * 40.0 * step;
+    let next = base + (p + 0.02).min(0.15) * 0.08 * step;
+    let amplitude = 1.0 + orbit * 0.1;
 
     HollowCubeDrive {
         perm: next,
+        orbit: [
+            value_noise2(next, 0.0) * amplitude * 500.0,
+            value_noise2(next, 1.0) * amplitude * 500.0,
+            value_noise2(next, 2.0) * amplitude * 500.0,
+        ],
         in1: [
-            (e * 2.2).min(1.2) * 0.6,
+            (l * 2.2).min(1.2) * 0.6,
             (l * 4.0 + 0.4).min(0.55),
             (l * 1.5).min(1.0),
         ],
         in2: [next, 1.0 + l.min(0.2), 0.0],
     }
+}
+
+/// `Shader1`'s own Expression phase, the vendor damping-0 `gIn2.x` creep.
+///
+/// This is deliberately separate from [`hollow_cube_drive`]: the two
+/// Expression nodes in the preset carry independent `perm` values, and only
+/// `Expression1`'s phase drives the whole-object rotation.
+fn shader_perm_step(perm: f32, band: f32, dt: f32) -> f32 {
+    let base = if perm.is_finite() { perm } else { 1.0 };
+    base + (band_value(band) + 0.01).min(0.5) * 40.0 * dt.min(MAX_DT)
 }
 
 /// `MeshInstancer`'s hollow-cube mapping: instance id -> one of the six faces
@@ -220,27 +248,18 @@ const HOLLOW_CUBE_PROPS: &[SceneProp] = &[
     SceneProp::float("bloom", "Bloom", 1.0, 0.0, 3.0, 0.01),
 ];
 
-/// The cube shader's uniform block (112 bytes).
+/// The cube shader's uniform block (176 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct CubeUniforms {
     view_proj: Mat4,
+    /// `RenderObject1.Rot` — the Expression1 whole-object rotation.
+    model: Mat4,
     camera_pos: [f32; 4],
     /// `gIn1`: explosion, colour, rotation.
     in1: [f32; 4],
     /// `gIn2`: phase, cube scale.
     in2: [f32; 4],
-}
-
-/// The fbm pass' uniform block (16 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct FbmUniforms {
-    /// `gTime`.
-    time: f32,
-    _pad: f32,
-    /// Target size, for `position.xy / resolution`.
-    resolution: [f32; 2],
 }
 
 /// The `Shader2` pass' uniform block (16 bytes).
@@ -292,19 +311,12 @@ struct HollowCubeGpu {
     cube_target: Target,
     _cube_depth: wgpu::Texture,
     cube_depth_view: wgpu::TextureView,
-    fbm_pipeline: wgpu::RenderPipeline,
-    fbm_bind_group: wgpu::BindGroup,
-    fbm_uniforms: wgpu::Buffer,
-    fbm_target: Target,
-    /// `composite_bind` samples the cube target, the bloom composite and the
-    /// fbm target.
+    /// `composite_bind` samples the cube target.
     composite_pipeline: wgpu::RenderPipeline,
     composite_layout: wgpu::BindGroupLayout,
     composite_sampler: wgpu::Sampler,
     composite_bind_group: wgpu::BindGroup,
     composite_uniforms: wgpu::Buffer,
-    /// The bloom of the cube capture (`_bloomPass`).
-    bloom: UnrealBloomPass,
     mesh: MeshGpu,
     composer: Composer,
 }
@@ -312,14 +324,16 @@ struct HollowCubeGpu {
 /// HollowCube scene.
 pub struct HollowCube {
     audio: P10Audio,
-    /// `this.perm`.
+    /// `Expression1`'s `perm` — the orbit phase.
     perm: f32,
+    /// `Shader1`'s own `perm` — the vendor damping-0 phase (`gIn2.x`).
+    shader_perm: f32,
+    /// `Expression1`'s `out1..3`: whole-object rotation in degrees.
+    orbit: [f32; 3],
     /// `gIn1` after the prop scales.
     in1: [f32; 4],
     /// `gIn2`.
     in2: [f32; 4],
-    /// `this.time` (the fbm clock).
-    time: f32,
     spin_scale: f32,
     explode_scale: f32,
     color_scale: f32,
@@ -341,9 +355,10 @@ impl HollowCube {
         Self {
             audio: P10Audio::new(),
             perm: make_perm(1.0),
+            shader_perm: make_perm(1.0),
+            orbit: [0.0; 3],
             in1: [0.0, 1.1, 0.0, 0.0],
             in2: [0.0, 1.0, 0.0, 0.0],
-            time: 0.0,
             spin_scale: 1.0,
             explode_scale: 1.0,
             color_scale: 1.0,
@@ -361,15 +376,31 @@ impl HollowCube {
                 "spinSpeed" => self.spin_scale = value,
                 "explode" => self.explode_scale = value,
                 "color" => self.color_scale = value,
-                "bloom" => self.bloom_scale = value,
+                "bloom" if (self.bloom_scale - value).abs() > f32::EPSILON => {
+                    self.bloom_scale = value;
+                    let params = self.plane9_bloom_params();
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.composer.enable_plane9_bloom(params);
+                    }
+                }
                 _ => {}
             }
         }
     }
 
-    /// `this.perm`.
+    /// `Expression1`'s `perm`.
     pub fn perm(&self) -> f32 {
         self.perm
+    }
+
+    /// `Shader1`'s own `perm` (`gIn2.x`).
+    pub fn shader_perm(&self) -> f32 {
+        self.shader_perm
+    }
+
+    /// `Expression1`'s `out1..3` in degrees.
+    pub fn orbit(&self) -> [f32; 3] {
+        self.orbit
     }
 
     /// `gIn1` after the prop scales.
@@ -382,14 +413,32 @@ impl HollowCube {
         self.in2
     }
 
-    /// `this.time`.
-    pub fn time(&self) -> f32 {
-        self.time
-    }
-
     /// The destination alpha the scene clears to.
     pub fn clear_alpha(&self) -> f64 {
         CLEAR_ALPHA
+    }
+
+    /// Plane9's `Bloom1` node with the `bloom` prop folded into its intensity.
+    ///
+    /// `Plane9BloomParams` with `mip_count == 1` never applies `intensity`, so
+    /// the prop is preserved for parity but has no visual effect.
+    fn plane9_bloom_params(&self) -> Plane9BloomParams {
+        Plane9BloomParams::new(
+            BLOOM_RADIUS,
+            BLOOM_THRESHOLD,
+            BLOOM_SMOOTHNESS,
+            BLOOM_STRENGTH * self.bloom_scale,
+            false,
+        )
+    }
+
+    /// `RenderObject1.Rot` as a model matrix.
+    fn model(&self) -> Mat4 {
+        euler_xyz(
+            self.orbit[0].to_radians(),
+            self.orbit[1].to_radians(),
+            self.orbit[2].to_radians(),
+        )
     }
 
     fn view_proj(&self) -> Mat4 {
@@ -413,6 +462,7 @@ impl HollowCube {
             0,
             bytemuck::bytes_of(&CubeUniforms {
                 view_proj: self.view_proj(),
+                model: self.model(),
                 camera_pos: [
                     CAMERA_POSITION[0],
                     CAMERA_POSITION[1],
@@ -421,15 +471,6 @@ impl HollowCube {
                 ],
                 in1: self.in1,
                 in2: self.in2,
-            }),
-        );
-        gpu.queue.write_buffer(
-            &gpu.fbm_uniforms,
-            0,
-            bytemuck::bytes_of(&FbmUniforms {
-                time: self.time,
-                _pad: 0.0,
-                resolution: [FBM_SIZE as f32, FBM_SIZE as f32],
             }),
         );
         gpu.queue.write_buffer(
@@ -461,8 +502,6 @@ impl HollowCube {
         );
         gpu._cube_depth = depth;
         gpu.cube_depth_view = depth_view;
-        gpu.bloom.resize(self.size.0, self.size.1);
-        gpu.bloom.set_input(&gpu.cube_target.view);
         gpu.composer.resize(self.size.0, self.size.1);
         gpu.composite_bind_group = create_composite_bind_group(&gpu.device, gpu);
         self.upload_cube_uniforms();
@@ -471,7 +510,7 @@ impl HollowCube {
 
 impl Point10Scene for HollowCube {
     fn name(&self) -> &'static str {
-        "Point10 Hollow Cube"
+        "Plane9 Hollow Cube"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -548,41 +587,6 @@ impl Point10Scene for HollowCube {
             cache: None,
         });
 
-        // --- fbm capture ---------------------------------------------------
-        let fbm_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("point10-hollow-cube-fbm-shader"),
-            source: wgpu::ShaderSource::Wgsl(hollow_cube_fbm_wgsl().into()),
-        });
-        let fbm_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("point10-hollow-cube-fbm-layout"),
-            entries: &[uniform_entry(0, wgpu::ShaderStages::FRAGMENT)],
-        });
-        let fbm_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("point10-hollow-cube-fbm-uniforms"),
-            size: std::mem::size_of::<FbmUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let fbm_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("point10-hollow-cube-fbm-bind-group"),
-            layout: &fbm_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: fbm_uniforms.as_entire_binding(),
-            }],
-        });
-        let fbm_pipeline = ctx.fullscreen_pipeline_with_format(
-            "point10-hollow-cube-fbm-pipeline",
-            &fbm_shader,
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("point10-hollow-cube-fbm-pipeline-layout"),
-                bind_group_layouts: &[Some(&fbm_layout)],
-                immediate_size: 0,
-            }),
-            HDR_FORMAT,
-            None,
-        );
-
         // --- Shader2 composite --------------------------------------------
         let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("point10-hollow-cube-composite-shader"),
@@ -593,9 +597,7 @@ impl Point10Scene for HollowCube {
             entries: &[
                 uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
                 texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-                sampler_entry(4),
+                sampler_entry(2),
             ],
         });
         let composite_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -632,7 +634,6 @@ impl Point10Scene for HollowCube {
             self.size.0,
             self.size.1,
         );
-        let fbm_target = Target::new(&device, "point10-hollow-cube-fbm", FBM_SIZE, FBM_SIZE);
         let (cube_depth, cube_depth_view) = create_depth(
             &device,
             "point10-hollow-cube-depth",
@@ -640,19 +641,13 @@ impl Point10Scene for HollowCube {
             self.size.1,
         );
 
-        // `_bloomComposer`: copy the cube capture into the bloom's bright pass.
-        let mut bloom = UnrealBloomPass::new(&device, &queue, self.size.0, self.size.1);
-        bloom.set_strength(BLOOM_STRENGTH);
-        bloom.set_radius(BLOOM_RADIUS);
-        bloom.set_threshold(BLOOM_THRESHOLD);
-        bloom.set_input(&cube_target.view);
-
         // `composer = EffectComposer(renderer); addPass(_finalPass); addPass(OutputPass)`.
-        // No bloom in the composer: the Shader2 pass already adds it, exactly
-        // like the JS (which only adds `_finalPass` + `OutputPass` here).
+        // The `Bloom1` node is Plane9's driver, applied by the composer to the
+        // Shader2 output (the faithful replacement for the vendor bloom pass).
         let mut composer =
             Composer::new(&device, &queue, self.size.0, self.size.1, ctx.target_format);
         composer.output_mut().set_tone_mapping(ToneMapping::None);
+        composer.enable_plane9_bloom(self.plane9_bloom_params());
 
         let composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("point10-hollow-cube-composite-bind-group"),
@@ -668,21 +663,6 @@ impl Point10Scene for HollowCube {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    // `composite_view()` is Some after `new` (the targets are
-                    // rebuilt in the constructor), so the bloom target can be
-                    // bound here; on resize `rebuild_targets` re-binds it.
-                    resource: wgpu::BindingResource::TextureView(
-                        bloom
-                            .composite_view()
-                            .expect("the bloom pass always has a composite target"),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&fbm_target.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
@@ -697,16 +677,11 @@ impl Point10Scene for HollowCube {
             cube_target,
             _cube_depth: cube_depth,
             cube_depth_view,
-            fbm_pipeline,
-            fbm_bind_group,
-            fbm_uniforms,
-            fbm_target,
             composite_pipeline,
             composite_layout,
             composite_sampler: sampler,
             composite_bind_group,
             composite_uniforms,
-            bloom,
             mesh,
             composer,
         });
@@ -722,16 +697,19 @@ impl Point10Scene for HollowCube {
     fn update(&mut self, dt: f32, audio: &AudioBridge) {
         let dt = frame_dt(dt);
         self.audio.update(dt, audio);
-        self.time += dt;
+
+        // `Shader1`'s own Expression keeps the vendor damping-0 phase.
+        self.shader_perm = shader_perm_step(self.shader_perm, self.audio.band(-1, 0, 0, 0.1), dt);
 
         let drive = hollow_cube_drive(
-            self.audio.band(-1, 0, 0, 0.1),
             self.audio.band(-1, 1, 0, 0.1),
-            self.audio.band(-1, 2, 0, 0.1),
+            self.audio.band(-1, 1, 0, 0.1),
+            self.audio.band(-1, 1, 0, 0.15),
             dt,
             self.perm,
         );
         self.perm = drive.perm;
+        self.orbit = drive.orbit;
         // `material.uniforms.gIn1.value.set(drive.in1.* * *Scale)`
         self.in1 = [
             drive.in1[0] * self.explode_scale,
@@ -739,7 +717,9 @@ impl Point10Scene for HollowCube {
             drive.in1[2] * self.spin_scale,
             0.0,
         ];
-        self.in2 = [drive.in2[0], drive.in2[1], 0.0, 0.0];
+        // `drive.in2.x` is the Expression1 phase (the pure-function contract);
+        // the shader's `gIn2.x` takes Shader1's own damping-0 phase instead.
+        self.in2 = [self.shader_perm, drive.in2[1], 0.0, 0.0];
         self.upload_cube_uniforms();
     }
 
@@ -778,35 +758,8 @@ impl Point10Scene for HollowCube {
             gpu.mesh.draw_instanced(&mut pass, INSTANCE_COUNT);
         }
 
-        // fbm capture (`RenderToTexture1`).
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("point10-hollow-cube-fbm"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &gpu.fbm_target.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&gpu.fbm_pipeline);
-            pass.set_bind_group(0, &gpu.fbm_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // `_bloomComposer.render()`: copy + UnrealBloomPass of the capture.
-        // The bright pass is bound to the cube target in `init` and after
-        // every resize (`rebuild_targets`).
-        gpu.bloom.encode(encoder);
-
-        // Shader2 → the composer's scene target, then OutputPass.
+        // Shader2 → the composer's scene target, then the Plane9 bloom and
+        // OutputPass.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("point10-hollow-cube-composite"),
@@ -842,7 +795,7 @@ impl Point10Scene for HollowCube {
 
     fn meta(&self) -> SceneMeta {
         // `Point10HollowCube.js` sets no category.
-        SceneMeta::for_scene("Point10 Hollow Cube", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Hollow Cube", "3d-scenes")
     }
 }
 
@@ -864,18 +817,6 @@ fn create_composite_bind_group(device: &wgpu::Device, gpu: &HollowCubeGpu) -> wg
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(
-                    gpu.bloom
-                        .composite_view()
-                        .expect("the bloom pass always has a composite target"),
-                ),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(&gpu.fbm_target.view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
                 resource: wgpu::BindingResource::Sampler(&gpu.composite_sampler),
             },
         ],
@@ -926,15 +867,6 @@ fn hollow_cube_cube_wgsl() -> String {
     format!("{P9_COMMON_WGSL}\n{P9_SHADING_WGSL}\n{HOLLOW_CUBE_CUBE_WGSL}")
 }
 
-/// `buildHollowCubeFbmFragment`.
-fn hollow_cube_fbm_wgsl() -> String {
-    format!(
-        "{}\n{}\n{HOLLOW_CUBE_FBM_WGSL}",
-        crate::point10::FULLSCREEN_TRIANGLE_WGSL,
-        P9_COMMON_WGSL
-    )
-}
-
 /// `buildHollowCubeShader2Fragment`.
 fn hollow_cube_composite_wgsl() -> String {
     format!(
@@ -962,6 +894,8 @@ fn p9_tonemap_aces(color: vec3<f32>) -> vec3<f32> {
 const HOLLOW_CUBE_CUBE_WGSL: &str = r#"
 struct CubeUniforms {
   view_proj: mat4x4<f32>,
+  // RenderObject1.Rot — the Expression1 whole-object rotation.
+  model: mat4x4<f32>,
   camera_pos: vec4<f32>,
   // x explosion, y colour, z rotation
   in1: vec4<f32>,
@@ -1056,13 +990,16 @@ fn vs_main(
   v = v + nv * pulse * u.in1.x;
   v = v + up * u.in2.y * xx;
 
-  out.position = u.view_proj * vec4<f32>(v, 1.0);
+  // `gMVP * v` with `gM = RenderObject1` carrying the Expression1 rotation.
+  let local = vec4<f32>(v, 1.0);
+  let world = u.model * local;
+  out.position = u.view_proj * world;
   out.diffuse = vec4<f32>(p9_hsv2rgb(0.0, 0.9, 0.8), 1.0)
     * (0.1 + 0.9 * p9_rand2(vec2<f32>(instance_id)));
-  // `mat3(modelMatrix)` is the identity.
-  out.w_normal = normalize(p9_rotate_vector(normal, q_rotation));
-  out.w_pos = v;
-  out.view_dir = u.camera_pos.xyz - v;
+  let rotated_normal = p9_rotate_vector(normal, q_rotation);
+  out.w_normal = normalize((u.model * vec4<f32>(rotated_normal, 0.0)).xyz);
+  out.w_pos = world.xyz;
+  out.view_dir = u.camera_pos.xyz - world.xyz;
   return out;
 }
 
@@ -1116,23 +1053,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-const HOLLOW_CUBE_FBM_WGSL: &str = r#"
-struct FbmUniforms {
-  time: f32,
-  _pad: f32,
-  resolution: vec2<f32>,
-}
-@group(0) @binding(0) var<uniform> u: FbmUniforms;
-
-@fragment
-fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-  let uv = position.xy / u.resolution;
-  // `_fbm(vec3(vUv.xy * vec2(10.0), gTime * 0.1), 3.0)`
-  let v = vec3<f32>(p9_fbm(vec3<f32>(uv * vec2<f32>(10.0), u.time * 0.1), 3u));
-  return vec4<f32>(v, 1.0);
-}
-"#;
-
 const HOLLOW_CUBE_COMPOSITE_WGSL: &str = r#"
 struct CompositeUniforms {
   resolution: vec2<f32>,
@@ -1140,28 +1060,30 @@ struct CompositeUniforms {
 }
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
 @group(0) @binding(1) var t_cube: texture_2d<f32>;
-@group(0) @binding(2) var t_bloom: texture_2d<f32>;
-@group(0) @binding(3) var t_fbm: texture_2d<f32>;
-@group(0) @binding(4) var source_sampler: sampler;
+@group(0) @binding(2) var source_sampler: sampler;
 
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let uv = position.xy / u.resolution;
-  let c1 = textureSample(t_bloom, source_sampler, uv);
   let c2 = textureSample(t_cube, source_sampler, uv);
-  let bg = textureSample(t_fbm, source_sampler, uv);
-
-  let col = mix(bg.rgb, p9_tonemap_aces(c2.rgb), c2.a)
-    + p9_tonemap_aces(c1.rgb * c1.rgb);
-
+  // `PreviousLayer1.Color` has no equivalent here: the compositor alpha-blends
+  // over the layers below, so the vendor's third texture is transparent black.
+  let bg = vec4<f32>(0.0);
+  let col = mix(bg.rgb, p9_tonemap_aces(c2.rgb), c2.a);
   return vec4<f32>(col, c2.a);
 }
 "#;
 
 #[cfg(test)]
 mod tests {
+    // The fidelity contract accumulates messages from `!(float < float)`
+    // checks; the negation is the readable form here.
+    #![allow(clippy::neg_cmp_op_on_partial_ord)]
+
     use super::*;
     use crate::point10::audio_bridge::BandPayload;
+    use crate::point10::postfx::Plane9BloomParams;
+    use crate::point10::test_support::{TestTarget, any_lit, gpu};
 
     // Port of tests/unit/point10-hollow-cube.test.js.
 
@@ -1178,21 +1100,27 @@ mod tests {
         let loud = hollow_cube_drive(0.1, 0.0, 0.0, 0.1, 0.0);
         let louder = hollow_cube_drive(5.0, 0.0, 0.0, 0.1, 0.0);
 
-        assert!((quiet.perm - (1.0 + 0.01 * 40.0 * 0.1)).abs() < 1e-6);
-        assert!((loud.perm - (0.1 + 0.01) * 40.0 * 0.1).abs() < 1e-6);
-        // min(0.5, band + 0.01) * 40 caps the advance at 20 units per second.
-        assert!((louder.perm - 0.5 * 40.0 * 0.1).abs() < 1e-6);
+        assert!((quiet.perm - (1.0 + 0.02 * 0.08 * 0.1)).abs() < 1e-6);
+        assert!((loud.perm - (0.1 + 0.02) * 0.08 * 0.1).abs() < 1e-6);
+        // min(0.15, band + 0.02) caps the advance at 0.15 * 0.08 per second.
+        assert!((louder.perm - 0.15 * 0.08 * 0.1).abs() < 1e-6);
     }
 
     #[test]
     fn drive_maps_the_damped_bass_lanes_to_in1_and_in2() {
         let drive = hollow_cube_drive(0.0, 0.1, 0.5, 0.1, 0.0);
 
-        assert!((drive.in1[0] - (0.5_f32 * 2.2).min(1.2) * 0.6).abs() < 1e-6);
+        // The explosion now reads the damping-1 level lane like colour/rotation.
+        assert!((drive.in1[0] - (0.1_f32 * 2.2).min(1.2) * 0.6).abs() < 1e-6);
         assert!((drive.in1[1] - (0.1_f32 * 4.0 + 0.4).min(0.55)).abs() < 1e-6);
         assert!((drive.in1[2] - (0.1_f32 * 1.5).min(1.0)).abs() < 1e-6);
         assert!((drive.in2[0] - drive.perm).abs() < 1e-6);
         assert!((drive.in2[1] - (1.0 + 0.1_f32.min(0.2))).abs() < 1e-6);
+        // The third lane scales the noise orbit.
+        let amplitude = 1.0 + 0.5 * 0.1;
+        assert!((drive.orbit[0] - value_noise2(drive.perm, 0.0) * amplitude * 500.0).abs() < 1e-4);
+        assert!((drive.orbit[1] - value_noise2(drive.perm, 1.0) * amplitude * 500.0).abs() < 1e-4);
+        assert!((drive.orbit[2] - value_noise2(drive.perm, 2.0) * amplitude * 500.0).abs() < 1e-4);
     }
 
     #[test]
@@ -1213,9 +1141,11 @@ mod tests {
 
         assert!((negative.perm - 1.0).abs() < 1e-6);
         assert_eq!(negative.in1, [0.0, 0.4, 0.0]);
+        // A silent damping-1 lane leaves the orbit at the noise term's 1.0 gain.
+        assert!((negative.orbit[0] - value_noise2(1.0, 0.0) * 500.0).abs() < 1e-4);
         assert!((bad.perm - 1.0).abs() < 1e-6);
-        // P9 deltatime is clamped, so a suspended tab cannot skip the pulse.
-        assert!((long_frame.perm - 0.5 * 40.0 * 0.1).abs() < 1e-6);
+        // P9 deltatime is clamped, so a suspended tab cannot skip the creep.
+        assert!((long_frame.perm - 0.15 * 0.08 * 0.1).abs() < 1e-6);
     }
 
     #[test]
@@ -1263,10 +1193,9 @@ mod tests {
         assert_eq!(CAMERA_LOOK_AT, [0.0, 0.0, -1.0]);
         assert_eq!(
             (BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD),
-            (0.51, 0.85, 0.0)
+            (0.51, 6.0, 0.0)
         );
         assert_eq!(BLOOM_SMOOTHNESS, 0.5);
-        assert_eq!((FBM_SIZE, FBM_OCTAVES), (256, 3));
         assert_eq!(MAX_DT, 0.1);
     }
 
@@ -1292,16 +1221,18 @@ mod tests {
 
         scene.update(0.1, &bridge);
 
-        // `in1 = (min(1.2, 0.3*2.2)*0.6 * 0.5, min(0.55, 0.2*4+0.4) * 1.5,
-        //         min(1, 0.2*1.5) * 2)`
-        assert!((scene.in1()[0] - (0.3_f32 * 2.2).min(1.2) * 0.6 * 0.5).abs() < 1e-5);
+        // `in1 = (min(1.2, 0.2*2.2)*0.6 * 0.5, min(0.55, 0.2*4+0.4) * 1.5,
+        //         min(1, 0.2*1.5) * 2)` — the explosion reads damping 1 too.
+        assert!((scene.in1()[0] - (0.2_f32 * 2.2).min(1.2) * 0.6 * 0.5).abs() < 1e-5);
         // `min(0.55, 0.2 * 4 + 0.4)` clamps *before* the colour prop scales it.
         assert!((scene.in1()[1] - 0.55 * 1.5).abs() < 1e-5);
         assert!((scene.in1()[2] - 0.3 * 2.0).abs() < 1e-5);
-        assert!((scene.in2()[0] - scene.perm()).abs() < 1e-6);
+        // `gIn2.x` is Shader1's own damping-0 phase; the Expression1 phase is
+        // `scene.perm()`.
+        assert!((scene.in2()[0] - scene.shader_perm()).abs() < 1e-6);
+        assert!((scene.shader_perm() - (1.0 + 0.11 * 40.0 * 0.1)).abs() < 1e-5);
+        assert!((scene.perm() - (1.0 + 0.15 * 0.08 * 0.1)).abs() < 1e-6);
         assert!((scene.in2()[1] - 1.2).abs() < 1e-6);
-        // The fbm clock uses the raw frame delta.
-        assert!((scene.time() - 0.1).abs() < 1e-6);
     }
 
     #[test]
@@ -1309,14 +1240,15 @@ mod tests {
         let mut scene = HollowCube::new();
         scene.update(4.0, &AudioBridge::new());
         // `frame_dt` caps at 0.1 s; with no audio the reads are the 0.1
-        // `nomusic` fallback, so `perm += min(0.5, 0.11) * 40 * 0.1`.
-        assert!((scene.perm() - (1.0 + 0.11 * 40.0 * 0.1)).abs() < 1e-5);
+        // `nomusic` fallback, so `perm += min(0.15, 0.12) * 0.08 * 0.1`.
+        assert!((scene.perm() - (1.0 + 0.12 * 0.08 * 0.1)).abs() < 1e-6);
+        // Shader1's damping-0 phase keeps the vendor formula.
+        assert!((scene.shader_perm() - (1.0 + 0.11 * 40.0 * 0.1)).abs() < 1e-5);
     }
 
     #[test]
     fn uniform_blocks_match_the_documented_sizes() {
-        assert_eq!(std::mem::size_of::<CubeUniforms>(), 112);
-        assert_eq!(std::mem::size_of::<FbmUniforms>(), 16);
+        assert_eq!(std::mem::size_of::<CubeUniforms>(), 176);
         assert_eq!(std::mem::size_of::<CompositeUniforms>(), 16);
     }
 
@@ -1324,7 +1256,6 @@ mod tests {
     fn wgsl_parses_and_validates() {
         for (label, program) in [
             ("cube", hollow_cube_cube_wgsl()),
-            ("fbm", hollow_cube_fbm_wgsl()),
             ("composite", hollow_cube_composite_wgsl()),
         ] {
             let module = match naga::front::wgsl::parse_str(&program) {
@@ -1363,25 +1294,320 @@ mod tests {
     }
 
     #[test]
-    fn fbm_and_composite_shaders_keep_the_preset_maths() {
-        let fbm = hollow_cube_fbm_wgsl();
-        assert!(fbm.contains("p9_fbm(vec3<f32>(uv * vec2<f32>(10.0), u.time * 0.1), 3u)"));
-        assert!(fbm.contains("vec4<f32>(v, 1.0)"));
-
+    fn composite_shader_keeps_the_preset_maths() {
         let composite = hollow_cube_composite_wgsl();
         for needle in [
+            "let bg = vec4<f32>(0.0);",
             "mix(bg.rgb, p9_tonemap_aces(c2.rgb), c2.a)",
-            "p9_tonemap_aces(c1.rgb * c1.rgb)",
-            "return vec4<f32>(col, c2.a)",
+            "return vec4<f32>(col, c2.a);",
         ] {
             assert!(composite.contains(needle), "composite lost {needle}");
         }
+        assert!(!composite.contains("t_fbm"));
+        assert!(!composite.contains("p9_fbm"));
+    }
+
+    #[test]
+    fn plane9_hollow_cube_fidelity_contract() {
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+
+        // Expression1 reads bass on damping lane 1. Changing only lanes 0/2
+        // must not move the explosion, and `perm` uses the documented creep.
+        let mut scene = HollowCube::new();
+        scene.apply_props(|key| match key {
+            "spinSpeed" => Some(0.0),
+            "explode" => Some(1.0),
+            "color" => Some(1.0),
+            "bloom" => Some(1.0),
+            _ => None,
+        });
+        let mut payload = BandPayload::silent(44_100.0);
+        payload.lanes[0] = 0.05;
+        payload.lanes[3] = 0.2;
+        payload.lanes[6] = 0.1;
+        let mut bridge = AudioBridge::new();
+        bridge.update(0.1, Some(&payload), &Default::default());
+        scene.update(0.1, &bridge);
+
+        let expected_explosion = (0.2_f32 * 2.2).min(1.2) * 0.6;
+        let expected_perm = 1.0 + (0.2_f32 + 0.02).min(0.15) * 0.08 * 0.1;
+        check!(
+            (scene.in1()[0] - expected_explosion).abs() < 1e-6,
+            "explosion must read damping-1 bass: expected {expected_explosion}, got {}",
+            scene.in1()[0]
+        );
+        check!(
+            (scene.perm() - expected_perm).abs() < 1e-6,
+            "Expression1 perm must use damping-1 bass and the 0.08 creep: expected {expected_perm}, got {}",
+            scene.perm()
+        );
+
+        payload.lanes[0] = 0.1;
+        payload.lanes[6] = 0.9;
+        bridge.update(0.1, Some(&payload), &Default::default());
+        scene.update(0.1, &bridge);
+        check!(
+            (scene.in1()[0] - expected_explosion).abs() < 1e-6,
+            "explosion responded to damping-0/2 instead of damping-1: expected {expected_explosion}, got {}",
+            scene.in1()[0]
+        );
+
+        let drive = hollow_cube_drive(0.1, 0.2, 0.3, 0.1, 1.0);
+        let documented_perm = 1.0 + (0.1_f32 + 0.02).min(0.15) * 0.08 * 0.1;
+        check!(
+            (drive.perm - documented_perm).abs() < 1e-6,
+            "drive must implement min(0.15, band + 0.02) * 0.08 * dt: expected {documented_perm}, got {}",
+            drive.perm
+        );
+        check!(
+            (drive.in2[0] - drive.perm).abs() < 1e-6,
+            "gIn2.x must carry the Expression1 perm"
+        );
+
+        // There is no public rotation output on HollowCubeDrive yet, so pin
+        // the missing Expression1 orbit as a production-source contract.
+        let production = include_str!("hollow_cube.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source precedes the test module");
+        let compact = production.split_whitespace().collect::<Vec<_>>().join(" ");
+        check!(
+            compact.matches("value_noise2(").count() >= 3,
+            "Expression1 must derive all three orbit axes with value_noise2"
+        );
+        let noise_axes: Vec<&str> = production
+            .match_indices("value_noise2(")
+            .map(|(start, _)| {
+                let args_start = start + "value_noise2(".len();
+                let args_end = args_start
+                    + production[args_start..]
+                        .find(')')
+                        .expect("value_noise2 call must close");
+                production[args_start..args_end]
+                    .split(',')
+                    .nth(1)
+                    .expect("value_noise2 call must have a y coordinate")
+                    .trim()
+            })
+            .collect();
+        for coordinate in ["0.0", "1.0", "2.0"] {
+            check!(
+                noise_axes.contains(&coordinate),
+                "Expression1 must derive orbit coordinate {coordinate} with value_noise2"
+            );
+        }
+        check!(
+            compact.matches("* 500.0").count() >= 3,
+            "Expression1 orbit must be expressed in degrees (noise2 * 500)"
+        );
+        let rust_logic = production
+            .split("const HOLLOW_CUBE_CUBE_WGSL")
+            .next()
+            .expect("cube WGSL follows the Rust implementation");
+        check!(
+            rust_logic.contains("band(-1, 1, 0, 0.15)")
+                && rust_logic.contains("1.0 +")
+                && rust_logic.contains("* 0.1"),
+            "Expression1 orbit amplitude must read damping-1 bass with the 0.15 fallback and apply its 0.1 gain"
+        );
+
+        // PreviousLayer1.Color is absent in this architecture: Texture3 is
+        // transparent black, not the dead vendor fbm render target.
+        check!(
+            !compact.contains("fbm_pipeline"),
+            "dead fbm pass must be removed"
+        );
+        check!(
+            !compact.contains("fbm_target"),
+            "dead fbm target must be removed"
+        );
+        check!(
+            !compact.contains("FbmUniforms"),
+            "dead fbm uniforms must be removed"
+        );
+        check!(
+            !compact.contains("hollow_cube_fbm_wgsl"),
+            "dead fbm shader must be removed"
+        );
+        check!(
+            !compact.contains("texture_entry(3)"),
+            "Texture3 sampler must be removed"
+        );
+        let composite = hollow_cube_composite_wgsl();
+        check!(
+            !composite.contains("t_fbm"),
+            "composite must not sample fbm"
+        );
+        check!(
+            !composite.contains("p9_fbm"),
+            "composite must not contain fbm noise"
+        );
+        check!(
+            !composite.contains("@binding(3)"),
+            "composite must not bind Texture3"
+        );
+        check!(
+            composite.contains("let bg = vec4<f32>(0.0);"),
+            "PreviousLayer1.Color must be transparent black"
+        );
+        check!(
+            composite.contains("return vec4<f32>(col, c2.a);"),
+            "composite alpha must remain the cube capture alpha"
+        );
+        check!(
+            !production.contains("RG16F"),
+            "Plane9 Format 5 is RGBA16F, not RG16F"
+        );
+
+        // Vendor Bloom: Radius 6, Threshold 0, Smoothness 0.5, Intensity 0.51,
+        // Antiflicker false. Threshold zero collapses the driver to one mip.
+        let params = Plane9BloomParams::new(6.0, 0.0, 0.5, 0.51, false);
+        check!(
+            (
+                params.radius(),
+                params.threshold(),
+                params.smoothness(),
+                params.intensity()
+            ) == (6.0, 0.0, 0.5, 0.51),
+            "Plane9 bloom params must match the vendor values"
+        );
+        check!(
+            !params.antiflicker(),
+            "Plane9 bloom antiflicker must be false"
+        );
+        check!(params.mip_count() == 1, "Plane9 bloom must use one mip");
+        check!(
+            !params.prefilter_enabled(),
+            "zero threshold must skip prefilter"
+        );
+        check!(
+            params.threshold_knee() == (0.0, 0.0, 0.0),
+            "zero-threshold bloom knee must stay finite and zero"
+        );
+        check!(
+            (
+                BLOOM_RADIUS,
+                BLOOM_THRESHOLD,
+                BLOOM_SMOOTHNESS,
+                BLOOM_STRENGTH
+            ) == (6.0, 0.0, 0.5, 0.51),
+            "scene bloom constants must use Plane9 values, got radius {}",
+            BLOOM_RADIUS
+        );
+        check!(
+            compact.contains("Plane9BloomParams::new(") && compact.contains("enable_plane9_bloom("),
+            "scene must wire Plane9BloomParams through Composer"
+        );
+        check!(
+            !compact.contains("UnrealBloomPass::new("),
+            "Hollow Cube must not use the three.js UnrealBloomPass model"
+        );
+
+        // Headless 64x64, two-frame smoke test. The same initialisation also
+        // proves the scene's live composer received the scaled Plane9 params.
+        if let Some((device, queue)) = gpu() {
+            let mut gpu_scene = HollowCube::new();
+            gpu_scene.apply_props(|key| (key == "bloom").then_some(2.0));
+            let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            ctx.resize(64, 64);
+            gpu_scene.init(&mut ctx);
+            gpu_scene.resize(64, 64);
+
+            if let Some(gpu) = gpu_scene.gpu.as_ref() {
+                check!(
+                    gpu.composer.plane9_bloom().is_some(),
+                    "scene composer has no Plane9 bloom pass"
+                );
+                if let Some(bloom) = gpu.composer.plane9_bloom() {
+                    check!(
+                        bloom.params() == Plane9BloomParams::new(6.0, 0.0, 0.5, 0.51 * 2.0, false),
+                        "live scene bloom params must include the bloom prop scale"
+                    );
+                }
+            }
+
+            let mut smoke_payload = BandPayload::silent(44_100.0);
+            smoke_payload.lanes = [0.6; 12];
+            let mut smoke_bridge = AudioBridge::new();
+            let target = TestTarget::new(&device, 64, 64);
+            let mut first = None;
+            for frame in 0..2 {
+                smoke_bridge.update(1.0 / 60.0, Some(&smoke_payload), &Default::default());
+                gpu_scene.update(1.0 / 60.0, &smoke_bridge);
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("point10-hollow-cube-fidelity-smoke"),
+                });
+                gpu_scene.render(&mut encoder, &target.view);
+                queue.submit(Some(encoder.finish()));
+                let pixels = target.read(&device, &queue);
+                check!(
+                    any_lit(&pixels),
+                    "64x64 Hollow Cube smoke frame {frame} is empty"
+                );
+                check!(
+                    pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] < 255),
+                    "64x64 Hollow Cube smoke frame {frame} must composite transparently"
+                );
+                if frame == 0 {
+                    first = Some(pixels);
+                }
+            }
+            check!(
+                first.is_some_and(|pixels| pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[3] == 0)),
+                "64x64 Hollow Cube must retain a fully transparent background"
+            );
+
+            // Isolate Expression1's whole-object orbit: zero the Shader1
+            // explosion/colour/spin props and hold dt at zero. Both level reads
+            // saturate cube size, so only the noise orbit amplitude may change.
+            gpu_scene.apply_props(|key| match key {
+                "spinSpeed" | "explode" | "color" => Some(0.0),
+                _ => None,
+            });
+            let mut orbit_payload = BandPayload::silent(44_100.0);
+            orbit_payload.lanes[0] = 0.4;
+            let mut orbit_frames = Vec::new();
+            for level in [0.2, 1.0] {
+                orbit_payload.lanes[3] = level;
+                smoke_bridge.update(0.0, Some(&orbit_payload), &Default::default());
+                gpu_scene.update(0.0, &smoke_bridge);
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("point10-hollow-cube-orbit-smoke"),
+                });
+                gpu_scene.render(&mut encoder, &target.view);
+                queue.submit(Some(encoder.finish()));
+                orbit_frames.push(target.read(&device, &queue));
+            }
+            check!(
+                orbit_frames[0] != orbit_frames[1],
+                "Expression1 noise orbit must rotate the whole cloud when its damping-1 amplitude changes"
+            );
+        } else {
+            eprintln!("skipping Hollow Cube GPU smoke: no fallback adapter");
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Plane9 Hollow Cube fidelity failures:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = HollowCube::new();
-        assert_eq!(scene.meta().name, "Point10 Hollow Cube");
+        assert_eq!(scene.meta().name, "Plane9 Hollow Cube");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(

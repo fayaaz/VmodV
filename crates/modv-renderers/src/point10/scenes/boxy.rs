@@ -329,7 +329,7 @@ impl Boxy {
 
 impl Point10Scene for Boxy {
     fn name(&self) -> &'static str {
-        "Point10 Boxy"
+        "Plane9 Boxy"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -657,7 +657,7 @@ impl Point10Scene for Boxy {
 
     fn meta(&self) -> SceneMeta {
         // `Point10Boxy.js` sets no category.
-        SceneMeta::for_scene("Point10 Boxy", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Boxy", "3d-scenes")
     }
 }
 
@@ -1029,7 +1029,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = Boxy::new();
-        assert_eq!(scene.meta().name, "Point10 Boxy");
+        assert_eq!(scene.meta().name, "Plane9 Boxy");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(

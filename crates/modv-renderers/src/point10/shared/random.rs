@@ -52,6 +52,35 @@ pub fn rand01(index: usize, frame: u32) -> f32 {
     seeded_rand(index as i32, frame as i32)
 }
 
+/// Plane9's `smooth` (`t t (3 - 2t)`).
+fn smooth(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn finite(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
+/// Plane9's value noise (`noise2` in expressions): a seeded hash over the four
+/// integer cell corners, smoothstep-interpolated, mapped to `[-1, 1)`.
+pub fn value_noise2(x: f32, y: f32) -> f32 {
+    let ix = finite(x).floor();
+    let iy = finite(y).floor();
+    let fx = smooth(finite(x) - ix);
+    let fy = smooth(finite(y) - iy);
+    let mut value = 0.0;
+
+    for dy in 0..=1 {
+        for dx in 0..=1 {
+            let corner = seeded_rand(ix as i32 + dx, iy as i32 + dy);
+            value +=
+                corner * if dx == 1 { fx } else { 1.0 - fx } * if dy == 1 { fy } else { 1.0 - fy };
+        }
+    }
+
+    value * 2.0 - 1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

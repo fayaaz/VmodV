@@ -51,6 +51,7 @@
 pub mod afterimage;
 pub mod composer;
 pub mod output_pass;
+pub mod plane9_bloom;
 pub mod render_pass;
 pub mod shader_pass;
 pub mod unreal_bloom_pass;
@@ -58,6 +59,7 @@ pub mod unreal_bloom_pass;
 pub use afterimage::{AfterimagePass, AfterimageUniforms};
 pub use composer::Composer;
 pub use output_pass::{OutputPass, ToneMapping};
+pub use plane9_bloom::{Plane9BloomParams, Plane9BloomPass};
 pub use render_pass::RenderPass;
 pub use shader_pass::{ShaderPass, ShaderPassUniforms};
 pub use unreal_bloom_pass::UnrealBloomPass;

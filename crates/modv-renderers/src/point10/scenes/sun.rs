@@ -1045,7 +1045,7 @@ fn write_pass_uniforms(gpu: &SunGpu, size: (u32, u32), ray_weight: f32, brightne
 
 impl Point10Scene for Sun {
     fn name(&self) -> &'static str {
-        "Point10 Sun"
+        "Plane9 Sun"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -1669,7 +1669,7 @@ impl Point10Scene for Sun {
     }
 
     fn meta(&self) -> SceneMeta {
-        SceneMeta::for_scene("Point10 Sun", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Sun", "3d-scenes")
     }
 }
 
@@ -2084,10 +2084,10 @@ mod tests {
     #[test]
     fn meta_matches_the_js_registry() {
         let scene = Sun::new();
-        assert_eq!(scene.meta().name, "Point10 Sun");
+        assert_eq!(scene.meta().name, "Plane9 Sun");
         assert_eq!(scene.meta().category, "3d-scenes");
         assert_eq!(scene.meta().audio_features, &["bass", "mid", "treble"]);
-        assert_eq!(scene.name(), "Point10 Sun");
+        assert_eq!(scene.name(), "Plane9 Sun");
     }
 
     #[test]

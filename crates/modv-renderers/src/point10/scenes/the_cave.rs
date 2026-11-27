@@ -287,7 +287,7 @@ struct CaveGpu {
     bloom: UnrealBloomPass,
 }
 
-/// `Point10 The Cave` scene.
+/// `Plane9 The Cave` scene.
 pub struct TheCave {
     audio: P10Audio,
     perm: f32,
@@ -942,7 +942,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 
 impl Point10Scene for TheCave {
     fn name(&self) -> &'static str {
-        "Point10 The Cave"
+        "Plane9 The Cave"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -1073,7 +1073,7 @@ impl Point10Scene for TheCave {
     }
 
     fn meta(&self) -> SceneMeta {
-        SceneMeta::for_scene("Point10 The Cave", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 The Cave", "3d-scenes")
     }
 }
 
@@ -1212,11 +1212,11 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_adapter_defaults() {
         let scene = TheCave::new();
-        assert_eq!(scene.name(), "Point10 The Cave");
+        assert_eq!(scene.name(), "Plane9 The Cave");
         let meta = scene.meta();
         assert_eq!(meta.name, scene.name());
         assert_eq!(meta.category, "3d-scenes");
-        assert_eq!(meta.author, "Point10");
+        assert_eq!(meta.author, "Plane9 (Joakim Dahl)");
         let props = scene.props();
         for key in ["scrollSpeed", "glow", "bloom"] {
             assert!(props.iter().any(|prop| prop.name == key), "missing {key}");

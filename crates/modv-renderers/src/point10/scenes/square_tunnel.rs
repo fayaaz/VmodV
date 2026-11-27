@@ -356,7 +356,7 @@ impl SquareTunnel {
 
 impl Point10Scene for SquareTunnel {
     fn name(&self) -> &'static str {
-        "Point10 Square Tunnel"
+        "Plane9 Square Tunnel"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -518,7 +518,7 @@ impl Point10Scene for SquareTunnel {
 
     fn meta(&self) -> SceneMeta {
         // `Point10SquareTunnel.js` sets no category, so the adapter default wins.
-        SceneMeta::for_scene("Point10 Square Tunnel", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Square Tunnel", "3d-scenes")
     }
 }
 
@@ -727,7 +727,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = SquareTunnel::new();
-        assert_eq!(scene.meta().name, "Point10 Square Tunnel");
+        assert_eq!(scene.meta().name, "Plane9 Square Tunnel");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(&names[names.len() - 2..], &["scrollSpeed", "brightness"]);

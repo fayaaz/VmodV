@@ -316,7 +316,7 @@ impl ItIsComingForYou {
 
 impl Point10Scene for ItIsComingForYou {
     fn name(&self) -> &'static str {
-        "Point10 It Is Coming For You"
+        "Plane9 It Is Coming For You"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -522,7 +522,7 @@ impl Point10Scene for ItIsComingForYou {
 
     fn meta(&self) -> SceneMeta {
         // `Point10ItIsComingForYou.js` sets no category.
-        SceneMeta::for_scene("Point10 It Is Coming For You", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 It Is Coming For You", "3d-scenes")
     }
 }
 
@@ -880,7 +880,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = ItIsComingForYou::new();
-        assert_eq!(scene.meta().name, "Point10 It Is Coming For You");
+        assert_eq!(scene.meta().name, "Plane9 It Is Coming For You");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(&names[names.len() - 3..], &["speed", "glow", "bloom"]);

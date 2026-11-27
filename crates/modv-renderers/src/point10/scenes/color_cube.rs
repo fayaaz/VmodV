@@ -472,7 +472,7 @@ impl ColorCube {
 
 impl Point10Scene for ColorCube {
     fn name(&self) -> &'static str {
-        "Point10 Color Cube"
+        "Plane9 Color Cube"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -688,7 +688,7 @@ impl Point10Scene for ColorCube {
 
     fn meta(&self) -> SceneMeta {
         // `Point10ColorCube.js` sets no category.
-        SceneMeta::for_scene("Point10 Color Cube", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Color Cube", "3d-scenes")
     }
 }
 
@@ -1045,7 +1045,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = ColorCube::new();
-        assert_eq!(scene.meta().name, "Point10 Color Cube");
+        assert_eq!(scene.meta().name, "Plane9 Color Cube");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(

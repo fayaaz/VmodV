@@ -4899,7 +4899,13 @@ impl Store {
     }
 
     pub fn restore(&mut self, preset: &Value) -> Result<(), StoreError> {
-        load_preset_into_state(&mut self.state, preset)?;
+        // Migrate historical `Point10 <Name>` references to their canonical
+        // `Plane9 <Name>` names before loading, so the re-save writes the new
+        // name. The alias table lives in `modv-renderers::point10`; the walk is
+        // idempotent and touches only alias strings.
+        let mut preset = preset.clone();
+        modv_renderers::point10::rename_legacy_scene_names(&mut preset);
+        load_preset_into_state(&mut self.state, &preset)?;
         // A saved snapshot carries whatever props existed when it was saved,
         // so registry-injected props (e.g. the synthetic `quality` enum on
         // ISF/Point10 modules) are missing from it. Merge them in — additive

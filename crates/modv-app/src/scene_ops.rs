@@ -2155,12 +2155,16 @@ impl Store {
         params: &Map<String, Value>,
     ) -> Result<Value, StoreError> {
         let action = "scenes/loadSceneFromJson";
-        let document = match params.get("scene").or_else(|| params.get("json")) {
+        let mut document = match params.get("scene").or_else(|| params.get("json")) {
             Some(Value::String(text)) => serde_json::from_str::<Value>(text)
                 .map_err(|error| invalid(action, format!("invalid Scene JSON: {error}")))?,
             Some(value) => value.clone(),
             None => return Err(invalid(action, "missing \"scene\" or \"json\"")),
         };
+        // Migrate historical `Point10 <Name>` references (the twelve Plane9
+        // ports) before normalising, so both the stored Scene and its re-save
+        // carry the canonical `Plane9 <Name>` name.
+        modv_renderers::point10::rename_legacy_scene_names(&mut document);
         let Some(normalized) = modv_engine::scenes_playlist::normalize_scene_document(&document)
         else {
             return Ok(Value::Null);
@@ -2752,6 +2756,11 @@ impl Store {
             })
             .or_else(|| object.get("name").and_then(Value::as_str))?
             .to_string();
+        // Resolve historical `Point10 <Name>` aliases to the canonical
+        // `Plane9 <Name>` name, so the live module (and its re-save) migrates
+        // even when the Scene document was not re-imported.
+        let module_name =
+            modv_renderers::point10::resolve_scene_name(module_name.as_str()).to_string();
         let id = crate::ids::uuid_v4();
 
         let (mut meta, defaults, registered) = match self.registry.meta_fields(&module_name) {
@@ -2775,6 +2784,9 @@ impl Store {
                 meta.insert(key.clone(), value.clone());
             }
         }
+        // The snapshot's `meta.name` may still carry a historical alias; the
+        // live module always reports its canonical name.
+        meta.insert("name".to_string(), json!(module_name));
         // Older Scene documents store `enabled: 1` / `0`; the legacy renderer
         // tests it for truthiness while the engine compositor requires a real
         // boolean, so a restored Webcam/effect would otherwise be skipped.

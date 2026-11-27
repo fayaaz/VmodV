@@ -3012,6 +3012,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "image",
+ "modv-renderers",
  "serde_json",
  "web-time",
 ]

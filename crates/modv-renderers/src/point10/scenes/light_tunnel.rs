@@ -219,7 +219,7 @@ impl LightTunnel {
 
 impl Point10Scene for LightTunnel {
     fn name(&self) -> &'static str {
-        "Point10 Light Tunnel"
+        "Plane9 Light Tunnel"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -378,7 +378,7 @@ impl Point10Scene for LightTunnel {
 
     fn meta(&self) -> SceneMeta {
         // `Point10LightTunnel.js` sets no category.
-        SceneMeta::for_scene("Point10 Light Tunnel", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Light Tunnel", "3d-scenes")
     }
 }
 
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = LightTunnel::new();
-        assert_eq!(scene.meta().name, "Point10 Light Tunnel");
+        assert_eq!(scene.meta().name, "Plane9 Light Tunnel");
         assert_eq!(scene.meta().category, "3d-scenes");
         assert_eq!(scene.meta().audio_features, &["bass", "mid", "treble"]);
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();

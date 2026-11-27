@@ -18609,6 +18609,1118 @@
       "passes": 1
     },
     {
+      "id": "plane9-boxy",
+      "name": "Plane9 Boxy",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "scrollSpeed",
+          "label": "Scroll Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "roughness",
+          "label": "Roughness Floor",
+          "type": "float",
+          "default": 0.30000001192092896,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bloom",
+          "label": "Bloom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-color-cube",
+      "name": "Plane9 Color Cube",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "spinSpeed",
+          "label": "Spin Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "turbulence",
+          "label": "Turbulence",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "bloom",
+          "label": "Bloom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "brightness",
+          "label": "Brightness",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-earth",
+      "name": "Plane9 Earth",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "spinSpeed",
+          "label": "Spin Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "sunSpeed",
+          "label": "Sun Orbit",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "nightLights",
+          "label": "Night Lights",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "atmosphere",
+          "label": "Atmosphere",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "brightness",
+          "label": "Brightness",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-hollow-cube",
+      "name": "Plane9 Hollow Cube",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "spinSpeed",
+          "label": "Spin Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "explode",
+          "label": "Explosion",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "color",
+          "label": "Color",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "bloom",
+          "label": "Bloom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-it-is-coming-for-you",
+      "name": "Plane9 It Is Coming For You",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "speed",
+          "label": "Cloud Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "bloom",
+          "label": "Bloom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-light-tunnel",
+      "name": "Plane9 Light Tunnel",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "scrollSpeed",
+          "label": "Scroll Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "bloom",
+          "label": "Bloom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-mirror-cube",
+      "name": "Plane9 Mirror Cube",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "spinSpeed",
+          "label": "Spin Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "brightness",
+          "label": "Brightness",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-sound-cube",
+      "name": "Plane9 Sound Cube",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "spinSpeed",
+          "label": "Spin Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "pulse",
+          "label": "Pulse",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trail",
+          "label": "Trail",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "brightness",
+          "label": "Brightness",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-square-tunnel",
+      "name": "Plane9 Square Tunnel",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "scrollSpeed",
+          "label": "Scroll Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "brightness",
+          "label": "Brightness",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-sun",
+      "name": "Plane9 Sun",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "surfaceSpeed",
+          "label": "Surface Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "brightness",
+          "label": "Brightness",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "corona",
+          "label": "Corona",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "rays",
+          "label": "God Rays",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-the-cave",
+      "name": "Plane9 The Cave",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "scrollSpeed",
+          "label": "Scroll Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "glow",
+          "label": "Glow",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        },
+        {
+          "name": "bloom",
+          "label": "Bloom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-wormhole",
+      "name": "Plane9 Wormhole",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "warpSpeed",
+          "label": "Warp Speed",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "bloom",
+          "label": "Bloom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
       "id": "plasma-5349f03f",
       "name": "Plasma",
       "kind": "shader",
@@ -19542,104 +20654,6 @@
       }
     },
     {
-      "id": "point10-boxy",
-      "name": "Point10 Boxy",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "scrollSpeed",
-          "label": "Scroll Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "glow",
-          "label": "Glow",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "roughness",
-          "label": "Roughness Floor",
-          "type": "float",
-          "default": 0.30000001192092896,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
       "id": "point10-chromatic-line",
       "name": "Point10 Chromatic Line",
       "kind": "point10",
@@ -20002,104 +21016,6 @@
         "passes": 1
       },
       "passes": 1
-    },
-    {
-      "id": "point10-color-cube",
-      "name": "Point10 Color Cube",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "spinSpeed",
-          "label": "Spin Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "turbulence",
-          "label": "Turbulence",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "brightness",
-          "label": "Brightness",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
     },
     {
       "id": "point10-color-distort",
@@ -20516,112 +21432,6 @@
       "preview": null
     },
     {
-      "id": "point10-earth",
-      "name": "Point10 Earth",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "spinSpeed",
-          "label": "Spin Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "sunSpeed",
-          "label": "Sun Orbit",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "nightLights",
-          "label": "Night Lights",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "atmosphere",
-          "label": "Atmosphere",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "brightness",
-          "label": "Brightness",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
       "id": "point10-embos",
       "name": "Point10 Embos",
       "kind": "shader",
@@ -20796,104 +21606,6 @@
       }
     },
     {
-      "id": "point10-hollow-cube",
-      "name": "Point10 Hollow Cube",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "spinSpeed",
-          "label": "Spin Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "explode",
-          "label": "Explosion",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "color",
-          "label": "Color",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
       "id": "point10-invert",
       "name": "Point10 Invert",
       "kind": "shader",
@@ -20924,96 +21636,6 @@
         "kind": "shader",
         "sharedUniformBytes": 160
       }
-    },
-    {
-      "id": "point10-it-is-coming-for-you",
-      "name": "Point10 It Is Coming For You",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "speed",
-          "label": "Cloud Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "glow",
-          "label": "Glow",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
     },
     {
       "id": "point10-latent-backrooms",
@@ -21146,96 +21768,6 @@
       }
     },
     {
-      "id": "point10-light-tunnel",
-      "name": "Point10 Light Tunnel",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "scrollSpeed",
-          "label": "Scroll Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "glow",
-          "label": "Glow",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
       "id": "point10-limit-hue",
       "name": "Point10 Limit Hue",
       "kind": "shader",
@@ -21342,88 +21874,6 @@
         "passes": 1
       },
       "passes": 1
-    },
-    {
-      "id": "point10-mirror-cube",
-      "name": "Point10 Mirror Cube",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "spinSpeed",
-          "label": "Spin Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "brightness",
-          "label": "Brightness",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
     },
     {
       "id": "point10-mycelium",
@@ -22316,104 +22766,6 @@
       "passes": 1
     },
     {
-      "id": "point10-sound-cube",
-      "name": "Point10 Sound Cube",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "spinSpeed",
-          "label": "Spin Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "pulse",
-          "label": "Pulse",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trail",
-          "label": "Trail",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "brightness",
-          "label": "Brightness",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
       "id": "point10-spiral-particles",
       "name": "Point10 Spiral Particles",
       "kind": "point10",
@@ -22498,186 +22850,6 @@
           "default": 0.20000000298023224,
           "min": 0.0,
           "max": 1.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
-      "id": "point10-square-tunnel",
-      "name": "Point10 Square Tunnel",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "scrollSpeed",
-          "label": "Scroll Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "brightness",
-          "label": "Brightness",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
-      "id": "point10-sun",
-      "name": "Point10 Sun",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "surfaceSpeed",
-          "label": "Surface Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "brightness",
-          "label": "Brightness",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "corona",
-          "label": "Corona",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "rays",
-          "label": "God Rays",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
         }
       ],
       "source": null,
@@ -22774,96 +22946,6 @@
         "passes": 1
       },
       "passes": 1
-    },
-    {
-      "id": "point10-the-cave",
-      "name": "Point10 The Cave",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "scrollSpeed",
-          "label": "Scroll Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "glow",
-          "label": "Glow",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        }
-      ],
-      "source": null,
-      "preview": null
     },
     {
       "id": "point10-ultra-hdr",
@@ -23246,88 +23328,6 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
-        }
-      ],
-      "source": null,
-      "preview": null
-    },
-    {
-      "id": "point10-wormhole",
-      "name": "Point10 Wormhole",
-      "kind": "point10",
-      "category": "3d-scenes",
-      "author": "Point10",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [
-        "bass",
-        "mid",
-        "treble"
-      ],
-      "props": [
-        {
-          "name": "gain",
-          "label": "Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "smoothing",
-          "label": "Smoothing",
-          "type": "float",
-          "default": 0.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "bassGain",
-          "label": "Bass Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "midGain",
-          "label": "Mid Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "trebleGain",
-          "label": "Treble Gain",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "useAgc",
-          "label": "Auto Gain (AGC)",
-          "type": "bool",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 1.0
-        },
-        {
-          "name": "warpSpeed",
-          "label": "Warp Speed",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 4.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
         }
       ],
       "source": null,

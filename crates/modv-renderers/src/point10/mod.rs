@@ -157,6 +157,101 @@ fn fullscreen_uv(position: vec2<f32>, resolution: vec2<f32>) -> vec2<f32> {
 /// frame at 0.1 s ("a tab-suspend catch-up cannot jump the pattern").
 pub const MAX_FRAME_SECONDS: f32 = 0.1;
 
+/// The twelve genuine Plane9 (Joakim Dahl) preset ports, under their current
+/// canonical `Plane9 <Name>` registry names.
+///
+/// These were originally registered as `Point10 <Name>`. Saved Scenes and
+/// presets still carry the old strings, so the legacy aliases stay resolvable
+/// through [`canonical_scene_name`] — this list is the single source of truth
+/// for both directions.
+pub const PLANE9_SCENE_NAMES: &[&str] = &[
+    "Plane9 Boxy",
+    "Plane9 Color Cube",
+    "Plane9 Earth",
+    "Plane9 Hollow Cube",
+    "Plane9 It Is Coming For You",
+    "Plane9 Light Tunnel",
+    "Plane9 Mirror Cube",
+    "Plane9 Sound Cube",
+    "Plane9 Square Tunnel",
+    "Plane9 Sun",
+    "Plane9 The Cave",
+    "Plane9 Wormhole",
+];
+
+/// The prefix of the scenes that kept their `Point10 ` registry name, and of
+/// the historical aliases of the twelve renamed Plane9 ports.
+pub const POINT10_PREFIX: &str = "Point10 ";
+
+/// The prefix of the renamed Plane9 ports.
+pub const PLANE9_PREFIX: &str = "Plane9 ";
+
+/// Author credit for the twelve Plane9 preset ports.
+pub const PLANE9_AUTHOR: &str = "Plane9 (Joakim Dahl)";
+
+/// Resolve a historical `Point10 <Name>` registry reference to its canonical
+/// `Plane9 <Name>` name.
+///
+/// Returns `None` when `name` is not one of the twelve renamed aliases (either
+/// already canonical, or a Point10 scene that kept its name).
+pub fn canonical_scene_name(name: &str) -> Option<&'static str> {
+    let suffix = name.strip_prefix(POINT10_PREFIX)?;
+    PLANE9_SCENE_NAMES.iter().copied().find(|canonical| {
+        canonical
+            .strip_prefix(PLANE9_PREFIX)
+            .is_some_and(|canonical_suffix| canonical_suffix == suffix)
+    })
+}
+
+/// The canonical registry name for `name`, resolving legacy aliases.
+///
+/// Non-aliases are returned unchanged.
+pub fn resolve_scene_name(name: &str) -> &str {
+    canonical_scene_name(name).unwrap_or(name)
+}
+
+/// The authoritative Gallery renderer kind for a registry module named `name`.
+///
+/// The twelve Plane9 preset ports share the Point10 runtime renderer but are
+/// surfaced to the Gallery as their own kind (`type:plane9`); every other
+/// module keeps `default_kind` (its engine renderer kind). Using this
+/// helper in both snapshot builders keeps the roster in one place so the
+/// desktop and wasm Galleries cannot diverge.
+pub fn gallery_kind(name: &str, default_kind: &str) -> String {
+    if PLANE9_SCENE_NAMES.contains(&name) {
+        "plane9".to_string()
+    } else {
+        default_kind.to_string()
+    }
+}
+
+/// Rewrite every legacy `Point10 <Name>` alias string in a JSON document to its
+/// canonical `Plane9 <Name>` name.
+///
+/// Walks arrays and objects so nested Scene cells, Groups and module records
+/// are migrated; every other value is left untouched. Idempotent: canonical
+/// names never match the legacy prefix.
+pub fn rename_legacy_scene_names(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(canonical) = canonical_scene_name(text) {
+                *text = canonical.to_string();
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                rename_legacy_scene_names(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values_mut() {
+                rename_legacy_scene_names(value);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Clamp a frame delta the way the Point10 adapter's frame clock does
 /// (`timing.js: createFrameClock`).
 ///
@@ -332,9 +427,11 @@ pub fn read_scene_props(
 /// The Gallery meta of a Point10 module (`adapter.js:857-866`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SceneMeta {
-    /// Display + registration name, e.g. `"Point10 Particle Field"`.
+    /// Display + registration name, e.g. `"Point10 Particle Field"` or
+    /// `"Plane9 Light Tunnel"`.
     pub name: &'static str,
-    /// Module author (`"Point10"` for every imported scene).
+    /// Module author: `"Point10"`, or [`PLANE9_AUTHOR`] for the twelve Plane9
+    /// preset ports.
     pub author: &'static str,
     /// Module version (`"1.0.0"`).
     pub version: &'static str,
@@ -362,6 +459,16 @@ impl SceneMeta {
     pub const fn for_scene(name: &'static str, category: &'static str) -> Self {
         Self {
             name,
+            category,
+            ..Self::DEFAULT
+        }
+    }
+
+    /// Meta for one of the twelve Plane9 (Joakim Dahl) preset ports.
+    pub const fn for_plane9_scene(name: &'static str, category: &'static str) -> Self {
+        Self {
+            name,
+            author: PLANE9_AUTHOR,
             category,
             ..Self::DEFAULT
         }
@@ -634,11 +741,12 @@ mod tests {
         assert_eq!(scenes[2].name(), "Point10 Particle Field");
         assert_eq!(scenes[3].name(), "Point10 Spiral Particles");
         assert_eq!(scenes[4].name(), "Point10 Waveform");
-        // Batch 2, in the WS-7 inventory order.
-        assert_eq!(scenes[5].name(), "Point10 Square Tunnel");
-        assert_eq!(scenes[6].name(), "Point10 Light Tunnel");
-        assert_eq!(scenes[7].name(), "Point10 Wormhole");
-        assert_eq!(scenes[8].name(), "Point10 It Is Coming For You");
+        // Batch 2, in the WS-7 inventory order. These are Plane9 ports and
+        // use the `Plane9 ` prefix (the `Point10 ` names stay aliases).
+        assert_eq!(scenes[5].name(), "Plane9 Square Tunnel");
+        assert_eq!(scenes[6].name(), "Plane9 Light Tunnel");
+        assert_eq!(scenes[7].name(), "Plane9 Wormhole");
+        assert_eq!(scenes[8].name(), "Plane9 It Is Coming For You");
         // Batch 3. Glass Lens was removed: its upstream CodePen does not
         // state a licence, so the scene is not redistributed.
         assert_eq!(scenes[9].name(), "Point10 Water Ripple");
@@ -646,12 +754,12 @@ mod tests {
         assert_eq!(scenes[11].name(), "Point10 Around Plus");
         // Batch 4, in the WS-7 inventory order (12, 14, 15, 16, 19).
         assert_eq!(scenes[12].name(), "Point10 Ultra HDR");
-        assert_eq!(scenes[13].name(), "Point10 Mirror Cube");
-        assert_eq!(scenes[14].name(), "Point10 Color Cube");
-        assert_eq!(scenes[15].name(), "Point10 Boxy");
-        assert_eq!(scenes[16].name(), "Point10 Sound Cube");
+        assert_eq!(scenes[13].name(), "Plane9 Mirror Cube");
+        assert_eq!(scenes[14].name(), "Plane9 Color Cube");
+        assert_eq!(scenes[15].name(), "Plane9 Boxy");
+        assert_eq!(scenes[16].name(), "Plane9 Sound Cube");
         // Batch 5a.
-        assert_eq!(scenes[17].name(), "Point10 Hollow Cube");
+        assert_eq!(scenes[17].name(), "Plane9 Hollow Cube");
         assert_eq!(scenes[18].name(), "Point10 Attractor Particles");
         assert_eq!(scenes[19].name(), "Point10 DVD Room");
         // Batch 5b — the last four of the 25 vendored scenes, plus the
@@ -660,9 +768,9 @@ mod tests {
         assert_eq!(scenes[21].name(), "Point10 Ball Of Fire");
         assert_eq!(scenes[22].name(), "Point10 Smoke Room");
         assert_eq!(scenes[23].name(), "Point10 Latent Backrooms");
-        assert_eq!(scenes[24].name(), "Point10 Sun");
-        assert_eq!(scenes[25].name(), "Point10 Earth");
-        assert_eq!(scenes[26].name(), "Point10 The Cave");
+        assert_eq!(scenes[24].name(), "Plane9 Sun");
+        assert_eq!(scenes[25].name(), "Plane9 Earth");
+        assert_eq!(scenes[26].name(), "Plane9 The Cave");
         assert!(
             scenes
                 .iter()
@@ -686,11 +794,80 @@ mod tests {
         for scene in all_scenes() {
             let meta = scene.meta();
             assert_eq!(meta.name, scene.name());
-            assert_eq!(meta.author, "Point10");
+            let expected_author = if scene.name().starts_with(PLANE9_PREFIX) {
+                PLANE9_AUTHOR
+            } else {
+                "Point10"
+            };
+            assert_eq!(meta.author, expected_author, "{}", scene.name());
             assert_eq!(meta.version, "1.0.0");
             assert_eq!(meta.module_type, "2d");
             assert_eq!(meta.audio_features, &["bass", "mid", "treble"]);
         }
+    }
+
+    #[test]
+    fn plane9_alias_table_matches_the_registered_ports() {
+        let canonical_names: Vec<&str> = all_scenes()
+            .iter()
+            .map(|scene| scene.name())
+            .filter(|name| name.starts_with(PLANE9_PREFIX))
+            .collect();
+        assert_eq!(canonical_names.len(), PLANE9_SCENE_NAMES.len());
+        for canonical in PLANE9_SCENE_NAMES {
+            assert!(
+                canonical_names.contains(canonical),
+                "no registered scene for {canonical}"
+            );
+            let legacy = canonical.replacen(PLANE9_PREFIX, POINT10_PREFIX, 1);
+            assert_eq!(canonical_scene_name(&legacy), Some(*canonical));
+            assert_eq!(resolve_scene_name(&legacy), *canonical);
+            assert_eq!(canonical_scene_name(canonical), None);
+            assert_eq!(resolve_scene_name(canonical), *canonical);
+        }
+        // Scenes that kept their `Point10 ` name (including the other Plane9
+        // port, Around Plus) are never aliases.
+        for name in [
+            "Point10 Around Plus",
+            "Point10 Particle Field",
+            "Plane9 Unknown",
+        ] {
+            assert_eq!(canonical_scene_name(name), None);
+            assert_eq!(resolve_scene_name(name), name);
+        }
+    }
+
+    #[test]
+    fn rename_legacy_scene_names_rewrites_only_aliases_and_is_idempotent() {
+        let mut document = serde_json::json!({
+            "$moduleName": "Point10 Light Tunnel",
+            "meta": {"name": "Point10 Earth", "author": "Plane9 / Joakim Dahl"},
+            "groups": [{"modules": ["Point10 Boxy", "Point10 Around Plus"]}],
+            "cells": [["Plane9 Sun", "Point10 Sun"]],
+            "count": 2,
+            "enabled": true,
+            "empty": null,
+            "Point10 Boxy": "a key is not an alias",
+        });
+        let expected = serde_json::json!({
+            "$moduleName": "Plane9 Light Tunnel",
+            "meta": {"name": "Plane9 Earth", "author": "Plane9 / Joakim Dahl"},
+            "groups": [{"modules": ["Plane9 Boxy", "Point10 Around Plus"]}],
+            "cells": [["Plane9 Sun", "Plane9 Sun"]],
+            "count": 2,
+            "enabled": true,
+            "empty": null,
+            "Point10 Boxy": "a key is not an alias",
+        });
+        rename_legacy_scene_names(&mut document);
+        assert_eq!(document, expected);
+        let once = serde_json::to_string(&document).expect("JSON serialises");
+        rename_legacy_scene_names(&mut document);
+        assert_eq!(document, expected);
+        assert_eq!(
+            serde_json::to_string(&document).expect("JSON serialises"),
+            once
+        );
     }
 
     #[test]

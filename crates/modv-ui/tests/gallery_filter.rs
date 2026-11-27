@@ -1,7 +1,9 @@
 //! Pure Gallery filtering tests: the default view must show every module and
 //! the category/search filters must stay exact without any tile cap.
 
-use modv_ui::model::ModuleMetaView;
+use std::collections::BTreeSet;
+
+use modv_ui::model::{EngineSnapshot, ModuleMetaView, gallery_preview_key};
 use modv_ui::state::{GalleryCategory, UiState, filter_gallery_modules};
 
 fn module(name: &str, module_type: &str, category: &str) -> ModuleMetaView {
@@ -359,4 +361,223 @@ fn plain_text_search_keeps_its_original_name_and_author_semantics() {
         )),
         vec!["Fire Chars"]
     );
+}
+
+/// Like [`module`], but with an authoritative renderer kind independent of the
+/// legacy `module_type` (all Point10/Plane9 scenes still register as `2d`).
+fn module_with_kind(name: &str, kind: &str) -> ModuleMetaView {
+    ModuleMetaView {
+        kind: kind.to_string(),
+        ..module(name, "2d", "2d-scenes")
+    }
+}
+
+#[test]
+fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tiles() {
+    const PLANE9: [&str; 12] = [
+        "Plane9 Boxy",
+        "Plane9 Color Cube",
+        "Plane9 Earth",
+        "Plane9 Hollow Cube",
+        "Plane9 It Is Coming For You",
+        "Plane9 Light Tunnel",
+        "Plane9 Mirror Cube",
+        "Plane9 Sound Cube",
+        "Plane9 Square Tunnel",
+        "Plane9 Sun",
+        "Plane9 The Cave",
+        "Plane9 Wormhole",
+    ];
+    const POINT10: [&str; 15] = [
+        "Point10 Around Plus",
+        "Point10 Attractor Particles",
+        "Point10 Ball Of Fire",
+        "Point10 Chromatic Line",
+        "Point10 Chromatic Wave",
+        "Point10 DVD Room",
+        "Point10 Latent Backrooms",
+        "Point10 Mycelium",
+        "Point10 Particle Field",
+        "Point10 Rolling Fire",
+        "Point10 Smoke Room",
+        "Point10 Spiral Particles",
+        "Point10 Ultra HDR",
+        "Point10 Water Ripple",
+        "Point10 Waveform",
+    ];
+
+    // Accumulate every contract failure so one RED run demonstrates all of the
+    // missing behaviour rather than stopping at the first unsupported token.
+    let mut failures = Vec::new();
+
+    // A — the existing renderer-kind filter surface is the `type:<kind>`
+    // search syntax. Every current kind must remain selectable, with Plane9
+    // joining Point10 as a distinct kind.
+    let kind_modules: Vec<_> = ["shader", "2d", "point10", "plane9", "isf", "milkdrop"]
+        .into_iter()
+        .map(|kind| module_with_kind(&format!("{kind} tile"), kind))
+        .collect();
+    for kind in ["shader", "2d", "point10", "plane9", "isf", "milkdrop"] {
+        let filtered =
+            filter_gallery_modules(&kind_modules, GalleryCategory::All, &format!("type:{kind}"));
+        let expected = format!("{kind} tile");
+        if names(&filtered) != vec![expected.as_str()] {
+            failures.push(format!(
+                "A: type:{kind} selected {:?}, expected only {expected:?}",
+                names(&filtered)
+            ));
+        }
+    }
+
+    let mut modules = Vec::with_capacity(PLANE9.len() + POINT10.len());
+    modules.extend(PLANE9.iter().map(|name| module_with_kind(name, "plane9")));
+    modules.extend(POINT10.iter().map(|name| module_with_kind(name, "point10")));
+
+    // B — Plane9 is exactly the twelve renamed preset ports.
+    let plane9 = filter_gallery_modules(&modules, GalleryCategory::All, "type:plane9");
+    if names(&plane9) != PLANE9 {
+        failures.push(format!(
+            "B: type:plane9 selected {:?}, expected exactly {PLANE9:?}",
+            names(&plane9)
+        ));
+    }
+
+    // C — Point10 is exactly the other fifteen scenes, with no Plane9 leakage.
+    let point10 = filter_gallery_modules(&modules, GalleryCategory::All, "type:point10");
+    if names(&point10) != POINT10 {
+        failures.push(format!(
+            "C: type:point10 selected {:?}, expected exactly {POINT10:?}",
+            names(&point10)
+        ));
+    }
+
+    // D — the All view still contains all 27 canonical scene entries.
+    let all = filter_gallery_modules(&modules, GalleryCategory::All, "");
+    let expected_all: Vec<&str> = PLANE9.iter().chain(POINT10.iter()).copied().collect();
+    if names(&all) != expected_all {
+        failures.push(format!(
+            "D: All selected {:?}, expected all 27 canonical scenes",
+            names(&all)
+        ));
+    }
+
+    // E — canonical entries have unique tile keys, and looking up a historical
+    // alias resolves to the existing canonical entry instead of synthesising a
+    // second tile. The registry-facing list deliberately contains no aliases.
+    let snapshot = EngineSnapshot {
+        registered: modules.clone(),
+        ..Default::default()
+    };
+    let tile_keys: Vec<_> = all
+        .iter()
+        .map(|module| gallery_preview_key(&module.name))
+        .collect();
+    let unique_tile_keys: BTreeSet<_> = tile_keys.iter().cloned().collect();
+    if tile_keys.len() != unique_tile_keys.len() {
+        failures.push(format!(
+            "E: All produced duplicate tile keys: {tile_keys:?}"
+        ));
+    }
+    let canonical = snapshot.registered_module("Plane9 Light Tunnel");
+    let legacy = snapshot.registered_module("Point10 Light Tunnel");
+    if !matches!((canonical, legacy), (Some(canonical), Some(legacy)) if std::ptr::eq(canonical, legacy))
+    {
+        failures.push(format!(
+            "E: legacy lookup resolved to {legacy:?}, expected the same entry as {canonical:?}"
+        ));
+    }
+    if snapshot
+        .registered
+        .iter()
+        .any(|module| module.name == "Point10 Light Tunnel")
+    {
+        failures.push("E: the canonical Gallery list contains a legacy alias tile".to_string());
+    }
+
+    assert!(
+        failures.is_empty(),
+        "Gallery Plane9/Point10 renderer-kind contract failed:\n- {}",
+        failures.join("\n- ")
+    );
+}
+
+/// The UI resolves aliases with a `Point10 ` -> `Plane9 ` prefix fallback so
+/// `modv-ui` stays free of the GPU-heavy renderer crate. Pin that duplication
+/// to the renderer's single source of truth: every canonical Plane9 port's
+/// legacy name must resolve to the same entry, and unrelated Point10 scenes
+/// must keep resolving to themselves.
+#[test]
+fn legacy_plane9_alias_lookup_matches_renderer_roster() {
+    use modv_renderers::point10::{
+        PLANE9_PREFIX, PLANE9_SCENE_NAMES, POINT10_PREFIX, canonical_scene_name, gallery_kind,
+    };
+
+    let canonical_modules: Vec<_> = PLANE9_SCENE_NAMES
+        .iter()
+        .map(|name| module_with_kind(name, &gallery_kind(name, "point10")))
+        .collect();
+    let point10_modules = [module_with_kind("Point10 Around Plus", "point10")];
+    let mut all_modules = canonical_modules.clone();
+    all_modules.extend(point10_modules.iter().cloned());
+    let snapshot = EngineSnapshot {
+        registered: all_modules,
+        ..Default::default()
+    };
+
+    for canonical in PLANE9_SCENE_NAMES {
+        let suffix = canonical
+            .strip_prefix(PLANE9_PREFIX)
+            .expect("roster entry has the Plane9 prefix");
+        let legacy = format!("{POINT10_PREFIX}{suffix}");
+
+        // The renderer says this legacy name is an alias of `canonical`.
+        assert_eq!(canonical_scene_name(&legacy), Some(*canonical));
+        // The UI parses the same prefix pair and lands on the identical entry.
+        let from_legacy = snapshot
+            .registered_module(&legacy)
+            .unwrap_or_else(|| panic!("no alias entry for {legacy}"));
+        let from_canonical = snapshot
+            .registered_module(canonical)
+            .unwrap_or_else(|| panic!("no canonical entry for {canonical}"));
+        assert!(std::ptr::eq(from_legacy, from_canonical));
+        assert_eq!(from_legacy.name, *canonical);
+        assert_eq!(gallery_kind(canonical, "point10"), "plane9");
+    }
+
+    // A Point10-authored scene is neither aliased nor classified as Plane9.
+    let around = snapshot
+        .registered_module("Point10 Around Plus")
+        .expect("unrelated Point10 scene resolves to itself");
+    assert_eq!(around.name, "Point10 Around Plus");
+    assert_eq!(around.kind, "point10");
+    assert_eq!(canonical_scene_name("Point10 Around Plus"), None);
+    assert_eq!(gallery_kind("Point10 Around Plus", "point10"), "point10");
+}
+
+#[test]
+fn type_tokens_are_case_insensitive_and_do_not_match_by_prefix() {
+    let modules = vec![
+        module_with_kind("A", "plane9"),
+        module_with_kind("B", "point10"),
+    ];
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "TYPE:PLANE9"
+        )),
+        vec!["A"]
+    );
+    assert_eq!(
+        names(&filter_gallery_modules(
+            &modules,
+            GalleryCategory::All,
+            "type:PoInT10"
+        )),
+        vec!["B"]
+    );
+    assert!(filter_gallery_modules(&modules, GalleryCategory::All, "type:nope").is_empty());
+    // Unknown/partial tokens must not leak via prefix comparison.
+    assert!(filter_gallery_modules(&modules, GalleryCategory::All, "type:plane").is_empty());
+    assert!(filter_gallery_modules(&modules, GalleryCategory::All, "type:point").is_empty());
 }

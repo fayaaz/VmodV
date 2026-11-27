@@ -1999,8 +1999,20 @@ impl EngineSnapshot {
     }
 
     /// The module definition with `name`.
+    ///
+    /// Historical `Point10 <Name>` references to one of the twelve renamed
+    /// Plane9 ports resolve to the canonical `Plane9 <Name>` entry. The
+    /// registry only holds the canonical names (the renderers' alias table in
+    /// `point10::resolve_scene_name` lists the same aliases), so saved Scenes
+    /// and presets keep loading without a second alias tile.
     pub fn registered_module(&self, name: &str) -> Option<&ModuleMetaView> {
-        self.registered.iter().find(|module| module.name == name)
+        if let Some(module) = self.registered.iter().find(|module| module.name == name) {
+            return Some(module);
+        }
+        let suffix = name.strip_prefix("Point10 ")?;
+        self.registered
+            .iter()
+            .find(|module| module.name.strip_prefix("Plane9 ") == Some(suffix))
     }
 
     /// The expression assignment for `input_id`, when one exists
@@ -2395,8 +2407,10 @@ pub struct ModuleMetaView {
     pub name: String,
     pub module_type: String,
     /// The renderer that actually owns this module (`shader`, `2d`,
-    /// `point10`, `isf`, `milkdrop`). Unlike `module_type` this is authoritative:
-    /// Point10 scenes register as `module_type: "2d"` for legacy compatibility.
+    /// `point10`, `plane9`, `isf`, `milkdrop`). Unlike `module_type` this is
+    /// authoritative: Point10/Plane9 scenes register as `module_type: "2d"`
+    /// for legacy compatibility, and the twelve Plane9 preset ports are split
+    /// out from the Point10-authored scenes here.
     pub kind: String,
     pub category: String,
     pub author: String,
@@ -2406,23 +2420,30 @@ pub struct ModuleMetaView {
 
 /// The licence shown for a module in its info window.
 ///
-/// Third-party terms are recorded in `THIRD_PARTY_NOTICES.md`. Point10 scenes
-/// are registered under their full `Point10 `-prefixed names and are classified
-/// by provenance there: the Plane9 ports keep Plane9's share-alike terms, the
-/// three.js/CodePen-derived scenes are MIT, and the visuals written for Point10
-/// are first-party MIT. Only the Plane9 group has a version stated in its
-/// ported file, so an unlisted Point10 scene must not inherit the generic
-/// "Shadertoy default" fallback below.
+/// Third-party terms are recorded in `THIRD_PARTY_NOTICES.md`. Point10-derived
+/// scenes are registered under their full `Point10 `- or `Plane9 `-prefixed
+/// names (the twelve Plane9 ports also accept their historical `Point10 `
+/// names) and are classified by provenance there: the Plane9 ports keep
+/// Plane9's share-alike terms, the three.js/CodePen-derived scenes are MIT, and
+/// the visuals written for Point10 are first-party MIT. Only the Plane9 group
+/// has a version stated in its ported file, so an unlisted Point10 scene must
+/// not inherit the generic "Shadertoy default" fallback below.
 ///
 /// The labels are assembled with `concat!` so this first-party file does not
 /// trip the source scan in `crates/modv-app/tests/notices.rs`, which requires
 /// every file bearing the licence markers to be a listed third-party source.
 /// Splitting the literals renders the same text as a single literal would.
 pub fn module_license(meta: &ModuleMetaView) -> &'static str {
-    // Point10 scenes are registered under their full `Point10 `-prefixed names.
-    // Match the suffix once and return directly: every registered scene has an
-    // explicit provenance, so none may fall through to the Shadertoy default.
-    if let Some(name) = meta.name.strip_prefix("Point10 ") {
+    // Point10 scenes are registered under their full `Point10 `- or `Plane9 `-
+    // prefixed names (`Point10 <Name>` stays a load alias for the twelve Plane9
+    // ports). Match the suffix once and return directly: every registered scene
+    // has an explicit provenance, so none may fall through to the Shadertoy
+    // default.
+    if let Some(name) = meta
+        .name
+        .strip_prefix("Point10 ")
+        .or_else(|| meta.name.strip_prefix("Plane9 "))
+    {
         return match name {
             // Plane9 ports whose own headers state 4.0.
             "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube" | "Square Tunnel"

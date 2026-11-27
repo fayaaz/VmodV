@@ -693,7 +693,7 @@ impl Earth {
 
 impl Point10Scene for Earth {
     fn name(&self) -> &'static str {
-        "Point10 Earth"
+        "Plane9 Earth"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -1234,7 +1234,7 @@ impl Point10Scene for Earth {
 
     fn meta(&self) -> SceneMeta {
         // `Point10Earth.js` sets no category; 3D scenes default to `3d-scenes`.
-        SceneMeta::for_scene("Point10 Earth", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Earth", "3d-scenes")
     }
 }
 
@@ -2034,10 +2034,10 @@ mod tests {
     #[test]
     fn meta_and_name_match_the_registry() {
         let scene = Earth::new();
-        assert_eq!(scene.name(), "Point10 Earth");
-        assert_eq!(scene.meta().name, "Point10 Earth");
+        assert_eq!(scene.name(), "Plane9 Earth");
+        assert_eq!(scene.meta().name, "Plane9 Earth");
         assert_eq!(scene.meta().category, "3d-scenes");
-        assert_eq!(scene.meta().author, "Point10");
+        assert_eq!(scene.meta().author, "Plane9 (Joakim Dahl)");
         assert_eq!(scene.meta().version, "1.0.0");
         assert_eq!(scene.meta().module_type, "2d");
         assert_eq!(scene.meta().audio_features, &["bass", "mid", "treble"]);

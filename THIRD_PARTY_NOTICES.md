@@ -121,11 +121,13 @@ multi-pass path without an override.
 
 ## Point10 scenes
 
-The 27 registered `Point10 ...` scenes do **not** share one provenance. Only
-the Plane9 ports are share-alike; the three.js/CodePen-derived scenes are MIT,
-and the visuals written for Point10 are first-party MIT. The licences below are
-keyed to the registered scene name and are what the module info panel shows.
-Glass Lens is not shipped: its upstream CodePen states no licence.
+The 27 registered Point10-derived scenes do **not** share one provenance. Only
+the twelve Plane9 (Joakim Dahl) presets are share-alike; they register as
+`Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases).
+The three.js/CodePen-derived scenes are MIT, and the visuals written for
+Point10 are first-party MIT. The licences below are keyed to the scene name
+suffix and are what the module info panel shows. Glass Lens is not shipped: its
+upstream CodePen states no licence.
 
 ### Plane9 ports (Joakim Dahl — CC BY-NC-SA)
 

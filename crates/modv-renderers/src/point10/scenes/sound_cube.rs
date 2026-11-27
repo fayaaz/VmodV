@@ -240,8 +240,8 @@ impl Target {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // `RenderToTexture1 Format 5 (RG16F)` keeps the additive feedback
-            // in float so the trail does not clamp at 1.0.
+            // `RenderToTexture1 Format 5 (GL_RGBA16F)` keeps the additive
+            // feedback in float so the trail does not clamp at 1.0.
             format: HDR_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
@@ -467,7 +467,7 @@ impl SoundCube {
 
 impl Point10Scene for SoundCube {
     fn name(&self) -> &'static str {
-        "Point10 Sound Cube"
+        "Plane9 Sound Cube"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -936,7 +936,7 @@ impl Point10Scene for SoundCube {
 
     fn meta(&self) -> SceneMeta {
         // `Point10SoundCube.js` sets no category.
-        SceneMeta::for_scene("Point10 Sound Cube", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Sound Cube", "3d-scenes")
     }
 }
 
@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = SoundCube::new();
-        assert_eq!(scene.meta().name, "Point10 Sound Cube");
+        assert_eq!(scene.meta().name, "Plane9 Sound Cube");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(

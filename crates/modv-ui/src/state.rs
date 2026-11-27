@@ -1762,7 +1762,7 @@ impl GalleryCategory {
 /// The remaining search terms match the module name or author,
 /// case-insensitively, and a whitespace-only query behaves like an empty one.
 /// A `type:<token>` directive restricts results to modules of that renderer
-/// kind (`shader`, `2d`, `point10`, `isf`, `milkdrop`), using the authoritative
+/// kind (`shader`, `2d`, `point10`, `plane9`, `isf`, `milkdrop`), using the authoritative
 /// [`ModuleMetaView::kind`] rather than the legacy `module_type`. An unknown
 /// token matches nothing. There is deliberately no tile cap: the Gallery
 /// scrolls instead of truncating the registry.
@@ -1776,7 +1776,10 @@ pub fn filter_gallery_modules<'a>(
     for term in search.split_whitespace() {
         let lowered = term.to_ascii_lowercase();
         if let Some(token) = lowered.strip_prefix("type:") {
-            if !matches!(token, "shader" | "2d" | "point10" | "isf" | "milkdrop") {
+            if !matches!(
+                token,
+                "shader" | "2d" | "point10" | "plane9" | "isf" | "milkdrop"
+            ) {
                 return Vec::new();
             }
             type_terms.push(token.to_string());

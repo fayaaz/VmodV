@@ -4582,10 +4582,17 @@ fn registered_modules(registry: &crate::module_registry::ModuleRegistry) -> Vec<
                     .unwrap_or_default()
                     .to_string()
             };
-            let kind = registry
-                .kind(name)
-                .map(|kind| kind.as_str().to_string())
-                .unwrap_or_default();
+            // The twelve Plane9 preset ports share the Point10 renderer
+            // internally, but the Gallery exposes them as their own kind
+            // (`type:plane9`). The renderer helper owns the roster so the
+            // desktop and wasm snapshot builders cannot diverge.
+            let kind = modv_renderers::point10::gallery_kind(
+                name,
+                registry
+                    .kind(name)
+                    .map(|kind| kind.as_str())
+                    .unwrap_or_default(),
+            );
             Some(ModuleMetaView {
                 name: name.clone(),
                 module_type: get("type"),

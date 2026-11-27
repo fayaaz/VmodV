@@ -317,13 +317,13 @@ pub enum Point10SceneKind {
     SpiralParticles(SpiralParticles),
     /// `Point10 Waveform` (`scenes/waveform.rs`).
     Waveform(Waveform),
-    /// `Point10 Square Tunnel` (`scenes/square_tunnel.rs`).
+    /// `Plane9 Square Tunnel` (`scenes/square_tunnel.rs`).
     SquareTunnel(SquareTunnel),
-    /// `Point10 Light Tunnel` (`scenes/light_tunnel.rs`).
+    /// `Plane9 Light Tunnel` (`scenes/light_tunnel.rs`).
     LightTunnel(LightTunnel),
-    /// `Point10 Wormhole` (`scenes/wormhole.rs`).
+    /// `Plane9 Wormhole` (`scenes/wormhole.rs`).
     Wormhole(Wormhole),
-    /// `Point10 It Is Coming For You` (`scenes/it_is_coming_for_you.rs`).
+    /// `Plane9 It Is Coming For You` (`scenes/it_is_coming_for_you.rs`).
     ItIsComingForYou(ItIsComingForYou),
     /// `Point10 Water Ripple` (`scenes/water_ripple.rs`).
     WaterRipple(WaterRipple),
@@ -333,15 +333,15 @@ pub enum Point10SceneKind {
     AroundPlus(AroundPlus),
     /// `Point10 Ultra HDR` (`scenes/ultra_hdr.rs`).
     UltraHdr(UltraHdr),
-    /// `Point10 Mirror Cube` (`scenes/mirror_cube.rs`).
+    /// `Plane9 Mirror Cube` (`scenes/mirror_cube.rs`).
     MirrorCube(MirrorCube),
-    /// `Point10 Color Cube` (`scenes/color_cube.rs`).
+    /// `Plane9 Color Cube` (`scenes/color_cube.rs`).
     ColorCube(ColorCube),
-    /// `Point10 Boxy` (`scenes/boxy.rs`).
+    /// `Plane9 Boxy` (`scenes/boxy.rs`).
     Boxy(Boxy),
-    /// `Point10 Sound Cube` (`scenes/sound_cube.rs`).
+    /// `Plane9 Sound Cube` (`scenes/sound_cube.rs`).
     SoundCube(SoundCube),
-    /// `Point10 Hollow Cube` (`scenes/hollow_cube.rs`).
+    /// `Plane9 Hollow Cube` (`scenes/hollow_cube.rs`).
     HollowCube(HollowCube),
     /// `Point10 Attractor Particles` (`scenes/attractor_particles.rs`).
     AttractorParticles(AttractorParticles),
@@ -355,11 +355,11 @@ pub enum Point10SceneKind {
     SmokeRoom(SmokeRoom),
     /// `Point10 Latent Backrooms` (`scenes/latent_backrooms.rs`).
     LatentBackrooms(LatentBackrooms),
-    /// `Point10 Sun` (`scenes/sun.rs`).
+    /// `Plane9 Sun` (`scenes/sun.rs`).
     Sun(Sun),
-    /// `Point10 Earth` (`scenes/earth.rs`).
+    /// `Plane9 Earth` (`scenes/earth.rs`).
     Earth(Earth),
-    /// `Point10 The Cave` (`scenes/the_cave.rs`).
+    /// `Plane9 The Cave` (`scenes/the_cave.rs`).
     TheCave(TheCave),
 }
 
@@ -384,34 +384,37 @@ impl Point10SceneKind {
     /// `None` when `name` is not a ported scene — the compositor then skips the
     /// module exactly like an unregistered 2D module.
     pub fn create(name: &str) -> Option<Self> {
+        // Historical `Point10 <Name>` references resolve to their canonical
+        // `Plane9 <Name>` scene (the alias table lives in `modv-renderers`).
+        let name = modv_renderers::point10::resolve_scene_name(name);
         Some(match name {
             "Point10 Chromatic Line" => Self::ChromaticLine(ChromaticLine::new()),
             "Point10 Chromatic Wave" => Self::ChromaticWave(ChromaticWave::new()),
             "Point10 Particle Field" => Self::ParticleField(ParticleField::new()),
             "Point10 Spiral Particles" => Self::SpiralParticles(SpiralParticles::new()),
             "Point10 Waveform" => Self::Waveform(Waveform::new()),
-            "Point10 Square Tunnel" => Self::SquareTunnel(SquareTunnel::new()),
-            "Point10 Light Tunnel" => Self::LightTunnel(LightTunnel::new()),
-            "Point10 Wormhole" => Self::Wormhole(Wormhole::new()),
-            "Point10 It Is Coming For You" => Self::ItIsComingForYou(ItIsComingForYou::new()),
+            "Plane9 Square Tunnel" => Self::SquareTunnel(SquareTunnel::new()),
+            "Plane9 Light Tunnel" => Self::LightTunnel(LightTunnel::new()),
+            "Plane9 Wormhole" => Self::Wormhole(Wormhole::new()),
+            "Plane9 It Is Coming For You" => Self::ItIsComingForYou(ItIsComingForYou::new()),
             "Point10 Water Ripple" => Self::WaterRipple(WaterRipple::new()),
             "Point10 Mycelium" => Self::Mycelium(Mycelium::new()),
             "Point10 Around Plus" => Self::AroundPlus(AroundPlus::new()),
             "Point10 Ultra HDR" => Self::UltraHdr(UltraHdr::new()),
-            "Point10 Mirror Cube" => Self::MirrorCube(MirrorCube::new()),
-            "Point10 Color Cube" => Self::ColorCube(ColorCube::new()),
-            "Point10 Boxy" => Self::Boxy(Boxy::new()),
-            "Point10 Sound Cube" => Self::SoundCube(SoundCube::new()),
-            "Point10 Hollow Cube" => Self::HollowCube(HollowCube::new()),
+            "Plane9 Mirror Cube" => Self::MirrorCube(MirrorCube::new()),
+            "Plane9 Color Cube" => Self::ColorCube(ColorCube::new()),
+            "Plane9 Boxy" => Self::Boxy(Boxy::new()),
+            "Plane9 Sound Cube" => Self::SoundCube(SoundCube::new()),
+            "Plane9 Hollow Cube" => Self::HollowCube(HollowCube::new()),
             "Point10 Attractor Particles" => Self::AttractorParticles(AttractorParticles::new()),
             "Point10 DVD Room" => Self::DvdRoom(DvdRoom::new()),
             "Point10 Rolling Fire" => Self::RollingFire(RollingFire::new()),
             "Point10 Ball Of Fire" => Self::BallOfFire(BallOfFire::new()),
             "Point10 Smoke Room" => Self::SmokeRoom(SmokeRoom::new()),
             "Point10 Latent Backrooms" => Self::LatentBackrooms(LatentBackrooms::new()),
-            "Point10 Sun" => Self::Sun(Sun::new()),
-            "Point10 Earth" => Self::Earth(Earth::new()),
-            "Point10 The Cave" => Self::TheCave(TheCave::new()),
+            "Plane9 Sun" => Self::Sun(Sun::new()),
+            "Plane9 Earth" => Self::Earth(Earth::new()),
+            "Plane9 The Cave" => Self::TheCave(TheCave::new()),
             _ => return None,
         })
     }
@@ -992,8 +995,12 @@ impl ModuleRegistry {
     }
 
     /// Look up a Point10 scene definition by its wrapper module name
-    /// (`"Point10 Chromatic Wave"`).
+    /// (`"Point10 Chromatic Wave"` or `"Plane9 Light Tunnel"`).
+    ///
+    /// Historical `Point10 <Name>` aliases of the twelve Plane9 ports resolve
+    /// to the canonical `Plane9 <Name>` definition.
     pub fn point10_definition(&self, name: &str) -> Option<&Point10Definition> {
+        let name = modv_renderers::point10::resolve_scene_name(name);
         self.point10.iter().find(|scene| scene.meta.name == name)
     }
 
@@ -1048,8 +1055,14 @@ impl ModuleRegistry {
     }
 
     /// Which renderer owns `name`, or `None` when it is not registered.
+    ///
+    /// Historical `Point10 <Name>` aliases of the twelve renamed Plane9 ports
+    /// report the canonical scene's kind.
     pub fn kind(&self, name: &str) -> Option<ModuleKind> {
-        self.kind_index().get(name).copied()
+        self.kind_index().get(name).copied().or_else(|| {
+            modv_renderers::point10::canonical_scene_name(name)
+                .and_then(|canonical| self.kind_index().get(canonical).copied())
+        })
     }
 
     /// The registry-authored `meta` fields of a known module, or `None` when
@@ -2386,33 +2399,38 @@ mod tests {
                 "Point10 Particle Field",
                 "Point10 Spiral Particles",
                 "Point10 Waveform",
-                "Point10 Square Tunnel",
-                "Point10 Light Tunnel",
-                "Point10 Wormhole",
-                "Point10 It Is Coming For You",
+                "Plane9 Square Tunnel",
+                "Plane9 Light Tunnel",
+                "Plane9 Wormhole",
+                "Plane9 It Is Coming For You",
                 "Point10 Water Ripple",
                 "Point10 Mycelium",
                 "Point10 Around Plus",
                 "Point10 Ultra HDR",
-                "Point10 Mirror Cube",
-                "Point10 Color Cube",
-                "Point10 Boxy",
-                "Point10 Sound Cube",
-                "Point10 Hollow Cube",
+                "Plane9 Mirror Cube",
+                "Plane9 Color Cube",
+                "Plane9 Boxy",
+                "Plane9 Sound Cube",
+                "Plane9 Hollow Cube",
                 "Point10 Attractor Particles",
                 "Point10 DVD Room",
                 "Point10 Rolling Fire",
                 "Point10 Ball Of Fire",
                 "Point10 Smoke Room",
                 "Point10 Latent Backrooms",
-                "Point10 Sun",
-                "Point10 Earth",
-                "Point10 The Cave",
+                "Plane9 Sun",
+                "Plane9 Earth",
+                "Plane9 The Cave",
             ]
         );
 
         for definition in registry.point10_definitions() {
-            assert_eq!(definition.meta.author, "Point10");
+            let expected_author = if definition.meta.name.starts_with("Plane9 ") {
+                "Plane9 (Joakim Dahl)"
+            } else {
+                "Point10"
+            };
+            assert_eq!(definition.meta.author, expected_author);
             assert_eq!(definition.meta.version, "1.0.0");
             // The JS wrappers register as `2d` modules so Scene documents and
             // presets keep resolving them (`adapter.js:857-866`).
@@ -3523,7 +3541,15 @@ void main() { gl_FragColor = vec4(1.0); }
             .collect();
 
         assert_same_module_names("2D", two_d, manifest_names(&manifest, "twoD"));
-        assert_same_module_names("Point10", point10, manifest_names(&manifest, "point10"));
+        // `tests/fixtures/module-parity.json` is the historical baseline and
+        // keeps the old `Point10 <Name>` strings for the twelve Plane9 ports;
+        // normalise them through the alias table before comparing. The
+        // manifest is never rewritten.
+        let historical_point10: Vec<String> = manifest_names(&manifest, "point10")
+            .into_iter()
+            .map(|name| modv_renderers::point10::resolve_scene_name(&name).to_string())
+            .collect();
+        assert_same_module_names("Point10", point10, historical_point10);
         assert_same_module_names("shader", shader, manifest_names(&manifest, "shader"));
         assert_same_module_names("ISF", isf, manifest_names(&manifest, "isf"));
         assert_same_module_names("MilkDrop", milkdrop, manifest_names(&manifest, "milkdrop"));

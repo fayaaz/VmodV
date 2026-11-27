@@ -15,3 +15,7 @@ web-time = "1.1"
 [dev-dependencies]
 accesskit = "0.25.2"
 egui_kittest = { version = "0.37.0", features = ["snapshot", "wgpu"] }
+# Test-only: pins the `Point10 ` -> `Plane9 ` alias fallback in
+# `EngineSnapshot::registered_module` to the renderer's canonical roster.
+# Dev-dependencies are not compiled into the wasm shell.
+modv-renderers = { version = "0.1.0", path = "../modv-renderers" }

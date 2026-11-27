@@ -48,6 +48,7 @@
 
 use super::afterimage::AfterimagePass;
 use super::output_pass::{OutputPass, ToneMapping};
+use super::plane9_bloom::{Plane9BloomParams, Plane9BloomPass};
 use super::render_pass::RenderPass;
 use super::unreal_bloom_pass::UnrealBloomPass;
 use super::{create_target, linear_sampler};
@@ -251,6 +252,9 @@ pub struct Composer {
     /// base copy/bloom (where `LatentBackrooms.js:1605-1606` puts it).
     afterimage: Option<AfterimagePass>,
     bloom: Option<UnrealBloomPass>,
+    /// The Plane9 bloom driver, used by the Plane9 preset ports. Kept separate
+    /// from `bloom` so the three.js scenes keep UnrealBloomPass semantics.
+    plane9_bloom: Option<Plane9BloomPass>,
     combine: CombinePass,
     output: OutputPass,
 }
@@ -300,6 +304,7 @@ impl Composer {
             blit,
             afterimage: None,
             bloom: None,
+            plane9_bloom: None,
             combine: CombinePass::new(device),
             output,
         }
@@ -349,6 +354,39 @@ impl Composer {
     pub fn disable_bloom(&mut self) {
         self.bloom = None;
         self.rebind();
+    }
+
+    /// Enable the Plane9 bloom driver for the Plane9 preset ports (driver
+    /// `0x1005cc60`). Independent of [`Composer::enable_bloom`]: while a
+    /// Plane9 bloom is active it takes precedence, but the Unreal bloom pass
+    /// keeps its own parameters and semantics.
+    ///
+    /// Re-enabling with structurally identical parameters only updates the
+    /// driver's uniforms: a tweened `bloom` prop must not recreate the five
+    /// pipelines and the whole mip chain every frame.
+    pub fn enable_plane9_bloom(&mut self, params: Plane9BloomParams) {
+        if let Some(bloom) = self.plane9_bloom.as_mut()
+            && bloom.can_reuse(params)
+        {
+            bloom.set_params(params);
+            return;
+        }
+        let mut bloom =
+            Plane9BloomPass::new(&self.device, &self.queue, self.width, self.height, params);
+        bloom.set_input(&self.base_view);
+        self.plane9_bloom = Some(bloom);
+        self.rebind();
+    }
+
+    /// Remove the Plane9 bloom stage.
+    pub fn disable_plane9_bloom(&mut self) {
+        self.plane9_bloom = None;
+        self.rebind();
+    }
+
+    /// Read-only access to the Plane9 bloom driver.
+    pub fn plane9_bloom(&self) -> Option<&Plane9BloomPass> {
+        self.plane9_bloom.as_ref()
     }
 
     /// Insert three's `AfterimagePass` between the scene target and the bloom
@@ -444,6 +482,9 @@ impl Composer {
         if let Some(bloom) = self.bloom.as_mut() {
             bloom.resize(width, height);
         }
+        if let Some(bloom) = self.plane9_bloom.as_mut() {
+            bloom.resize(width, height);
+        }
         if let Some(afterimage) = self.afterimage.as_mut() {
             afterimage.resize(width, height);
         }
@@ -464,7 +505,15 @@ impl Composer {
         let source = afterimage_view.as_ref().unwrap_or(&self.scene_view);
         self.blit.set_source(&self.device, source);
 
-        if let Some(bloom) = self.bloom.as_mut() {
+        if let Some(bloom) = self.plane9_bloom.as_mut() {
+            // Scene -> base copy, then the Plane9 chain, then `base + bloom`
+            // into the HDR target (the driver's own additive combine).
+            self.blit.encode(encoder, &self.base_view);
+            bloom.encode(encoder);
+            if bloom.composite_view().is_some() {
+                self.combine.encode(encoder, &self.hdr_view);
+            }
+        } else if let Some(bloom) = self.bloom.as_mut() {
             // Scene -> base copy (three's RenderPass), then the bloom chain
             // (its bind groups are refreshed by `rebind`), then
             // `base + bloom` into the HDR target.
@@ -485,6 +534,16 @@ impl Composer {
         self.blit.set_source(&self.device, &self.scene_view);
         self.output.set_source(&self.device, &self.hdr_view);
         if let Some(bloom) = self.bloom.as_mut() {
+            bloom.set_input(&self.base_view);
+            // A Plane9 bloom, when present, owns the combine sources.
+            if self.plane9_bloom.is_none()
+                && let Some(composite) = bloom.composite_view()
+            {
+                self.combine
+                    .set_sources(&self.device, &self.base_view, composite);
+            }
+        }
+        if let Some(bloom) = self.plane9_bloom.as_mut() {
             bloom.set_input(&self.base_view);
             if let Some(composite) = bloom.composite_view() {
                 self.combine

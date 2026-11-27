@@ -70,7 +70,7 @@ use crate::point10::scenes::cube_mesh::{
     Mat4, MeshGpu, build_box, create_depth, depth_state, look_at, mat4_mul, perspective, trs,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
-use crate::point10::shared::random::seeded_rand;
+use crate::point10::shared::random::{seeded_rand, value_noise2};
 use crate::point10::{
     FULLSCREEN_TRIANGLE_WGSL, HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp,
     frame_dt, read_scene_props, scene_props_with_levers,
@@ -124,33 +124,8 @@ pub fn make_perm(seed: f32) -> f32 {
     if seed.is_finite() { seed } else { perm_seed() }
 }
 
-/// Plane9's `smooth` (`t t (3 - 2t)`).
-fn smooth(t: f32) -> f32 {
-    t * t * (3.0 - 2.0 * t)
-}
-
 fn finite(value: f32) -> f32 {
     if value.is_finite() { value } else { 0.0 }
-}
-
-/// Plane9's value noise (`noise2` in expressions): a seeded hash over the four
-/// integer cell corners, smoothstep-interpolated, mapped to `[-1, 1)`.
-pub fn value_noise2(x: f32, y: f32) -> f32 {
-    let ix = finite(x).floor();
-    let iy = finite(y).floor();
-    let fx = smooth(finite(x) - ix);
-    let fy = smooth(finite(y) - iy);
-    let mut value = 0.0;
-
-    for dy in 0..=1 {
-        for dx in 0..=1 {
-            let corner = seeded_rand(ix as i32 + dx, iy as i32 + dy);
-            value +=
-                corner * if dx == 1 { fx } else { 1.0 - fx } * if dy == 1 { fy } else { 1.0 - fy };
-        }
-    }
-
-    value * 2.0 - 1.0
 }
 
 /// One frame of Expression1.
@@ -398,7 +373,7 @@ impl MirrorCube {
 
 impl Point10Scene for MirrorCube {
     fn name(&self) -> &'static str {
-        "Point10 Mirror Cube"
+        "Plane9 Mirror Cube"
     }
 
     fn init(&mut self, ctx: &mut SceneContext) {
@@ -838,7 +813,7 @@ impl Point10Scene for MirrorCube {
 
     fn meta(&self) -> SceneMeta {
         // `Point10MirrorCube.js` sets no category.
-        SceneMeta::for_scene("Point10 Mirror Cube", "3d-scenes")
+        SceneMeta::for_plane9_scene("Plane9 Mirror Cube", "3d-scenes")
     }
 }
 
@@ -1140,7 +1115,7 @@ mod tests {
     #[test]
     fn meta_and_props_match_the_js_registry() {
         let scene = MirrorCube::new();
-        assert_eq!(scene.meta().name, "Point10 Mirror Cube");
+        assert_eq!(scene.meta().name, "Plane9 Mirror Cube");
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(&names[names.len() - 2..], &["spinSpeed", "brightness"]);
