@@ -21,6 +21,17 @@
 //! (`d = (length(position) - 0.5) / 0.75`, red at `d > 0.9`). Baking the scale
 //! would push the whole surface past the mask and turn the ball solid red.
 //!
+//! # Model fit
+//!
+//! [`MESH_FIT`] is an extra model-matrix factor on top of `RenderObject1`'s
+//! 0.5 and `TransformEx1`'s `2 2 1`. The vendor mesh chain is a
+//! reconstruction, and the rebuilt mesh comes out twice the size the vendor
+//! camera expects: at 1.0 the camera sits inside the spikes. `MESH_FIT = 0.5`
+//! reproduces the Plane9 reference (`p9screens/spiky.png`: the whole star at
+//! 48.5% of the frame width at 16:9, with the tips clipped vertically). Like
+//! `TransformEx1`'s scale it stays in the model matrix, so the tip mask keeps
+//! reading the unscaled `length(position)` band.
+//!
 //! # Ported exactly
 //!
 //! * the camera (`0 0 1`, look `0 0 -1` *relative*, FOV 70, near 0.1, far
@@ -105,6 +116,17 @@ pub const CAMERA_FAR: f32 = 1000.0;
 
 /// `RenderObject1.Scale`.
 pub const RENDER_SCALE: [f32; 3] = [0.5, 0.5, 0.5];
+
+/// Model-space fit applied on top of `RenderObject1`'s 0.5 and
+/// `TransformEx1`'s 2,2,1.
+///
+/// The vendor mesh chain is a reconstruction: `P9Nodes.js` ships
+/// `TransformEx` as a scene-object wrapper, not a mesh modifier, and the
+/// upstream Spiky preset crashes on it. The reconstructed mesh is twice the
+/// size the vendor camera expects; at 1.0 the camera sits inside the spikes.
+/// The Plane9 reference (whole star, 48.5% of the frame width at 16:9 with
+/// the tips clipped) is reproduced at 0.5.
+pub const MESH_FIT: f32 = 0.5;
 
 /// `TransformEx1`'s ports.
 ///
@@ -506,9 +528,13 @@ impl Spiky {
         self.composite_in1
     }
 
-    /// `RenderObject1`'s rotation over `TransformEx1`'s scale.
+    /// `RenderObject1`'s rotation over `TransformEx1`'s scale and [`MESH_FIT`].
     pub fn model(&self) -> Mat4 {
-        let render = trs([0.0, 0.0, 0.0], self.rotation_radians(), RENDER_SCALE);
+        let render = trs(
+            [0.0, 0.0, 0.0],
+            self.rotation_radians(),
+            scale3(RENDER_SCALE, MESH_FIT),
+        );
         let transform_ex = scale(
             TRANSFORM_EX.scale[0],
             TRANSFORM_EX.scale[1],
@@ -1184,14 +1210,17 @@ mod tests {
         assert!((0.45..0.6).contains(&min), "local min {min}");
         assert!((1.175..1.35).contains(&max), "local max {max}");
 
-        // ...and the 2,2,1 belongs to the model matrix.
+        // ...and the 2,2,1 belongs to the model matrix, alongside MESH_FIT.
         let mut scene = Spiky::new();
         scene.rotation = [0.0; 3];
         let model = scene.model();
         let world = crate::point10::scenes::cube_mesh::transform_point(&model, [max, 0.0, 0.0]);
-        assert!((world[0] - max * 2.0 * 0.5).abs() < 1e-4, "{world:?}");
+        assert!(
+            (world[0] - max * 2.0 * 0.5 * MESH_FIT).abs() < 1e-4,
+            "{world:?}"
+        );
         let z = crate::point10::scenes::cube_mesh::transform_point(&model, [0.0, 0.0, max]);
-        assert!((z[2] - max * 1.0 * 0.5).abs() < 1e-4, "{z:?}");
+        assert!((z[2] - max * 1.0 * 0.5 * MESH_FIT).abs() < 1e-4, "{z:?}");
     }
 
     #[test]
@@ -1360,6 +1389,222 @@ mod tests {
             tip_vertices > 0,
             "the vendor mesh has no vertices in the fragment's d > 0.9 tip band"
         );
+        scene.dispose();
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct FramingBbox {
+        min_x: u32,
+        max_x: u32,
+        min_y: u32,
+        max_y: u32,
+        visible_pixels: usize,
+    }
+
+    impl FramingBbox {
+        fn width_fraction(self, width: u32) -> f32 {
+            if self.visible_pixels == 0 {
+                0.0
+            } else {
+                (self.max_x - self.min_x + 1) as f32 / width as f32
+            }
+        }
+
+        fn height_fraction(self, height: u32) -> f32 {
+            if self.visible_pixels == 0 {
+                0.0
+            } else {
+                (self.max_y - self.min_y + 1) as f32 / height as f32
+            }
+        }
+
+        fn centre_x_fraction(self, width: u32) -> f32 {
+            if self.visible_pixels == 0 {
+                0.0
+            } else {
+                (self.min_x + self.max_x) as f32 / (2.0 * width as f32)
+            }
+        }
+    }
+
+    /// `Shader2` presents opaque black outside the ball, so alpha cannot define
+    /// the silhouette. Use the composited RGB instead (including bloom).
+    fn non_background_bbox(pixels: &[u8], width: u32, _height: u32) -> FramingBbox {
+        let mut bbox = FramingBbox {
+            min_x: u32::MAX,
+            max_x: 0,
+            min_y: u32::MAX,
+            max_y: 0,
+            visible_pixels: 0,
+        };
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            if pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 {
+                continue;
+            }
+            let index = index as u32;
+            let x = index % width;
+            let y = index / width;
+            bbox.min_x = bbox.min_x.min(x);
+            bbox.max_x = bbox.max_x.max(x);
+            bbox.min_y = bbox.min_y.min(y);
+            bbox.max_y = bbox.max_y.max(y);
+            bbox.visible_pixels += 1;
+        }
+        bbox
+    }
+
+    /// Test-only scale sweep: multiply the real uploaded model matrix by a
+    /// factor relative to the shipped [`MESH_FIT`], then rebuild the same
+    /// view-proj and normal matrix that `Spiky::upload_uniforms` writes.
+    /// No scene or production hook is changed.
+    fn upload_test_model_scale(scene: &Spiky, factor: f32) {
+        let gpu = scene.gpu.as_ref().expect("scene must be initialised");
+        let model = mat4_mul(&scene.model(), &scale(factor, factor, factor));
+        let view = scene.view();
+        gpu.queue.write_buffer(
+            &gpu.ball_uniforms,
+            0,
+            bytemuck::bytes_of(&SpikyUniforms {
+                model,
+                view,
+                view_proj: mat4_mul(&mat4_mul(&scene.projection(), &view), &model),
+                normal_matrix: inverse_transpose(&model),
+                camera_pos: [
+                    CAMERA_POSITION[0],
+                    CAMERA_POSITION[1],
+                    CAMERA_POSITION[2],
+                    1.0,
+                ],
+                time: scene.elapsed,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+                in1: scene.shader_in1,
+                in2: [0.0; 4],
+            }),
+        );
+    }
+
+    fn render_spiky_framing(
+        scene: &mut Spiky,
+        factor: f32,
+        target: &TestTarget,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> FramingBbox {
+        upload_test_model_scale(scene, factor);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("point10-plane9-spiky-reference-framing"),
+        });
+        scene.render(&mut encoder, &target.view);
+        queue.submit(Some(encoder.finish()));
+        let pixels = target.read(device, queue);
+        non_background_bbox(&pixels, target.width, target.height)
+    }
+
+    #[test]
+    fn plane9_spiky_matches_the_reference_framing() {
+        const WIDTH: u32 = 1280;
+        const HEIGHT: u32 = 720;
+        // Distinct seeds exercise the vendor noise expression's Euler angles.
+        // `update(0.0)` freezes both elapsed time and shader displacement.
+        const PERM_SAMPLES: [f32; 5] = [1.0, 19.0, 47.0, 89.0, 151.0];
+        // Multipliers over the shipped `MESH_FIT`, so 1.0 is the real scene;
+        // only that baseline is asserted. `MESH_FIT = 0.5` came from the
+        // 1275x717 reference (618 px = 48.5% W, vertically clipped) and this
+        // 1280x720 sweep; the smaller multipliers are printed for context.
+        const RELATIVE_FIT_FACTORS: [f32; 4] = [1.0, 0.5, 0.35, 0.25];
+
+        let Some((device, queue)) = gpu() else {
+            eprintln!("skipping Plane9 Spiky reference framing: no fallback adapter");
+            return;
+        };
+        let mut scene = Spiky::new();
+        scene.apply_props(|key| (key == "lens").then_some(1.0));
+        assert_eq!(scene.lens, 1.0, "the reference uses default Lens 1");
+        let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        ctx.resize(WIDTH, HEIGHT);
+        scene.init(&mut ctx);
+        scene.resize(WIDTH, HEIGHT);
+        let audio = AudioBridge::new();
+        let target = TestTarget::new(&device, WIDTH, HEIGHT);
+
+        let mut baseline = Vec::new();
+        let mut sweep = Vec::new();
+        for perm in PERM_SAMPLES {
+            scene.perm = perm;
+            scene.elapsed = 0.0;
+            scene.update(0.0, &audio);
+            let rotation = scene.rotation();
+            for factor in RELATIVE_FIT_FACTORS {
+                let bbox = render_spiky_framing(&mut scene, factor, &target, &device, &queue);
+                eprintln!(
+                    "spiky framing: perm={perm:.3} rotation={rotation:?} relative_factor={factor:.2} \
+                     bbox={bbox:?} width={:.6} height={:.6} centre_x={:.6}",
+                    bbox.width_fraction(WIDTH),
+                    bbox.height_fraction(HEIGHT),
+                    bbox.centre_x_fraction(WIDTH),
+                );
+                if factor == 1.0 {
+                    baseline.push((perm, rotation, bbox));
+                }
+                sweep.push((
+                    factor,
+                    bbox.width_fraction(WIDTH),
+                    bbox.height_fraction(HEIGHT),
+                ));
+            }
+        }
+
+        for factor in RELATIVE_FIT_FACTORS {
+            let widest = sweep
+                .iter()
+                .filter(|(candidate, _, _)| *candidate == factor)
+                .max_by(|(_, width_a, _), (_, width_b, _)| width_a.total_cmp(width_b))
+                .expect("every fit factor has sampled orientations");
+            eprintln!(
+                "spiky fit sweep: relative_factor={factor:.2} max_width={:.6} height_at_max_width={:.6}",
+                widest.1, widest.2
+            );
+        }
+
+        for (perm, rotation, bbox) in &baseline {
+            assert!(bbox.visible_pixels > 0, "empty frame at perm {perm}");
+            assert!(
+                bbox.width_fraction(WIDTH) < 0.95,
+                "Plane9 Spiky is a close-up at perm={perm:.3} rotation={rotation:?}: \
+                 bbox width {:.6} must stay below 0.95; bbox={bbox:?}",
+                bbox.width_fraction(WIDTH),
+            );
+        }
+
+        let (perm, rotation, widest) = baseline
+            .iter()
+            .copied()
+            .max_by(|(_, _, a), (_, _, b)| {
+                a.width_fraction(WIDTH).total_cmp(&b.width_fraction(WIDTH))
+            })
+            .expect("sampled orientations are non-empty");
+        let width = widest.width_fraction(WIDTH);
+        assert!(
+            (0.40..=0.65).contains(&width),
+            "Plane9 Spiky maximum width {width:.6} at perm={perm:.3} rotation={rotation:?} \
+             must match the reference's 48.5% framing band (0.40..=0.65); bbox={widest:?}"
+        );
+        let vertically_clipped = baseline
+            .iter()
+            .any(|(_, _, bbox)| bbox.height_fraction(HEIGHT) >= 0.95);
+        assert!(
+            vertically_clipped,
+            "at least one Plane9 Spiky orientation must have height >= 0.95 like the \
+             reference's clipped tips; sampled bboxes={baseline:?}"
+        );
+        assert!(
+            widest.min_x > 0 && widest.max_x < WIDTH - 1,
+            "Plane9 Spiky must remain wholly inside the horizontal frame edges at its \
+             widest sampled orientation; bbox={widest:?}"
+        );
+
         scene.dispose();
     }
 }
