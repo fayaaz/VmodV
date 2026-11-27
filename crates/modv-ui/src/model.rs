@@ -2449,8 +2449,8 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
     {
         return match name {
             // Plane9 ports whose own headers state 4.0.
-            "Boxy" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Sound Cube" | "Square Tunnel"
-            | "Wormhole" => concat!(
+            "Boxy" | "Colors" | "Earth" | "Hollow Cube" | "Mirror Cube" | "Noise Warp"
+            | "Rorschach" | "Sound Cube" | "Square Tunnel" | "Wormhole" => concat!(
                 "CC BY-NC-",
                 "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),
@@ -2462,7 +2462,18 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             }
             // Plane9 ports whose own headers state 3.0 (The Cave included:
             // Plane9 by Joakim Dahl, itself based on BoyC's Shadertoy scene).
-            "Color Cube" | "It Is Coming For You" | "Light Tunnel" | "Sun" | "The Cave" => concat!(
+            "Color Cube"
+            | "It Is Coming For You"
+            | "Light Tunnel"
+            | "Sun"
+            | "The Cave"
+            | "Blob Fade"
+            | "Circle Crossover"
+            | "Gradient"
+            | "Though The Noise"
+            | "Truchet Tentacles"
+            | "Tv Noise"
+            | "Xor" => concat!(
                 "CC BY-NC-",
                 "SA 3.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),
@@ -4108,12 +4119,15 @@ mod tests {
         // Plane9 ports: the version is stated in the ported file.
         for name in [
             "Point10 Boxy",
+            "Point10 Colors",
             "Point10 Earth",
             "Point10 Hollow Cube",
             "Point10 Hollow Cuboid",
             "Point10 Hollow Cube Layers",
             "Point10 Hollow Cube Blur",
             "Point10 Mirror Cube",
+            "Point10 Noise Warp",
+            "Point10 Rorschach",
             "Point10 Sound Cube",
             "Point10 Square Tunnel",
             "Point10 Wormhole",
@@ -4121,11 +4135,18 @@ mod tests {
             check(name, v4, &[v3]);
         }
         for name in [
+            "Point10 Blob Fade",
+            "Point10 Circle Crossover",
             "Point10 Color Cube",
+            "Point10 Gradient",
             "Point10 It Is Coming For You",
             "Point10 Light Tunnel",
             "Point10 Sun",
             "Point10 The Cave",
+            "Point10 Though The Noise",
+            "Point10 Truchet Tentacles",
+            "Point10 Tv Noise",
+            "Point10 Xor",
         ] {
             check(name, v3, &[v4]);
         }
@@ -4161,7 +4182,7 @@ mod tests {
 
         assert_eq!(
             checked.len(),
-            30,
+            40,
             "every registered Point10 scene must have a provenance label"
         );
     }

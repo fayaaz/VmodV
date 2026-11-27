@@ -121,9 +121,10 @@ multi-pass path without an override.
 
 ## Point10 scenes
 
-The 30 registered Point10-derived scenes do **not** share one provenance. Only
-the twelve Plane9 (Joakim Dahl) presets are share-alike; they register as
-`Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases).
+The 40 registered Point10-derived scenes do **not** share one provenance. Only
+the twenty-two Plane9 (Joakim Dahl) presets are share-alike; they register as
+`Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases for
+the twelve renamed ports).
 The three Hollow Cuboid/Layers/Blur variants re-parameterise the Plane9
 "Hollow Cube" preset and stay share-alike too. The three.js/CodePen-derived
 scenes are MIT, and the visuals written for Point10 are first-party MIT. The
@@ -160,6 +161,16 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 | The Cave | `crates/modv-renderers/src/point10/scenes/the_cave.rs` | CC BY-NC-SA 3.0 (Plane9 preset by Joakim Dahl, itself based on BoyC's Shadertoy "The Cave") |
 | Wormhole | `crates/modv-renderers/src/point10/scenes/wormhole.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Around Plus | `crates/modv-renderers/src/point10/scenes/around_plus.rs` | Rust/wgpu port by this repository's author of the Plane9 "Around And Around" preset by Joakim Dahl; the original **CC BY-NC-SA** licence and attribution still bind the derivative |
+| Blob Fade | `crates/modv-renderers/src/point10/scenes/blob_fade.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Circle Crossover | `crates/modv-renderers/src/point10/scenes/circle_crossover.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Colors | `crates/modv-renderers/src/point10/scenes/colors.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Gradient | `crates/modv-renderers/src/point10/scenes/gradient.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Noise Warp | `crates/modv-renderers/src/point10/scenes/noise_warp.rs` | CC BY-NC-SA 4.0 (stated in file; after Inigo Quilez's domain-warping article) |
+| Rorschach | `crates/modv-renderers/src/point10/scenes/rorschach.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Though The Noise | `crates/modv-renderers/src/point10/scenes/though_the_noise.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Truchet Tentacles | `crates/modv-renderers/src/point10/scenes/truchet_tentacles.rs` | CC BY-NC-SA 3.0 (stated in file; after WAHa_06x36's Shadertoy, https://www.shadertoy.com/view/ldfGWn) |
+| Tv Noise | `crates/modv-renderers/src/point10/scenes/tv_noise.rs` | CC BY-NC-SA 3.0 (stated in file) |
+| Xor | `crates/modv-renderers/src/point10/scenes/xor.rs` | CC BY-NC-SA 3.0 (stated in file) |
 
 ### three.js examples and other permissive sources (MIT)
 

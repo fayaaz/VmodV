@@ -62,8 +62,8 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 27 Point10 scenes and 36 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 402 `.fs` shaders of the ISF corpus (481 total). Names match
+//! 40 Point10 scenes and 36 shader modules, plus the VmodV-only `Video` 2D
+//! module and the 402 `.fs` shaders of the ISF corpus (494 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -135,28 +135,38 @@ use modv_renderers::point10::chromatic::line::ChromaticLine;
 use modv_renderers::point10::chromatic::wave::ChromaticWave;
 use modv_renderers::point10::scenes::around_plus::AroundPlus;
 use modv_renderers::point10::scenes::attractor_particles::AttractorParticles;
+use modv_renderers::point10::scenes::blob_fade::BlobFade;
 use modv_renderers::point10::scenes::boxy::Boxy;
+use modv_renderers::point10::scenes::circle_crossover::CircleCrossover;
 use modv_renderers::point10::scenes::color_cube::ColorCube;
+use modv_renderers::point10::scenes::colors::Colors;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
 use modv_renderers::point10::scenes::earth::Earth;
+use modv_renderers::point10::scenes::gradient::Gradient;
 use modv_renderers::point10::scenes::hollow_cube::HollowCube;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
 use modv_renderers::point10::scenes::latent_backrooms::LatentBackrooms;
 use modv_renderers::point10::scenes::light_tunnel::LightTunnel;
 use modv_renderers::point10::scenes::mirror_cube::MirrorCube;
 use modv_renderers::point10::scenes::mycelium::Mycelium;
+use modv_renderers::point10::scenes::noise_warp::NoiseWarp;
 use modv_renderers::point10::scenes::particle_field::ParticleField;
 use modv_renderers::point10::scenes::rolling_fire::{BallOfFire, RollingFire};
+use modv_renderers::point10::scenes::rorschach::Rorschach;
 use modv_renderers::point10::scenes::smoke_room::SmokeRoom;
 use modv_renderers::point10::scenes::sound_cube::SoundCube;
 use modv_renderers::point10::scenes::spiral_particles::SpiralParticles;
 use modv_renderers::point10::scenes::square_tunnel::SquareTunnel;
 use modv_renderers::point10::scenes::sun::Sun;
 use modv_renderers::point10::scenes::the_cave::TheCave;
+use modv_renderers::point10::scenes::though_the_noise::ThoughTheNoise;
+use modv_renderers::point10::scenes::truchet_tentacles::TruchetTentacles;
+use modv_renderers::point10::scenes::tv_noise::TvNoise;
 use modv_renderers::point10::scenes::ultra_hdr::UltraHdr;
 use modv_renderers::point10::scenes::water_ripple::WaterRipple;
 use modv_renderers::point10::scenes::waveform::Waveform;
 use modv_renderers::point10::scenes::wormhole::Wormhole;
+use modv_renderers::point10::scenes::xor::Xor;
 use modv_renderers::point10::{
     Point10Scene, SceneMeta, SceneProp, ScenePropKind, all_scenes as all_point10_scenes,
 };
@@ -367,6 +377,26 @@ pub enum Point10SceneKind {
     Earth(Earth),
     /// `Plane9 The Cave` (`scenes/the_cave.rs`).
     TheCave(TheCave),
+    /// `Plane9 Colors` (`scenes/colors.rs`).
+    Colors(Colors),
+    /// `Plane9 Gradient` (`scenes/gradient.rs`).
+    Gradient(Gradient),
+    /// `Plane9 Noise Warp` (`scenes/noise_warp.rs`).
+    NoiseWarp(NoiseWarp),
+    /// `Plane9 Rorschach` (`scenes/rorschach.rs`).
+    Rorschach(Rorschach),
+    /// `Plane9 Xor` (`scenes/xor.rs`).
+    Xor(Xor),
+    /// `Plane9 Truchet Tentacles` (`scenes/truchet_tentacles.rs`).
+    TruchetTentacles(TruchetTentacles),
+    /// `Plane9 Blob Fade` (`scenes/blob_fade.rs`).
+    BlobFade(BlobFade),
+    /// `Plane9 Though The Noise` (`scenes/though_the_noise.rs`).
+    ThoughTheNoise(ThoughTheNoise),
+    /// `Plane9 Tv Noise` (`scenes/tv_noise.rs`).
+    TvNoise(TvNoise),
+    /// `Plane9 Circle Crossover` (`scenes/circle_crossover.rs`).
+    CircleCrossover(CircleCrossover),
 }
 
 impl Point10SceneKind {
@@ -430,6 +460,16 @@ impl Point10SceneKind {
             "Plane9 Sun" => Self::Sun(Sun::new()),
             "Plane9 Earth" => Self::Earth(Earth::new()),
             "Plane9 The Cave" => Self::TheCave(TheCave::new()),
+            "Plane9 Colors" => Self::Colors(Colors::new()),
+            "Plane9 Gradient" => Self::Gradient(Gradient::new()),
+            "Plane9 Noise Warp" => Self::NoiseWarp(NoiseWarp::new()),
+            "Plane9 Rorschach" => Self::Rorschach(Rorschach::new()),
+            "Plane9 Xor" => Self::Xor(Xor::new()),
+            "Plane9 Truchet Tentacles" => Self::TruchetTentacles(TruchetTentacles::new()),
+            "Plane9 Blob Fade" => Self::BlobFade(BlobFade::new()),
+            "Plane9 Though The Noise" => Self::ThoughTheNoise(ThoughTheNoise::new()),
+            "Plane9 Tv Noise" => Self::TvNoise(TvNoise::new()),
+            "Plane9 Circle Crossover" => Self::CircleCrossover(CircleCrossover::new()),
             _ => return None,
         })
     }
@@ -472,6 +512,16 @@ impl Point10SceneKind {
             Self::ParticleField(scene) => scene.apply_props(|key| get(key)),
             Self::SpiralParticles(scene) => scene.apply_props(|key| get(key)),
             Self::Waveform(scene) => scene.apply_props(|key| get(key)),
+            Self::Colors(scene) => scene.apply_props(|key| get(key)),
+            Self::Gradient(scene) => scene.apply_props(|key| get(key)),
+            Self::NoiseWarp(scene) => scene.apply_props(|key| get(key)),
+            Self::Rorschach(scene) => scene.apply_props(|key| get(key)),
+            Self::Xor(scene) => scene.apply_props(|key| get(key)),
+            Self::TruchetTentacles(scene) => scene.apply_props(|key| get(key)),
+            Self::BlobFade(scene) => scene.apply_props(|key| get(key)),
+            Self::ThoughTheNoise(scene) => scene.apply_props(|key| get(key)),
+            Self::TvNoise(scene) => scene.apply_props(|key| get(key)),
+            Self::CircleCrossover(scene) => scene.apply_props(|key| get(key)),
         }
     }
 }
@@ -510,6 +560,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.name(),
             Self::SpiralParticles(scene) => scene.name(),
             Self::Waveform(scene) => scene.name(),
+            Self::Colors(scene) => scene.name(),
+            Self::Gradient(scene) => scene.name(),
+            Self::NoiseWarp(scene) => scene.name(),
+            Self::Rorschach(scene) => scene.name(),
+            Self::Xor(scene) => scene.name(),
+            Self::TruchetTentacles(scene) => scene.name(),
+            Self::BlobFade(scene) => scene.name(),
+            Self::ThoughTheNoise(scene) => scene.name(),
+            Self::TvNoise(scene) => scene.name(),
+            Self::CircleCrossover(scene) => scene.name(),
         }
     }
 
@@ -545,6 +605,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.init(ctx),
             Self::SpiralParticles(scene) => scene.init(ctx),
             Self::Waveform(scene) => scene.init(ctx),
+            Self::Colors(scene) => scene.init(ctx),
+            Self::Gradient(scene) => scene.init(ctx),
+            Self::NoiseWarp(scene) => scene.init(ctx),
+            Self::Rorschach(scene) => scene.init(ctx),
+            Self::Xor(scene) => scene.init(ctx),
+            Self::TruchetTentacles(scene) => scene.init(ctx),
+            Self::BlobFade(scene) => scene.init(ctx),
+            Self::ThoughTheNoise(scene) => scene.init(ctx),
+            Self::TvNoise(scene) => scene.init(ctx),
+            Self::CircleCrossover(scene) => scene.init(ctx),
         }
     }
 
@@ -580,6 +650,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.resize(width, height),
             Self::SpiralParticles(scene) => scene.resize(width, height),
             Self::Waveform(scene) => scene.resize(width, height),
+            Self::Colors(scene) => scene.resize(width, height),
+            Self::Gradient(scene) => scene.resize(width, height),
+            Self::NoiseWarp(scene) => scene.resize(width, height),
+            Self::Rorschach(scene) => scene.resize(width, height),
+            Self::Xor(scene) => scene.resize(width, height),
+            Self::TruchetTentacles(scene) => scene.resize(width, height),
+            Self::BlobFade(scene) => scene.resize(width, height),
+            Self::ThoughTheNoise(scene) => scene.resize(width, height),
+            Self::TvNoise(scene) => scene.resize(width, height),
+            Self::CircleCrossover(scene) => scene.resize(width, height),
         }
     }
 
@@ -615,6 +695,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.update(dt, audio),
             Self::SpiralParticles(scene) => scene.update(dt, audio),
             Self::Waveform(scene) => scene.update(dt, audio),
+            Self::Colors(scene) => scene.update(dt, audio),
+            Self::Gradient(scene) => scene.update(dt, audio),
+            Self::NoiseWarp(scene) => scene.update(dt, audio),
+            Self::Rorschach(scene) => scene.update(dt, audio),
+            Self::Xor(scene) => scene.update(dt, audio),
+            Self::TruchetTentacles(scene) => scene.update(dt, audio),
+            Self::BlobFade(scene) => scene.update(dt, audio),
+            Self::ThoughTheNoise(scene) => scene.update(dt, audio),
+            Self::TvNoise(scene) => scene.update(dt, audio),
+            Self::CircleCrossover(scene) => scene.update(dt, audio),
         }
     }
 
@@ -654,6 +744,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.render(encoder, target),
             Self::SpiralParticles(scene) => scene.render(encoder, target),
             Self::Waveform(scene) => scene.render(encoder, target),
+            Self::Colors(scene) => scene.render(encoder, target),
+            Self::Gradient(scene) => scene.render(encoder, target),
+            Self::NoiseWarp(scene) => scene.render(encoder, target),
+            Self::Rorschach(scene) => scene.render(encoder, target),
+            Self::Xor(scene) => scene.render(encoder, target),
+            Self::TruchetTentacles(scene) => scene.render(encoder, target),
+            Self::BlobFade(scene) => scene.render(encoder, target),
+            Self::ThoughTheNoise(scene) => scene.render(encoder, target),
+            Self::TvNoise(scene) => scene.render(encoder, target),
+            Self::CircleCrossover(scene) => scene.render(encoder, target),
         }
     }
 
@@ -689,6 +789,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.dispose(),
             Self::SpiralParticles(scene) => scene.dispose(),
             Self::Waveform(scene) => scene.dispose(),
+            Self::Colors(scene) => scene.dispose(),
+            Self::Gradient(scene) => scene.dispose(),
+            Self::NoiseWarp(scene) => scene.dispose(),
+            Self::Rorschach(scene) => scene.dispose(),
+            Self::Xor(scene) => scene.dispose(),
+            Self::TruchetTentacles(scene) => scene.dispose(),
+            Self::BlobFade(scene) => scene.dispose(),
+            Self::ThoughTheNoise(scene) => scene.dispose(),
+            Self::TvNoise(scene) => scene.dispose(),
+            Self::CircleCrossover(scene) => scene.dispose(),
         }
     }
 
@@ -724,6 +834,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.props(),
             Self::SpiralParticles(scene) => scene.props(),
             Self::Waveform(scene) => scene.props(),
+            Self::Colors(scene) => scene.props(),
+            Self::Gradient(scene) => scene.props(),
+            Self::NoiseWarp(scene) => scene.props(),
+            Self::Rorschach(scene) => scene.props(),
+            Self::Xor(scene) => scene.props(),
+            Self::TruchetTentacles(scene) => scene.props(),
+            Self::BlobFade(scene) => scene.props(),
+            Self::ThoughTheNoise(scene) => scene.props(),
+            Self::TvNoise(scene) => scene.props(),
+            Self::CircleCrossover(scene) => scene.props(),
         }
     }
 
@@ -759,6 +879,16 @@ impl Point10Scene for Point10SceneKind {
             Self::ParticleField(scene) => scene.meta(),
             Self::SpiralParticles(scene) => scene.meta(),
             Self::Waveform(scene) => scene.meta(),
+            Self::Colors(scene) => scene.meta(),
+            Self::Gradient(scene) => scene.meta(),
+            Self::NoiseWarp(scene) => scene.meta(),
+            Self::Rorschach(scene) => scene.meta(),
+            Self::Xor(scene) => scene.meta(),
+            Self::TruchetTentacles(scene) => scene.meta(),
+            Self::BlobFade(scene) => scene.meta(),
+            Self::ThoughTheNoise(scene) => scene.meta(),
+            Self::TvNoise(scene) => scene.meta(),
+            Self::CircleCrossover(scene) => scene.meta(),
         }
     }
 }
@@ -2402,7 +2532,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 36 + 16 + 30, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 36 + 16 + 40, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2422,7 +2552,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 30);
+        assert_eq!(registry.point10_definitions().len(), 40);
     }
 
     #[test]
@@ -2466,6 +2596,16 @@ mod tests {
                 "Plane9 Sun",
                 "Plane9 Earth",
                 "Plane9 The Cave",
+                "Plane9 Colors",
+                "Plane9 Gradient",
+                "Plane9 Noise Warp",
+                "Plane9 Rorschach",
+                "Plane9 Xor",
+                "Plane9 Truchet Tentacles",
+                "Plane9 Blob Fade",
+                "Plane9 Though The Noise",
+                "Plane9 Tv Noise",
+                "Plane9 Circle Crossover",
             ]
         );
 
@@ -3543,7 +3683,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 30 + 402 + milkdrop_count,
+            36 + 16 + 40 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3607,12 +3747,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            36 + 16 + 30 + 402 + milkdrop_count,
+            36 + 16 + 40 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(484),
+            Some(494),
             "manifest total"
         );
     }

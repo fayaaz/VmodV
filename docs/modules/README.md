@@ -6,6 +6,11 @@ static files with no build step.
 
 ## Where the data comes from
 
+`modules.json` is the metadata catalogue loaded on page load; WGSL is split
+into `previews.json` and fetched only when a live preview opens. Both are
+projections of one `build_document()` call, shared by the generator and the
+catalogue guards in `notices.rs`.
+
 | File | Source |
 | --- | --- |
 | module names, authors, categories, props | `ModuleRegistry` in `crates/modv-app/src/module_registry.rs` — the same registry the running app uses |
@@ -50,8 +55,8 @@ uses a split runtime:
   draws it with dummy input/FFT textures. Browsers without WebGPU get a
   metadata card instead of a canvas.
 
-The catalogue's preview shim only draws a single fragment pass, so 438 of 484
-modules get a live preview. The 16 2D canvas modules and 30 Point10 scenes are
+The catalogue's preview shim only draws a single fragment pass, so 438 of 494
+modules get a live preview. The 16 2D canvas modules and 40 Point10 scenes are
 catalogued with full metadata but are not drawn by this shim; they render in
 the browser shell at the site root, which runs the real compositor and registry
 (shader, 2D and Point10 modules).

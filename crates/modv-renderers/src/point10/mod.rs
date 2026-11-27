@@ -157,43 +157,56 @@ fn fullscreen_uv(position: vec2<f32>, resolution: vec2<f32>) -> vec2<f32> {
 /// frame at 0.1 s ("a tab-suspend catch-up cannot jump the pattern").
 pub const MAX_FRAME_SECONDS: f32 = 0.1;
 
-/// The twelve genuine Plane9 (Joakim Dahl) preset ports, under their current
+/// The twenty-two Plane9 (Joakim Dahl) preset ports, under their current
 /// canonical `Plane9 <Name>` registry names.
 ///
-/// These were originally registered as `Point10 <Name>`. Saved Scenes and
-/// presets still carry the old strings, so the legacy aliases stay resolvable
-/// through [`canonical_scene_name`] — this list is the single source of truth
-/// for both directions.
+/// Twelve were originally registered as `Point10 <Name>`. Saved Scenes and
+/// presets still carry those old strings, so the legacy aliases stay
+/// resolvable through [`canonical_scene_name`] — this list is the single
+/// source of truth for both directions and for the Gallery's `plane9` kind.
+/// The remaining ten were imported later and never had a `Point10 ` name; the
+/// alias lookup accepts their `Point10 ` spelling too, for uniform handling.
 pub const PLANE9_SCENE_NAMES: &[&str] = &[
     "Plane9 Boxy",
+    "Plane9 Blob Fade",
+    "Plane9 Circle Crossover",
     "Plane9 Color Cube",
+    "Plane9 Colors",
     "Plane9 Earth",
+    "Plane9 Gradient",
     "Plane9 Hollow Cube",
     "Plane9 It Is Coming For You",
     "Plane9 Light Tunnel",
     "Plane9 Mirror Cube",
+    "Plane9 Noise Warp",
+    "Plane9 Rorschach",
     "Plane9 Sound Cube",
     "Plane9 Square Tunnel",
     "Plane9 Sun",
     "Plane9 The Cave",
+    "Plane9 Though The Noise",
+    "Plane9 Truchet Tentacles",
+    "Plane9 Tv Noise",
     "Plane9 Wormhole",
+    "Plane9 Xor",
 ];
 
 /// The prefix of the scenes that kept their `Point10 ` registry name, and of
-/// the historical aliases of the twelve renamed Plane9 ports.
+/// the historical aliases of the twelve renamed Plane9 ports (the ten later
+/// imports are accepted under this prefix too).
 pub const POINT10_PREFIX: &str = "Point10 ";
 
 /// The prefix of the renamed Plane9 ports.
 pub const PLANE9_PREFIX: &str = "Plane9 ";
 
-/// Author credit for the twelve Plane9 preset ports.
+/// Author credit for the twenty-two Plane9 preset ports.
 pub const PLANE9_AUTHOR: &str = "Plane9 (Joakim Dahl)";
 
 /// Resolve a historical `Point10 <Name>` registry reference to its canonical
 /// `Plane9 <Name>` name.
 ///
-/// Returns `None` when `name` is not one of the twelve renamed aliases (either
-/// already canonical, or a Point10 scene that kept its name).
+/// Returns `None` when `name` is not one of the Plane9 roster (either already
+/// canonical, or a Point10 scene that kept its name).
 pub fn canonical_scene_name(name: &str) -> Option<&'static str> {
     let suffix = name.strip_prefix(POINT10_PREFIX)?;
     PLANE9_SCENE_NAMES.iter().copied().find(|canonical| {
@@ -212,8 +225,8 @@ pub fn resolve_scene_name(name: &str) -> &str {
 
 /// The authoritative Gallery renderer kind for a registry module named `name`.
 ///
-/// The twelve Plane9 preset ports share the Point10 runtime renderer but are
-/// surfaced to the Gallery as their own kind (`type:plane9`); every other
+/// The twenty-two Plane9 preset ports share the Point10 runtime renderer but
+/// are surfaced to the Gallery as their own kind (`type:plane9`); every other
 /// module keeps `default_kind` (its engine renderer kind). Using this
 /// helper in both snapshot builders keeps the roster in one place so the
 /// desktop and wasm Galleries cannot diverge.
@@ -733,6 +746,18 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::sun::Sun::new()),
         Box::new(scenes::earth::Earth::new()),
         Box::new(scenes::the_cave::TheCave::new()),
+        // The second Plane9 XML batch (Simple presets), in the import order the
+        // RED contract names: Abstract, DemoScene, Fractals, Other, Psychedelic.
+        Box::new(scenes::colors::Colors::new()),
+        Box::new(scenes::gradient::Gradient::new()),
+        Box::new(scenes::noise_warp::NoiseWarp::new()),
+        Box::new(scenes::rorschach::Rorschach::new()),
+        Box::new(scenes::xor::Xor::new()),
+        Box::new(scenes::truchet_tentacles::TruchetTentacles::new()),
+        Box::new(scenes::blob_fade::BlobFade::new()),
+        Box::new(scenes::though_the_noise::ThoughTheNoise::new()),
+        Box::new(scenes::tv_noise::TvNoise::new()),
+        Box::new(scenes::circle_crossover::CircleCrossover::new()),
     ]
 }
 
@@ -743,7 +768,7 @@ mod tests {
     #[test]
     fn registry_has_the_port_order_scenes() {
         let scenes = all_scenes();
-        assert_eq!(scenes.len(), 30);
+        assert_eq!(scenes.len(), 40);
 
         assert_eq!(scenes[0].name(), "Point10 Chromatic Line");
         assert_eq!(scenes[1].name(), "Point10 Chromatic Wave");
@@ -783,6 +808,17 @@ mod tests {
         assert_eq!(scenes[27].name(), "Plane9 Sun");
         assert_eq!(scenes[28].name(), "Plane9 Earth");
         assert_eq!(scenes[29].name(), "Plane9 The Cave");
+        // The second Plane9 XML batch.
+        assert_eq!(scenes[30].name(), "Plane9 Colors");
+        assert_eq!(scenes[31].name(), "Plane9 Gradient");
+        assert_eq!(scenes[32].name(), "Plane9 Noise Warp");
+        assert_eq!(scenes[33].name(), "Plane9 Rorschach");
+        assert_eq!(scenes[34].name(), "Plane9 Xor");
+        assert_eq!(scenes[35].name(), "Plane9 Truchet Tentacles");
+        assert_eq!(scenes[36].name(), "Plane9 Blob Fade");
+        assert_eq!(scenes[37].name(), "Plane9 Though The Noise");
+        assert_eq!(scenes[38].name(), "Plane9 Tv Noise");
+        assert_eq!(scenes[39].name(), "Plane9 Circle Crossover");
         assert!(
             scenes
                 .iter()

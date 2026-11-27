@@ -29,9 +29,13 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use modv_app::module_docs::{build_document, split_documents};
 use modv_app::module_registry::{ModuleKind, ModuleRegistry};
 use modv_app::store_ops::Store;
-use modv_renderers::point10::{Point10Scene, all_scenes};
+use modv_render::{Engine, EngineConfig, wgpu};
+use modv_renderers::point10::audio_bridge::{AUDIO_SAMPLES, AudioBridge, BandPayload};
+use modv_renderers::point10::postfx::Composer;
+use modv_renderers::point10::{HDR_FORMAT, Point10Scene, SceneContext, all_scenes};
 use modv_ui::model::{ModuleMetaView, module_license};
 use serde_json::{Value, json};
 
@@ -1016,6 +1020,32 @@ fn milkdrop_presets_guide_accepts_both_extensions_case_insensitively() {
 #[test]
 fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
     const PLANE9: &[(&str, &str)] = &[
+        ("Blob Fade", "3.0"),
+        ("Boxy", "4.0"),
+        ("Circle Crossover", "3.0"),
+        ("Color Cube", "3.0"),
+        ("Colors", "4.0"),
+        ("Earth", "4.0"),
+        ("Gradient", "3.0"),
+        ("Hollow Cube", "4.0"),
+        ("It Is Coming For You", "3.0"),
+        ("Light Tunnel", "3.0"),
+        ("Mirror Cube", "4.0"),
+        ("Noise Warp", "4.0"),
+        ("Rorschach", "4.0"),
+        ("Sound Cube", "4.0"),
+        ("Square Tunnel", "4.0"),
+        ("Sun", "3.0"),
+        ("The Cave", "3.0"),
+        ("Though The Noise", "3.0"),
+        ("Truchet Tentacles", "3.0"),
+        ("Tv Noise", "3.0"),
+        ("Wormhole", "4.0"),
+        ("Xor", "3.0"),
+    ];
+    // Only these twelve were *renamed* from a historical `Point10 ` name;
+    // the ten imported presets never had a Point10 alias.
+    const RENAMED: &[(&str, &str)] = &[
         ("Boxy", "4.0"),
         ("Color Cube", "3.0"),
         ("Earth", "4.0"),
@@ -1076,10 +1106,10 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         .filter_map(|name| name.strip_prefix("Point10 ").map(str::to_string))
         .collect();
 
-    // A — exactly the twelve Plane9 ports move prefix; the other fifteen stay.
+    // A — the twenty-two Plane9 ports use the prefix; the other eighteen stay.
     check!(
-        scene_names.len() == 30,
-        "A: expected 30 scenes, got {}",
+        scene_names.len() == 40,
+        "A: expected 40 scenes, got {}",
         scene_names.len()
     );
     check!(
@@ -1137,7 +1167,7 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
     // constructor result as its new Plane9 name.
     let registry = ModuleRegistry::builtin();
     let mut alias_mismatches = Vec::new();
-    for (suffix, _) in PLANE9 {
+    for (suffix, _) in RENAMED {
         let old_name = format!("Point10 {suffix}");
         let new_name = format!("Plane9 {suffix}");
         let canonical = registry.point10_definition(&new_name);
@@ -1309,10 +1339,10 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         .map(|name| name.as_str().expect("module name").to_string())
         .collect();
     let mut manifest_mismatches = Vec::new();
-    if manifest_names.len() != 30 {
-        manifest_mismatches.push(format!("expected 30 names, got {}", manifest_names.len()));
+    if manifest_names.len() != 40 {
+        manifest_mismatches.push(format!("expected 40 names, got {}", manifest_names.len()));
     }
-    for (suffix, _) in PLANE9 {
+    for (suffix, _) in RENAMED {
         let old_name = format!("Point10 {suffix}");
         let new_name = format!("Plane9 {suffix}");
         if !manifest_names.contains(&old_name) {
@@ -1329,7 +1359,7 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
     );
 
     let canonical_for_legacy = |name: &str| {
-        PLANE9
+        RENAMED
             .iter()
             .find_map(|(suffix, _)| {
                 (name == format!("Point10 {suffix}")).then(|| format!("Plane9 {suffix}"))
@@ -1421,6 +1451,386 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         failures.is_empty(),
         "Plane9 rename contract failed ({} checks):\n{}",
         failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// Render one Plane9 batch scene through the same two-frame presentation path
+/// as `point10::scene_tests`, returning tightly packed 64x64 RGBA8 pixels.
+fn render_plane9_batch_smoke(scene: &mut dyn Point10Scene, engine: &Engine) -> Vec<u8> {
+    const SIZE: u32 = 64;
+
+    let mut composer = Composer::new(
+        &engine.device,
+        &engine.queue,
+        SIZE,
+        SIZE,
+        wgpu::TextureFormat::Rgba8Unorm,
+    );
+    let mut ctx = SceneContext::new(&engine.device, &engine.queue, HDR_FORMAT);
+    ctx.resize(SIZE, SIZE);
+    scene.init(&mut ctx);
+    scene.resize(SIZE, SIZE);
+
+    let mut payload = BandPayload::silent(44_100.0);
+    payload.byte_frequency_data = vec![200; 1024];
+    payload.wave = [0.5; AUDIO_SAMPLES];
+    payload.beat = 0.8;
+    payload.lanes = [0.6; 12];
+    payload.cells = [0.6; 16];
+    payload.freq_mag = [0.4; AUDIO_SAMPLES];
+    let mut bridge = AudioBridge::new();
+
+    let texture = engine.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("plane9-batch-smoke-target"),
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = engine
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("plane9-batch-smoke"),
+        });
+    for _ in 0..2 {
+        bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+        scene.update(1.0 / 60.0, &bridge);
+        scene.render(&mut encoder, composer.scene_view());
+    }
+    composer.render(&mut encoder, &view);
+    engine.queue.submit(Some(encoder.finish()));
+
+    // 64 * 4 is already 256-byte aligned, so the tightly packed readback needs
+    // no row-padding removal.
+    let bytes_per_row = SIZE * 4;
+    let buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("plane9-batch-smoke-readback"),
+        size: bytes_per_row as u64 * SIZE as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = engine
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("plane9-batch-smoke-readback"),
+        });
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(SIZE),
+            },
+        },
+        wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+    );
+    engine.queue.submit(Some(encoder.finish()));
+
+    let slice = buffer.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    engine
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("poll the Plane9 smoke readback");
+    receiver
+        .recv()
+        .expect("the Plane9 readback callback runs")
+        .expect("map the Plane9 readback");
+    let mapped = slice
+        .get_mapped_range()
+        .expect("the Plane9 readback buffer is mapped");
+    let pixels = mapped.to_vec();
+    drop(mapped);
+    buffer.unmap();
+    scene.dispose();
+    pixels
+}
+
+/// The ten simple Plane9 XML presets imported as one batch. This deliberately
+/// resolves scenes by registry name rather than naming their not-yet-existing
+/// Rust constructors, so the RED test compiles before the port exists.
+#[test]
+#[allow(clippy::op_ref)]
+fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
+    const PRESETS: &[(&str, &str)] = &[
+        ("Colors", "4.0"),
+        ("Gradient", "3.0"),
+        ("Noise Warp", "4.0"),
+        ("Rorschach", "4.0"),
+        ("Xor", "3.0"),
+        ("Truchet Tentacles", "3.0"),
+        ("Blob Fade", "3.0"),
+        ("Though The Noise", "3.0"),
+        ("Tv Noise", "3.0"),
+        ("Circle Crossover", "3.0"),
+    ];
+
+    let mut failures = Vec::new();
+    macro_rules! check {
+        ($condition:expr, $($arg:tt)*) => {
+            if !$condition {
+                failures.push(format!($($arg)*));
+            }
+        };
+    }
+
+    let mut scenes = all_scenes();
+    let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
+    let unique_names: BTreeSet<&str> = names.iter().copied().collect();
+    check!(
+        scenes.len() == 40,
+        "roster: expected 40 scenes, got {}",
+        scenes.len()
+    );
+    check!(
+        unique_names.len() == names.len(),
+        "roster: duplicate names in {names:?}"
+    );
+    check!(
+        modv_renderers::point10::PLANE9_SCENE_NAMES.len() == 22,
+        "Plane9 alias roster: expected 22 names, got {}",
+        modv_renderers::point10::PLANE9_SCENE_NAMES.len()
+    );
+
+    for (suffix, version) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        let matches: Vec<_> = scenes.iter().filter(|scene| scene.name() == name).collect();
+        check!(
+            matches.len() == 1,
+            "{name}: expected exactly one all_scenes registration, got {}",
+            matches.len()
+        );
+        if let Some(scene) = matches.first() {
+            let meta = scene.meta();
+            check!(
+                meta.name == scene.name(),
+                "{name}: meta.name does not match name()"
+            );
+            check!(
+                meta.author == "Plane9 (Joakim Dahl)",
+                "{name}: author {:?}, expected Plane9 (Joakim Dahl)",
+                meta.author
+            );
+            check!(
+                meta.version == "1.0.0",
+                "{name}: version {:?}",
+                meta.version
+            );
+            check!(
+                meta.module_type == "2d",
+                "{name}: type {:?}",
+                meta.module_type
+            );
+            check!(
+                meta.audio_features == &["bass", "mid", "treble"],
+                "{name}: audio features {:?}",
+                meta.audio_features
+            );
+        }
+        check!(
+            modv_renderers::point10::PLANE9_SCENE_NAMES.contains(&name.as_str()),
+            "{name}: missing from the Plane9 alias/Gallery roster"
+        );
+        check!(
+            modv_renderers::point10::gallery_kind(&name, "point10") == "plane9",
+            "{name}: Gallery kind is not plane9"
+        );
+
+        let expected_license =
+            format!("CC BY-NC-SA {version} (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)");
+        let license = module_license(&ModuleMetaView {
+            name: name.clone(),
+            module_type: "2d".to_string(),
+            kind: "plane9".to_string(),
+            ..ModuleMetaView::default()
+        });
+        check!(
+            license == expected_license,
+            "{name}: UI license {license:?}, expected {expected_license:?}"
+        );
+        let notices = notices_section("Point10 scenes");
+        let row = notices
+            .lines()
+            .find(|line| line.starts_with(&format!("| {suffix} |")));
+        match row {
+            Some(row) if row.contains(&format!("CC BY-NC-SA {version}")) => {}
+            Some(row) => check!(false, "{name}: wrong notices row {row:?}"),
+            None => check!(false, "{name}: missing notices provenance row"),
+        }
+    }
+
+    let registry = ModuleRegistry::builtin();
+    check!(
+        registry.point10_definitions().len() == 40,
+        "ModuleRegistry: expected 40 Point10 definitions, got {}",
+        registry.point10_definitions().len()
+    );
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        check!(
+            registry.kind(&name) == Some(ModuleKind::Point10),
+            "{name}: ModuleRegistry kind is not Point10"
+        );
+        match registry.point10_definition(&name) {
+            Some(definition) => {
+                check!(
+                    definition.meta.author == "Plane9 (Joakim Dahl)"
+                        && definition.meta.version == "1.0.0"
+                        && definition.meta.module_type == "2d"
+                        && definition.meta.audio_features == &["bass", "mid", "treble"],
+                    "{name}: ModuleRegistry metadata does not match the Plane9 contract"
+                );
+            }
+            None => check!(false, "{name}: missing from ModuleRegistry"),
+        }
+    }
+
+    let manifest: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
+            .expect("the parity manifest is valid JSON");
+    check!(
+        manifest["counts"]["point10"].as_u64() == Some(40),
+        "manifest: point10 count is {:?}, expected 40",
+        manifest["counts"]["point10"]
+    );
+    check!(
+        manifest["counts"]["total"].as_u64() == Some(494),
+        "manifest: total is {:?}, expected 494",
+        manifest["counts"]["total"]
+    );
+    let manifest_names: Vec<&str> = manifest["point10"]
+        .as_array()
+        .expect("manifest point10 array")
+        .iter()
+        .map(|name| name.as_str().expect("manifest module name"))
+        .collect();
+    check!(
+        manifest_names.len() == 40,
+        "manifest: expected 40 Point10 names, got {}",
+        manifest_names.len()
+    );
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        check!(
+            manifest_names
+                .iter()
+                .filter(|candidate| **candidate == name)
+                .count()
+                == 1,
+            "{name}: parity manifest must contain the canonical name exactly once"
+        );
+    }
+
+    let corpus = repo_root().join("resources/isf");
+    let generated = build_document(&corpus);
+    let (metadata, previews) = split_documents(&generated);
+    let committed: Value = serde_json::from_str(include_str!("../../../docs/modules/modules.json"))
+        .expect("the committed module catalogue is valid JSON");
+    check!(
+        metadata == committed,
+        "docs/modules/modules.json does not match the metadata projection of build_document()"
+    );
+    let committed_previews: Value =
+        serde_json::from_str(include_str!("../../../docs/modules/previews.json"))
+            .expect("the committed preview catalogue is valid JSON");
+    check!(
+        previews == committed_previews,
+        "docs/modules/previews.json does not match the preview projection of build_document()"
+    );
+    check!(
+        generated["counts"]["point10"].as_u64() == Some(40),
+        "catalogue: point10 count is {:?}, expected 40",
+        generated["counts"]["point10"]
+    );
+    check!(
+        generated["counts"]["total"].as_u64() == Some(494),
+        "catalogue: total is {:?}, expected 494",
+        generated["counts"]["total"]
+    );
+    let modules = generated["modules"]
+        .as_array()
+        .expect("catalogue modules array");
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        let matches: Vec<_> = modules
+            .iter()
+            .filter(|module| module["name"] == name)
+            .collect();
+        check!(
+            matches.len() == 1,
+            "{name}: catalogue must contain the module exactly once, got {}",
+            matches.len()
+        );
+        if let Some(module) = matches.first() {
+            check!(
+                module["kind"] == "point10"
+                    && module["author"] == "Plane9 (Joakim Dahl)"
+                    && module["version"] == "1.0.0"
+                    && module["audioFeatures"] == serde_json::json!(["bass", "mid", "treble"]),
+                "{name}: catalogue metadata does not match the Plane9 contract"
+            );
+        }
+    }
+
+    for face in ["posx", "negx", "posy", "negy", "posz", "negz"] {
+        let path = repo_root().join(format!("resources/point10/textures/stormy/{face}.jpg"));
+        check!(
+            path.is_file(),
+            "Though The Noise: missing bundled cubemap face {path:?}"
+        );
+    }
+
+    assert!(
+        failures.is_empty(),
+        "Plane9 batch contract failed ({} checks):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+
+    let Ok(engine) = Engine::new(&EngineConfig {
+        force_fallback_adapter: true,
+    }) else {
+        eprintln!("plane9 batch GPU smoke skipped: no fallback adapter");
+        return;
+    };
+    for (suffix, _) in PRESETS {
+        let name = format!("Plane9 {suffix}");
+        let index = scenes
+            .iter()
+            .position(|scene| scene.name() == name)
+            .expect("the registry contract above guarantees the scene exists");
+        let pixels = render_plane9_batch_smoke(scenes[index].as_mut(), &engine);
+        let non_black = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] > 0 || pixel[1] > 0 || pixel[2] > 0);
+        check!(
+            non_black,
+            "{name}: two-frame 64x64 fallback-adapter render is uniformly black"
+        );
+    }
+    assert!(
+        failures.is_empty(),
+        "Plane9 batch GPU smoke failed:\n{}",
         failures.join("\n")
     );
 }

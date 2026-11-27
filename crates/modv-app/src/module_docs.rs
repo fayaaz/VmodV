@@ -239,17 +239,18 @@ pub fn build_document(isf_dir: &Path) -> Value {
     })
 }
 
-/// Write the two data files the static site loads.
+/// Split a [`build_document`] into the two documents the static site loads.
 ///
 /// `modules.json` is the small catalogue shown on page load; WGSL lives in
 /// `previews.json`, fetched only when someone opens a live preview. Keeping
 /// the shaders out of the initial payload makes the front page fast even with
-/// 432 compilable modules.
-pub fn write_documents(isf_dir: &Path, output_dir: &Path) -> Result<(), std::io::Error> {
-    let mut document = build_document(isf_dir);
+/// 494 compilable modules. Both the generator and the catalogue guards use
+/// this projection so they cannot disagree about which file holds what.
+pub fn split_documents(document: &Value) -> (Value, Value) {
+    let mut metadata = document.clone();
     let mut previews = Map::new();
 
-    if let Some(modules) = document["modules"].as_array_mut() {
+    if let Some(modules) = metadata["modules"].as_array_mut() {
         for module in modules.iter_mut() {
             let id = module["id"].as_str().unwrap_or_default().to_string();
             let Some(preview) = module["preview"].as_object_mut() else {
@@ -265,11 +266,19 @@ pub fn write_documents(isf_dir: &Path, output_dir: &Path) -> Result<(), std::io:
         }
     }
 
-    fs::create_dir_all(output_dir)?;
-    write_json(&output_dir.join("modules.json"), &document)?;
-    write_json(&output_dir.join("previews.json"), &Value::Object(previews))
+    (metadata, Value::Object(previews))
 }
 
+/// Generate and write the metadata/preview pair the static site loads.
+pub fn write_documents(isf_dir: &Path, output_dir: &Path) -> Result<(), std::io::Error> {
+    let (metadata, previews) = split_documents(&build_document(isf_dir));
+
+    fs::create_dir_all(output_dir)?;
+    write_json(&output_dir.join("modules.json"), &metadata)?;
+    write_json(&output_dir.join("previews.json"), &previews)
+}
+
+/// Write one pretty-printed, newline-terminated JSON document.
 fn write_json(path: &Path, value: &Value) -> Result<(), std::io::Error> {
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;

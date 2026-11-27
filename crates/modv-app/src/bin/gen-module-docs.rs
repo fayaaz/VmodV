@@ -3,8 +3,8 @@
 //! Run with `make module-docs` (Docker), or directly:
 //!   cargo run -p modv-app --bin gen-module-docs -- [--isf-dir DIR] [--out FILE]
 //!
-//! The output is checked into `docs/modules/modules.json`; Pages serves the
-//! committed file, so no Rust toolchain is needed to publish the site.
+//! The output is checked into `docs/modules/{modules,previews}.json`; Pages
+//! serves the committed files, so no Rust toolchain is needed to publish.
 
 use std::path::{Path, PathBuf};
 

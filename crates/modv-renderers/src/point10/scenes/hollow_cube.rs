@@ -1948,6 +1948,16 @@ mod tests {
             "Plane9 Sun",
             "Plane9 Earth",
             "Plane9 The Cave",
+            "Plane9 Blob Fade",
+            "Plane9 Circle Crossover",
+            "Plane9 Colors",
+            "Plane9 Gradient",
+            "Plane9 Noise Warp",
+            "Plane9 Rorschach",
+            "Plane9 Though The Noise",
+            "Plane9 Truchet Tentacles",
+            "Plane9 Tv Noise",
+            "Plane9 Xor",
         ];
         expected_names.extend_from_slice(&NEW_NAMES);
         expected_names.sort_unstable();
@@ -1966,8 +1976,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         check!(
-            scenes.len() == 30,
-            "A: expected 30 Point10 scenes, got {}",
+            scenes.len() == 40,
+            "A: expected 40 Point10 scenes, got {}",
             scenes.len()
         );
         let mut unique_names = names.clone();
@@ -2017,13 +2027,13 @@ mod tests {
         ))
         .expect("module-parity.json must parse");
         check!(
-            manifest["counts"]["point10"].as_u64() == Some(30),
-            "G: module-parity point10 count must be 30, got {:?}",
+            manifest["counts"]["point10"].as_u64() == Some(40),
+            "G: module-parity point10 count must be 40, got {:?}",
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(484),
-            "G: module-parity total must be 484, got {:?}",
+            manifest["counts"]["total"].as_u64() == Some(494),
+            "G: module-parity total must be 494, got {:?}",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -2033,8 +2043,8 @@ mod tests {
             .map(|name| name.as_str().expect("point10 name"))
             .collect();
         check!(
-            manifest_names.len() == 30,
-            "G: module-parity point10 array must contain 30 names, got {}",
+            manifest_names.len() == 40,
+            "G: module-parity point10 array must contain 40 names, got {}",
             manifest_names.len()
         );
         for name in NEW_NAMES {
@@ -2052,13 +2062,13 @@ mod tests {
             serde_json::from_str(include_str!("../../../../../docs/modules/modules.json"))
                 .expect("generated module catalogue must parse");
         check!(
-            docs["counts"]["point10"].as_u64() == Some(30),
-            "G: generated catalogue point10 count must be 30, got {:?}",
+            docs["counts"]["point10"].as_u64() == Some(40),
+            "G: generated catalogue point10 count must be 40, got {:?}",
             docs["counts"]["point10"]
         );
         check!(
-            docs["counts"]["total"].as_u64() == Some(484),
-            "G: generated catalogue total must be 484, got {:?}",
+            docs["counts"]["total"].as_u64() == Some(494),
+            "G: generated catalogue total must be 494, got {:?}",
             docs["counts"]["total"]
         );
         let doc_point10: Vec<&str> = docs["modules"]

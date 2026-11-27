@@ -31,7 +31,7 @@ modv-engine = { path = "../modv-engine" }
 modv-render = { version = "0.1.0", path = "../modv-render" }
 modv-renderers = { version = "0.1.0", path = "../modv-renderers" }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 
 # Desktop-only: windowing, the egui shell, capture, MIDI, sockets and the
 # native event loop.

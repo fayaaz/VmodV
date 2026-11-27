@@ -374,19 +374,29 @@ fn module_with_kind(name: &str, kind: &str) -> ModuleMetaView {
 
 #[test]
 fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tiles() {
-    const PLANE9: [&str; 12] = [
+    const PLANE9: [&str; 22] = [
+        "Plane9 Blob Fade",
         "Plane9 Boxy",
+        "Plane9 Circle Crossover",
         "Plane9 Color Cube",
+        "Plane9 Colors",
         "Plane9 Earth",
+        "Plane9 Gradient",
         "Plane9 Hollow Cube",
         "Plane9 It Is Coming For You",
         "Plane9 Light Tunnel",
         "Plane9 Mirror Cube",
+        "Plane9 Noise Warp",
+        "Plane9 Rorschach",
         "Plane9 Sound Cube",
         "Plane9 Square Tunnel",
         "Plane9 Sun",
         "Plane9 The Cave",
+        "Plane9 Though The Noise",
+        "Plane9 Truchet Tentacles",
+        "Plane9 Tv Noise",
         "Plane9 Wormhole",
+        "Plane9 Xor",
     ];
     const POINT10: [&str; 18] = [
         "Point10 Around Plus",
@@ -436,7 +446,7 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
     modules.extend(PLANE9.iter().map(|name| module_with_kind(name, "plane9")));
     modules.extend(POINT10.iter().map(|name| module_with_kind(name, "point10")));
 
-    // B — Plane9 is exactly the twelve renamed preset ports.
+    // B — Plane9 is exactly the twenty-two renamed/imported preset ports.
     let plane9 = filter_gallery_modules(&modules, GalleryCategory::All, "type:plane9");
     if names(&plane9) != PLANE9 {
         failures.push(format!(
@@ -454,12 +464,12 @@ fn gallery_renderer_kind_filters_separate_plane9_from_point10_without_alias_tile
         ));
     }
 
-    // D — the All view still contains all 30 canonical scene entries.
+    // D — the All view still contains all 40 canonical scene entries.
     let all = filter_gallery_modules(&modules, GalleryCategory::All, "");
     let expected_all: Vec<&str> = PLANE9.iter().chain(POINT10.iter()).copied().collect();
     if names(&all) != expected_all {
         failures.push(format!(
-            "D: All selected {:?}, expected all 30 canonical scenes",
+            "D: All selected {:?}, expected all 40 canonical scenes",
             names(&all)
         ));
     }
