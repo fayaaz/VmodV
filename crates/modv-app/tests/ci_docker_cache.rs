@@ -193,21 +193,33 @@ fn makefile_image_builds_use_buildx_and_forward_cache_args() {
 
 #[test]
 fn linux_jobs_share_the_runner_prep_action() {
-    // Every Docker/Linux job used to repeat the same cache-mount chmod and
-    // disk-space cleanup. Keep those details in one composite action so a
-    // runner fix lands everywhere and workflow YAML stays readable.
+    // Every Docker/Linux job used to repeat the same cache-mount chmod. Keep
+    // that detail in one composite action so a runner fix lands everywhere and
+    // workflow YAML stays readable. The disk-space cleanup was removed: it
+    // cost a minute on every job and the builds have enough headroom without
+    // it.
     let root = repo_root();
     let action = read_text(&root.join(".github/actions/prepare-linux-runner/action.yml"));
     for token in [
         "using: composite",
         "mkdir -p .cargo-cache crates/target",
         "chmod -R a+rwX",
-        "sudo rm -rf /usr/share/dotnet",
-        "df -h /",
     ] {
         assert!(
             action.contains(token),
             "the shared Linux runner-prep action is missing `{token}`"
+        );
+    }
+    for removed in [
+        "Free runner disk space",
+        "sudo rm -rf /usr/share/dotnet",
+        "df -h /",
+        "free disk space",
+    ] {
+        assert!(
+            !action.contains(removed),
+            "the shared Linux runner-prep action must not contain `{removed}`; \
+             freeing runner disk space is unnecessary and slow"
         );
     }
     for (path, text) in docker_workflows() {
