@@ -1217,14 +1217,16 @@ impl TweenRuntime {
         self.bpm
     }
 
-    /// Advance one frame, wrapping to 0 at the end (`advanceFrame`,
-    /// `tweens.js:248-254`).
+    /// Advance one frame (`advanceFrame`, `tweens.js:248-254`).
+    ///
+    /// A looping descriptor wraps to 0 at the end of its frames; a one-shot
+    /// holds its final frame instead of replaying the sweep forever.
     pub fn advance(&mut self) {
         if self.frames.is_empty() {
             self.frame = 0;
         } else if self.frame + 1 < self.frames.len() {
             self.frame += 1;
-        } else {
+        } else if self.descriptor.looping {
             self.frame = 0;
         }
     }
@@ -1233,7 +1235,8 @@ impl TweenRuntime {
     /// `dataTypes.js:122-127`).
     ///
     /// The advance happens even when there is no frame to read, matching the
-    /// JS getter.
+    /// JS getter. A looping tween wraps to frame 0 at the end of its recorded
+    /// cycle; a one-shot holds its final frame instead of replaying it.
     pub fn value(&mut self) -> Option<Vec<f64>> {
         let value = self.frames.get(self.frame).cloned();
         self.advance();
@@ -1304,7 +1307,9 @@ impl TweenRuntime {
 /// calls `advanceFrame` on every read, and one link read is one advance
 /// (`dataTypes.js:122-127`). Keep that behaviour by resolving tween links with
 /// [`resolve_tween_link`]; use [`TweenSet::advance_all`] only for tweens no
-/// link read during the frame (otherwise they advance twice).
+/// link read during the frame (otherwise they advance twice). At the end of a
+/// recorded cycle a looping tween wraps to frame 0, while a one-shot holds its
+/// final frame.
 #[derive(Clone, Debug, Default)]
 pub struct TweenSet {
     tweens: IndexMap<String, TweenRuntime>,
@@ -1568,7 +1573,8 @@ fn decode_descriptor(
 ///
 /// The read advances the tween exactly once (even when the channel is
 /// missing, like the JS getter), which is what makes a BPM tween breathe at
-/// the link evaluation rate.
+/// the link evaluation rate. Looping tweens wrap at the end of their recorded
+/// cycle; one-shots hold their last value.
 pub fn resolve_tween_link(tweens: &mut TweenSet, id: &str, channel: usize) -> Option<f64> {
     let frame = tweens.get_mut(id)?.value()?;
     frame.get(channel).copied()
@@ -2148,20 +2154,54 @@ mod tests {
 
     #[test]
     fn value_reads_then_advances_and_wraps() {
-        let mut runtime = TweenRuntime::new(linear_tween(), 10.0, 120.0);
-        assert_eq!(runtime.frames().len(), 5);
+        let mut tween = linear_tween();
+        tween.looping = true;
+        let mut runtime = TweenRuntime::new(tween, 10.0, 120.0);
+        assert_eq!(runtime.frames().len(), 10);
         assert_eq!(runtime.frame(), 0);
 
-        let read: Vec<f64> = (0..5).map(|_| runtime.value().expect("frame")[0]).collect();
-        assert_eq!(read, vec![0.0, 0.2, 0.4, 0.6, 0.8]);
-        // `advanceFrame` wraps to 0 at the last frame.
+        let read: Vec<f64> = (0..10)
+            .map(|_| runtime.value().expect("frame")[0])
+            .collect();
+        assert_eq!(read, vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 0.8, 0.6, 0.4, 0.2]);
+        // A looping runtime wraps to 0 after its recorded ping-pong cycle.
         assert_eq!(runtime.frame(), 0);
         assert_eq!(runtime.value().expect("frame")[0], 0.0);
 
         runtime.set_frame(100);
-        assert_eq!(runtime.frame(), 4);
+        assert_eq!(runtime.frame(), 9);
         runtime.advance();
         assert_eq!(runtime.frame(), 0);
+    }
+
+    #[test]
+    fn one_shot_holds_the_last_frame_after_reading_past_the_end() {
+        let mut runtime = TweenRuntime::new(linear_tween(), 10.0, 120.0);
+        assert_eq!(runtime.frames().len(), 5);
+
+        let read: Vec<f64> = (0..5).map(|_| runtime.value().expect("frame")[0]).collect();
+        assert_eq!(read, vec![0.0, 0.2, 0.4, 0.6, 0.8]);
+        let last_frame = runtime.frames().last().cloned().expect("final frame");
+
+        assert_eq!(
+            runtime.frame(),
+            4,
+            "a non-looping tween must not wrap to frame 0"
+        );
+        assert_eq!(runtime.current_value(), Some(last_frame.as_slice()));
+
+        // Every subsequent read is past the end of a one-shot, but the final
+        // value remains available instead of replaying the sweep forever.
+        for _ in 0..3 {
+            assert_eq!(runtime.value(), Some(last_frame.clone()));
+            assert_eq!(runtime.frame(), 4);
+            assert_eq!(runtime.current_value(), Some(last_frame.as_slice()));
+        }
+
+        runtime.set_frame(100);
+        runtime.advance();
+        assert_eq!(runtime.frame(), 4);
+        assert_eq!(runtime.current_value(), Some(last_frame.as_slice()));
     }
 
     #[test]
@@ -2366,8 +2406,14 @@ mod tests {
 
     #[test]
     fn resolve_tween_link_advances_once_per_read() {
+        let mut descriptor = linear_tween();
+        // This checks the one-step advance and restart wrap, so use a looping
+        // restart descriptor rather than the one-shot helper (which holds).
+        descriptor.looping = true;
+        descriptor.loop_mode = Some("restart".to_string());
+
         let mut set = TweenSet::new();
-        set.insert_descriptor(linear_tween(), 10.0, 120.0);
+        set.insert_descriptor(descriptor, 10.0, 120.0);
 
         let values: Vec<f64> = (0..7)
             .map(|_| resolve_tween_link(&mut set, "t1", 0).expect("link value"))

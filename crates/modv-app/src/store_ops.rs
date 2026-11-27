@@ -3652,6 +3652,9 @@ impl Store {
         if let Some(looping) = params.get("loop").and_then(Value::as_bool) {
             descriptor.looping = looping;
         }
+        if let Some(loop_mode) = params.get("loopMode").and_then(Value::as_str) {
+            descriptor.loop_mode = Some(loop_mode.to_string());
+        }
         if let Some(use_bpm) = params.get("useBpm").and_then(Value::as_bool) {
             descriptor.use_bpm = use_bpm;
         }
@@ -7666,6 +7669,60 @@ mod tests {
             .expect("remove tween");
         assert!(!store.tweens.contains("created"));
         assert_eq!(store.state().tweens, json!([]));
+    }
+
+    #[test]
+    fn create_tween_preserves_restart_loop_mode_and_runtime() {
+        let mut store = Store::new();
+        store
+            .dispatch("fps/SET_FPS", json!({ "fps": 10 }))
+            .expect("set fps");
+        let tween = store
+            .dispatch(
+                "tweens/createTween",
+                json!({
+                    "id": "restart-created",
+                    "data": [[0.0], [1.0]],
+                    "duration": 1000,
+                    "direction": "normal",
+                    "easing": "linear",
+                    "loop": true,
+                    "loopMode": "restart",
+                    "useBpm": false,
+                }),
+            )
+            .expect("createTween");
+
+        assert_eq!(
+            tween["loopMode"], "restart",
+            "createTween must return the requested restart loop mode"
+        );
+        assert_eq!(
+            store.state().tweens[0]["loopMode"],
+            "restart",
+            "the stored descriptor must retain the requested restart loop mode"
+        );
+
+        let runtime = store.tweens.get_mut("restart-created").expect("tween");
+        assert_eq!(runtime.descriptor().loop_mode.as_deref(), Some("restart"));
+        assert_eq!(
+            runtime.frames().len(),
+            5,
+            "a restart loop records one forward leg, not a ping-pong"
+        );
+
+        let frame_count = runtime.frames().len();
+        let first_cycle: Vec<Vec<f64>> = (0..frame_count)
+            .map(|_| runtime.value().expect("first-cycle frame"))
+            .collect();
+        let second_cycle: Vec<Vec<f64>> = (0..frame_count)
+            .map(|_| runtime.value().expect("second-cycle frame"))
+            .collect();
+        assert_eq!(
+            first_cycle, second_cycle,
+            "the registered runtime must restart with the same forward-leg values"
+        );
+        assert_eq!(runtime.frame(), 0);
     }
 
     #[test]

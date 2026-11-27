@@ -851,6 +851,9 @@ fn draw_curve(
 ///
 /// `keyframeTimes` is emitted only for explicit times (three or more rows);
 /// a two-row `[0, 1]` list would be redundant with anime's shorthand.
+/// `loopMode: "restart"` is emitted alongside `loop`: when looping is enabled
+/// it replays the drawn cycle from frame 0 instead of ping-ponging it (what
+/// `loop: true` alone does).
 fn descriptor_payload(view: &TweenView) -> serde_json::Value {
     let mut payload = serde_json::json!({
         "id": view.id,
@@ -859,6 +862,7 @@ fn descriptor_payload(view: &TweenView) -> serde_json::Value {
         "direction": view.direction,
         "easing": view.easing,
         "loop": view.looping,
+        "loopMode": "restart",
         "useBpm": view.use_bpm,
         "bpmDivision": view.bpm_division,
         "durationAsTotalTime": view.duration_as_total_time,
@@ -960,6 +964,7 @@ mod tests {
         assert_eq!(actions[0].payload["direction"], "alternate");
         assert_eq!(actions[0].payload["easing"], "easeInOutSine");
         assert_eq!(actions[0].payload["loop"], true);
+        assert_eq!(actions[0].payload["loopMode"], "restart");
         assert_eq!(actions[0].payload["useBpm"], true);
         assert_eq!(actions[0].payload["bpmDivision"], 16.0);
         assert_eq!(actions[0].payload["durationAsTotalTime"], false);
@@ -972,6 +977,28 @@ mod tests {
             "tweens.tweens['input-1'].value[0]"
         );
         assert!(control.tween.is_some());
+    }
+
+    #[test]
+    fn looping_tween_updates_request_restart_instead_of_ping_pong() {
+        let view = two_row();
+        let mut control = TweenControl::new(
+            "gain",
+            Some("input-1".to_string()),
+            Some(view.clone()),
+            0.0,
+            1.0,
+        );
+        let mut state = UiState::new();
+        control.update(&mut state, view);
+
+        let actions = state.take_actions();
+        assert_eq!(actions[0].action, "tweens/createTween");
+        assert_eq!(actions[0].payload["loop"], true);
+        assert_eq!(
+            actions[0].payload["loopMode"], "restart",
+            "a checked loop must replay the forward leg instead of ping-ponging"
+        );
     }
 
     #[test]
