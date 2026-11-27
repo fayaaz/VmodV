@@ -1,7 +1,7 @@
-//! The 30 Point10 effects — port of
+//! The 27 Point10 effects — port of
 //! `src/renderer/src/application/renderers/shader/modules/Point10Effects.js`.
 //!
-//! Twenty-five are Plane9 presets by Joakim Dahl and register as
+//! Twenty-two are Plane9 presets by Joakim Dahl and register as
 //! `Plane9 <Name>` with `author = "Plane9 (Joakim Dahl)"`; the five without a
 //! Plane9 preset (`Pixelation`, `RGB Shift`, `Digital Glitch`, `Vignette`,
 //! `Bloom`) keep the `Point10 ` prefix and `author = "Point10"`. Every effect
@@ -614,54 +614,6 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
 }
 "#,
     },
-    // Point10Effects.js:471-489 — Led Display
-    P10Effect {
-        name: "Plane9 Led Display",
-        chunks: &[],
-        audio: false,
-        body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
-  let vUv = modv_uv(fragCoord);
-  let size = u.iResolution.xy;
-  let ledSize = 1.0 / size;
-  let ledCenter = floor(vUv * size) / size + ledSize * 0.5;
-  var c = textureSample(u_modVCanvas, modvGroupSampler, ledCenter);
-  let luminance = (c.r + c.g + c.b) / 3.0;
-  if (luminance > 0.01) {
-    let ratios = c.rgb / luminance;
-    let stepSize = 1.0 / 100.0;
-    let factor = stepSize * floor(luminance / stepSize);
-    c = vec4<f32>(ratios * factor * 1.5, c.a);
-  }
-  let v = length((ledCenter - vUv) / (ledSize * 0.5));
-  return mix(c, vec4<f32>(0.0, 0.0, 0.0, 1.0), v);
-}
-"#,
-    },
-    // Point10Effects.js:491-508 — Led Display Curved
-    P10Effect {
-        name: "Plane9 Led Display Curved",
-        chunks: &[],
-        audio: false,
-        body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
-  let vUv = modv_uv(fragCoord);
-  let p = vUv * 2.0 - 1.0;
-  let bend = vUv + p * vec2<f32>(p.x * p.x, p.y * p.y) * 0.04;
-  let size = u.iResolution.xy;
-  let ledSize = 1.0 / size;
-  let ledCenter = floor(bend * size) / size + ledSize * 0.5;
-  var c = textureSample(u_modVCanvas, modvGroupSampler, ledCenter);
-  let lpos = (ledCenter - bend) / (ledSize * 0.5);
-  let v = 1.0 - smoothstep(
-    0.1,
-    1.0,
-    lpos.x * lpos.x + lpos.y * lpos.y - lpos.x * lpos.x * lpos.y * lpos.y
-  );
-  c = mix(vec4<f32>(0.0, 0.0, 0.0, 1.0), c, v);
-  c = mix(vec4<f32>(0.0, 0.0, 0.0, 1.0), c, pow(1.0 - abs(p.y), 1.8));
-  return c;
-}
-"#,
-    },
     // Point10Effects.js:510-549 — Limit Hue
     P10Effect {
         name: "Plane9 Limit Hue",
@@ -731,22 +683,6 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     textureSample(u_modVCanvas, modvGroupSampler, vUv + texel).rgb * 2.0;
   c = vec4<f32>(c.rgb + vec3<f32>((emboss.r + emboss.g + emboss.b) / 3.0), c.a);
   return c;
-}
-"#,
-    },
-    // Point10Effects.js:580-591 — Embos
-    P10Effect {
-        name: "Plane9 Embos",
-        chunks: &[],
-        audio: false,
-        body: r#"fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
-  let vUv = modv_uv(fragCoord);
-  let texel = 1.0 / u.iResolution.xy;
-  let emboss = textureSample(u_modVCanvas, modvGroupSampler, vUv - texel).rgb * 2.0 -
-    textureSample(u_modVCanvas, modvGroupSampler, vUv + texel).rgb * 2.0;
-  let value = (emboss.r + emboss.g + emboss.b) / 3.0;
-  let base = textureSample(u_modVCanvas, modvGroupSampler, vUv);
-  return vec4<f32>(base.rgb + vec3<f32>(value) + vec3<f32>(value) * 0.6, 1.0);
 }
 "#,
     },
@@ -842,7 +778,7 @@ fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
     },
 ];
 
-/// All 30 effect modules (25 Plane9, 5 Point10), in `Point10Effects.js`
+/// All 27 effect modules (22 Plane9, 5 Point10), in `Point10Effects.js`
 /// registration order.
 pub(crate) fn modules() -> Vec<ShaderModule> {
     P10_EFFECTS
@@ -886,15 +822,94 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retires_the_old_movie_effect() {
+    fn retires_the_old_movie_effect_and_removed_plane9_effects() {
         let modules = modules();
 
-        assert_eq!(modules.len(), 30, "the Old Movie effect is retired");
+        assert_eq!(modules.len(), 27, "retired effects must not be registered");
+        for removed in [
+            "Plane9 Embos",
+            "Plane9 Led Display Curved",
+            "Plane9 Led Display",
+        ] {
+            assert!(
+                !modules.iter().any(|module| module.name == removed),
+                "{removed} is still registered"
+            );
+        }
         assert!(
             !modules
                 .iter()
                 .any(|module| module.name == "Point10 Old Movie"),
             "Point10 Old Movie is still registered"
+        );
+    }
+
+    #[test]
+    fn retired_plane9_effects_are_absent_from_registry_aliases_and_resolution() {
+        use crate::point10::{PLANE9_EFFECT_NAMES, resolve_effect_name};
+
+        const REMOVED: &[&str] = &[
+            "Plane9 Embos",
+            "Plane9 Led Display Curved",
+            "Plane9 Led Display",
+        ];
+
+        let modules = modules();
+        let registered_names: Vec<&str> =
+            modules.iter().map(|module| module.name.as_ref()).collect();
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+
+        check!(
+            registered_names.len() == 27,
+            "registry: expected 27 effects, got {}",
+            registered_names.len()
+        );
+        check!(
+            PLANE9_EFFECT_NAMES.len() == 49,
+            "alias roster: expected 49 names, got {}",
+            PLANE9_EFFECT_NAMES.len()
+        );
+        for canonical in REMOVED {
+            check!(
+                !registered_names.contains(canonical),
+                "registry: {canonical} is still registered"
+            );
+            check!(
+                !PLANE9_EFFECT_NAMES.contains(canonical),
+                "alias roster: {canonical} is still present"
+            );
+            let legacy = canonical.replacen("Plane9 ", "Point10 ", 1);
+            let resolved = resolve_effect_name(&legacy);
+            check!(
+                resolved == legacy.as_str(),
+                "legacy alias: {legacy} still resolves to {resolved}"
+            );
+        }
+        check!(
+            registered_names.contains(&"Plane9 Embos Merge"),
+            "registry: Plane9 Embos Merge must remain registered"
+        );
+        check!(
+            PLANE9_EFFECT_NAMES.contains(&"Plane9 Embos Merge"),
+            "alias roster: Plane9 Embos Merge must remain present"
+        );
+        check!(
+            resolve_effect_name("Point10 Embos Merge") == "Plane9 Embos Merge",
+            "legacy alias: Point10 Embos Merge must still resolve"
+        );
+
+        assert!(
+            failures.is_empty(),
+            "retired Plane9 effect absence contract failed ({} checks):\n{}",
+            failures.len(),
+            failures.join("\n")
         );
     }
 }

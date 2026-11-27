@@ -125,7 +125,7 @@ fn shader_and_isf_modules_ship_compilable_wgsl_previews() {
             other => panic!("unexpected module kind: {other}"),
         }
     }
-    assert_eq!(shader_previews, 36);
+    assert_eq!(shader_previews, 33);
     assert_eq!(isf_previews, 402);
 }
 

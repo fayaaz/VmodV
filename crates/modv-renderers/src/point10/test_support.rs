@@ -160,3 +160,99 @@ pub(crate) fn any_lit(pixels: &[u8]) -> bool {
         .iter()
         .any(|pixel| pixel[3] > 0 && (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) > 0)
 }
+
+/// Rec. 709 luma of a bloom-enabled frame and its direct-only counterpart.
+///
+/// Used by the Plane9 bloom migration contracts in the three.js-ported scenes,
+/// which compare the same 64x64 render with and without the composer's additive
+/// combine. The thresholds in [`check_bloom_brightness`] are calibrated against
+/// the vendor driver's one-mip bloom.
+#[derive(Debug)]
+pub(crate) struct BloomBrightness {
+    pub(crate) mean: f32,
+    pub(crate) direct_mean: f32,
+    pub(crate) dark_count: usize,
+    pub(crate) dark_mean: f32,
+    pub(crate) dark_direct_mean: f32,
+    pub(crate) gained_fraction: f32,
+}
+
+/// Measure the bloom halo over pixels that were dark in the direct-only frame.
+pub(crate) fn bloom_brightness(with_bloom: &[u8], direct_only: &[u8]) -> BloomBrightness {
+    assert_eq!(with_bloom.len(), direct_only.len());
+    let luma = |pixels: &[u8]| {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| {
+                (0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32)
+                    / 255.0
+            })
+            .collect::<Vec<_>>()
+    };
+    let lit = luma(with_bloom);
+    let direct = luma(direct_only);
+    let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+    let dark = lit
+        .iter()
+        .zip(&direct)
+        .filter(|(_, direct)| **direct <= 1.0 / 255.0)
+        .collect::<Vec<_>>();
+    BloomBrightness {
+        mean: mean(&lit),
+        direct_mean: mean(&direct),
+        dark_count: dark.len(),
+        dark_mean: dark.iter().map(|(lit, _)| **lit).sum::<f32>() / dark.len().max(1) as f32,
+        dark_direct_mean: dark.iter().map(|(_, direct)| **direct).sum::<f32>()
+            / dark.len().max(1) as f32,
+        gained_fraction: dark.iter().filter(|(lit, _)| **lit > 1.0 / 255.0).count() as f32
+            / dark.len().max(1) as f32,
+    }
+}
+
+/// Accumulate the bloom-halo assertions into `failures` for one labelled frame.
+pub(crate) fn check_bloom_brightness(
+    failures: &mut Vec<String>,
+    label: &str,
+    brightness: &BloomBrightness,
+) {
+    use std::fmt::Write;
+
+    let mut detail = String::new();
+    writeln!(
+        detail,
+        "{label}: mean={:.6} direct_mean={:.6} dark_count={} dark_mean={:.6} dark_direct_mean={:.6} gained_fraction={:.3}",
+        brightness.mean,
+        brightness.direct_mean,
+        brightness.dark_count,
+        brightness.dark_mean,
+        brightness.dark_direct_mean,
+        brightness.gained_fraction
+    )
+    .expect("write to String");
+    eprintln!("{detail}");
+    if brightness.dark_count < 256 {
+        failures.push(format!("{detail}dark-pixel mask is vacuous (<256 pixels)"));
+    }
+    if brightness.dark_mean <= 0.003 {
+        failures.push(format!(
+            "{detail}Plane9 bloom did not brighten dark pixels above 0.003"
+        ));
+    }
+    if brightness.dark_mean <= brightness.dark_direct_mean + 0.002 {
+        failures.push(format!(
+            "{detail}dark pixels gained less than 0.002 mean luma"
+        ));
+    }
+    if brightness.gained_fraction <= 0.1 {
+        failures.push(format!(
+            "{detail}at least 10% of dark pixels must gain bloom"
+        ));
+    }
+    if brightness.mean <= brightness.direct_mean * 1.05 {
+        failures.push(format!(
+            "{detail}bloom-enabled frame must be at least 5% brighter overall"
+        ));
+    }
+}

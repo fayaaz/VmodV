@@ -45,7 +45,7 @@ use crate::point10::scenes::plane9_common::{
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::random::value_noise2;
 use crate::point10::{
-    Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, scene_props_with_levers,
+    Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, lens_value, plane9_scene_props,
 };
 
 /// `Screen1` camera position.
@@ -131,6 +131,9 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let tex = position.xy / u.resolution;
   var p = -1.0 + 2.0 * tex;
   p.x = p.x * (u.resolution.x / u.resolution.y);
+  // `in2.y` carries the shared Lens, applied after the aspect correction so
+  // lens 1.0 restores the vendor framing exactly.
+  p = p / u.in2.y;
   let mo = u.in1.xy;
 
   let ro = 4.0 * normalize(vec3<f32>(
@@ -180,6 +183,7 @@ pub struct CloudFlight {
     audio: P10Audio,
     perm: f32,
     elapsed: f32,
+    lens: f32,
     size: (u32, u32),
     target_format: wgpu::TextureFormat,
     device: Option<wgpu::Device>,
@@ -200,6 +204,7 @@ impl CloudFlight {
             audio: P10Audio::new(),
             perm: 1.0,
             elapsed: 0.0,
+            lens: 1.0,
             size: (1, 1),
             target_format: crate::point10::HDR_FORMAT,
             device: None,
@@ -218,8 +223,10 @@ impl CloudFlight {
         rtt_size(self.size.0, self.size.1)
     }
 
-    /// Bind the modV props (this preset declares no `sceneProps`).
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Bind the shared Lens prop (this preset declares no other `sceneProps`).
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+    }
 
     fn rebuild(&mut self) {
         let (Some(device), Some(queue)) = (self.device.clone(), self.queue.clone()) else {
@@ -253,7 +260,8 @@ impl CloudFlight {
                 sampler: &sampler,
             }),
         );
-        let march_uniforms = Plane9Uniforms::new(rtt_w, rtt_h);
+        let mut march_uniforms = Plane9Uniforms::new(rtt_w, rtt_h);
+        march_uniforms.in2 = [NOISE_SCALE, self.lens, 0.0, 0.0];
         let present_uniforms = Plane9Uniforms::new(self.size.0, self.size.1);
         march.upload(&march_uniforms);
         present.upload(&present_uniforms);
@@ -308,7 +316,7 @@ impl Point10Scene for CloudFlight {
             t * 10.0,
             0.0,
         ];
-        gpu.march_uniforms.in2 = [NOISE_SCALE, 0.0, 0.0, 0.0];
+        gpu.march_uniforms.in2 = [NOISE_SCALE, self.lens, 0.0, 0.0];
         gpu.march.upload(&gpu.march_uniforms);
         gpu.present_uniforms.time = self.elapsed;
         gpu.present.upload(&gpu.present_uniforms);
@@ -341,7 +349,7 @@ impl Point10Scene for CloudFlight {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(PROPS)
+        plane9_scene_props(PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

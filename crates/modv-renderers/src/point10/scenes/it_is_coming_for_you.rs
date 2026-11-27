@@ -94,8 +94,8 @@ use crate::point10::postfx::{Composer, ToneMapping};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::random::seeded_rand;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, UnitQuad, frame_dt,
-    read_scene_props, scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, UnitQuad, frame_dt, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 /// `ItIsComingForYou.js: export const INSTANCE_COUNT = 30000`.
@@ -243,6 +243,8 @@ pub struct ItIsComingForYou {
     glow_scale: f32,
     /// `this.bloomScale` (`bloom`).
     bloom_scale: f32,
+    /// Shared Plane9 Lens magnification (`1.0` = the vendor framing).
+    lens: f32,
     /// `BaseScene.time` — advanced every frame, drives `gTime`.
     time: f32,
     /// `gIn1` as last uploaded.
@@ -268,6 +270,7 @@ impl ItIsComingForYou {
             speed_scale: 1.0,
             glow_scale: 1.0,
             bloom_scale: 1.0,
+            lens: 1.0,
             time: 0.0,
             in1: [0.0; 4],
             in2: [IN2[0], IN2[1], IN2[2], 0.0],
@@ -277,8 +280,9 @@ impl ItIsComingForYou {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:389-395`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(IT_IS_COMING_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(IT_IS_COMING_PROPS, &mut props) {
             match key {
                 "speed" => self.speed_scale = value,
                 "glow" => self.glow_scale = value,
@@ -517,7 +521,7 @@ impl Point10Scene for ItIsComingForYou {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(IT_IS_COMING_PROPS)
+        plane9_scene_props(IT_IS_COMING_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {
@@ -531,17 +535,11 @@ impl ItIsComingForYou {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
-        gpu.queue.write_buffer(
-            &gpu.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&ItIsComingUniforms::new(
-                self.size.0,
-                self.size.1,
-                self.time,
-                self.in1,
-                self.in2,
-            )),
-        );
+        let mut uniforms =
+            ItIsComingUniforms::new(self.size.0, self.size.1, self.time, self.in1, self.in2);
+        uniforms.fov_scale *= self.lens;
+        gpu.queue
+            .write_buffer(&gpu.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
 }
 

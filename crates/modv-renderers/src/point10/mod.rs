@@ -209,7 +209,7 @@ pub const POINT10_PREFIX: &str = "Point10 ";
 /// The prefix of the renamed Plane9 ports.
 pub const PLANE9_PREFIX: &str = "Plane9 ";
 
-/// The fifty-two Plane9 (Joakim Dahl) shader effects and ISF transitions that
+/// The forty-nine Plane9 (Joakim Dahl) shader effects and ISF transitions that
 /// were audited as Plane9 originals and moved from the historical `Point10 `
 /// prefix to their canonical `Plane9 <Name>` registry names.
 ///
@@ -241,11 +241,8 @@ pub const PLANE9_EFFECT_NAMES: &[&str] = &[
     "Plane9 Crt",
     "Plane9 Cubic Lens Distortion",
     "Plane9 Hexagons",
-    "Plane9 Led Display",
-    "Plane9 Led Display Curved",
     "Plane9 Limit Hue",
     "Plane9 Embos Merge",
-    "Plane9 Embos",
     // ISF transitions (`resources/isf/Plane9 *.fs`).
     "Plane9 Banded Swirl",
     "Plane9 Blinds",
@@ -328,7 +325,7 @@ pub fn resolve_effect_name(name: &str) -> &str {
 
 /// The authoritative Gallery renderer kind for a registry module named `name`.
 ///
-/// The thirty Plane9 preset ports and the fifty-two renamed Plane9
+/// The thirty Plane9 preset ports and the forty-nine renamed Plane9
 /// effects share the Point10 runtime renderer but are surfaced to the Gallery
 /// as their own kind (`plane9`, matched as free text); every other module keeps
 /// `default_kind` (its engine renderer kind). Using this helper in both snapshot
@@ -345,7 +342,7 @@ pub fn gallery_kind(name: &str, default_kind: &str) -> String {
 /// Rewrite every legacy `Point10 <Name>` alias string in a JSON document to its
 /// canonical `Plane9 <Name>` name.
 ///
-/// Covers both the thirty Plane9 preset scenes and the fifty-two audited
+/// Covers both the thirty Plane9 preset scenes and the forty-nine audited
 /// Plane9 shader effects/ISF transitions. Walks arrays and objects so nested
 /// Scene cells, Groups and module records are migrated; every other value is
 /// left untouched. Idempotent: canonical names never match the legacy prefix.
@@ -528,6 +525,44 @@ pub fn scene_props_with_levers(schema: &[SceneProp]) -> Vec<SceneProp> {
     props.extend_from_slice(audio_bridge::RESPONSIVENESS_PROPS);
     props.extend_from_slice(schema);
     props
+}
+
+/// The user-facing Lens magnification prop the Plane9 camera scenes publish.
+///
+/// `2.0` doubles the rendered size, `0.5` halves it and `1.0` is the vendor
+/// framing. Only the Plane9 scenes declare it (see [`plane9_scene_props`]); the
+/// Point10-authored scenes must not gain a dead control.
+pub const LENS_PROP: SceneProp = SceneProp::float("lens", "Lens", 1.0, 0.25, 4.0, 0.01);
+
+/// Resolve an incoming Lens value exactly like [`SceneProp::read`]:
+/// non-finite falls back to `1.0`, then clamps into `[0.25, 4.0]`.
+pub fn lens_value(value: Option<f32>) -> f32 {
+    LENS_PROP.read(value)
+}
+
+/// A Plane9 scene's prop list: the responsiveness levers, then Lens, then the
+/// scene's own schema.
+///
+/// This is [`scene_props_with_levers`] plus Lens for the Plane9 presets only;
+/// the global helper stays Lens-free so the Point10-authored scenes keep their
+/// exact schemas.
+pub fn plane9_scene_props(schema: &[SceneProp]) -> Vec<SceneProp> {
+    let mut props = Vec::with_capacity(audio_bridge::RESPONSIVENESS_PROPS.len() + 1 + schema.len());
+    props.extend_from_slice(audio_bridge::RESPONSIVENESS_PROPS);
+    props.push(LENS_PROP);
+    props.extend_from_slice(schema);
+    props
+}
+
+/// Apply Lens magnification to an existing projection matrix.
+///
+/// Only the x/y scale entries change, so the clip-space depth rows are
+/// untouched. A `lens` of `1.0` multiplies by exactly `1.0`, which preserves
+/// every element bit-for-bit.
+pub fn apply_lens(mut projection: scenes::cube_mesh::Mat4, lens: f32) -> scenes::cube_mesh::Mat4 {
+    projection[0][0] *= lens;
+    projection[1][1] *= lens;
+    projection
 }
 
 /// Resolve a whole schema against a prop getter.
@@ -1236,9 +1271,9 @@ mod tests {
         let repo_root = manifest_dir.join("../..");
         let point10_root = manifest_dir.join("src/point10");
 
-        // D — committed parity and generated catalogue data move 47 -> 48 and
-        // 501 -> 502. The catalogue is checked as data; this RED phase does not
-        // regenerate or edit it.
+        // D — committed parity and generated catalogue data retain 48 Point10
+        // scenes and total 499 after three shader effects were retired. The
+        // catalogue is checked as data.
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
                 .expect("read module-parity.json"),
@@ -1250,8 +1285,8 @@ mod tests {
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(502),
-            "manifest: total is {:?}, expected 502",
+            manifest["counts"]["total"].as_u64() == Some(499),
+            "manifest: total is {:?}, expected 499",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -1285,8 +1320,8 @@ mod tests {
             catalogue["counts"]["point10"]
         );
         check!(
-            catalogue["counts"]["total"].as_u64() == Some(502),
-            "catalogue: total is {:?}, expected 502",
+            catalogue["counts"]["total"].as_u64() == Some(499),
+            "catalogue: total is {:?}, expected 499",
             catalogue["counts"]["total"]
         );
         let catalogue_modules = catalogue["modules"].as_array().expect("catalogue modules");

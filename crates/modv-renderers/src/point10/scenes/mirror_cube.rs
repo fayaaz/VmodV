@@ -73,7 +73,7 @@ use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::random::{seeded_rand, value_noise2};
 use crate::point10::{
     FULLSCREEN_TRIANGLE_WGSL, HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp,
-    frame_dt, read_scene_props, scene_props_with_levers,
+    apply_lens, frame_dt, lens_value, plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -237,6 +237,7 @@ pub struct MirrorCube {
     camera_z: f32,
     spin_scale: f32,
     brightness_scale: f32,
+    lens: f32,
     /// The target the inner cube samples (`_prevTarget`).
     prev_index: usize,
     /// The target the feedback pass writes (`_curTarget`).
@@ -262,6 +263,7 @@ impl MirrorCube {
             camera_z: CAMERA_Z,
             spin_scale: 1.0,
             brightness_scale: 1.0,
+            lens: 1.0,
             prev_index: 0,
             cur_index: 1,
             size: (1, 1),
@@ -270,8 +272,9 @@ impl MirrorCube {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:302-305`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(MIRROR_CUBE_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(MIRROR_CUBE_PROPS, &mut props) {
             match key {
                 "spinSpeed" => self.spin_scale = value,
                 "brightness" => self.brightness_scale = value,
@@ -317,7 +320,10 @@ impl MirrorCube {
 
     fn view_proj(&self, aspect: f32) -> Mat4 {
         mat4_mul(
-            &perspective(CAMERA_FOV.to_radians(), aspect, CAMERA_NEAR, CAMERA_FAR),
+            &apply_lens(
+                perspective(CAMERA_FOV.to_radians(), aspect, CAMERA_NEAR, CAMERA_FAR),
+                self.lens,
+            ),
             &look_at([0.0, 0.0, self.camera_z], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
         )
     }
@@ -808,7 +814,7 @@ impl Point10Scene for MirrorCube {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(MIRROR_CUBE_PROPS)
+        plane9_scene_props(MIRROR_CUBE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

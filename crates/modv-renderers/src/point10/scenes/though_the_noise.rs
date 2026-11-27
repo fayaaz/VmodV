@@ -34,7 +34,8 @@ use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::shared::random::value_noise2;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, lens_value,
+    plane9_scene_props,
 };
 
 /// `Screen1` camera position.
@@ -100,6 +101,7 @@ pub struct ThoughTheNoise {
     audio: P10Audio,
     perm: f32,
     elapsed: f32,
+    lens: f32,
     size: (u32, u32),
     target_format: wgpu::TextureFormat,
     device: Option<wgpu::Device>,
@@ -122,6 +124,7 @@ impl ThoughTheNoise {
             audio: P10Audio::new(),
             perm: 1.0,
             elapsed: 0.0,
+            lens: 1.0,
             size: (1, 1),
             target_format: HDR_FORMAT,
             device: None,
@@ -142,9 +145,10 @@ impl ThoughTheNoise {
         &self.uniforms
     }
 
-    /// Bind the modV props. These presets declare no `sceneProps` of their
-    /// own, so this only exists to satisfy the registry's prop binder.
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Bind the shared Lens prop (this preset declares no other `sceneProps`).
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+    }
 
     fn rebuild(&mut self) {
         let (Some(device), Some(queue)) = (self.device.clone(), self.queue.clone()) else {
@@ -227,7 +231,9 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let tex = position.xy / u.resolution;
   let p = -1.0 + 2.0 * tex;
   var point = vec3<f32>(p.x, p.y, -1.0 + u.in1.z);
-  var ray_dir = normalize(vec3<f32>(p.x, p.y, 1.0));
+  // `in3.y` carries the shared Lens; only the ray direction narrows, so the
+  // point/origin keeps the vendor framing untouched.
+  var ray_dir = normalize(vec3<f32>(p.x / u.in3.y, p.y / u.in3.y, 1.0));
   var t = 0.0;
 
   ray_dir = rotate_x(rotate_y(ray_dir, u.in1.x), u.in1.y);
@@ -289,7 +295,7 @@ impl Point10Scene for ThoughTheNoise {
         self.assets_dir = ctx.assets_dir.clone();
         self.size = (ctx.width.max(1), ctx.height.max(1));
         self.uniforms = Plane9Uniforms::new(self.size.0, self.size.1);
-        self.uniforms.in3 = [ROUGHNESS, 0.0, 0.0, 0.0];
+        self.uniforms.in3 = [ROUGHNESS, self.lens, 0.0, 0.0];
         self.uniforms.color1 = COLOR1;
         self.rebuild();
     }
@@ -312,6 +318,7 @@ impl Point10Scene for ThoughTheNoise {
         self.perm = drive.perm;
         self.uniforms.time = self.elapsed;
         self.uniforms.in1 = drive.in1;
+        self.uniforms.in3 = [ROUGHNESS, self.lens, 0.0, 0.0];
         self.upload_uniforms();
     }
 
@@ -329,7 +336,7 @@ impl Point10Scene for ThoughTheNoise {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(NOISE_RAY_PROPS)
+        plane9_scene_props(NOISE_RAY_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

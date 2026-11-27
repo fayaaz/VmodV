@@ -2,10 +2,10 @@
   "schema": 1,
   "source": "ModuleRegistry + modv_renderers::isf (see tools/gen-module-docs.sh)",
   "counts": {
-    "total": 502,
+    "total": 499,
     "2d": 16,
     "point10": 48,
-    "shader": 36,
+    "shader": 33,
     "isf": 402
   },
   "modules": [
@@ -18907,6 +18907,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19037,6 +19045,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "scrollSpeed",
           "label": "Scroll Speed",
           "type": "float",
@@ -19059,14 +19075,6 @@
           "default": 0.30000001192092896,
           "min": 0.0,
           "max": 1.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
         }
       ],
       "source": null,
@@ -19133,6 +19141,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19383,6 +19399,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19449,6 +19473,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19515,6 +19547,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -19583,6 +19623,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -19593,14 +19641,6 @@
         {
           "name": "turbulence",
           "label": "Turbulence",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,
@@ -20019,6 +20059,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -20057,26 +20105,18 @@
           "default": 1.0,
           "min": 0.0,
           "max": 3.0
+        },
+        {
+          "name": "zoom",
+          "label": "Zoom",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 2.0
         }
       ],
       "source": null,
       "preview": null
-    },
-    {
-      "id": "plane9-embos",
-      "name": "Plane9 Embos",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Plane9 (Joakim Dahl)",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
     },
     {
       "id": "plane9-embos-merge",
@@ -20365,6 +20405,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -20383,14 +20431,6 @@
         {
           "name": "color",
           "label": "Color",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,
@@ -20495,6 +20535,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "speed",
           "label": "Cloud Speed",
           "type": "float",
@@ -20521,38 +20569,6 @@
       ],
       "source": null,
       "preview": null
-    },
-    {
-      "id": "plane9-led-display",
-      "name": "Plane9 Led Display",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Plane9 (Joakim Dahl)",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
-    },
-    {
-      "id": "plane9-led-display-curved",
-      "name": "Plane9 Led Display Curved",
-      "kind": "shader",
-      "category": "effects",
-      "author": "Plane9 (Joakim Dahl)",
-      "version": "1.0.0",
-      "description": null,
-      "audioFeatures": [],
-      "props": [],
-      "source": null,
-      "preview": {
-        "kind": "shader",
-        "sharedUniformBytes": 160
-      }
     },
     {
       "id": "plane9-light-tunnel",
@@ -20881,6 +20897,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -20961,6 +20985,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -21591,6 +21623,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -21687,6 +21727,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -21903,6 +21951,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "surfaceSpeed",
           "label": "Surface Speed",
           "type": "float",
@@ -22093,6 +22149,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "scrollSpeed",
           "label": "Scroll Speed",
           "type": "float",
@@ -22181,6 +22245,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -22247,6 +22319,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -22471,6 +22551,14 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         },
         {
           "name": "warpSpeed",
@@ -23642,6 +23730,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -23660,14 +23756,6 @@
         {
           "name": "color",
           "label": "Color",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,
@@ -23740,6 +23828,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -23758,14 +23854,6 @@
         {
           "name": "color",
           "label": "Color",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,
@@ -23838,6 +23926,14 @@
           "max": 1.0
         },
         {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        },
+        {
           "name": "spinSpeed",
           "label": "Spin Speed",
           "type": "float",
@@ -23856,14 +23952,6 @@
         {
           "name": "color",
           "label": "Color",
-          "type": "float",
-          "default": 1.0,
-          "min": 0.0,
-          "max": 3.0
-        },
-        {
-          "name": "bloom",
-          "label": "Bloom",
           "type": "float",
           "default": 1.0,
           "min": 0.0,

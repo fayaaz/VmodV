@@ -2493,8 +2493,8 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             "Gray" | "Invert" | "Posterization" | "Film Grain" | "BlackAndWhite"
             | "Gray Stripes" | "Invert Gray" | "Crosshatching" | "Blocks" | "Fuzzy Pixels"
             | "Fractured" | "Bathroom Window" | "Color Distort" | "Crt" | "Hexagons"
-            | "Led Display" | "Led Display Curved" | "Limit Hue" | "Embos Merge" | "Block"
-            | "Clock Swipe" | "Close Horizontal" | "Wave" => concat!(
+            | "Limit Hue" | "Embos Merge" | "Block" | "Clock Swipe" | "Close Horizontal"
+            | "Wave" => concat!(
                 "CC BY-NC-",
                 "SA 4.0 (Plane9 / Joakim Dahl; see THIRD_PARTY_NOTICES.md)"
             ),
@@ -2503,7 +2503,6 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             | "Bayer Matrix Dithering Color"
             | "Contrast"
             | "Cubic Lens Distortion"
-            | "Embos"
             | "Banded Swirl"
             | "Blinds"
             | "Circle Reveal"

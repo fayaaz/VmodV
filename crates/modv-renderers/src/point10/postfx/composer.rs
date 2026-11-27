@@ -362,8 +362,8 @@ impl Composer {
     /// keeps its own parameters and semantics.
     ///
     /// Re-enabling with structurally identical parameters only updates the
-    /// driver's uniforms: a tweened `bloom` prop must not recreate the five
-    /// pipelines and the whole mip chain every frame.
+    /// driver's uniforms: per-frame intensity updates must not recreate the
+    /// five pipelines and the whole mip chain every frame.
     pub fn enable_plane9_bloom(&mut self, params: Plane9BloomParams) {
         if let Some(bloom) = self.plane9_bloom.as_mut()
             && bloom.can_reuse(params)

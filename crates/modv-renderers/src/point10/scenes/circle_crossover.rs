@@ -37,11 +37,12 @@
 
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::scenes::plane9_common::{
-    Plane9QuadInstance, Plane9QuadPass, Plane9QuadUniforms, plane9_camera,
+    Plane9QuadInstance, Plane9QuadPass, Plane9QuadUniforms, plane9_camera_lens,
 };
 use crate::point10::shared::random::seeded_rand;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, lens_value,
+    plane9_scene_props,
 };
 
 /// `Screen1` camera position.
@@ -164,6 +165,7 @@ struct CircleCrossoverGpu {
 pub struct CircleCrossover {
     audio: P10Audio,
     perm: f32,
+    lens: f32,
     size: (u32, u32),
     target_format: wgpu::TextureFormat,
     device: Option<wgpu::Device>,
@@ -184,6 +186,7 @@ impl CircleCrossover {
         Self {
             audio: P10Audio::new(),
             perm: 1.0,
+            lens: 1.0,
             size: (1, 1),
             target_format: HDR_FORMAT,
             device: None,
@@ -203,9 +206,28 @@ impl CircleCrossover {
         CloneGrid::for_aspect(self.size.0 as f32 / self.size.1.max(1) as f32)
     }
 
-    /// Bind the modV props. These presets declare no `sceneProps` of their
-    /// own, so this only exists to satisfy the registry's prop binder.
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Bind the shared Lens prop (this preset declares no other `sceneProps`).
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        self.refresh_camera();
+    }
+
+    /// Recompute the uploaded view-projection after a size or Lens change,
+    /// without rebuilding the pipeline.
+    fn refresh_camera(&mut self) {
+        self.uniforms.view_proj = plane9_camera_lens(
+            self.size.0 as f32 / self.size.1.max(1) as f32,
+            CAMERA_POSITION,
+            CAMERA_LOOK,
+            45.0,
+            0.1,
+            1000.0,
+            self.lens,
+        );
+        if let Some(gpu) = &self.gpu {
+            gpu.pass.upload_uniforms(&self.uniforms);
+        }
+    }
 
     fn rebuild(&mut self) {
         let (Some(device), Some(queue)) = (self.device.clone(), self.queue.clone()) else {
@@ -225,17 +247,9 @@ impl CircleCrossover {
             _grid: grid,
             instances: Vec::new(),
         });
-        self.uniforms.view_proj = plane9_camera(
-            self.size.0 as f32 / self.size.1.max(1) as f32,
-            CAMERA_POSITION,
-            CAMERA_LOOK,
-            45.0,
-            0.1,
-            1000.0,
-        );
+        self.refresh_camera();
         let instances = circle_crossover_instances(grid);
         if let Some(gpu) = &self.gpu {
-            gpu.pass.upload_uniforms(&self.uniforms);
             gpu.pass.upload_instances(&instances);
         }
         if let Some(gpu) = &mut self.gpu {
@@ -312,7 +326,7 @@ impl Point10Scene for CircleCrossover {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(CIRCLE_PROPS)
+        plane9_scene_props(CIRCLE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

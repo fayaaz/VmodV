@@ -608,7 +608,7 @@
           "rust": [
             "crates/modv-app/src/module_registry.rs:module_registry_matches_the_legacy_manifest",
             "crates/modv-app/src/module_registry.rs:registered_module_count_matches_the_parity_baseline",
-            "crates/modv-renderers/src/shader/modules/mod.rs:module_count_is_36"
+            "crates/modv-renderers/src/shader/modules/mod.rs:module_count_is_33"
           ],
           "notes": ""
         }

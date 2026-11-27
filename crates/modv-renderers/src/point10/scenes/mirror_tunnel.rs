@@ -44,12 +44,13 @@ use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::scenes::cube_mesh::{Mat4, mat4_mul, trs};
 use crate::point10::scenes::plane9_common::{
     Plane9Feedback, Plane9MeshPass, Plane9MeshUniforms, Plane9Pass, Plane9TextureBinding,
-    Plane9Uniforms, plane9_camera, plane9_sampler,
+    Plane9Uniforms, plane9_camera_lens, plane9_sampler,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::random::{value_noise1, value_noise2};
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, lens_value,
+    plane9_scene_props,
 };
 
 /// `Screen1` camera position.
@@ -147,6 +148,7 @@ pub struct MirrorTunnel {
     elapsed: f32,
     position: [f32; 3],
     rotation_degrees: f32,
+    lens: f32,
     size: (u32, u32),
     target_format: wgpu::TextureFormat,
     device: Option<wgpu::Device>,
@@ -173,6 +175,7 @@ impl MirrorTunnel {
             elapsed: 0.0,
             position: [0.0, 0.0, 0.0],
             rotation_degrees: 1.0,
+            lens: 1.0,
             size: (1, 1),
             target_format: HDR_FORMAT,
             device: None,
@@ -193,8 +196,10 @@ impl MirrorTunnel {
         self.rotation_degrees
     }
 
-    /// Bind the modV props (this preset declares no `sceneProps`).
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Bind the shared Lens prop (this preset declares no other `sceneProps`).
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+    }
 
     /// The cube-face model matrix at the current position/rotation.
     pub fn model(&self) -> Mat4 {
@@ -322,7 +327,15 @@ impl Point10Scene for MirrorTunnel {
         ];
         self.mesh_uniforms.time = self.elapsed;
         let aspect = self.size.0 as f32 / self.size.1.max(1) as f32;
-        let camera = plane9_camera(aspect, CAMERA_POSITION, CAMERA_LOOK, 45.0, 0.1, 1000.0);
+        let camera = plane9_camera_lens(
+            aspect,
+            CAMERA_POSITION,
+            CAMERA_LOOK,
+            45.0,
+            0.1,
+            1000.0,
+            self.lens,
+        );
         self.mesh_uniforms.view_proj = mat4_mul(&camera, &self.model());
         self.upload_uniforms();
     }
@@ -368,7 +381,7 @@ impl Point10Scene for MirrorTunnel {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(PROPS)
+        plane9_scene_props(PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

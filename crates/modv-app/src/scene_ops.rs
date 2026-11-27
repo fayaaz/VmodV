@@ -43,7 +43,11 @@
 //! ## `applyScene` (`scenes.js:2529-2815`)
 //!
 //! Groups and Modules are rebuilt with **fresh ids** so the previous Groups
-//! can be crossfaded out. The crossfade style comes from
+//! can be crossfaded out, and every Scene import (`scenes/loadSceneFromJson`)
+//! applies the same way: the live stack never reuses the document's `$id`s.
+//! Preset restore (`Store::restore`) is a separate path: it keeps the
+//! document's ids as the live ids; only Scene apply/import mints fresh ones.
+//! The crossfade style comes from
 //! `pickTransitionName`: `None` applies immediately, `Fade` keeps the outgoing
 //! Scene-stamped Groups in the layer stack for `transitionSeconds` and fades
 //! their alphas against the incoming set (the Fade branch of `applySceneNow`),
@@ -761,10 +765,6 @@ impl Store {
             .cloned()
             .unwrap_or_default();
         let row_indexes = assign_scene_row_indexes(&group_snapshots, &row_names);
-        let preserve_module_ids = params
-            .get("preserveModuleIds")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
 
         // `applySceneNow` finishes any in-flight transition first, then keeps
         // the outgoing Groups alive when the change crossfades
@@ -788,22 +788,11 @@ impl Store {
             .cloned()
             .collect();
         let old_ids: HashSet<String> = old_groups.iter().map(|group| group.id.clone()).collect();
-        // Only Groups that survive this apply own ids an imported Module must
-        // not reuse. The outgoing Scene-stamped Groups are replaced below, so
-        // their ids may be reused by the imported document.
-        let surviving_module_ids: HashSet<String> = self
-            .state
-            .groups
-            .iter()
-            .filter(|group| !old_ids.contains(&group.id))
-            .flat_map(|group| group.modules.iter().cloned())
-            .collect();
         self.state
             .groups
             .retain(|group| !old_ids.contains(&group.id));
 
         let mut input_map: HashMap<String, String> = HashMap::new();
-        let mut used_module_ids: HashSet<String> = HashSet::new();
         let mut created: Vec<CreatedGroup> = Vec::new();
 
         for (index, snapshot) in group_snapshots.iter().enumerate() {
@@ -840,17 +829,7 @@ impl Store {
                 let Some(module_snapshot) = module_snapshots.get(key) else {
                     continue;
                 };
-                // A document id is safe to keep only when no surviving Group
-                // owns it and this apply has not already used it. Otherwise
-                // the import falls back to a fresh id, like a direct apply.
-                let preserve_id = preserve_module_ids
-                    && Self::scene_module_document_id(module_snapshot).is_some_and(|id| {
-                        !surviving_module_ids.contains(id) && used_module_ids.insert(id.to_string())
-                    });
-                if let Some(module_id) =
-                    self.build_live_module(module_snapshot, &mut input_map, preserve_id)
-                {
-                    used_module_ids.insert(module_id.clone());
+                if let Some(module_id) = self.build_live_module(module_snapshot, &mut input_map) {
                     group.modules.push(module_id.clone());
                     self.deltas.push(
                         "groups/ADD_MODULE_TO_GROUP",
@@ -1108,8 +1087,7 @@ impl Store {
             let Some(module_snapshot) = module_snapshots.get(key) else {
                 continue;
             };
-            if let Some(module_id) = self.build_live_module(module_snapshot, &mut input_map, false)
-            {
+            if let Some(module_id) = self.build_live_module(module_snapshot, &mut input_map) {
                 new_modules.push(module_id);
             }
         }
@@ -2217,10 +2195,6 @@ impl Store {
         if params.get("apply").and_then(Value::as_bool) != Some(false) {
             let mut apply_params = Map::new();
             apply_params.insert("sceneId".to_string(), json!(scene_id));
-            // An imported Scene keeps its document module ids on the live stack
-            // so the returned document, the stored Scene and the live Modules
-            // stay addressable by the same id.
-            apply_params.insert("preserveModuleIds".to_string(), json!(true));
             self.apply_scene_action(&apply_params)?;
         }
         if params.get("persist").and_then(Value::as_bool) != Some(false) {
@@ -2763,14 +2737,6 @@ impl Store {
         group
     }
 
-    /// The document id a Module snapshot carries, when it has a usable one.
-    fn scene_module_document_id(snapshot: &Value) -> Option<&str> {
-        snapshot
-            .get("$id")
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty())
-    }
-
     /// Build one live Module from a Scene Module snapshot.
     ///
     /// Prop values are applied **on top of** the registry defaults and the
@@ -2781,7 +2747,6 @@ impl Store {
         &mut self,
         snapshot: &Value,
         input_map: &mut HashMap<String, String>,
-        preserve_id: bool,
     ) -> Option<String> {
         let object = snapshot.as_object()?;
         let module_name = object
@@ -2802,14 +2767,9 @@ impl Store {
             modv_renderers::point10::resolve_scene_name(module_name.as_str()).to_string();
         let module_name =
             modv_renderers::point10::resolve_effect_name(module_name.as_str()).to_string();
-        // Direct applies mint fresh ids (JS `makeActiveModule`); a JSON import
-        // keeps the Scene's own id when the caller has checked it is free.
-        let id = if preserve_id {
-            Self::scene_module_document_id(snapshot).map(str::to_string)
-        } else {
-            None
-        }
-        .unwrap_or_else(crate::ids::uuid_v4);
+        // Every apply mints fresh ids (JS `makeActiveModule`), including a
+        // JSON Scene import: the stored Scene document keeps its own `$id`s.
+        let id = crate::ids::uuid_v4();
 
         let (mut meta, defaults, registered) = match self.registry.meta_fields(&module_name) {
             Some(meta) => (
@@ -4836,6 +4796,181 @@ mod tests {
     }
 
     #[test]
+    fn scene_import_mints_fresh_module_ids() {
+        let scene = two_row_scene("scene-import-fresh-module-ids");
+        let mut store = Store::new();
+        let imported = store
+            .load_scene_from_json(
+                json!({ "scene": scene.clone(), "persist": false })
+                    .as_object()
+                    .expect("Scene import params"),
+            )
+            .expect("Scene import dispatches");
+
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)*) => {
+                if !$condition {
+                    failures.push(format!($($arg)*));
+                }
+            };
+        }
+
+        for document_id in ["doc-bands", "doc-ball"] {
+            check!(
+                imported["modules"][document_id]["$id"] == json!(document_id),
+                "the imported document lost Module id {document_id:?}: {:?}",
+                imported["modules"][document_id]["$id"]
+            );
+            check!(
+                !store.state().modules.contains_key(document_id),
+                "the live Store reused document Module id {document_id:?}"
+            );
+        }
+
+        let first_live_ids: Vec<String> = store
+            .state()
+            .groups
+            .iter()
+            .filter(|group| group.transition_ghost != Some(true))
+            .flat_map(|group| group.modules.iter().cloned())
+            .collect();
+        let expected_names: Vec<String> = imported["groups"]
+            .as_array()
+            .expect("imported groups")
+            .iter()
+            .flat_map(|group| {
+                group["modules"]
+                    .as_array()
+                    .expect("imported group modules")
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|id| {
+                        imported["modules"][id]["$moduleName"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string()
+                    })
+            })
+            .collect();
+        let document_module_count = imported["modules"]
+            .as_object()
+            .expect("imported modules")
+            .len();
+        check!(
+            first_live_ids.len() == document_module_count,
+            "the live Groups contain {} Modules, expected the document's {document_module_count}",
+            first_live_ids.len()
+        );
+        let first_live_names: Vec<&str> = first_live_ids
+            .iter()
+            .filter_map(|id| store.state().modules.get(id))
+            .map(|module| module.module_name.as_str())
+            .collect();
+        let expected_live_names: Vec<&str> = expected_names.iter().map(String::as_str).collect();
+        check!(
+            first_live_names == expected_live_names,
+            "live Module names {first_live_names:?} do not match the document's {expected_names:?}"
+        );
+
+        let mut distinct_live_ids = HashSet::new();
+        for live_id in &first_live_ids {
+            check!(
+                !live_id.is_empty(),
+                "the live stack contains an empty Module id"
+            );
+            check!(
+                distinct_live_ids.insert(live_id.as_str()),
+                "the live stack contains duplicate Module id {live_id:?}"
+            );
+        }
+
+        let first_live_id_set: HashSet<String> = first_live_ids.iter().cloned().collect();
+        store
+            .load_scene_from_json(
+                json!({ "scene": scene, "persist": false })
+                    .as_object()
+                    .expect("second Scene import params"),
+            )
+            .expect("second Scene import dispatches");
+        // The second apply may keep the outgoing stack alive for a crossfade.
+        // Finish it so the id-set comparison covers the newly applied stack.
+        store.complete_whole_scene_transition();
+        let second_live_ids: Vec<String> = store
+            .state()
+            .groups
+            .iter()
+            .filter(|group| group.transition_ghost != Some(true))
+            .flat_map(|group| group.modules.iter().cloned())
+            .collect();
+        let overlapping_ids: Vec<&String> = second_live_ids
+            .iter()
+            .filter(|id| first_live_id_set.contains(id.as_str()))
+            .collect();
+        check!(
+            overlapping_ids.is_empty(),
+            "the second import reused live Module ids from the first import: {overlapping_ids:?}"
+        );
+
+        let background = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| group.name == "Background" && group.transition_ghost != Some(true));
+        let effects = store
+            .state()
+            .groups
+            .iter()
+            .find(|group| group.name == "Effects" && group.transition_ghost != Some(true));
+        match (background, effects) {
+            (Some(background), Some(effects)) => check!(
+                effects.inherit_from == InheritFrom::Group(background.id.clone()),
+                "Effects inheritFrom {:?} does not resolve to the live Background Group {:?}",
+                effects.inherit_from,
+                background.id
+            ),
+            _ => failures.push(format!(
+                "the live Background/Effects Groups are missing: background={}, effects={}",
+                background.is_some(),
+                effects.is_some()
+            )),
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Scene import did not mint fresh live Module ids:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn apply_scene_ignores_the_retired_preserve_module_ids_param() {
+        let mut store = Store::new();
+        seed_scene(&mut store, two_row_scene("scene-retired-preserve-param"));
+        store
+            .dispatch(
+                "scenes/applyScene",
+                json!({
+                    "sceneId": "scene-retired-preserve-param",
+                    "preserveModuleIds": true
+                }),
+            )
+            .expect("applyScene dispatches");
+
+        let reused_document_ids: Vec<&str> = store
+            .state()
+            .groups
+            .iter()
+            .flat_map(|group| group.modules.iter().map(String::as_str))
+            .filter(|id| matches!(*id, "doc-bands" | "doc-ball"))
+            .collect();
+        assert!(
+            reused_document_ids.is_empty(),
+            "the retired preserveModuleIds parameter must be ignored; live Modules reused document ids: {reused_document_ids:?}"
+        );
+    }
+
+    #[test]
     fn apply_scene_builds_rows_with_fresh_ids_and_merged_props() {
         let mut store = Store::new();
         seed_scene(&mut store, two_row_scene("scene-1"));
@@ -4878,6 +5013,42 @@ mod tests {
         assert_eq!(
             effects.inherit_from,
             InheritFrom::Group(background.id.clone())
+        );
+    }
+
+    #[test]
+    fn applying_a_scene_tolerates_unknown_module_props() {
+        // Seeded Scenes keep orphan `bloom` keys on modules whose registry no
+        // longer declares them (the one-mip Plane9 bloom drivers ignore the
+        // intensity prop). Loading and applying such a Scene must not reject
+        // the key or drop the module's registered props.
+        let mut scene = two_row_scene("scene-unknown-prop");
+        scene["modules"]["doc-bands"]["props"]["bloom"] = json!(2.5);
+
+        let mut store = Store::new();
+        seed_scene(&mut store, scene);
+        store
+            .dispatch(
+                "scenes/applyScene",
+                json!({ "sceneId": "scene-unknown-prop" }),
+            )
+            .expect("a Scene with an unknown prop applies cleanly");
+
+        let bands = store
+            .state()
+            .modules
+            .values()
+            .find(|module| module.module_name == "Bands")
+            .expect("the module carrying the orphan key survives apply");
+        assert_eq!(
+            bands.props["bloom"],
+            json!(2.5),
+            "the orphan prop is carried verbatim, not rejected"
+        );
+        assert_eq!(
+            bands.props["u_ringWidth"],
+            json!(0.3),
+            "registered props still apply"
         );
     }
 

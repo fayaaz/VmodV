@@ -36,10 +36,10 @@ use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::scenes::cube_mesh::{Mat4, mat4_mul, trs};
 use crate::point10::scenes::plane9_common::{
     Plane9Feedback, Plane9MeshPass, Plane9MeshUniforms, Plane9Pass, Plane9TextureBinding,
-    Plane9Uniforms, plane9_camera, plane9_sampler,
+    Plane9Uniforms, plane9_camera_lens, plane9_sampler,
 };
 use crate::point10::{
-    Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, scene_props_with_levers,
+    Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, lens_value, plane9_scene_props,
 };
 
 /// `Screen1` camera position.
@@ -119,6 +119,7 @@ struct Gpu {
 pub struct ColorBlob {
     audio: P10Audio,
     elapsed: f32,
+    lens: f32,
     size: (u32, u32),
     target_format: wgpu::TextureFormat,
     device: Option<wgpu::Device>,
@@ -140,6 +141,7 @@ impl ColorBlob {
         Self {
             audio: P10Audio::new(),
             elapsed: 0.0,
+            lens: 1.0,
             size: (1, 1),
             target_format: crate::point10::HDR_FORMAT,
             device: None,
@@ -166,8 +168,10 @@ impl ColorBlob {
         trs([0.0, 0.0, 0.0], rotation, [MESH_SCALE, MESH_SCALE, 1.0])
     }
 
-    /// Bind the modV props (this preset declares no `sceneProps`).
-    pub fn apply_props(&mut self, _props: impl FnMut(&str) -> Option<f32>) {}
+    /// Bind the shared Lens prop (this preset declares no other `sceneProps`).
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+    }
 
     fn rebuild(&mut self) {
         let (Some(device), Some(queue)) = (self.device.clone(), self.queue.clone()) else {
@@ -264,7 +268,15 @@ impl Point10Scene for ColorBlob {
         self.uniforms.in1 = [pulse, 0.0, 0.0, 0.0];
         self.mesh_uniforms.time = self.elapsed;
         let aspect = self.size.0 as f32 / self.size.1.max(1) as f32;
-        let camera = plane9_camera(aspect, CAMERA_POSITION, CAMERA_LOOK, 45.0, 0.1, 1000.0);
+        let camera = plane9_camera_lens(
+            aspect,
+            CAMERA_POSITION,
+            CAMERA_LOOK,
+            45.0,
+            0.1,
+            1000.0,
+            self.lens,
+        );
         self.mesh_uniforms.view_proj = mat4_mul(&camera, &self.model(self.elapsed));
         self.upload_uniforms();
     }
@@ -307,7 +319,7 @@ impl Point10Scene for ColorBlob {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(PROPS)
+        plane9_scene_props(PROPS)
     }
 
     fn meta(&self) -> SceneMeta {

@@ -130,8 +130,8 @@
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::{
-    FULLSCREEN_TRIANGLE_WGSL, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt,
-    read_scene_props, scene_props_with_levers,
+    FULLSCREEN_TRIANGLE_WGSL, Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens,
+    frame_dt, lens_value, plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -638,6 +638,7 @@ pub struct Sun {
     brightness_scale: f32,
     corona_scale: f32,
     rays_scale: f32,
+    lens: f32,
     /// `uniforms.gIn1.value.x` of the surface material — stored so tests can
     /// read the live drive without reaching into the GPU.
     surface_level: f32,
@@ -665,6 +666,7 @@ impl Sun {
             brightness_scale: 1.0,
             corona_scale: 1.0,
             rays_scale: 1.0,
+            lens: 1.0,
             surface_level: 0.0,
             corona_level: 0.0,
             ray_weight: SUN.rays.weight,
@@ -675,8 +677,9 @@ impl Sun {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:296-301`).
-    pub fn apply_props(&mut self, get: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(SUN_PROPS, get) {
+    pub fn apply_props(&mut self, mut get: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(get("lens"));
+        for (key, value) in read_scene_props(SUN_PROPS, &mut get) {
             match key {
                 "surfaceSpeed" => self.surface_speed = value,
                 "brightness" => self.brightness_scale = value,
@@ -730,7 +733,10 @@ impl Sun {
     fn camera_matrix(&self) -> [[f32; 4]; 4] {
         use crate::point10::scenes::cube_mesh::{look_at, mat4_mul, perspective};
         let aspect = self.size.0 as f32 / self.size.1.max(1) as f32;
-        let projection = perspective(SUN.fov.to_radians(), aspect, SUN.near, SUN.far);
+        let projection = apply_lens(
+            perspective(SUN.fov.to_radians(), aspect, SUN.near, SUN.far),
+            self.lens,
+        );
         let view = look_at(SUN.camera_position, SUN.camera_look_at, [0.0, 1.0, 0.0]);
         mat4_mul(&projection, &view)
     }
@@ -1665,7 +1671,7 @@ impl Point10Scene for Sun {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(SUN_PROPS)
+        plane9_scene_props(SUN_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {
@@ -2077,7 +2083,7 @@ mod tests {
         assert_eq!(props[0].name, "gain");
         assert_eq!(
             props.len(),
-            crate::point10::audio_bridge::RESPONSIVENESS_PROPS.len() + 4
+            crate::point10::audio_bridge::RESPONSIVENESS_PROPS.len() + 5
         );
     }
 

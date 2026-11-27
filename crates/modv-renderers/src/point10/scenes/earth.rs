@@ -9,10 +9,15 @@
 //!
 //! # Ported exactly
 //!
-//! * the constant set (`Earth.js:41-56`) as [`EARTH`] (`seed 1`, planet radius
-//!   10, atmosphere radius 10.2, sky radius 150, sun distance 100, sun time
-//!   scale 0.04, camera distance 34 ± 5.5, fov 60.4, near 0.1, far 200, bloom
-//!   `{ strength: 0.2, radius: 0.85, threshold: 0 }`);
+//! * the constant set as [`EARTH`] (`seed 1`, planet radius 10, atmosphere
+//!   radius 10.2, sky radius 150, sun distance 100, sun time scale 0.04,
+//!   camera distance 26.363 ± 5.5, fov 60.4, near 0.1, far 200, bloom
+//!   `{ strength: 0.2, radius: 0.85, threshold: 0 }`). The orbit-noise and
+//!   look-at constants are the JS transcription (`Earth.js:41-56`), but the
+//!   camera **distance** is vendor-derived: the vendor `Earth.xml` `Screen1`
+//!   node carries `CamPos = -25.9343 -0.690177 -4.68578`, whose length is
+//!   `sqrt(25.9343^2 + 0.690177^2 + 4.68578^2) = 26.363247049438524`, pinned
+//!   here to `26.363`;
 //! * the pure driver functions (`:58-93`), function for function:
 //!   [`earth_camera`] (`earthCamera`), [`earth_sun_position`]
 //!   (`earthSunPosition`), [`earth_texture_phase`] (`earthTexturePhase`) and
@@ -52,7 +57,10 @@
 //!   atmosphere 3 (`:502-524`);
 //! * the prop binder (`sceneProps.js:289-295`): `spinSpeed` → `spinScale`,
 //!   `sunSpeed` → `sunScale`, `nightLights` → `lightsScale`, `atmosphere` →
-//!   `atmosphereScale`, `brightness` → `brightnessScale`;
+//!   `atmosphereScale`, `brightness` → `brightnessScale`; the appended `zoom`
+//!   prop (label `Zoom`) is a ModV **magnification extension** — not in the
+//!   vendor preset — that divides the orbit distance by its value (1.0 is the
+//!   exact vendor framing, 2.0 halves the distance, 0.5 doubles it);
 //! * the composer chain (`:543-553`): RenderPass (the scene target) →
 //!   UnrealBloomPass (strength 0.2, radius 0.85, threshold 0) → OutputPass with
 //!   `ACESFilmic` (`renderer.toneMapping = ACESFilmicToneMapping`,
@@ -152,8 +160,8 @@ use crate::point10::shared::assets::{ColourSpace, Wrap, load_texture};
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::{
-    Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
-    scene_props_with_levers,
+    Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens, frame_dt, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -176,7 +184,12 @@ pub struct EarthConstants {
     pub sun_distance: f64,
     /// Sun orbit time scale (`sunTimeScale: 0.04`).
     pub sun_time_scale: f64,
-    /// Camera distance from the origin (`cameraDistance: 34`).
+    /// Camera distance from the origin (`Earth.js`'s `cameraDistance: 34`).
+    ///
+    /// Vendor-derived from the `Earth.xml` `Screen1` node's
+    /// `CamPos = -25.9343 -0.690177 -4.68578`, whose length is
+    /// `sqrt(25.9343^2 + 0.690177^2 + 4.68578^2) = 26.363247049438524`,
+    /// pinned to `26.363`.
     pub camera_distance: f64,
     /// Camera distance noise amplitude (`cameraDistanceVar: 5.5`).
     pub camera_distance_var: f64,
@@ -202,7 +215,7 @@ pub const EARTH: EarthConstants = EarthConstants {
     sky_radius: 150.0,
     sun_distance: 100.0,
     sun_time_scale: 0.04,
-    camera_distance: 34.0,
+    camera_distance: 26.363,
     camera_distance_var: 5.5,
     fov: 60.4,
     near: 0.1,
@@ -305,18 +318,40 @@ pub fn value_noise2(x: f64, y: f64) -> f64 {
     acc * 2.0 - 1.0
 }
 
-/// `earthCamera(time)` (`Earth.js:58-76`).
+/// `earthCamera(time)` (`Earth.js:58-76`) — the vendor framing.
 ///
 /// `t = seed * 15 + time * 0.005`; `rot = valueNoise(2, t * 0.2, 0)`;
 /// `dist = cameraDistance + valueNoise(2, t * 2, 2) * cameraDistanceVar`;
 /// `position = (cos(rot * PI * 4) * dist, valueNoise(2, t, 1) * 10, sin(rot * PI * 4) * dist)`;
 /// `lookAt = (valueNoise(2, t, 3.42|6.73|8.45) * 5)`.
 ///
-/// Non-finite `time` propagates NaN, exactly like the JS.
+/// This is [`earth_camera_zoom`] at `zoom = 1.0`, i.e. the exact vendor
+/// framing. Non-finite `time` propagates NaN, exactly like the JS.
 pub fn earth_camera(time: f64) -> EarthCamera {
+    earth_camera_zoom(time, 1.0)
+}
+
+/// The vendor camera framing magnified by `zoom` — a ModV **magnification
+/// extension**, not part of `Earth.js`.
+///
+/// Identical to [`earth_camera`] (`Earth.js:58-76`) except that the orbit
+/// distance is divided by `zoom`: `1.0` is the exact vendor framing, `2.0`
+/// halves the orbit distance, `0.5` doubles it. The y component and `lookAt`
+/// are unchanged.
+///
+/// A non-finite or non-positive `zoom` falls back to `1.0`; the `zoom` prop
+/// already clamps to `0.25..=2.0`. Non-finite `time` propagates NaN, exactly
+/// like the JS.
+pub fn earth_camera_zoom(time: f64, zoom: f64) -> EarthCamera {
+    let zoom = if zoom.is_finite() && zoom > 0.0 {
+        zoom
+    } else {
+        1.0
+    };
     let t = EARTH.seed * 15.0 + time * 0.005;
     let rot = value_noise2(t * 0.2, 0.0);
-    let dist = EARTH.camera_distance + value_noise2(t * 2.0, 2.0) * EARTH.camera_distance_var;
+    let dist =
+        (EARTH.camera_distance + value_noise2(t * 2.0, 2.0) * EARTH.camera_distance_var) / zoom;
     EarthCamera {
         position: [
             (rot * std::f64::consts::PI * 4.0).cos() * dist,
@@ -436,13 +471,17 @@ pub fn build_sphere(
 // Props (`sceneProps.js:148-154` / `:289-295`)
 // ---------------------------------------------------------------------------
 
-/// `EARTH_PROPS` (`sceneProps.js:148-154`).
+/// `EARTH_PROPS` (`sceneProps.js:148-154`), plus the ModV `zoom` extension.
 const EARTH_PROPS: &[SceneProp] = &[
     SceneProp::float("spinSpeed", "Spin Speed", 1.0, 0.0, 4.0, 0.01),
     SceneProp::float("sunSpeed", "Sun Orbit", 1.0, 0.0, 4.0, 0.01),
     SceneProp::float("nightLights", "Night Lights", 1.0, 0.0, 3.0, 0.01),
     SceneProp::float("atmosphere", "Atmosphere", 1.0, 0.0, 3.0, 0.01),
     SceneProp::float("brightness", "Brightness", 1.0, 0.0, 3.0, 0.01),
+    // A ModV extension, not a Plane9 port: the vendor scene has no zoom
+    // control. 1.0 is the exact vendor framing; 2.0 halves the orbit
+    // distance, 0.5 doubles it.
+    SceneProp::float("zoom", "Zoom", 1.0, 0.25, 2.0, 0.01),
 ];
 
 // ---------------------------------------------------------------------------
@@ -553,6 +592,10 @@ pub struct Earth {
     lights_scale: f32,
     atmosphere_scale: f32,
     brightness_scale: f32,
+    /// ModV magnification extension (`1.0` = the vendor framing).
+    zoom: f64,
+    /// Shared Plane9 Lens magnification (`1.0` = the vendor framing).
+    lens: f32,
     /// Last exposure written to the output pass (`set_exposure` re-uploads its
     /// uniform, so only write on change).
     exposure: f32,
@@ -582,6 +625,8 @@ impl Earth {
             lights_scale: 1.0,
             atmosphere_scale: 1.0,
             brightness_scale: 1.0,
+            zoom: 1.0,
+            lens: 1.0,
             exposure: 1.0,
             size: (1, 1),
             view_proj: cube_mesh::identity(),
@@ -593,15 +638,18 @@ impl Earth {
         }
     }
 
-    /// Apply the resolved modV props (`sceneProps.js:289-295`).
-    pub fn apply_props(&mut self, get: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(EARTH_PROPS, get) {
+    /// Apply the resolved modV props (`sceneProps.js:289-295`) plus the ModV
+    /// `zoom` extension.
+    pub fn apply_props(&mut self, mut get: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(get("lens"));
+        for (key, value) in read_scene_props(EARTH_PROPS, &mut get) {
             match key {
                 "spinSpeed" => self.spin_scale = value,
                 "sunSpeed" => self.sun_scale = value,
                 "nightLights" => self.lights_scale = value,
                 "atmosphere" => self.atmosphere_scale = value,
                 "brightness" => self.brightness_scale = value,
+                "zoom" => self.zoom = f64::from(value),
                 _ => {}
             }
         }
@@ -627,9 +675,9 @@ impl Earth {
         self.sun_pos
     }
 
-    /// The camera pose for the current scene time.
+    /// The camera pose for the current scene time (with the `zoom` extension).
     pub fn camera_pose(&self) -> EarthCamera {
-        earth_camera(self.time)
+        earth_camera_zoom(self.time, self.zoom)
     }
 
     /// Camera aspect ratio for the current size.
@@ -1120,7 +1168,7 @@ impl Point10Scene for Earth {
         self.time += f64::from(dt);
         self.audio.update(dt, audio);
 
-        let pose = earth_camera(self.time);
+        let pose = self.camera_pose();
         let sun = earth_sun_position(self.time, f64::from(self.sun_scale));
         self.phase = earth_texture_phase(self.time, f64::from(self.spin_scale)) as f32;
         // `earthLightLevel(p9audio.band(-1, 1, 1, 1), lightsScale)` (`:603-606`).
@@ -1146,7 +1194,10 @@ impl Point10Scene for Earth {
 
         // `camera.lookAt(...)` + `matrixWorldInverse` (`:609-617`).
         let aspect = self.aspect();
-        let projection = perspective(EARTH.fov.to_radians(), aspect, EARTH.near, EARTH.far);
+        let projection = apply_lens(
+            perspective(EARTH.fov.to_radians(), aspect, EARTH.near, EARTH.far),
+            self.lens,
+        );
         let view = look_at(cam, look, [0.0, 1.0, 0.0]);
         self.view_proj = mat4_mul(&projection, &view);
 
@@ -1229,7 +1280,7 @@ impl Point10Scene for Earth {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(EARTH_PROPS)
+        plane9_scene_props(EARTH_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {
@@ -1738,10 +1789,12 @@ mod tests {
 
     #[test]
     fn earth_camera_matches_the_python_transcription() {
+        // Independently transcribed with the vendor-derived camera distance
+        // 26.363; the look-at noise is unchanged from the 34.0 reference.
         let pose = earth_camera(0.0);
         assert_close3(
             pose.position,
-            [-18.60034364614435, 1.209544474259019, 27.37204525106031],
+            [-14.307977955156563, 1.209544474259019, 21.055450775013036],
         );
         assert_close3(
             pose.look_at,
@@ -1751,7 +1804,7 @@ mod tests {
         let pose = earth_camera(10.0);
         assert_close3(
             pose.position,
-            [-18.582245278678663, 1.1925088708626563, 27.479668860306326],
+            [-14.3042592146695, 1.1925088708626563, 21.153326770587864],
         );
         assert_close3(
             pose.look_at,
@@ -1761,7 +1814,7 @@ mod tests {
         let pose = earth_camera(61.8);
         assert_close3(
             pose.position,
-            [-17.1744261291714, 0.6751299778632647, 30.48847688643713],
+            [-13.426213777637248, 0.6751299778632647, 23.83455524819951],
         );
         assert_close3(
             pose.look_at,
@@ -1771,7 +1824,7 @@ mod tests {
         let pose = earth_camera(123.456);
         assert_close3(
             pose.position,
-            [-9.90272660075646, -0.3711097940142305, 34.88919408564],
+            [-7.81745854106094, -0.3711097940142305, 27.542397088361962],
         );
         assert_close3(
             pose.look_at,
@@ -1781,7 +1834,7 @@ mod tests {
         let pose = earth_camera(1000.0);
         assert_close3(
             pose.position,
-            [19.655748425345603, -9.591975277289748, 20.96116803941726],
+            [14.431831840885662, -9.591975277289748, 15.39030953119751],
         );
         assert_close3(
             pose.look_at,
@@ -1868,7 +1921,7 @@ mod tests {
         assert_eq!(EARTH.sky_radius, 150.0);
         assert_eq!(EARTH.sun_distance, 100.0);
         assert_eq!(EARTH.sun_time_scale, 0.04);
-        assert_eq!(EARTH.camera_distance, 34.0);
+        assert_eq!(EARTH.camera_distance, 26.363);
         assert_eq!(EARTH.camera_distance_var, 5.5);
         assert_eq!(EARTH.fov, 60.4);
         assert_eq!(EARTH.near, 0.1);
@@ -1965,16 +2018,17 @@ mod tests {
             ]
         );
         assert_eq!(
-            &names[6..],
+            &names[7..],
             &[
                 "spinSpeed",
                 "sunSpeed",
                 "nightLights",
                 "atmosphere",
-                "brightness"
+                "brightness",
+                "zoom"
             ]
         );
-        let earth_props = &props[6..];
+        let earth_props = &props[7..];
         assert_eq!(
             earth_props
                 .iter()
@@ -1986,6 +2040,7 @@ mod tests {
                 (1.0, 0.0, 3.0, 0.01, ScenePropKind::Float),
                 (1.0, 0.0, 3.0, 0.01, ScenePropKind::Float),
                 (1.0, 0.0, 3.0, 0.01, ScenePropKind::Float),
+                (1.0, 0.25, 2.0, 0.01, ScenePropKind::Float),
             ]
         );
         assert_eq!(
@@ -1995,7 +2050,8 @@ mod tests {
                 "Sun Orbit",
                 "Night Lights",
                 "Atmosphere",
-                "Brightness"
+                "Brightness",
+                "Zoom"
             ]
         );
     }
@@ -2029,6 +2085,186 @@ mod tests {
         assert_eq!(scene.lights_scale, 3.0);
         scene.apply_props(|key| (key == "nightLights").then_some(-1.0));
         assert_eq!(scene.lights_scale, 0.0);
+    }
+
+    #[test]
+    fn earth_camera_zoom_is_a_clamped_magnification_extension() {
+        fn pose_at(time: f64, zoom: Option<f32>) -> EarthCamera {
+            let mut scene = Earth::new();
+            scene.time = time;
+            if let Some(zoom) = zoom {
+                scene.apply_props(|key| (key == "zoom").then_some(zoom));
+            }
+            scene.camera_pose()
+        }
+
+        fn horizontal_distance(pose: EarthCamera) -> f64 {
+            pose.position[0].hypot(pose.position[2])
+        }
+
+        fn distance_matches(actual: f64, expected: f64) -> bool {
+            (actual - expected).abs() <= 1e-9
+        }
+
+        let mut failures = Vec::new();
+        let mut check = |label: String, passed: bool| {
+            if !passed {
+                failures.push(label);
+            }
+        };
+
+        let props = Earth::new().props();
+        let zoom_prop = props.iter().find(|prop| prop.name == "zoom");
+        check(
+            "zoom prop metadata".into(),
+            zoom_prop.is_some_and(|prop| {
+                prop.label == "Zoom"
+                    && prop.default == 1.0
+                    && prop.min == 0.25
+                    && prop.max == 2.0
+                    && prop.step == 0.01
+                    && prop.kind == ScenePropKind::Float
+            }),
+        );
+        let zoom_is_appended = props
+            .iter()
+            .position(|prop| prop.name == "brightness")
+            .zip(props.iter().position(|prop| prop.name == "zoom"))
+            .is_some_and(|(brightness, zoom)| zoom == brightness + 1 && zoom + 1 == props.len());
+        check(
+            "zoom is appended immediately after brightness".into(),
+            zoom_is_appended,
+        );
+
+        for (time, label) in [(0.0, "0.0"), (61.8, "61.8"), (1000.0, "1000.0")] {
+            let base = earth_camera(time);
+            let base_distance = horizontal_distance(base);
+            let no_prop = pose_at(time, None);
+            let identity = pose_at(time, Some(1.0));
+            let zoomed_in = pose_at(time, Some(2.0));
+            let zoomed_out = pose_at(time, Some(0.5));
+
+            check(
+                format!("{label}: no prop equals the unzoomed pose"),
+                no_prop == base,
+            );
+            check(
+                format!("{label}: zoom 1.0 equals the unzoomed pose"),
+                identity == base,
+            );
+            check(
+                format!("{label}: zoom 2.0 halves horizontal distance"),
+                distance_matches(horizontal_distance(zoomed_in), base_distance / 2.0),
+            );
+            check(
+                format!("{label}: zoom 0.5 doubles horizontal distance"),
+                distance_matches(horizontal_distance(zoomed_out), base_distance * 2.0),
+            );
+            for (zoom, pose) in [(1.0, identity), (2.0, zoomed_in), (0.5, zoomed_out)] {
+                check(
+                    format!("{label}: zoom {zoom} preserves y and look_at"),
+                    pose.position[1] == base.position[1] && pose.look_at == base.look_at,
+                );
+            }
+        }
+
+        let clamp_base = earth_camera(61.8);
+        let clamp_base_distance = horizontal_distance(clamp_base);
+        for (zoom, label, clamped_zoom) in [
+            (0.0_f32, "0.0", 0.25_f64),
+            (-3.0_f32, "-3.0", 0.25_f64),
+            (99.0_f32, "99.0", 2.0_f64),
+        ] {
+            let pose = pose_at(61.8, Some(zoom));
+            check(
+                format!("clamp {label}: distance uses zoom {clamped_zoom}"),
+                distance_matches(
+                    horizontal_distance(pose),
+                    clamp_base_distance / clamped_zoom,
+                ),
+            );
+            check(
+                format!("clamp {label}: y and look_at are unchanged"),
+                pose.position[1] == clamp_base.position[1] && pose.look_at == clamp_base.look_at,
+            );
+        }
+
+        let mut updated_scene = Earth::new();
+        updated_scene.time = 61.8;
+        updated_scene.apply_props(|key| (key == "zoom").then_some(2.0));
+        updated_scene.update(0.0, &AudioBridge::new());
+        let updated_position = updated_scene.camera_pos;
+        let updated_distance = f64::from(updated_position[0]).hypot(f64::from(updated_position[2]));
+        check(
+            "update applies zoom to the rendered camera position".into(),
+            (updated_distance - clamp_base_distance / 2.0).abs() <= 1e-6,
+        );
+        check(
+            "update preserves the noise-driven camera y".into(),
+            updated_position[1] == clamp_base.position[1] as f32,
+        );
+
+        for (time, label) in [(0.0, "0.0"), (61.8, "61.8"), (1000.0, "1000.0")] {
+            let pose = pose_at(time, Some(f32::NAN));
+            let finite = pose
+                .position
+                .iter()
+                .chain(pose.look_at.iter())
+                .all(|value| value.is_finite());
+            check(
+                format!("{label}: NaN zoom falls back to a finite unzoomed pose"),
+                finite && pose == earth_camera(time),
+            );
+        }
+
+        // Inspect only production source/docs so these needles cannot match
+        // their own test literals.
+        const SOURCE: &str = include_str!("earth.rs");
+        let source = SOURCE
+            .split("#[cfg(test)]")
+            .next()
+            .expect("earth.rs has a #[cfg(test)] module");
+        let module_docs = source
+            .split("#![forbid(unsafe_code)]")
+            .next()
+            .unwrap_or(source);
+        let docs_lower = module_docs.to_ascii_lowercase();
+        let component_is_squared = |component: &str| {
+            module_docs.contains(&format!("{component}^2"))
+                || module_docs.contains(&format!("{component}²"))
+        };
+        let vendor_distance_documented = module_docs.contains("CamPos")
+            && module_docs.contains("-25.9343")
+            && module_docs.contains("-0.690177")
+            && module_docs.contains("-4.68578")
+            && component_is_squared("25.9343")
+            && component_is_squared("0.690177")
+            && component_is_squared("4.68578")
+            && (module_docs.contains("sqrt") || module_docs.contains("hypot"))
+            && module_docs.contains("26.363");
+        check(
+            "module docs derive 26.363 from the vendor CamPos".into(),
+            vendor_distance_documented,
+        );
+        check(
+            "module docs describe zoom as a magnification extension".into(),
+            docs_lower.contains("zoom")
+                && docs_lower.contains("magnification")
+                && docs_lower.contains("extension"),
+        );
+        check(
+            "earth_camera_zoom entry point and wrapper/accessor wiring exist".into(),
+            source.contains("pub fn earth_camera_zoom(time: f64, zoom: f64) -> EarthCamera")
+                && source.contains("pub fn earth_camera(time: f64) -> EarthCamera")
+                && source.contains("earth_camera_zoom(time, 1.0)")
+                && source.contains("earth_camera_zoom(self.time, self.zoom)"),
+        );
+
+        assert!(
+            failures.is_empty(),
+            "Earth camera zoom/vendor contract failures:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -2343,26 +2579,65 @@ mod tests {
                 .any(|&channel| channel > 0),
             "centre pixel must not be black"
         );
-        // Everything outside the planet is the sky — an alpha ≤ 1 blended
-        // layer, never fully opaque. Check the corners and the edge
-        // midpoints (alpha-sane).
+        // The corners remain sky with the vendor framing: the planet's
+        // measured angular radius is ~23.1° against the ~30.2° half-FOV, and
+        // the corners look along the ~45° diagonal, outside the disc in both
+        // the old 34.0 framing and the 26.363 vendor framing.
+        //
+        // The old test also assumed every edge midpoint was outside the
+        // planet. That is wrong at the vendor distance: the larger disc and
+        // the look-at offset put the left midpoint on the opaque planet. Pin
+        // that framing with both the midpoint alpha and a tolerant left-edge
+        // intersection count. The fixed two-frame render deterministically
+        // measures 29 opaque pixels in that column; 16 leaves ample room for
+        // the small per-frame orbit/distance noise while still rejecting the
+        // old 34.0 framing. The right edge is sky in this pose, so symmetry
+        // between the two edge midpoints is deliberately not assumed.
         let size = SIZE as usize;
         for &(x, y) in &[
             (0usize, 0usize),
             (size - 1, 0),
             (0, size - 1),
             (size - 1, size - 1),
-            (size / 2, 0),
-            (size / 2, size - 1),
-            (0, size / 2),
-            (size - 1, size / 2),
         ] {
             let index = (y * size + x) * 4;
             assert!(
                 pixels[index + 3] < 255,
-                "pixel ({x}, {y}) outside the planet must not be fully opaque"
+                "corner pixel ({x}, {y}) must remain sky under the vendor framing"
             );
         }
+        let left_edge_opaque = (0..size)
+            .filter(|&y| pixels[(y * size) * 4 + 3] == 255)
+            .count();
+        assert!(
+            left_edge_opaque >= 16,
+            "vendor framing must intersect the left edge with opaque planet pixels; got {left_edge_opaque}"
+        );
+        let left_midpoint = ((size / 2) * size) * 4;
+        assert_eq!(
+            pixels[left_midpoint + 3],
+            255,
+            "left edge midpoint must be on the opaque planet at the vendor distance"
+        );
+
+        // Keep both elements covered: neither an all-planet nor an all-sky
+        // frame satisfies the composer contract.
+        let opaque_count = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] == 255)
+            .count();
+        let sky_count = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] < 255)
+            .count();
+        assert!(
+            opaque_count > 0 && sky_count > 0,
+            "frame must contain both planet and sky pixels; opaque={opaque_count}, sky={sky_count}"
+        );
     }
 
     // ————— default night-lights visibility (silent audio) —————

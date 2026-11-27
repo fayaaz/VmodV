@@ -6,7 +6,7 @@
 //! output is a single JSON document checked into `docs/modules/`, which the
 //! static Pages site reads; no build step runs on the Pages side.
 //!
-//! Live browser previews cover the 36 WGSL shader modules and the 402 ISF
+//! Live browser previews cover the 33 WGSL shader modules and the 402 ISF
 //! shaders. The 2D canvas modules and Point10 scenes have no portable WGSL
 //! representation, so they are catalogued with full metadata but no preview.
 

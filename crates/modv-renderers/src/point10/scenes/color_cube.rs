@@ -26,9 +26,10 @@
 //!   brightness`, the origin point light `(1, 0.5, 0.3) * 50` with the
 //!   `pow(saturate(1 - pow(d/100, 4)), 2) / (d² + 1)` attenuation, `roughness
 //!   0.4`, `metallic 0`, and `light + realAlbedo * gIn3.x`;
-//! * the render chain (`:373-388`): RenderPass → UnrealBloomPass `(0.5, 0.85,
-//!   0)` wrapped in `preserveBloomAlpha` → OutputPass, `NoToneMapping`, clear
-//!   alpha 0;
+//! * the render chain (`:373-388`): RenderPass → the vendor `Bloom` node
+//!   (Plane9 `Radius 5, Threshold 0, ThresholdSmoothness 0.5, Intensity 0.5,
+//!   Antiflicker false`) wrapped in `preserveBloomAlpha` → OutputPass,
+//!   `NoToneMapping`, clear alpha 0;
 //! * the camera (`:42-48`): `PerspectiveCamera(70, aspect, 0.01, 100)`, position
 //!   `(0, 0, -1.17)` looking at `(0, 0, 1)`;
 //! * `Rotator1` (`:50-51`) at 1.5/1/0.5 deg/s, scaled by `spinSpeed`;
@@ -43,14 +44,19 @@
 //! | `InstancedBufferAttribute aColor` | the same instance buffer's colour half |
 //! | `BoxGeometry(0.05)` | [`build_box`](crate::point10::scenes::cube_mesh::build_box) |
 //! | `_turbulencefast`, `_lightDirectional` | [`P9_COMMON_WGSL`] + [`P9_SHADING_WGSL`] |
-//! | `EffectComposer` + `preserveBloomAlpha` | [`Composer`] with `set_preserve_bloom_alpha(true)` |
+//! | `EffectComposer` + `preserveBloomAlpha` | [`Composer`] with [`Plane9BloomParams`] and `set_preserve_bloom_alpha(true)` |
 //!
 //! # Deviations
 //!
 //! * **Bloom alpha.** `preserveBloomAlpha` is imported from `Boxy.js` and
-//!   applied here too, so the additive bloom cannot turn the transparent clear
-//!   into an opaque veil; the port calls
+//!   applied here too, so the additive bloom combine cannot turn the
+//!   transparent clear into an opaque veil; the port calls
 //!   [`Composer::set_preserve_bloom_alpha(true)`] exactly like `Boxy`.
+//! * **Bloom driver.** The three.js `UnrealBloomPass(0.5, 0.85, 0)` is
+//!   replaced by the Plane9 `Bloom` node driven through [`Plane9BloomParams`]
+//!   (`Radius 5`, `Threshold 0`, `ThresholdSmoothness 0.5`, `Intensity 0.5`,
+//!   `Antiflicker false`), matching the vendor XML. The old `bloom` prop was
+//!   inert at this one-mip configuration and has been removed.
 //! * three uploads a 4x4 instance matrix per cube; the port uploads the
 //!   translation and the colour, because `CloneExpression1` never rotates or
 //!   scales an instance (`_dummy.rotation.set(0, 0, 0)`,
@@ -63,19 +69,20 @@
 //!   over the shared [`AudioBridge`] like every other ported scene.
 //!
 //! [`Composer::set_preserve_bloom_alpha(true)`]: crate::point10::postfx::Composer::set_preserve_bloom_alpha
+//! [`Plane9BloomParams`]: crate::point10::postfx::Plane9BloomParams
 
 #![forbid(unsafe_code)]
 
 use crate::point10::audio_bridge::{AudioBridge, P10Audio};
-use crate::point10::postfx::{Composer, ToneMapping};
+use crate::point10::postfx::{Composer, Plane9BloomParams, ToneMapping};
 use crate::point10::scenes::cube_mesh::{
     Mat4, MeshGpu, build_box, create_depth, depth_state, euler_xyz, look_at, mat4_mul, perspective,
 };
 use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
 use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
 use crate::point10::{
-    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, frame_dt, read_scene_props,
-    scene_props_with_levers,
+    HDR_FORMAT, Point10Scene, SceneContext, SceneMeta, SceneProp, apply_lens, frame_dt, lens_value,
+    plane9_scene_props, read_scene_props,
 };
 
 // ---------------------------------------------------------------------------
@@ -103,12 +110,14 @@ pub const CAMERA_LOOK_AT: [f32; 3] = [0.0, 0.0, 1.0];
 /// `ROTATOR`, degrees per second.
 pub const ROTATOR: [f32; 3] = [1.5, 1.0, 0.5];
 
-/// `BLOOM.strength`.
+/// Plane9 `Bloom` node `Intensity`.
 pub const BLOOM_STRENGTH: f32 = 0.5;
-/// `BLOOM.radius`.
-pub const BLOOM_RADIUS: f32 = 0.85;
-/// `BLOOM.threshold`.
+/// Plane9 `Bloom` node `Radius`.
+pub const BLOOM_RADIUS: f32 = 5.0;
+/// Plane9 `Bloom` node `Threshold`.
 pub const BLOOM_THRESHOLD: f32 = 0.0;
+/// Plane9 `Bloom` node `ThresholdSmoothness`.
+pub const BLOOM_SMOOTHNESS: f32 = 0.5;
 
 /// `CLEAR_ALPHA` — the scene composites transparently.
 pub const CLEAR_ALPHA: f64 = 0.0;
@@ -274,7 +283,6 @@ pub fn color_cube_drive(
 const COLOR_CUBE_PROPS: &[SceneProp] = &[
     SceneProp::float("spinSpeed", "Spin Speed", 1.0, 0.0, 4.0, 0.01),
     SceneProp::float("turbulence", "Turbulence", 1.0, 0.0, 3.0, 0.01),
-    SceneProp::float("bloom", "Bloom", 1.0, 0.0, 3.0, 0.01),
     SceneProp::float("brightness", "Brightness", 1.0, 0.0, 3.0, 0.01),
 ];
 
@@ -347,8 +355,8 @@ pub struct ColorCube {
     positions: Vec<[f32; 3]>,
     spin_scale: f32,
     turbulence_scale: f32,
-    bloom_scale: f32,
     brightness_scale: f32,
+    lens: f32,
     camera_aspect: f32,
     size: (u32, u32),
     gpu: Option<ColorCubeGpu>,
@@ -371,8 +379,8 @@ impl ColorCube {
             positions: grid.positions,
             spin_scale: 1.0,
             turbulence_scale: 1.0,
-            bloom_scale: 1.0,
             brightness_scale: 1.0,
+            lens: 1.0,
             camera_aspect: 1.0,
             size: (1, 1),
             gpu: None,
@@ -380,12 +388,12 @@ impl ColorCube {
     }
 
     /// Apply the resolved modV props (`sceneProps.js:318-323`).
-    pub fn apply_props(&mut self, props: impl FnMut(&str) -> Option<f32>) {
-        for (key, value) in read_scene_props(COLOR_CUBE_PROPS, props) {
+    pub fn apply_props(&mut self, mut props: impl FnMut(&str) -> Option<f32>) {
+        self.lens = lens_value(props("lens"));
+        for (key, value) in read_scene_props(COLOR_CUBE_PROPS, &mut props) {
             match key {
                 "spinSpeed" => self.spin_scale = value,
                 "turbulence" => self.turbulence_scale = value,
-                "bloom" => self.bloom_scale = value,
                 "brightness" => self.brightness_scale = value,
                 _ => {}
             }
@@ -407,13 +415,31 @@ impl ColorCube {
         &self.positions
     }
 
+    /// The vendor XML's Plane9 `Bloom` node.
+    ///
+    /// `Radius 5`, `Threshold 0`, `ThresholdSmoothness 0.5`, `Intensity 0.5`
+    /// and `Antiflicker false`. `Plane9BloomParams` with `mip_count == 1` never
+    /// applies `intensity`, so the removed `bloom` prop was inert here.
+    fn plane9_bloom_params(&self) -> Plane9BloomParams {
+        Plane9BloomParams::new(
+            BLOOM_RADIUS,
+            BLOOM_THRESHOLD,
+            BLOOM_SMOOTHNESS,
+            BLOOM_STRENGTH,
+            false,
+        )
+    }
+
     fn view_proj(&self) -> Mat4 {
         mat4_mul(
-            &perspective(
-                CAMERA_FOV.to_radians(),
-                self.camera_aspect,
-                CAMERA_NEAR,
-                CAMERA_FAR,
+            &apply_lens(
+                perspective(
+                    CAMERA_FOV.to_radians(),
+                    self.camera_aspect,
+                    CAMERA_NEAR,
+                    CAMERA_FAR,
+                ),
+                self.lens,
             ),
             &look_at(CAMERA_POSITION, CAMERA_LOOK_AT, [0.0, 1.0, 0.0]),
         )
@@ -566,11 +592,11 @@ impl Point10Scene for ColorCube {
             self.size.1,
         );
 
-        // `EffectComposer`: RenderPass -> preserveBloomAlpha(UnrealBloomPass)
-        // -> OutputPass, NoToneMapping.
+        // `EffectComposer`: RenderPass -> preserveBloomAlpha(Plane9 Bloom) ->
+        // OutputPass, NoToneMapping.
         let mut composer =
             Composer::new(&device, &queue, self.size.0, self.size.1, ctx.target_format);
-        composer.enable_bloom(BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+        composer.enable_plane9_bloom(self.plane9_bloom_params());
         composer.set_preserve_bloom_alpha(true);
         composer.output_mut().set_tone_mapping(ToneMapping::None);
 
@@ -641,10 +667,6 @@ impl Point10Scene for ColorCube {
             return;
         };
 
-        if let Some(bloom) = gpu.composer.bloom_mut() {
-            bloom.set_strength(BLOOM_STRENGTH * self.bloom_scale);
-        }
-
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("point10-color-cube"),
@@ -683,7 +705,7 @@ impl Point10Scene for ColorCube {
     }
 
     fn props(&self) -> Vec<SceneProp> {
-        scene_props_with_levers(COLOR_CUBE_PROPS)
+        plane9_scene_props(COLOR_CUBE_PROPS)
     }
 
     fn meta(&self) -> SceneMeta {
@@ -793,7 +815,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::point10::all_scenes;
     use crate::point10::audio_bridge::BandPayload;
+    use crate::point10::postfx::Plane9BloomParams;
+    use crate::point10::test_support::{
+        TestTarget, any_lit, bloom_brightness, check_bloom_brightness, gpu,
+    };
 
     // Port of tests/unit/point10-color-cube.test.js.
 
@@ -935,7 +962,7 @@ mod tests {
         assert_eq!(ROTATOR, [1.5, 1.0, 0.5]);
         assert_eq!(
             (BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD),
-            (0.5, 0.85, 0.0)
+            (0.5, 5.0, 0.0)
         );
         assert_eq!(CLEAR_ALPHA, 0.0);
         assert_eq!(DISCARD_MAX, 0.15);
@@ -980,13 +1007,11 @@ mod tests {
         scene.apply_props(|key| match key {
             "spinSpeed" => Some(9.0),
             "turbulence" => Some(-1.0),
-            "bloom" => Some(2.0),
             "brightness" => Some(1.5),
             _ => None,
         });
         assert_eq!(scene.spin_scale, 4.0);
         assert_eq!(scene.turbulence_scale, 0.0);
-        assert_eq!(scene.bloom_scale, 2.0);
         assert_eq!(scene.brightness_scale, 1.5);
     }
 
@@ -1049,9 +1074,224 @@ mod tests {
         assert_eq!(scene.meta().category, "3d-scenes");
         let names: Vec<&str> = scene.props().iter().map(|prop| prop.name).collect();
         assert_eq!(
-            &names[names.len() - 4..],
-            &["spinSpeed", "turbulence", "bloom", "brightness"]
+            &names[names.len() - 3..],
+            &["spinSpeed", "turbulence", "brightness"]
         );
         assert_eq!(names[0], "gain");
+    }
+
+    fn render_color_cube_frame(
+        scene: &mut ColorCube,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &TestTarget,
+        label: &str,
+    ) -> Vec<u8> {
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        scene.render(&mut encoder, &target.view);
+        queue.submit(Some(encoder.finish()));
+        target.read(device, queue)
+    }
+
+    #[test]
+    fn plane9_bloom_migration_contract() {
+        let mut failures = Vec::new();
+        macro_rules! check {
+            ($condition:expr, $($arg:tt)+) => {
+                if !$condition {
+                    failures.push(format!($($arg)+));
+                }
+            };
+        }
+
+        // A — exercise the real registry props for all six affected scenes.
+        let scenes = all_scenes();
+        for name in [
+            "Plane9 Color Cube",
+            "Plane9 Boxy",
+            "Plane9 Hollow Cube",
+            "Point10 Hollow Cuboid",
+            "Point10 Hollow Cube Layers",
+            "Point10 Hollow Cube Blur",
+        ] {
+            let Some(scene) = scenes.iter().find(|scene| scene.name() == name) else {
+                failures.push(format!("A: {name} is missing from the registry"));
+                continue;
+            };
+            check!(
+                !scene.props().iter().any(|prop| prop.name == "bloom"),
+                "A: {name} still exposes the inert bloom prop"
+            );
+        }
+
+        // F — cheap source guard for the two migrations, excluding this module.
+        for (name, source) in [
+            ("Color Cube", include_str!("color_cube.rs")),
+            ("Boxy", include_str!("boxy.rs")),
+        ] {
+            let production = source
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production source precedes the test module");
+            let compact = production.split_whitespace().collect::<Vec<_>>().join(" ");
+            check!(
+                !compact.contains("enable_bloom("),
+                "F: {name} still constructs the Unreal bloom pass"
+            );
+            check!(
+                !compact.contains("BLOOM_RADIUS: f32 = 0.85"),
+                "F: {name} still pins three.js' Unreal bloom radius 0.85"
+            );
+            check!(
+                compact.contains("enable_plane9_bloom("),
+                "F: {name} does not enable the Plane9 bloom driver"
+            );
+        }
+
+        // B/C/D — live GPU composer contract and an actual 64x64 halo read-back.
+        let Some((device, queue)) = gpu() else {
+            failures.push("B/C/D: a headless fallback adapter is required".to_string());
+            assert!(
+                failures.is_empty(),
+                "Plane9 bloom migration contract failed ({} checks):\n{}",
+                failures.len(),
+                failures.join("\n")
+            );
+            return;
+        };
+        let expected = Plane9BloomParams::new(5.0, 0.0, 0.5, 0.5, false);
+        let mut scene = ColorCube::new();
+        let mut ctx = SceneContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        ctx.resize(64, 64);
+        scene.init(&mut ctx);
+        scene.resize(64, 64);
+
+        {
+            let gpu = scene.gpu.as_ref().expect("Color Cube GPU resources");
+            check!(
+                gpu.composer.plane9_bloom().is_some(),
+                "B: Color Cube composer has no Plane9 bloom pass"
+            );
+            if let Some(bloom) = gpu.composer.plane9_bloom() {
+                check!(
+                    bloom.params() == expected,
+                    "B: Color Cube Plane9 params must be {expected:?}, got {:?}",
+                    bloom.params()
+                );
+                check!(
+                    bloom.params().mip_count() == 1,
+                    "B: Color Cube Plane9 bloom must use one mip, got {}",
+                    bloom.params().mip_count()
+                );
+            } else {
+                failures.push(
+                    "B: Color Cube cannot report Plane9 mip_count without a pass".to_string(),
+                );
+            }
+            check!(
+                gpu.composer.bloom().is_none(),
+                "B: Color Cube must not construct the Unreal bloom pass"
+            );
+            check!(
+                gpu.composer.preserve_bloom_alpha(),
+                "D: Color Cube must preserve the destination alpha"
+            );
+        }
+
+        scene.apply_props(|key| (key == "bloom").then_some(3.0));
+        check!(
+            scene
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.composer.plane9_bloom())
+                .map(|bloom| bloom.params())
+                == Some(expected),
+            "C: applying bloom=3.0 must leave Color Cube Plane9 params unchanged at {expected:?}"
+        );
+
+        let target = TestTarget::new(&device, 64, 64);
+        let mut payload = BandPayload::silent(44_100.0);
+        payload.lanes = [0.6; 12];
+        let mut bridge = AudioBridge::new();
+        for _ in 0..2 {
+            bridge.update(1.0 / 60.0, Some(&payload), &Default::default());
+            scene.update(1.0 / 60.0, &bridge);
+            render_color_cube_frame(
+                &mut scene,
+                &device,
+                &queue,
+                &target,
+                "point10-color-cube-bloom-warmup",
+            );
+        }
+        check!(
+            scene
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.composer.plane9_bloom())
+                .map(|bloom| bloom.params())
+                == Some(expected),
+            "C: rendering after bloom=3.0 must leave Color Cube Plane9 params unchanged at {expected:?}"
+        );
+
+        let with_bloom = render_color_cube_frame(
+            &mut scene,
+            &device,
+            &queue,
+            &target,
+            "point10-color-cube-bloom-on",
+        );
+        scene.gpu.as_mut().unwrap().composer.disable_plane9_bloom();
+        let direct_only = render_color_cube_frame(
+            &mut scene,
+            &device,
+            &queue,
+            &target,
+            "point10-color-cube-bloom-off",
+        );
+        check!(any_lit(&with_bloom), "D: Color Cube bloom frame is empty");
+        check!(any_lit(&direct_only), "D: Color Cube direct frame is empty");
+        check_bloom_brightness(
+            &mut failures,
+            "D: Color Cube live composer",
+            &bloom_brightness(&with_bloom, &direct_only),
+        );
+
+        // Calibrate the assertions against the vendor driver independently of
+        // the scene's wiring: clear any legacy Unreal pass before probing the
+        // exact Plane9 params the scene must use.
+        {
+            let gpu = scene.gpu.as_mut().unwrap();
+            gpu.composer.disable_bloom();
+            gpu.composer.enable_plane9_bloom(expected);
+        }
+        let vendor_with_bloom = render_color_cube_frame(
+            &mut scene,
+            &device,
+            &queue,
+            &target,
+            "point10-color-cube-vendor-plane9-on",
+        );
+        scene.gpu.as_mut().unwrap().composer.disable_plane9_bloom();
+        let vendor_direct_only = render_color_cube_frame(
+            &mut scene,
+            &device,
+            &queue,
+            &target,
+            "point10-color-cube-vendor-plane9-off",
+        );
+        check_bloom_brightness(
+            &mut failures,
+            "D: Color Cube vendor Plane9 probe",
+            &bloom_brightness(&vendor_with_bloom, &vendor_direct_only),
+        );
+
+        assert!(
+            failures.is_empty(),
+            "Plane9 bloom migration contract failed ({} checks):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 }
