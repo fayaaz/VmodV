@@ -107,6 +107,20 @@
       }
       #mic:hover { background: rgba(69, 255, 154, 0.12); }
       #mic:disabled { color: var(--muted); cursor: default; }
+      #download-desktop {
+        padding: 5px 9px;
+        border: 1px solid rgba(0, 230, 118, 0.35);
+        background: rgba(7, 7, 11, 0.86);
+        color: #00E676;
+        font-family: inherit;
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        text-decoration: none;
+      }
+      #download-desktop:hover {
+        background: rgba(0, 230, 118, 0.12);
+        border-color: #00E676;
+      }
       html[data-modv-output] #audio-controls { display: none; }
     </style>
   </head>
@@ -117,6 +131,7 @@
         <option value="">Default microphone</option>
       </select>
       <button id="mic" type="button">Use microphone</button>
+      <a id="download-desktop" href="./download/" title="Download the latest desktop release for Linux, Windows and macOS">↓ Download desktop app</a>
     </div>
     <div id="boot">
       <div class="card">

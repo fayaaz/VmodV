@@ -93,6 +93,28 @@ fn theme_hex(constant: &str) -> String {
     format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
 
+fn web_index() -> String {
+    fs::read_to_string(repo_root().join("web/index.html")).unwrap_or_default()
+}
+
+#[test]
+fn browser_shell_has_a_persistent_download_link() {
+    let index = web_index();
+    assert!(
+        index.contains("id=\"download-desktop\""),
+        "PAGES-02: the browser shell must keep a persistent link to /download/, \
+         not only one in the boot overlay that is removed after startup"
+    );
+    assert!(
+        index.contains("href=\"./download/\""),
+        "PAGES-02: the browser shell's download link must point at /download/"
+    );
+    assert!(
+        index.contains("html[data-modv-output] #audio-controls { display: none; }"),
+        "PAGES-02: the overlay carrying the download link must hide in output view"
+    );
+}
+
 #[test]
 fn download_page_is_staged_by_the_pages_workflow() {
     let page = repo_root().join("web/download/index.html");
