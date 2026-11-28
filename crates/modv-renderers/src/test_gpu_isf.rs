@@ -21,7 +21,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use crate::isf::{IsfFrameUniforms, IsfRuntime, IsfValues, parse_isf};
+use crate::isf::{IsfFrameUniforms, IsfRuntime, IsfValue, IsfValues, parse_isf};
 
 /// Fixed frame — the same clock as the golden tests, so a shader's behaviour
 /// is comparable between the two suites.
@@ -259,5 +259,400 @@ mod tests {
                 panic!("{stem}: non-finite channel {index} ({})", frame[index]);
             }
         }
+    }
+}
+
+/// GPU pixel counterparts of the text-only assertions in `isf::source` and
+/// `isf::runtime`.
+///
+/// Those tests pin the *mechanism* (a `RENDERSIZE.y - gl_FragCoord.y` rewrite,
+/// a bottom-left/top-left `isf_FragNormCoord` assignment, an unrewritten `.r`
+/// or `for` token). This module pins the *result*: the same shaders are parsed
+/// from inline sources, compiled with [`IsfRuntime::compile`], drawn into a
+/// small `Rgba32Float` target with [`IsfRuntime::draw`] and read back with
+/// [`crate::isf::runtime::read_texture`]. A translator change that keeps the
+/// text shape but flips the wrong channel, or silently changes a uniform
+/// layout, fails here with a pixel diff instead.
+#[cfg(test)]
+mod pixel_behaviour {
+    use super::*;
+
+    const SIZE: u32 = 8;
+
+    /// Both coordinate systems as colour channels, as in the runtime
+    /// orientation tests: green is `isf_FragNormCoord.y`, blue is
+    /// `gl_FragCoord.y / RENDERSIZE.y`. The middle-column pixels of the top and
+    /// bottom rows are enough to tell a WebGL bottom-left origin from a wgpu
+    /// top-left one.
+    const ORIENTATION_BODY: &str = "void main() { gl_FragColor = vec4(isf_FragNormCoord, gl_FragCoord.y / RENDERSIZE.y, 1.0); }";
+
+    const SIDECAR_PROBE: &str = r#"varying vec2 norm;
+    void main() { gl_FragColor = vec4(norm, 0.0, 1.0); }"#;
+
+    const SIDECAR_VERTEX: &str = r#"varying vec2 norm;
+    void main() { isf_vertShaderInit(); norm = isf_FragNormCoord; }"#;
+
+    // Header *entries* (not whole comments): `parse_isf` reads only the first
+    // `/*{ ... }*/` block, so every probe needs exactly one merged header.
+    const IMAGE_INPUT_JSON: &str = r#""INPUTS":[{"NAME":"inputImage","TYPE":"image"}]"#;
+    const BUFFER_ONLY_JSON: &str = r#""PASSES":[{"TARGET":"accum","PERSISTENT":true}]"#;
+
+    fn with_header(entries: &str, body: &str) -> String {
+        format!("/*{{{entries}}}*/\n{body}")
+    }
+
+    fn with_image_and_buffer(body: &str) -> String {
+        with_header(&format!("{IMAGE_INPUT_JSON},{BUFFER_ONLY_JSON}"), body)
+    }
+
+    /// Compile one inline shader, draw it for a fixed frame and return its
+    /// pixels as tightly packed `r, g, b, a` floats in row-major order.
+    ///
+    /// `image_input` binds a real opaque texture (the same shape as the
+    /// runtime's `solid_input`) when the shader declares an external image.
+    fn draw_probe(
+        source: &str,
+        vertex: Option<&str>,
+        name: &str,
+        values: &IsfValues,
+        image_input: Option<(&str, [u8; 4])>,
+    ) -> Option<Vec<f32>> {
+        let (device, queue) = crate::test_gpu::gpu()?;
+        let document =
+            parse_isf(source, vertex).unwrap_or_else(|error| panic!("{name} parses: {error}"));
+
+        // Declared before the view so it outlives the borrowed bindings below.
+        let input_texture = image_input.map(|(_, rgba)| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("modV ISF pixel-behaviour input"),
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &rgba.repeat((SIZE * SIZE) as usize),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(SIZE * 4),
+                    rows_per_image: Some(SIZE),
+                },
+                wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+            );
+            texture
+        });
+        let input_view = input_texture
+            .as_ref()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let bindings: Vec<(&str, &wgpu::TextureView)> = image_input
+            .into_iter()
+            .zip(input_view.iter())
+            .map(|((input_name, _), view)| (input_name, view))
+            .collect();
+
+        let mut runtime = IsfRuntime::new(device.clone(), queue.clone(), 4);
+        let mut compiled = runtime
+            .compile(&document, name, TARGET_FORMAT)
+            .unwrap_or_else(|error| panic!("{name} compiles: {error:?}"));
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("modV ISF pixel-behaviour target"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TARGET_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        runtime
+            .draw(
+                &mut compiled,
+                &view,
+                [SIZE, SIZE],
+                FRAME,
+                values,
+                &bindings,
+                &bindings,
+            )
+            .unwrap_or_else(|error| panic!("{name} draws: {error:?}"));
+        let bytes =
+            crate::isf::runtime::read_texture(&device, &queue, &target).expect("pixel read-back");
+        Some(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| f32::from_le_bytes(*chunk))
+                .collect(),
+        )
+    }
+
+    /// (top green, bottom green, top blue, bottom blue) at the middle column.
+    fn orientation_rows(pixels: &[f32]) -> (f32, f32, f32, f32) {
+        let stride = SIZE as usize * 4;
+        let column = (SIZE as usize / 2) * 4;
+        let top = column;
+        let bottom = pixels.len() - stride + column;
+        (
+            pixels[top + 1],
+            pixels[bottom + 1],
+            pixels[top + 2],
+            pixels[bottom + 2],
+        )
+    }
+
+    fn assert_bottom_left(pixels: &[f32], label: &str) {
+        let (top_green, bottom_green, top_blue, bottom_blue) = orientation_rows(pixels);
+        assert!(
+            top_green > 0.8 && bottom_green < 0.2,
+            "{label}: isf_FragNormCoord.y must be 1 at the top row like WebGL \
+             (top {top_green}, bottom {bottom_green})"
+        );
+        assert!(
+            top_blue > 0.8 && bottom_blue < 0.2,
+            "{label}: gl_FragCoord.y / RENDERSIZE.y must be 1 at the top row like WebGL \
+             (top {top_blue}, bottom {bottom_blue})"
+        );
+    }
+
+    fn assert_top_left(pixels: &[f32], label: &str) {
+        let (top_green, bottom_green, top_blue, bottom_blue) = orientation_rows(pixels);
+        assert!(
+            top_green < 0.2 && bottom_green > 0.8,
+            "{label}: isf_FragNormCoord.y must start at the top row like wgpu \
+             (top {top_green}, bottom {bottom_green})"
+        );
+        assert!(
+            top_blue < 0.2 && bottom_blue > 0.8,
+            "{label}: gl_FragCoord.y / RENDERSIZE.y must start at the top row like wgpu \
+             (top {top_blue}, bottom {bottom_blue})"
+        );
+    }
+
+    fn assert_uniform_pixels(pixels: &[f32], expected: [f32; 4], label: &str) {
+        assert_eq!(
+            pixels.len(),
+            (SIZE * SIZE) as usize * 4,
+            "{label}: wrong framebuffer size"
+        );
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            for channel in 0..4 {
+                assert!(
+                    (pixel[channel] - expected[channel]).abs() <= 1e-5,
+                    "{label}: pixel {index} channel {channel} = {}, expected {}",
+                    pixel[channel],
+                    expected[channel]
+                );
+            }
+        }
+    }
+
+    /// `texture_free_shaders_flip_gl_fragcoord_to_bottom_left` in `isf::source`
+    /// and `texture_free_generators_use_the_legacy_bottom_left_coordinates` in
+    /// `isf::runtime`, checked as pixels rather than source text.
+    #[test]
+    fn texture_free_generator_pixels_use_the_bottom_left_origin() {
+        let Some(pixels) = draw_probe(
+            ORIENTATION_BODY,
+            None,
+            "gpu-pixel texture-free orientation",
+            &IsfValues::new(),
+            None,
+        ) else {
+            eprintln!("skipping ISF pixel orientation test: no adapter");
+            return;
+        };
+        assert_bottom_left(&pixels, "texture-free generator");
+    }
+
+    /// `textured_shaders_keep_the_top_left_fragcoord` in `isf::source`: one
+    /// external image input is enough to switch both coordinate systems to the
+    /// wgpu top-left origin so input sampling stays upright.
+    #[test]
+    fn textured_shader_pixels_keep_the_top_left_origin() {
+        let source = with_header(IMAGE_INPUT_JSON, ORIENTATION_BODY);
+        let Some(pixels) = draw_probe(
+            &source,
+            None,
+            "gpu-pixel textured orientation",
+            &IsfValues::new(),
+            Some(("inputImage", [255, 0, 0, 255])),
+        ) else {
+            eprintln!("skipping ISF pixel orientation test: no adapter");
+            return;
+        };
+        assert_top_left(&pixels, "textured generator");
+    }
+
+    /// `self_contained_buffer_only_shaders_flip_gl_fragcoord_to_bottom_left`
+    /// (`isf::source`) and `self_contained_buffer_generator_uses_the_legacy_
+    /// bottom_left_coordinates` (`isf::runtime`).
+    #[test]
+    fn self_contained_buffer_pixels_use_the_bottom_left_origin() {
+        let source = with_header(BUFFER_ONLY_JSON, ORIENTATION_BODY);
+        let Some(pixels) = draw_probe(
+            &source,
+            None,
+            "gpu-pixel buffer-only orientation",
+            &IsfValues::new(),
+            None,
+        ) else {
+            eprintln!("skipping ISF pixel orientation test: no adapter");
+            return;
+        };
+        assert_bottom_left(&pixels, "self-contained buffer generator");
+    }
+
+    /// `externally_supplied_multipass_shaders_keep_the_top_left_fragcoord`
+    /// (`isf::source`) and `externally_supplied_multipass_generator_keeps_the_
+    /// wgpu_top_left_coordinates` (`isf::runtime`): a buffer alone does not
+    /// trigger the WebGL flip, an external image does.
+    #[test]
+    fn externally_supplied_multipass_pixels_keep_the_top_left_origin() {
+        let source = with_image_and_buffer(ORIENTATION_BODY);
+        let Some(pixels) = draw_probe(
+            &source,
+            None,
+            "gpu-pixel external multipass orientation",
+            &IsfValues::new(),
+            Some(("inputImage", [255, 0, 0, 255])),
+        ) else {
+            eprintln!("skipping ISF pixel orientation test: no adapter");
+            return;
+        };
+        assert_top_left(&pixels, "externally supplied multipass generator");
+    }
+
+    /// `self_contained_sidecar_generator_emits_the_bottom_left_norm_varying`
+    /// (`isf::source`) and `self_contained_sidecar_generator_uses_the_legacy_
+    /// bottom_left_coordinates` (`isf::runtime`), through an actual `.vs`.
+    #[test]
+    fn self_contained_sidecar_norm_pixels_use_the_bottom_left_origin() {
+        let source = with_header(BUFFER_ONLY_JSON, SIDECAR_PROBE);
+        let Some(pixels) = draw_probe(
+            &source,
+            Some(SIDECAR_VERTEX),
+            "gpu-pixel sidecar bottom-left",
+            &IsfValues::new(),
+            None,
+        ) else {
+            eprintln!("skipping ISF pixel orientation test: no adapter");
+            return;
+        };
+        let (top_green, bottom_green, _, _) = orientation_rows(&pixels);
+        assert!(
+            top_green > 0.8 && bottom_green < 0.2,
+            "a self-contained sidecar's norm.y must be 1 at the top \
+             (top {top_green}, bottom {bottom_green})"
+        );
+    }
+
+    /// `externally_supplied_sidecar_generator_keeps_the_top_left_norm_varying`
+    /// in `isf::source`: the sidecar selector follows the same buffer-only
+    /// rule as the fragment stage.
+    #[test]
+    fn externally_supplied_sidecar_norm_pixels_keep_the_top_left_origin() {
+        let source = with_image_and_buffer(SIDECAR_PROBE);
+        let Some(pixels) = draw_probe(
+            &source,
+            Some(SIDECAR_VERTEX),
+            "gpu-pixel sidecar top-left",
+            &IsfValues::new(),
+            Some(("inputImage", [255, 0, 0, 255])),
+        ) else {
+            eprintln!("skipping ISF pixel orientation test: no adapter");
+            return;
+        };
+        let (top_green, bottom_green, _, _) = orientation_rows(&pixels);
+        assert!(
+            top_green < 0.2 && bottom_green > 0.8,
+            "an externally supplied sidecar's norm.y must start at the top \
+             (top {top_green}, bottom {bottom_green})"
+        );
+    }
+
+    /// `a_short_bool_input_name_does_not_rewrite_swizzles` in `isf::source`.
+    /// A macro-based bool rewrite would corrupt `pixel.r` into a call and fail
+    /// to translate; a uniform-layout bug would give the wrong red channel.
+    /// Both draws are checked pixel-for-pixel.
+    #[test]
+    fn bool_input_named_r_does_not_corrupt_swizzles_in_pixels() {
+        let shader = r#"/*{ "INPUTS": [ { "NAME": "r", "TYPE": "bool" } ] }*/
+        void main() {
+            vec4 pixel = vec4(0.2, 0.4, 0.6, 1.0);
+            if (r) { pixel.r = 1.0; }
+            gl_FragColor = pixel;
+        }"#;
+
+        let mut off = IsfValues::new();
+        off.insert("r".into(), IsfValue::Bool(false));
+        let Some(pixels) = draw_probe(shader, None, "gpu-pixel bool r off", &off, None) else {
+            eprintln!("skipping ISF input-rewrite test: no adapter");
+            return;
+        };
+        assert_uniform_pixels(&pixels, [0.2, 0.4, 0.6, 1.0], "bool r = false");
+
+        let mut on = IsfValues::new();
+        on.insert("r".into(), IsfValue::Bool(true));
+        let Some(pixels) = draw_probe(shader, None, "gpu-pixel bool r on", &on, None) else {
+            eprintln!("skipping ISF input-rewrite test: no adapter");
+            return;
+        };
+        assert_uniform_pixels(&pixels, [1.0, 0.4, 0.6, 1.0], "bool r = true");
+    }
+
+    /// `statement_keyword_inputs_keep_control_flow_intact` in `isf::source`:
+    /// inputs named `return`, `for` and `if` must be renamed at declaration
+    /// only, leaving the keywords to drive the loop and early return. The
+    /// expected red is exactly 3 (the loop adds 1.0 three times) in every
+    /// pixel, so a broken control flow cannot pass by accident.
+    #[test]
+    fn statement_keyword_inputs_keep_control_flow_in_pixels() {
+        let shader = r#"/*{ "INPUTS": [
+            { "NAME": "return", "TYPE": "float" },
+            { "NAME": "for", "TYPE": "float" },
+            { "NAME": "if", "TYPE": "event" }
+        ] }*/
+        void main() {
+            float total = 0.0;
+            for (int i = 0; i < 3; i++) { total += 1.0; }
+            if (total > 0.0) { gl_FragColor = vec4(total, 0.0, 0.0, 1.0); return; }
+            gl_FragColor = vec4(0.0);
+        }"#;
+        let Some(pixels) = draw_probe(
+            shader,
+            None,
+            "gpu-pixel reserved-word inputs",
+            &IsfValues::new(),
+            None,
+        ) else {
+            eprintln!("skipping ISF input-rewrite test: no adapter");
+            return;
+        };
+        assert_uniform_pixels(&pixels, [3.0, 0.0, 0.0, 1.0], "reserved-word control flow");
     }
 }

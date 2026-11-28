@@ -179,6 +179,9 @@ impl<'a, I: Pod, O: Pod> ComputeTest<'a, I, O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::point10::scenes::plane9_common::{PLANE9_BATCH_WGSL, PLANE9_TONEMAP_WGSL};
+    use crate::point10::shared::p9_glsl::P9_COMMON_WGSL;
+    use crate::point10::shared::p9_shading::P9_SHADING_WGSL;
     use crate::shader::uniforms::{GLSL_MOD_F_WGSL, GLSL_MOD_V2_WGSL};
 
     #[derive(Clone, Copy, Pod, Zeroable)]
@@ -404,5 +407,550 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 );
             }
         }
+    }
+
+    // ---- Shipped Point10 / Plane9 helpers, executed on the GPU ------------
+    //
+    // The `contains(...)` needles in p9_glsl, p9_shading and plane9_common pin
+    // only the *text* of these helpers. Each test below splices the shipped WGSL
+    // const straight into a compute shim, so naga compiles the real arithmetic
+    // and the shared lavapipe adapter executes it. Rust only checks numbers.
+
+    /// Slice one function out of a shipped WGSL const, keeping its source
+    /// byte-for-byte. Used for helpers that live alongside functions wgpu
+    /// cannot compile in a compute stage (`p9_perturb_normal` uses `dpdx`).
+    fn extract_fn<'a>(wgsl: &'a str, name: &str) -> &'a str {
+        let marker = format!("fn {name}(");
+        let start = wgsl
+            .find(&marker)
+            .unwrap_or_else(|| panic!("shipped WGSL is missing {marker}"));
+        let tail = &wgsl[start..];
+        let end = tail
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("{marker} has no closing brace"))
+            + "\n}\n".len();
+        &tail[..end]
+    }
+
+    fn assert_close(actual: f32, expected: f32, tol: f32, label: &str) {
+        assert!(
+            (actual - expected).abs() <= tol,
+            "{label}: expected {expected}, got {actual} (tol {tol})"
+        );
+    }
+
+    // vec4 is used for every storage field: WGSL's vec4<f32> has a 16-byte
+    // stride and `[f32; 4]` mirrors it exactly, including in an array.
+    #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+    #[repr(C)]
+    struct P9Vec4Input {
+        value: [f32; 4],
+    }
+
+    #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+    #[repr(C)]
+    struct P9Vec4Output {
+        value: [f32; 4],
+    }
+
+    #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+    #[repr(C)]
+    struct P9DualInput {
+        a: [f32; 4],
+        b: [f32; 4],
+    }
+
+    #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+    #[repr(C)]
+    struct P9DualOutput {
+        a: [f32; 4],
+        b: [f32; 4],
+    }
+
+    /// `P9_COMMON_WGSL`'s text is pinned by `common_wgsl_keeps_the_ported_formulas`.
+    /// WGSL's built-in `smoothstep` is undefined when `edge0 >= edge1`, which is
+    /// exactly how the ported Plane9 scenes call it; the shipped helper must
+    /// still produce GLSL's values in that order.
+    #[test]
+    fn compute_shim_executes_p9_smoothstep_reversed_edges_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let wgsl = format!(
+            r#"
+struct P9Vec4Input {{ value: vec4<f32>, }}
+struct P9Vec4Output {{ value: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<P9Vec4Input>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<P9Vec4Output>;
+{P9_COMMON_WGSL}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let v = inputs[gid.x].value;
+  outputs[gid.x] = P9Vec4Output(vec4<f32>(p9_smoothstep(v.x, v.y, v.z), 0.0, 0.0, 0.0));
+}}
+"#
+        );
+        // (edge0, edge1, x) -> GLSL smoothstep, forward and reversed edges.
+        let cases: [([f32; 4], f32); 6] = [
+            ([0.0, 1.0, 0.25, 0.0], 0.156_25),
+            ([1.0, 0.9, 0.9, 0.0], 1.0),
+            ([1.0, 0.9, 1.0, 0.0], 0.0),
+            ([1.0, 0.9, 0.95, 0.0], 0.5),
+            ([1.0, 0.9, 0.8, 0.0], 1.0),
+            ([1.0, 0.9, 1.1, 0.0], 0.0),
+        ];
+        let inputs: Vec<P9Vec4Input> = cases
+            .iter()
+            .map(|(c, _)| P9Vec4Input { value: *c })
+            .collect();
+        let outputs =
+            ComputeTest::<P9Vec4Input, P9Vec4Output>::new("p9_smoothstep", &wgsl, &inputs)
+                .workgroup_size(1)
+                .run()
+                .expect("shared test adapter is available");
+        assert_eq!(outputs.len(), cases.len());
+        for (i, (out, (_, expected))) in outputs.iter().zip(cases.iter()).enumerate() {
+            assert_close(
+                out.value[0],
+                *expected,
+                1e-5,
+                &format!("p9_smoothstep case {i}"),
+            );
+        }
+    }
+
+    /// `p9_mod` (shading const) and `p9_mod_f` (batch const) are two copies of
+    /// GLSL's floor-based `mod`. Both remainders must follow the divisor's
+    /// sign, unlike WGSL's truncated `%` — the discrepancy the text needles in
+    /// `shading_wgsl_keeps_the_ported_formulas` and `batch_wgsl_keeps_...` pin.
+    #[test]
+    fn compute_shim_executes_p9_mod_divisor_sign_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let p9_mod = extract_fn(P9_SHADING_WGSL, "p9_mod");
+        let p9_mod_f = extract_fn(PLANE9_BATCH_WGSL, "p9_mod_f");
+        let wgsl = format!(
+            r#"
+struct P9Vec4Input {{ value: vec4<f32>, }}
+struct P9DualOutput {{ a: vec4<f32>, b: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<P9Vec4Input>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<P9DualOutput>;
+{p9_mod}
+{p9_mod_f}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let v = inputs[gid.x].value;
+  outputs[gid.x] = P9DualOutput(
+    vec4<f32>(p9_mod(v.x, v.y), 0.0, 0.0, 0.0),
+    vec4<f32>(p9_mod_f(v.x, v.y), 0.0, 0.0, 0.0)
+  );
+}}
+"#
+        );
+        let cases: [([f32; 4], f32); 6] = [
+            ([-3.0, 20.0, 0.0, 0.0], 17.0),
+            ([23.0, 20.0, 0.0, 0.0], 3.0),
+            ([1.5, -2.0, 0.0, 0.0], -0.5),
+            ([-1.5, 2.0, 0.0, 0.0], 0.5),
+            ([0.0, 20.0, 0.0, 0.0], 0.0),
+            ([20.0, 20.0, 0.0, 0.0], 0.0),
+        ];
+        let inputs: Vec<P9Vec4Input> = cases
+            .iter()
+            .map(|(c, _)| P9Vec4Input { value: *c })
+            .collect();
+        let outputs = ComputeTest::<P9Vec4Input, P9DualOutput>::new("p9_mod", &wgsl, &inputs)
+            .workgroup_size(1)
+            .run()
+            .expect("shared test adapter is available");
+        assert_eq!(outputs.len(), cases.len());
+        for (i, (out, (_, expected))) in outputs.iter().zip(cases.iter()).enumerate() {
+            assert_close(out.a[0], *expected, 1e-5, &format!("p9_mod case {i}"));
+            assert_close(out.b[0], *expected, 1e-5, &format!("p9_mod_f case {i}"));
+        }
+    }
+
+    /// `PLANE9_TONEMAP_WGSL` is text-pinned by
+    /// `mesh_and_tonemap_wgsl_keep_the_ported_formulas`. Execute the Narkowicz
+    /// ACES fit: clamped to [0, 1], monotone in luminance, channel order kept.
+    #[test]
+    fn compute_shim_executes_p9_tonemap_aces_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let wgsl = format!(
+            r#"
+struct P9Vec4Input {{ value: vec4<f32>, }}
+struct P9Vec4Output {{ value: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<P9Vec4Input>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<P9Vec4Output>;
+{P9_COMMON_WGSL}
+{PLANE9_TONEMAP_WGSL}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let v = inputs[gid.x].value;
+  outputs[gid.x] = P9Vec4Output(vec4<f32>(p9_tonemap_aces(v.xyz), 0.0));
+}}
+"#
+        );
+        let inputs = [
+            P9Vec4Input {
+                value: [0.0, 0.0, 0.0, 0.0],
+            },
+            P9Vec4Input {
+                value: [0.25, 0.25, 0.25, 0.0],
+            },
+            P9Vec4Input {
+                value: [0.5, 0.5, 0.5, 0.0],
+            },
+            P9Vec4Input {
+                value: [1.0, 1.0, 1.0, 0.0],
+            },
+            P9Vec4Input {
+                value: [4.0, 4.0, 4.0, 0.0],
+            },
+            P9Vec4Input {
+                value: [16.0, 16.0, 16.0, 0.0],
+            },
+            P9Vec4Input {
+                value: [0.5, 1.0, 2.0, 0.0],
+            },
+        ];
+        let outputs =
+            ComputeTest::<P9Vec4Input, P9Vec4Output>::new("p9_tonemap_aces", &wgsl, &inputs)
+                .workgroup_size(1)
+                .run()
+                .expect("shared test adapter is available");
+        assert_eq!(outputs.len(), inputs.len());
+        for (out, input) in outputs.iter().zip(inputs.iter()) {
+            for lane in 0..3 {
+                let value = out.value[lane];
+                assert!(
+                    (0.0..=1.0).contains(&value),
+                    "p9_tonemap_aces left [0, 1]: {out:?} for {input:?}"
+                );
+            }
+        }
+        for value in outputs[0].value.iter().take(3) {
+            assert_close(*value, 0.0, 1e-7, "aces maps black to black");
+        }
+        // Narkowicz: (1*(2.51+0.03)) / (1*(2.43+0.59)+0.14) = 2.54/3.16.
+        assert_close(outputs[3].value[0], 2.54 / 3.16, 1e-4, "aces white point");
+        for i in 1..5 {
+            assert!(
+                outputs[i - 1].value[0] < outputs[i].value[0],
+                "p9_tonemap_aces is not monotone: {:?}",
+                outputs.iter().map(|o| o.value[0]).collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            outputs[4].value[0] < outputs[5].value[0] || (outputs[5].value[0] - 1.0).abs() < 1e-5,
+            "the bright end must keep rising or saturate at 1"
+        );
+        assert!(
+            outputs[6].value[0] < outputs[6].value[1] && outputs[6].value[1] < outputs[6].value[2],
+            "p9_tonemap_aces must preserve channel order: {:?}",
+            outputs[6].value
+        );
+    }
+
+    /// `p9_hsv2rgb` is text-pinned in `common_wgsl_keeps_the_ported_formulas`.
+    /// Check the primaries so a swapped/garbled ramp cannot pass on text alone.
+    #[test]
+    fn compute_shim_executes_p9_hsv2rgb_primaries_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let wgsl = format!(
+            r#"
+struct P9Vec4Input {{ value: vec4<f32>, }}
+struct P9Vec4Output {{ value: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<P9Vec4Input>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<P9Vec4Output>;
+{P9_COMMON_WGSL}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let v = inputs[gid.x].value;
+  outputs[gid.x] = P9Vec4Output(vec4<f32>(p9_hsv2rgb(v.x, v.y, v.z), 0.0));
+}}
+"#
+        );
+        // (h, s, v) -> RGB.
+        let cases: [([f32; 4], [f32; 3]); 6] = [
+            ([0.0, 1.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
+            ([1.0 / 3.0, 1.0, 1.0, 0.0], [0.0, 1.0, 0.0]),
+            ([2.0 / 3.0, 1.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+            ([0.5, 1.0, 0.5, 0.0], [0.0, 0.5, 0.5]),
+            ([0.0, 0.0, 1.0, 0.0], [1.0, 1.0, 1.0]),
+            ([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+        ];
+        let inputs: Vec<P9Vec4Input> = cases
+            .iter()
+            .map(|(c, _)| P9Vec4Input { value: *c })
+            .collect();
+        let outputs = ComputeTest::<P9Vec4Input, P9Vec4Output>::new("p9_hsv2rgb", &wgsl, &inputs)
+            .workgroup_size(1)
+            .run()
+            .expect("shared test adapter is available");
+        for (i, (out, (_, expected))) in outputs.iter().zip(cases.iter()).enumerate() {
+            for lane in 0..3 {
+                assert_close(
+                    out.value[lane],
+                    expected[lane],
+                    1e-4,
+                    &format!("p9_hsv2rgb case {i} lane {lane}"),
+                );
+            }
+        }
+    }
+
+    /// `p9_brightness_saturation_contrast` is text-pinned in
+    /// `batch_wgsl_keeps_the_ported_formulas` for its `0.2126/0.7152/0.0722`
+    /// luma weights. With saturation 0 the output is exactly that luma, so the
+    /// three primary colours reveal each weight directly.
+    #[test]
+    fn compute_shim_executes_p9_brightness_saturation_contrast_luma_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let wgsl = format!(
+            r#"
+struct P9DualInput {{ a: vec4<f32>, b: vec4<f32>, }}
+struct P9Vec4Output {{ value: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<P9DualInput>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<P9Vec4Output>;
+{P9_COMMON_WGSL}
+{PLANE9_BATCH_WGSL}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let input = inputs[gid.x];
+  let c = p9_brightness_saturation_contrast(input.a.xyz, input.b.x, input.b.y, input.b.z);
+  outputs[gid.x] = P9Vec4Output(vec4<f32>(c, 0.0));
+}}
+"#
+        );
+        // (colour), (brightness, saturation, contrast) -> expected RGB.
+        let cases: [([f32; 4], [f32; 4], [f32; 3]); 6] = [
+            (
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 1.0, 0.0],
+                [0.2126, 0.2126, 0.2126],
+            ),
+            (
+                [0.0, 1.0, 0.0, 0.0],
+                [1.0, 0.0, 1.0, 0.0],
+                [0.7152, 0.7152, 0.7152],
+            ),
+            (
+                [0.0, 0.0, 1.0, 0.0],
+                [1.0, 0.0, 1.0, 0.0],
+                [0.0722, 0.0722, 0.0722],
+            ),
+            ([1.0, 1.0, 1.0, 0.0], [0.5, 1.0, 1.0, 0.0], [0.5, 0.5, 0.5]),
+            ([1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
+            ([1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [0.5, 0.5, 0.5]),
+        ];
+        let inputs: Vec<P9DualInput> = cases
+            .iter()
+            .map(|(c, p, _)| P9DualInput { a: *c, b: *p })
+            .collect();
+        let outputs = ComputeTest::<P9DualInput, P9Vec4Output>::new(
+            "p9_brightness_saturation_contrast",
+            &wgsl,
+            &inputs,
+        )
+        .workgroup_size(1)
+        .run()
+        .expect("shared test adapter is available");
+        assert_eq!(outputs.len(), cases.len());
+        for (i, (out, (_, _, expected))) in outputs.iter().zip(cases.iter()).enumerate() {
+            for lane in 0..3 {
+                assert_close(
+                    out.value[lane],
+                    expected[lane],
+                    1e-5,
+                    &format!("brightness_saturation_contrast case {i} lane {lane}"),
+                );
+            }
+        }
+    }
+
+    /// The noise family (`p9_fbm`, `p9_noise`, `p9_turbulence` from the common
+    /// const and `p9_ridgedmf_fast` from the shading const) is text-pinned but
+    /// never executed. Check bounded, finite, repeatable output; one octave of
+    /// FBM is exactly one `p9_noise` sample, which also proves the two shipped
+    /// functions really ran rather than a Rust stand-in.
+    #[test]
+    fn compute_shim_executes_p9_noise_family_range_and_determinism_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let p9_ridgedmf_fast = extract_fn(P9_SHADING_WGSL, "p9_ridgedmf_fast");
+        let wgsl = format!(
+            r#"
+struct P9Vec4Input {{ value: vec4<f32>, }}
+struct P9Vec4Output {{ value: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<P9Vec4Input>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<P9Vec4Output>;
+{P9_COMMON_WGSL}
+{p9_ridgedmf_fast}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let v = inputs[gid.x].value;
+  let p = v.xyz;
+  let octaves = u32(v.w);
+  outputs[gid.x] = P9Vec4Output(vec4<f32>(
+    p9_fbm(p, octaves),
+    p9_noise(p),
+    p9_turbulence(p, octaves),
+    p9_ridgedmf_fast(p, octaves)
+  ));
+}}
+"#
+        );
+        let points: [[f32; 4]; 6] = [
+            [0.1, 0.2, 0.3, 1.0],
+            [0.1, 0.2, 0.3, 1.0], // repeat: bit-identical readback expected
+            [1.7, -2.3, 0.4, 3.0],
+            [1.7, -2.3, 0.4, 3.0],
+            [5.0, 5.0, 5.0, 5.0],
+            [-3.1, 0.7, 2.2, 3.0],
+        ];
+        let inputs: Vec<P9Vec4Input> = points.iter().map(|p| P9Vec4Input { value: *p }).collect();
+        let outputs =
+            ComputeTest::<P9Vec4Input, P9Vec4Output>::new("p9_noise_family", &wgsl, &inputs)
+                .workgroup_size(1)
+                .run()
+                .expect("shared test adapter is available");
+        assert_eq!(outputs.len(), points.len());
+        for (i, out) in outputs.iter().enumerate() {
+            for (lane, &value) in out.value.iter().enumerate() {
+                assert!(
+                    value.is_finite(),
+                    "p9 noise family case {i} lane {lane}: {value}"
+                );
+                assert!(
+                    (-1.5..=1.5).contains(&value),
+                    "p9 noise family case {i} lane {lane} out of range: {value}"
+                );
+            }
+            // Turbulence (abs of noise) and ridged noise are non-negative.
+            assert!(
+                out.value[2] >= 0.0,
+                "p9_turbulence went negative: {:?}",
+                out.value
+            );
+            assert!(
+                out.value[3] >= 0.0,
+                "p9_ridgedmf_fast went negative: {:?}",
+                out.value
+            );
+        }
+        for (i, (fbm, point)) in outputs
+            .iter()
+            .zip(points.iter())
+            .filter(|(_, p)| p[3] == 1.0)
+            .enumerate()
+        {
+            assert_close(
+                fbm.value[0],
+                fbm.value[1],
+                1e-6,
+                &format!("one-octave fbm must equal p9_noise (case {i} at {point:?})"),
+            );
+        }
+        for (a, b) in [(0, 1), (2, 3)] {
+            for lane in 0..4 {
+                assert_eq!(
+                    outputs[a].value[lane].to_bits(),
+                    outputs[b].value[lane].to_bits(),
+                    "p9 noise family must be deterministic: {:?} vs {:?}",
+                    outputs[a].value,
+                    outputs[b].value
+                );
+            }
+        }
+        assert!(
+            outputs[0].value[1] != outputs[4].value[1]
+                && outputs[0].value[1] != outputs[5].value[1],
+            "p9_noise returned the same value at different points"
+        );
+    }
+
+    /// `p9_rand4` / `p9_perm4_vec2` / `p9_voronoi3` are pin-only batch helpers.
+    /// Check the hash is in [0, 1), the perm alias agrees, and voronoi reports
+    /// its nearest feature before its second nearest.
+    #[test]
+    fn compute_shim_executes_p9_batch_hash_and_voronoi_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let wgsl = format!(
+            r#"
+struct P9Vec4Input {{ value: vec4<f32>, }}
+struct P9DualOutput {{ a: vec4<f32>, b: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<P9Vec4Input>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<P9DualOutput>;
+{P9_COMMON_WGSL}
+{PLANE9_BATCH_WGSL}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let p = inputs[gid.x].value.xyz;
+  let r = p9_rand4(p.xy);
+  let cell = p9_voronoi3(p);
+  outputs[gid.x] = P9DualOutput(
+    r,
+    vec4<f32>(cell.f1, cell.f2, p9_perm4_vec2(p.xy).x, 0.0)
+  );
+}}
+"#
+        );
+        let points: [[f32; 4]; 4] = [
+            [0.1, 0.2, 0.3, 0.0],
+            [0.1, 0.2, 0.3, 0.0],
+            [2.5, -1.0, 4.0, 0.0],
+            [-4.0, 3.25, 0.5, 0.0],
+        ];
+        let inputs: Vec<P9Vec4Input> = points.iter().map(|p| P9Vec4Input { value: *p }).collect();
+        let outputs =
+            ComputeTest::<P9Vec4Input, P9DualOutput>::new("p9_batch_hash_voronoi", &wgsl, &inputs)
+                .workgroup_size(1)
+                .run()
+                .expect("shared test adapter is available");
+        assert_eq!(outputs.len(), points.len());
+        for (i, out) in outputs.iter().enumerate() {
+            for lane in 0..4 {
+                assert!(
+                    (0.0..1.0).contains(&out.a[lane]),
+                    "p9_rand4 case {i} lane {lane} outside [0, 1): {:?}",
+                    out.a
+                );
+            }
+            assert_close(out.b[2], out.a[0], 1e-7, "p9_perm4_vec2 is p9_rand4");
+            assert!(
+                out.b[1] >= out.b[0] && out.b[0] >= 0.0,
+                "p9_voronoi3 must order f1 <= f2: {:?}",
+                out.b
+            );
+        }
+        for lane in 0..4 {
+            assert_eq!(
+                outputs[0].a[lane].to_bits(),
+                outputs[1].a[lane].to_bits(),
+                "p9_rand4 must be deterministic"
+            );
+        }
+        assert_ne!(
+            outputs[0].a, outputs[2].a,
+            "p9_rand4 is constant across points"
+        );
     }
 }

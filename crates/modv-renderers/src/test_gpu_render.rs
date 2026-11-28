@@ -162,6 +162,10 @@ pub(crate) fn render_module(module: &ShaderModule, inputs: RenderInputs) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shader::default_shader::{
+        DEFAULT_VERTEX, default_fragment, main_image_fragment,
+        main_image_fragment_preserving_alpha, validate_wgsl,
+    };
 
     /// How many framebuffer channels changed by a visible amount between two
     /// renders. A handful would be dithering; a full row means the shader
@@ -306,5 +310,130 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A prop-less `mainImage` body with a known partial alpha. The two
+    /// wrapper tests below differ only in which wrapper expands this body, so
+    /// their alpha assertions pin the wrapper's runtime behaviour rather than
+    /// just its source text.
+    const PARTIAL_ALPHA_BODY: &str = r#"
+fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
+  return vec4<f32>(0.2, 0.4, 0.6, 0.25);
+}
+"#;
+
+    fn probe_module(name: &'static str, fragment_wgsl: String) -> ShaderModule {
+        ShaderModule {
+            name: name.into(),
+            fragment_wgsl,
+            meta_author: "modV GPU tests".into(),
+            meta_version: "0.1.0".into(),
+            category: None,
+            audio: false,
+            audio_features: &[],
+            preview_with_output: false,
+            props: Vec::new(),
+        }
+    }
+
+    /// Validate exactly the source `ShaderRenderer::setup_module` hands to
+    /// wgpu: the shared vertex entry plus the expanded fragment source.
+    fn validate_probe(name: &str, module: &ShaderModule) {
+        let source = format!("{}\n{}", DEFAULT_VERTEX, module.fragment_wgsl);
+        validate_wgsl(&source)
+            .unwrap_or_else(|error| panic!("{name}: synthetic WGSL failed validation: {error}"));
+    }
+
+    fn skip_if_no_gpu(test: &str) -> bool {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping {test}: no GPU adapter in this environment");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The GLSL `fWrap` shim (`image.a = 1.;`) must force alpha opaque even
+    /// when `mainImage` returns 0.25 — on the GPU, not just in the source.
+    #[test]
+    fn mainimage_forced_wrapper_forces_opaque_alpha_on_gpu() {
+        if skip_if_no_gpu("forced-alpha wrapper test") {
+            return;
+        }
+        let module = probe_module(
+            "Probe mainImage forced alpha",
+            main_image_fragment(PARTIAL_ALPHA_BODY),
+        );
+        validate_probe("forced-alpha wrapper", &module);
+        let frame = render_module(&module, RenderInputs::default())
+            .expect("the shared test adapter is available");
+        assert_eq!(frame.len(), (FRAME_SIZE * FRAME_SIZE * 4) as usize);
+        for (pixel, rgba) in frame.as_chunks::<4>().0.iter().enumerate() {
+            assert!(
+                (rgba[0] - 0.2).abs() <= 1e-5
+                    && (rgba[1] - 0.4).abs() <= 1e-5
+                    && (rgba[2] - 0.6).abs() <= 1e-5,
+                "forced-alpha wrapper: mainImage body did not run at pixel {pixel}: {rgba:?}"
+            );
+            assert_eq!(
+                rgba[3], 1.0,
+                "forced-alpha wrapper did not force opaque alpha at pixel {pixel}"
+            );
+        }
+    }
+
+    /// Chromatic Abberation's preserving wrapper must let the module's
+    /// partial alpha through unchanged at every pixel.
+    #[test]
+    fn mainimage_preserving_wrapper_keeps_partial_alpha_on_gpu() {
+        if skip_if_no_gpu("preserve-alpha wrapper test") {
+            return;
+        }
+        let module = probe_module(
+            "Probe mainImage preserved alpha",
+            main_image_fragment_preserving_alpha(PARTIAL_ALPHA_BODY),
+        );
+        validate_probe("preserve-alpha wrapper", &module);
+        let frame = render_module(&module, RenderInputs::default())
+            .expect("the shared test adapter is available");
+        assert_eq!(frame.len(), (FRAME_SIZE * FRAME_SIZE * 4) as usize);
+        for (pixel, rgba) in frame.as_chunks::<4>().0.iter().enumerate() {
+            assert!(
+                (rgba[0] - 0.2).abs() <= 1e-5
+                    && (rgba[1] - 0.4).abs() <= 1e-5
+                    && (rgba[2] - 0.6).abs() <= 1e-5,
+                "preserve-alpha wrapper: mainImage body did not run at pixel {pixel}: {rgba:?}"
+            );
+            assert!(
+                (rgba[3] - 0.25).abs() <= 1e-5,
+                "preserve-alpha wrapper lost the module's 0.25 alpha at pixel {pixel}: {}",
+                rgba[3]
+            );
+        }
+    }
+
+    /// The `f` gradient fallback paints `vUv.x` in red and opaque alpha; the
+    /// first pixel centre is (0.5, 0.5), so with a 32x32 target r = 0.5/32.
+    #[test]
+    fn default_gradient_fragment_paints_expected_first_pixel() {
+        if skip_if_no_gpu("default gradient test") {
+            return;
+        }
+        let module = probe_module("Probe default gradient", default_fragment());
+        validate_probe("default gradient", &module);
+        let frame = render_module(&module, RenderInputs::default())
+            .expect("the shared test adapter is available");
+        assert_eq!(frame.len(), (FRAME_SIZE * FRAME_SIZE * 4) as usize);
+        let first = &frame[..4];
+        assert!(
+            (first[0] - 0.5 / FRAME_SIZE as f32).abs() <= 1e-4,
+            "default gradient red at pixel (0,0) was {}, expected {}",
+            first[0],
+            0.5 / FRAME_SIZE as f32
+        );
+        assert_eq!(
+            first[3], 1.0,
+            "default gradient was not opaque at pixel (0,0)"
+        );
     }
 }

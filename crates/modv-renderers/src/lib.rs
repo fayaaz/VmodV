@@ -15,4 +15,6 @@ mod test_gpu_compute;
 #[cfg(test)]
 mod test_gpu_isf;
 #[cfg(test)]
+mod test_gpu_postfx;
+#[cfg(test)]
 mod test_gpu_render;
