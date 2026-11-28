@@ -179,7 +179,7 @@ impl<'a, I: Pod, O: Pod> ComputeTest<'a, I, O> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shader::uniforms::GLSL_MOD_F_WGSL;
+    use crate::shader::uniforms::{GLSL_MOD_F_WGSL, GLSL_MOD_V2_WGSL};
 
     #[derive(Clone, Copy, Pod, Zeroable)]
     #[repr(C)]
@@ -234,6 +234,175 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 (actual - expected).abs() < 1e-5,
                 "glsl_mod_f on the GPU returned {values:?}; expected floor-based mod"
             );
+        }
+    }
+
+    #[derive(Clone, Copy, Pod, Zeroable)]
+    #[repr(C)]
+    struct Vec2ModPair {
+        x: [f32; 2],
+        y: [f32; 2],
+    }
+
+    #[derive(Clone, Copy, Pod, Zeroable)]
+    #[repr(C)]
+    struct Vec2ModOutput {
+        value: [f32; 4],
+    }
+
+    /// `glsl_mod_v2` is spliced into Point10 modules alongside the scalar form,
+    /// but only the scalar form was exercised numerically. Each vector lane
+    /// below has a negative operand, so WGSL's `%` (which truncates the
+    /// quotient toward zero) gives a different answer from GLSL's floor-based
+    /// `mod`: the remainder's sign follows the divisor, not the dividend.
+    #[test]
+    fn compute_shim_executes_glsl_mod_v2_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let wgsl = format!(
+            r#"
+struct Vec2ModPair {{ x: vec2<f32>, y: vec2<f32>, }}
+struct Vec2ModOutput {{ value: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<Vec2ModPair>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<Vec2ModOutput>;
+{GLSL_MOD_V2_WGSL}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let i = gid.x;
+  let result = glsl_mod_v2(inputs[i].x, inputs[i].y);
+  outputs[i] = Vec2ModOutput(vec4<f32>(result.x, result.y, 0.0, 0.0));
+}}
+"#
+        );
+        let inputs = [
+            // Negative dividend / positive divisor: floor(-0.75) == -1.
+            Vec2ModPair {
+                x: [-1.5, 5.5],
+                y: [2.0, 2.0],
+            },
+            // Positive dividend / negative divisor: floor(-0.75) == -1.
+            Vec2ModPair {
+                x: [1.5, -1.5],
+                y: [-2.0, -2.0],
+            },
+            // Both operands negative: lane 0's result flips sign, lane 1's does not.
+            Vec2ModPair {
+                x: [-0.25, -0.25],
+                y: [0.5, -0.5],
+            },
+        ];
+        let outputs = ComputeTest::<Vec2ModPair, Vec2ModOutput>::new("glsl_mod_v2", &wgsl, &inputs)
+            .workgroup_size(1)
+            .run()
+            .expect("shared test adapter is available");
+        let values: Vec<[f32; 2]> = outputs.iter().map(|o| [o.value[0], o.value[1]]).collect();
+        assert_eq!(values.len(), inputs.len());
+        for (actual, expected) in values
+            .iter()
+            .zip([[0.5_f32, 1.5], [-0.5, -1.5], [0.25, -0.25]])
+        {
+            for lane in 0..2 {
+                assert!(
+                    (actual[lane] - expected[lane]).abs() < 1e-5,
+                    "glsl_mod_v2 on the GPU returned {values:?}; expected floor-based vec2 mod: lane {lane} was {} instead of {}",
+                    actual[lane],
+                    expected[lane]
+                );
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Pod, Zeroable)]
+    #[repr(C)]
+    struct UvInput {
+        resolution: [f32; 4],
+        frag: [f32; 4],
+    }
+
+    #[derive(Clone, Copy, Pod, Zeroable)]
+    #[repr(C)]
+    struct UvOutput {
+        value: [f32; 4],
+    }
+
+    /// `modv_uv` ships only as text inside `SHARED_UNIFORM_WGSL`, so this test
+    /// extracts the *actual* helper body rather than re-implementing the
+    /// division in the shim. A private stand-in for `u` supplies `iResolution`
+    /// per invocation; the shader still compiles the shipped function.
+    #[test]
+    fn compute_shim_executes_shipped_modv_uv_on_gpu() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping compute-shim test: no GPU adapter in this environment");
+            return;
+        }
+        let shared = crate::shader::uniforms::SHARED_UNIFORM_WGSL;
+        let from_fn = &shared[shared
+            .find("fn modv_uv(")
+            .expect("SHARED_UNIFORM_WGSL declares modv_uv")..];
+        let end = from_fn
+            .find("\n}\n")
+            .expect("modv_uv body has a closing brace")
+            + "\n}\n".len();
+        let helper = &from_fn[..end];
+
+        let wgsl = format!(
+            r#"
+struct UvStandIn {{ iResolution: vec3<f32>, _pad0: f32, }}
+struct UvInput {{ resolution: vec4<f32>, frag: vec4<f32>, }}
+struct UvOutput {{ value: vec4<f32>, }}
+@group(0) @binding(0) var<storage, read> inputs: array<UvInput>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<UvOutput>;
+var<private> u: UvStandIn;
+{helper}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+  let i = gid.x;
+  u.iResolution = inputs[i].resolution.xyz;
+  let uv = modv_uv(inputs[i].frag.xy);
+  outputs[i] = UvOutput(vec4<f32>(uv.x, uv.y, 0.0, 0.0));
+}}
+"#
+        );
+        let inputs = [
+            UvInput {
+                resolution: [1920.0, 1080.0, 1.0, 0.0],
+                frag: [0.0, 0.0, 0.0, 0.0],
+            },
+            UvInput {
+                resolution: [1920.0, 1080.0, 1.0, 0.0],
+                frag: [960.0, 540.0, 0.0, 0.0],
+            },
+            // A y-flip would return 0.25 here; the shipped helper must not flip.
+            UvInput {
+                resolution: [1920.0, 1080.0, 1.0, 0.0],
+                frag: [480.0, 810.0, 0.0, 0.0],
+            },
+            UvInput {
+                resolution: [800.0, 600.0, 1.0, 0.0],
+                frag: [200.0, 450.0, 0.0, 0.0],
+            },
+        ];
+        let outputs = ComputeTest::<UvInput, UvOutput>::new("modv_uv", &wgsl, &inputs)
+            .workgroup_size(1)
+            .run()
+            .expect("shared test adapter is available");
+        let values: Vec<[f32; 2]> = outputs.iter().map(|o| [o.value[0], o.value[1]]).collect();
+        assert_eq!(values.len(), inputs.len());
+        for (actual, expected) in
+            values
+                .iter()
+                .zip([[0.0_f32, 0.0], [0.5, 0.5], [0.25, 0.75], [0.25, 0.75]])
+        {
+            for lane in 0..2 {
+                assert!(
+                    (actual[lane] - expected[lane]).abs() < 1e-5,
+                    "modv_uv on the GPU returned {values:?}; expected top-left-origin normalised uv: lane {lane} was {} instead of {}",
+                    actual[lane],
+                    expected[lane]
+                );
+            }
         }
     }
 }
