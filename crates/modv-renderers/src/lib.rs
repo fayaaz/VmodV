@@ -12,3 +12,7 @@ pub mod user_module;
 mod test_gpu;
 #[cfg(test)]
 mod test_gpu_compute;
+#[cfg(test)]
+mod test_gpu_isf;
+#[cfg(test)]
+mod test_gpu_render;
