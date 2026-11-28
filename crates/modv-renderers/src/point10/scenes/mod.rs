@@ -30,6 +30,7 @@
 //! | [`music_waves`] | Music Waves | `Music/Music Waves.xml` (instanced wave RTT + bloom) |
 //! | [`hypno_toad`] | Hypno Toad | `Psychedelic/HypnoToad.xml` (single-pass instanced spirograph) |
 //! | [`cell_culture`] | Cell Culture | `Cell/Cell Culture.xml` (reaction-diffusion feedback) |
+//! | [`waves_of_sin`] | Waves of Sin | `Line/Waves of sin.xml` (50 000 instanced point sprites) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -55,6 +56,8 @@ mod plane9_cell_culture_fidelity_red_contract;
 mod plane9_hypno_toad_fidelity_red_contract;
 #[cfg(test)]
 mod plane9_music_waves_fidelity_red_contract;
+#[cfg(test)]
+mod plane9_waves_of_sin_fidelity_red_contract;
 
 pub mod abstract_clouds;
 pub mod around_plus;
@@ -107,5 +110,6 @@ pub mod tv_noise;
 pub mod ultra_hdr;
 pub mod water_ripple;
 pub mod waveform;
+pub mod waves_of_sin;
 pub mod wormhole;
 pub mod xor;

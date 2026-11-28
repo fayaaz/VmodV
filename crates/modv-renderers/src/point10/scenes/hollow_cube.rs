@@ -2431,6 +2431,7 @@ mod tests {
             "Plane9 Music Waves",
             "Plane9 Hypno Toad",
             "Plane9 Cell Culture",
+            "Plane9 Waves of Sin",
         ];
         expected_names.extend_from_slice(&NEW_NAMES);
         expected_names.sort_unstable();
@@ -2449,8 +2450,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         check!(
-            scenes.len() == 52,
-            "A: expected 52 Point10 scenes, got {}",
+            scenes.len() == 53,
+            "A: expected 53 Point10 scenes, got {}",
             scenes.len()
         );
         let mut unique_names = names.clone();
@@ -2500,13 +2501,13 @@ mod tests {
         ))
         .expect("module-parity.json must parse");
         check!(
-            manifest["counts"]["point10"].as_u64() == Some(52),
-            "G: module-parity point10 count must be 52, got {:?}",
+            manifest["counts"]["point10"].as_u64() == Some(53),
+            "G: module-parity point10 count must be 53, got {:?}",
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(503),
-            "G: module-parity total must be 503, got {:?}",
+            manifest["counts"]["total"].as_u64() == Some(504),
+            "G: module-parity total must be 504, got {:?}",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -2516,8 +2517,8 @@ mod tests {
             .map(|name| name.as_str().expect("point10 name"))
             .collect();
         check!(
-            manifest_names.len() == 52,
-            "G: module-parity point10 array must contain 52 names, got {}",
+            manifest_names.len() == 53,
+            "G: module-parity point10 array must contain 53 names, got {}",
             manifest_names.len()
         );
         for name in NEW_NAMES {
@@ -2535,13 +2536,13 @@ mod tests {
             serde_json::from_str(include_str!("../../../../../docs/modules/modules.json"))
                 .expect("generated module catalogue must parse");
         check!(
-            docs["counts"]["point10"].as_u64() == Some(52),
-            "G: generated catalogue point10 count must be 52, got {:?}",
+            docs["counts"]["point10"].as_u64() == Some(53),
+            "G: generated catalogue point10 count must be 53, got {:?}",
             docs["counts"]["point10"]
         );
         check!(
-            docs["counts"]["total"].as_u64() == Some(503),
-            "G: generated catalogue total must be 503, got {:?}",
+            docs["counts"]["total"].as_u64() == Some(504),
+            "G: generated catalogue total must be 504, got {:?}",
             docs["counts"]["total"]
         );
         let doc_point10: Vec<&str> = docs["modules"]

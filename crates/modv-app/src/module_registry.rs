@@ -62,8 +62,8 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 52 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 402 `.fs` shaders of the ISF corpus (503 total). Names match
+//! 53 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
+//! module and the 402 `.fs` shaders of the ISF corpus (504 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -177,6 +177,7 @@ use modv_renderers::point10::scenes::tv_noise::TvNoise;
 use modv_renderers::point10::scenes::ultra_hdr::UltraHdr;
 use modv_renderers::point10::scenes::water_ripple::WaterRipple;
 use modv_renderers::point10::scenes::waveform::Waveform;
+use modv_renderers::point10::scenes::waves_of_sin::WavesOfSin;
 use modv_renderers::point10::scenes::wormhole::Wormhole;
 use modv_renderers::point10::scenes::xor::Xor;
 use modv_renderers::point10::{
@@ -433,6 +434,8 @@ pub enum Point10SceneKind {
     HypnoToad(HypnoToad),
     /// `Plane9 Cell Culture` (`scenes/cell_culture.rs`).
     CellCulture(CellCulture),
+    /// `Plane9 Waves of Sin` (`scenes/waves_of_sin.rs`).
+    WavesOfSin(WavesOfSin),
 }
 
 impl Point10SceneKind {
@@ -520,6 +523,7 @@ impl Point10SceneKind {
             "Plane9 Music Waves" => Self::MusicWaves(MusicWaves::new()),
             "Plane9 Hypno Toad" => Self::HypnoToad(HypnoToad::new()),
             "Plane9 Cell Culture" => Self::CellCulture(CellCulture::new()),
+            "Plane9 Waves of Sin" => Self::WavesOfSin(WavesOfSin::new()),
             _ => return None,
         })
     }
@@ -584,6 +588,7 @@ impl Point10SceneKind {
             Self::MusicWaves(scene) => scene.apply_props(|key| get(key)),
             Self::HypnoToad(scene) => scene.apply_props(|key| get(key)),
             Self::CellCulture(scene) => scene.apply_props(|key| get(key)),
+            Self::WavesOfSin(scene) => scene.apply_props(|key| get(key)),
         }
     }
 }
@@ -644,6 +649,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.name(),
             Self::HypnoToad(scene) => scene.name(),
             Self::CellCulture(scene) => scene.name(),
+            Self::WavesOfSin(scene) => scene.name(),
         }
     }
 
@@ -701,6 +707,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.init(ctx),
             Self::HypnoToad(scene) => scene.init(ctx),
             Self::CellCulture(scene) => scene.init(ctx),
+            Self::WavesOfSin(scene) => scene.init(ctx),
         }
     }
 
@@ -758,6 +765,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.resize(width, height),
             Self::HypnoToad(scene) => scene.resize(width, height),
             Self::CellCulture(scene) => scene.resize(width, height),
+            Self::WavesOfSin(scene) => scene.resize(width, height),
         }
     }
 
@@ -815,6 +823,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.update(dt, audio),
             Self::HypnoToad(scene) => scene.update(dt, audio),
             Self::CellCulture(scene) => scene.update(dt, audio),
+            Self::WavesOfSin(scene) => scene.update(dt, audio),
         }
     }
 
@@ -876,6 +885,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.render(encoder, target),
             Self::HypnoToad(scene) => scene.render(encoder, target),
             Self::CellCulture(scene) => scene.render(encoder, target),
+            Self::WavesOfSin(scene) => scene.render(encoder, target),
         }
     }
 
@@ -933,6 +943,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.dispose(),
             Self::HypnoToad(scene) => scene.dispose(),
             Self::CellCulture(scene) => scene.dispose(),
+            Self::WavesOfSin(scene) => scene.dispose(),
         }
     }
 
@@ -990,6 +1001,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.props(),
             Self::HypnoToad(scene) => scene.props(),
             Self::CellCulture(scene) => scene.props(),
+            Self::WavesOfSin(scene) => scene.props(),
         }
     }
 
@@ -1047,6 +1059,7 @@ impl Point10Scene for Point10SceneKind {
             Self::MusicWaves(scene) => scene.meta(),
             Self::HypnoToad(scene) => scene.meta(),
             Self::CellCulture(scene) => scene.meta(),
+            Self::WavesOfSin(scene) => scene.meta(),
         }
     }
 }
@@ -2699,7 +2712,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 33 + 16 + 52, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 33 + 16 + 53, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2719,7 +2732,7 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 52);
+        assert_eq!(registry.point10_definitions().len(), 53);
     }
 
     #[test]
@@ -2785,6 +2798,7 @@ mod tests {
                 "Plane9 Music Waves",
                 "Plane9 Hypno Toad",
                 "Plane9 Cell Culture",
+                "Plane9 Waves of Sin",
             ]
         );
 
@@ -3862,7 +3876,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 52 + 402 + milkdrop_count,
+            33 + 16 + 53 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3938,12 +3952,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 52 + 402 + milkdrop_count,
+            33 + 16 + 53 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(503),
+            Some(504),
             "manifest total"
         );
     }
