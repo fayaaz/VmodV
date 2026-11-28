@@ -141,13 +141,12 @@ jobs:
           cache-from: type=gha,scope=rust-toolchain
           cache-to: type=gha,mode=max,scope=rust-toolchain
 
-      # modv-app's GPU tests share one lavapipe device and race when run in
-      # parallel (`cargo test -p modv-app -- --test-threads=1`). The rest of
-      # the workspace runs normally.
       # Serial: the GPU/kittest suites share one lavapipe device and a
-      # virtual display, just like modv-app below.
-      - name: Workspace tests (modv-app excluded, serial)
-        run: make engine-test ARGS="--workspace --exclude modv-app -- --test-threads=1 --skip test_gpu"
+      # virtual display. modv-app has its own lib step; modv-renderers runs
+      # with the GPU shader and e2e suites below so its slow volume/corpus
+      # tests do not hold up the workspace sweep.
+      - name: Workspace tests (modv-app, modv-renderers excluded, serial)
+        run: make engine-test ARGS="--workspace --exclude modv-app --exclude modv-renderers -- --test-threads=1 --skip test_gpu"
 
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
@@ -159,8 +158,12 @@ jobs:
       - name: modv-app static and packaging guard tests (serial)
         run: make test-static-guards
 
-      # GPU shader units use the same lavapipe device as the e2e processes, so
-      # they run in this job immediately before e2e, never in parallel.
+      # Renderers (Point10 volume simulations, ISF corpus) and GPU shader
+      # units use the same lavapipe device as the e2e processes, so they run
+      # serially in this job immediately before e2e, never in parallel.
+      - name: modv-renderers tests (serial)
+        run: make test-renderers
+
       - name: GPU shader unit tests (serial)
         run: make test-shader-gpu
 

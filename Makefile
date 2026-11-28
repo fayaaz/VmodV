@@ -345,6 +345,13 @@ engine-run: docker-cargo-volume
 engine-test: docker-cargo-volume
 	$(call run-cargo-test,test $(ARGS))
 
+# The Point10 volume simulations and ISF corpus checks in modv-renderers are
+# the slowest part of the workspace and exercise the same lavapipe device as
+# the shader/e2e suites. CI runs them on that leg, excluded from the workspace
+# sweep; `test_gpu` names are left to test-shader-gpu so nothing runs twice.
+test-renderers: docker-cargo-volume
+	$(call run-cargo-test,test -p modv-renderers -- --test-threads=1 --skip test_gpu)
+
 # GPU-executed shader unit tests (compute shim, built-in registry, ISF corpus).
 # CI runs this step immediately before the e2e suites in the same job, and
 # skips these tests in the workspace sweep so they are not run twice.

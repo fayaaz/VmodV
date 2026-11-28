@@ -148,6 +148,7 @@ fn pr_ci_measures_coverage_and_publishes_the_html_artifact() {
         "make engine-test ARGS=\"--workspace",
         "make engine-test ARGS=\"-p modv-app --lib",
         "make test-static-guards",
+        "make test-renderers",
         "make test-shader-gpu",
         "make test-e2e-vmodv",
     ] {

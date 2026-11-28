@@ -234,6 +234,68 @@ fn gpu_shader_tests_run_before_e2e_in_the_same_job() {
 }
 
 #[test]
+fn renderers_tests_run_with_the_gpu_and_e2e_suites() {
+    // The Point10 volume simulations and ISF corpus checks in modv-renderers
+    // are the slowest part of the workspace. They exercise the same lavapipe
+    // device as the GPU shader and real-binary e2e suites, so they live on
+    // that leg instead of holding up the workspace sweep.
+    let root = repo_root();
+    let makefile = read_text(&root.join("Makefile"));
+    let recipe = recipe_for(&makefile, "test-renderers");
+    assert!(
+        recipe.contains("run-cargo-test") && recipe.contains("-p modv-renderers"),
+        "Makefile must expose a `test-renderers` recipe that runs the whole crate \
+         under the coverage wrapper; got:\n{recipe}"
+    );
+    assert!(
+        recipe.contains("--test-threads=1"),
+        "Makefile's `test-renderers` recipe must include `--test-threads=1`: the \
+         renderers share one lavapipe device with the shader/e2e suites"
+    );
+    assert!(
+        recipe.contains("--skip test_gpu"),
+        "Makefile's `test-renderers` recipe must `--skip test_gpu` so the dedicated \
+         shader step does not run the same tests twice"
+    );
+
+    for (name, file, job) in [
+        ("vmodv.yml", "vmodv.yml", "test"),
+        ("release.yml", "release.yml", "validate-e2e"),
+    ] {
+        let workflow = read_text(&root.join(".github/workflows").join(file));
+        let block = job_block(&workflow, job);
+        let renderers = block
+            .lines()
+            .position(|line| line.contains("make test-renderers"))
+            .unwrap_or_else(|| panic!("{name}'s `{job}` job must run `make test-renderers`"));
+        let shader = block
+            .lines()
+            .position(|line| line.contains("make test-shader-gpu"))
+            .unwrap_or_else(|| panic!("{name}'s `{job}` job must run `make test-shader-gpu`"));
+        assert!(
+            renderers < shader,
+            "{name}'s `{job}` job runs the renderers suite after the GPU shaders; \
+             both share the lavapipe device and must stay serial in one leg"
+        );
+        let workspace_sweep = active_lines(&workflow, false)
+            .find(|line| line.contains("engine-test ARGS=\"--workspace"))
+            .unwrap_or_else(|| panic!("{name} must run the workspace tests with `--workspace`"));
+        assert!(
+            workspace_sweep.contains("--exclude modv-renderers"),
+            "{name}'s workspace sweep must exclude modv-renderers now that its \
+             own serial step runs in `{job}`; got:\n{workspace_sweep}"
+        );
+    }
+
+    let release = read_text(&root.join(".github/workflows/release.yml"));
+    assert!(
+        !job_block(&release, "validate").contains("make test-renderers"),
+        "release.yml's `validate` job must not duplicate the modv-renderers suite; \
+         it runs in `validate-e2e` alongside the GPU and e2e suites"
+    );
+}
+
+#[test]
 fn every_top_level_integration_target_runs_in_ci() {
     let root = repo_root();
     let tests_dir = root.join("crates/modv-app/tests");

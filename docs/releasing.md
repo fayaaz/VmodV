@@ -56,7 +56,7 @@ Merge commits are ignored.
    the tag or release already existing.
 5. The release is created as a **draft**; `publish` makes it visible only after
    both `validate` (lint, unit and static guard tests) and `validate-e2e`
-   (real-binary suites, on a separate runner) pass. A failed or cancelled run
+   (`modv-renderers`, GPU shader and real-binary suites, on a separate runner) pass. A failed or cancelled run
    can therefore strand an
    invisible draft. `.github/workflows/nightly-cleanup.yml` runs at 03:00 UTC
    and calls `tools/prune-draft-releases.sh` to delete drafts older than a day
