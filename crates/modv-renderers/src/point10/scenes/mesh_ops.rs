@@ -47,7 +47,7 @@
 //! | --- | --- | --- |
 //! | `Subdivide` | `NumSteps`, `Smootness`, `Selection` | [`subdivide`] |
 //! | `SelectMesh` | `SelectionType`, `Logic`, `Invert`, `Output`, `RandomFactor`, `RandomSeed` | [`select_faces`] |
-//! | `Extrude` | `NumSteps`, `Amount`, `Direction`, `LocalScale` | [`extrude`] |
+//! | `Extrude` | `NumSteps`, `Amount`, `Direction`, `Center`, `LocalScale` | [`extrude`] |
 //! | `Randomize` | `Selection`, `Direction`, `Amount`, `RandomSeed` | [`randomize`] |
 //! | `TransformEx` | `Scale` | **not here** — the scene's model matrix |
 //! | `Cube` | `Size`, tessellation | [`from_box`] / `scenes::cube_mesh::build_box` |
@@ -166,6 +166,8 @@ pub struct ExtrudeParams {
     pub amount: f32,
     /// `Direction`: `0` is the face normal.
     pub direction: u32,
+    /// `Center` — an offset added to every extrusion direction/anchor.
+    pub center: [f32; 3],
     /// `LocalScale` — cap scale; `0` collapses the cap to one apex.
     pub local_scale: f32,
 }
@@ -393,15 +395,21 @@ pub fn select_faces(mesh: &IndexedMesh, params: SelectParams) -> IndexedMesh {
     }
 }
 
-/// `Extrude`: push every face along its normal and taper the cap.
+/// `Extrude`: raise a tapered spike from every face.
 ///
 /// `LocalScale 0` collapses the cap to a single apex, turning each face into a
 /// cone (Spiky's spike); a non-zero value keeps a smaller copy of the face at
-/// the cap. `NumSteps 2` emits one intermediate ring before the apex.
+/// the cap and closes it with a triangle. `NumSteps 2` emits one intermediate
+/// ring before the apex.
 ///
-/// The base face is retained: with back-face culling the spike's outside is
-/// what the camera sees, and keeping the base keeps every triangle wound
-/// outward without a separate cap-orientation pass.
+/// The input base vertices are reused in place and the base triangle is **not**
+/// emitted. That is what makes the result one watertight body: adjacent spikes
+/// meet along their shared base edge, and each such edge is used by exactly the
+/// two wall triangles on either side. Retaining the base triangle as well would
+/// give every original edge four incident triangles (two bases plus two walls,
+/// two closed shells joined along an interior membrane), which is precisely
+/// how the previous implementation produced 48 disconnected hollow shards: the
+/// retained bases became internal walls, so the star had no solid centre.
 pub fn extrude(mesh: &IndexedMesh, params: ExtrudeParams) -> IndexedMesh {
     let steps = params.num_steps.max(1);
     let amount = if params.amount.is_finite() {
@@ -414,25 +422,33 @@ pub fn extrude(mesh: &IndexedMesh, params: ExtrudeParams) -> IndexedMesh {
     } else {
         1.0
     };
+    let center = if params.center.iter().all(|value| value.is_finite()) {
+        params.center
+    } else {
+        [0.0; 3]
+    };
 
-    let mut positions = Vec::new();
+    // Reuse the input positions so neighbouring faces share their base ring.
+    let mut positions = mesh.positions.clone();
     let mut triangles = Vec::new();
 
     for face in &mesh.triangles {
-        let base = face.map(|index| mesh.positions[index as usize]);
-        let centroid = scale(add(add(base[0], base[1]), base[2]), 1.0 / 3.0);
-        let normal = normalise(cross(sub(base[1], base[0]), sub(base[2], base[0])));
+        let base = *face;
+        let corners = base.map(|index| mesh.positions[index as usize]);
+        let centroid = scale(add(add(corners[0], corners[1]), corners[2]), 1.0 / 3.0);
+        let normal = normalise(cross(
+            sub(corners[1], corners[0]),
+            sub(corners[2], corners[0]),
+        ));
 
         // Direction 0 is the face normal; other directions are not used by
         // Spiky and fall back to the same normal.
         let direction = normal;
+        let anchor = add(centroid, center);
 
-        let base_start = positions.len() as u32;
-        positions.extend_from_slice(&base);
-
-        // ring[ring][corner] vertex indices; ring 0 is the base face.
+        // rings[n][corner] vertex indices; ring 0 is the shared base face.
         let mut rings: Vec<[u32; 3]> = Vec::with_capacity(steps as usize + 1);
-        rings.push([base_start, base_start + 1, base_start + 2]);
+        rings.push(base);
         let mut apex: Option<u32> = None;
 
         for step in 1..=steps {
@@ -440,17 +456,17 @@ pub fn extrude(mesh: &IndexedMesh, params: ExtrudeParams) -> IndexedMesh {
             let cap_scale = 1.0 + (local_scale - 1.0) * t;
             if step == steps && local_scale == 0.0 {
                 // All three cap vertices land on the same point: emit one apex.
-                let apex_position = add(centroid, scale(direction, amount * t));
+                let apex_position = add(anchor, scale(direction, amount * t));
                 let index = positions.len() as u32;
                 positions.push(apex_position);
                 apex = Some(index);
                 break;
             }
             let mut ring = [0_u32; 3];
-            for (corner, vertex) in base.iter().enumerate() {
+            for (corner, vertex) in corners.iter().enumerate() {
                 let tangential = sub(*vertex, centroid);
                 let ring_position = add(
-                    add(centroid, scale(direction, amount * t)),
+                    add(anchor, scale(direction, amount * t)),
                     scale(tangential, cap_scale),
                 );
                 ring[corner] = positions.len() as u32;
@@ -458,9 +474,6 @@ pub fn extrude(mesh: &IndexedMesh, params: ExtrudeParams) -> IndexedMesh {
             }
             rings.push(ring);
         }
-
-        // Base triangle (unchanged, wound outward).
-        triangles.push([base_start, base_start + 1, base_start + 2]);
 
         for pair in rings.windows(2) {
             let lower = pair[0];
@@ -472,13 +485,17 @@ pub fn extrude(mesh: &IndexedMesh, params: ExtrudeParams) -> IndexedMesh {
             }
         }
 
-        // Connect the last full ring to the collapsed apex.
         if let Some(apex) = apex {
+            // Connect the last full ring to the collapsed apex.
             let ring = *rings.last().expect("a base ring exists");
             for edge in 0..3 {
                 let next = (edge + 1) % 3;
                 triangles.push([ring[edge], ring[next], apex]);
             }
+        } else {
+            // A non-zero `LocalScale` leaves a smaller face at the cap; close
+            // it with the same winding as the input face.
+            triangles.push(*rings.last().expect("a base ring exists"));
         }
     }
 
@@ -586,25 +603,144 @@ fn spherical_uv(position: [f32; 3]) -> [f32; 2] {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
+
+    fn triangle_key(mesh: &IndexedMesh, triangle: [u32; 3]) -> [[i64; 3]; 3] {
+        let mut corners: Vec<_> = triangle
+            .map(|index| quantise(mesh.positions[index as usize]))
+            .to_vec();
+        corners.sort_unstable();
+        [corners[0], corners[1], corners[2]]
+    }
 
     fn face_keys(mesh: &IndexedMesh) -> BTreeSet<[[i64; 3]; 3]> {
         mesh.triangles
             .iter()
-            .map(|triangle| {
-                let mut corners: Vec<_> = triangle
-                    .map(|index| quantise(mesh.positions[index as usize]))
-                    .to_vec();
-                corners.sort_unstable();
-                [corners[0], corners[1], corners[2]]
-            })
+            .map(|&triangle| triangle_key(mesh, triangle))
             .collect()
     }
 
     fn cube() -> IndexedMesh {
         from_box(1.0, 1.0, 1.0)
+    }
+
+    /// Connected components after welding triangle connectivity by vertex index.
+    ///
+    /// This deliberately uses the emitted indices, not coincident positions:
+    /// private base copies are the defect this contract needs to expose.
+    fn connected_components_by_index(mesh: &IndexedMesh) -> usize {
+        fn find(parent: &mut [usize], mut node: usize) -> usize {
+            while parent[node] != node {
+                parent[node] = parent[parent[node]];
+                node = parent[node];
+            }
+            node
+        }
+
+        fn union(parent: &mut [usize], a: usize, b: usize) {
+            let a = find(parent, a);
+            let b = find(parent, b);
+            if a != b {
+                parent[b] = a;
+            }
+        }
+
+        let mut parent: Vec<_> = (0..mesh.triangles.len()).collect();
+        let mut first_triangle = vec![None; mesh.positions.len()];
+        for (face, triangle) in mesh.triangles.iter().enumerate() {
+            for &vertex in triangle {
+                let vertex = vertex as usize;
+                if let Some(first) = first_triangle[vertex] {
+                    union(&mut parent, face, first);
+                } else {
+                    first_triangle[vertex] = Some(face);
+                }
+            }
+        }
+        (0..parent.len())
+            .map(|face| find(&mut parent, face))
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+
+    /// Histogram of undirected-edge incidence after welding coincident positions.
+    ///
+    /// Index-only incidence would call each private cone shell manifold even
+    /// though coincident base seams belong to four triangles geometrically.
+    fn position_welded_edge_incidence(mesh: &IndexedMesh) -> BTreeMap<usize, usize> {
+        let mut vertex_ids = HashMap::new();
+        let mut next_id = 0_u32;
+        let remap: Vec<u32> = mesh
+            .positions
+            .iter()
+            .map(|&position| {
+                *vertex_ids.entry(quantise(position)).or_insert_with(|| {
+                    let id = next_id;
+                    next_id += 1;
+                    id
+                })
+            })
+            .collect();
+
+        let mut edges = BTreeMap::new();
+        for triangle in &mesh.triangles {
+            let triangle = triangle.map(|vertex| remap[vertex as usize]);
+            for (a, b) in [
+                (triangle[0], triangle[1]),
+                (triangle[1], triangle[2]),
+                (triangle[2], triangle[0]),
+            ] {
+                *edges.entry(ordered_edge(a, b)).or_insert(0_usize) += 1;
+            }
+        }
+
+        let mut histogram = BTreeMap::new();
+        for uses in edges.into_values() {
+            *histogram.entry(uses).or_insert(0_usize) += 1;
+        }
+        histogram
+    }
+
+    fn triangle_area(mesh: &IndexedMesh, triangle: [u32; 3]) -> f32 {
+        let [a, b, c] = triangle.map(|index| mesh.positions[index as usize]);
+        length(cross(sub(b, a), sub(c, a))) * 0.5
+    }
+
+    /// Number of intersections for a ray from `origin` along +Z.
+    ///
+    /// This is Möller–Trumbore without the intersection point: an odd count is
+    /// the usual structural inside/outside test for a closed triangle surface.
+    fn positive_z_crossings(mesh: &IndexedMesh, origin: [f32; 3]) -> usize {
+        let direction = [0.0_f32, 0.0, 1.0];
+        let mut crossings = 0;
+        for triangle in &mesh.triangles {
+            let [a, b, c] = triangle.map(|index| mesh.positions[index as usize]);
+            let edge1 = sub(b, a);
+            let edge2 = sub(c, a);
+            let h = cross(direction, edge2);
+            let determinant = dot(edge1, h);
+            if determinant.abs() < 1e-6 {
+                continue;
+            }
+            let inverse = 1.0 / determinant;
+            let s = sub(origin, a);
+            let u = dot(s, h) * inverse;
+            if !(-1e-6..=1.0 + 1e-6).contains(&u) {
+                continue;
+            }
+            let q = cross(s, edge1);
+            let v = dot(direction, q) * inverse;
+            if v < -1e-6 || u + v > 1.0 + 1e-6 {
+                continue;
+            }
+            let distance = dot(edge2, q) * inverse;
+            if distance > 1e-6 {
+                crossings += 1;
+            }
+        }
+        crossings
     }
 
     #[test]
@@ -783,13 +919,11 @@ mod tests {
                 num_steps: 2,
                 amount: 0.88,
                 direction: 0,
+                center: [0.0; 3],
                 local_scale: 0.0,
             },
         );
-        assert_eq!(
-            (extruded.positions.len(), extruded.face_count()),
-            (336, 480)
-        );
+        assert!(extruded.face_count() > selected.face_count());
         let jittered = randomize(
             &extruded,
             RandomizeParams {
@@ -798,10 +932,7 @@ mod tests {
                 random_seed: 1,
             },
         );
-        assert_eq!(
-            (jittered.positions.len(), jittered.face_count()),
-            (336, 480)
-        );
+        assert_eq!(jittered.face_count(), extruded.face_count());
         let sub1 = subdivide(
             &jittered,
             SubdivideParams {
@@ -809,7 +940,187 @@ mod tests {
                 smoothness: 1.0,
             },
         );
-        assert_eq!((sub1.positions.len(), sub1.face_count()), (3936, 7680));
+        assert_eq!(sub1.face_count(), extruded.face_count() * 16);
+        assert!(sub1.positions.len() > jittered.positions.len());
+    }
+
+    /// Spiky's extrusion must consume each selected base triangle and replace it
+    /// with walls through one intermediate ring to an apex, leaving one closed
+    /// genus-0 surface. Retaining a per-face base is incompatible with that
+    /// contract: two base triangles plus two wall triangles would meet on every
+    /// original edge, creating a four-face interior membrane rather than a
+    /// two-manifold solid.
+    #[test]
+    fn spiky_extrusion_preserves_one_manifold_solid_body() {
+        // `Things/Spiky.xml`: Cube1 -> Subdivide2 -> SelectMesh1 -> Extrude2
+        // -> Randomize1 -> Subdivide1. Extrude2's ports are NumSteps 2,
+        // Amount 0.88, Direction 0, Center 0 0 0, LocalScale 0.
+        let params = ExtrudeParams {
+            num_steps: 2,
+            amount: 0.88,
+            direction: 0,
+            center: [0.0; 3],
+            local_scale: 0.0,
+        };
+        let subdivided_cube = subdivide(
+            &cube(),
+            SubdivideParams {
+                num_steps: 1,
+                smoothness: 1.0,
+            },
+        );
+        let selected = select_faces(
+            &subdivided_cube,
+            SelectParams {
+                selection_type: 4,
+                logic: 1,
+                invert: false,
+                output: 1,
+                random_factor: 1.0,
+                random_seed: 1,
+            },
+        );
+        let extruded = extrude(&selected, params);
+
+        let components = connected_components_by_index(&extruded);
+        let incidence = position_welded_edge_incidence(&extruded);
+        let boundary_edges = incidence.get(&1).copied().unwrap_or(0);
+        let non_manifold_edges = incidence
+            .iter()
+            .filter_map(|(&uses, &count)| (uses != 2).then_some(count))
+            .sum::<usize>();
+
+        let jittered = randomize(
+            &extruded,
+            RandomizeParams {
+                amount: 0.1,
+                direction: 0,
+                random_seed: 1,
+            },
+        );
+        let smoothed = subdivide(
+            &jittered,
+            SubdivideParams {
+                num_steps: 2,
+                smoothness: 1.0,
+            },
+        );
+
+        // Referenced, position-welded topology: V=218, F=432 and E=3F/2=648 give χ=2,
+        // the signature of one closed genus-0 surface.
+        let welded_vertex_count = extruded
+            .triangles
+            .iter()
+            .flatten()
+            .map(|&vertex| quantise(extruded.positions[vertex as usize]))
+            .collect::<BTreeSet<_>>()
+            .len();
+        let welded_edge_count = incidence.values().sum::<usize>();
+        let euler_characteristic =
+            welded_vertex_count as i64 - welded_edge_count as i64 + extruded.face_count() as i64;
+
+        // The solid must retain real surface around its body, not just distant
+        // spike tips. Measure the full-chain result that previously lost 69% of
+        // its area when the cloned base shells collapsed.
+        let mut total_area = 0.0_f32;
+        let mut centre_area = 0.0_f32;
+        for &triangle in &smoothed.triangles {
+            let area = triangle_area(&smoothed, triangle);
+            total_area += area;
+            let [a, b, c] = triangle.map(|index| smoothed.positions[index as usize]);
+            let centroid = scale(add(add(a, b), c), 1.0 / 3.0);
+            if length(centroid) < 0.8 {
+                centre_area += area;
+            }
+        }
+        let centre_area_fraction = centre_area / total_area;
+
+        // Structural through-hole check: probe the cube's central Z=0
+        // cross-section well inside its 0.5 inscribed radius. A solid body has an
+        // odd number of +Z surface crossings at every probe; the hollow cage has
+        // an even count. Asymmetric probes avoid exact vertices and shared edges,
+        // and no rasterisation or visual threshold is involved.
+        let centre_samples = [
+            [0.0137, -0.0211, 0.0],
+            [0.1370, 0.0910, 0.0],
+            [-0.1730, 0.1170, 0.0],
+            [0.0710, -0.1810, 0.0],
+            [-0.1310, -0.1490, 0.0],
+        ];
+        let outside_centre_samples: Vec<_> = centre_samples
+            .into_iter()
+            .map(|point| {
+                let crossings = positive_z_crossings(&smoothed, point);
+                (point, crossings)
+            })
+            .filter(|(_, crossings)| crossings % 2 == 0)
+            .collect();
+
+        let mut failures = Vec::new();
+        if (
+            params.num_steps,
+            params.amount,
+            params.direction,
+            params.local_scale,
+        ) != (2, 0.88_f32, 0, 0.0)
+        {
+            failures.push(format!(
+                "Extrude2 parameters: expected (steps=2, amount=0.88, direction=0, local_scale=0), got {:?}",
+                (params.num_steps, params.amount, params.direction, params.local_scale)
+            ));
+        }
+        if components != 1 {
+            failures.push(format!(
+                "connected components: expected 1, got {components}"
+            ));
+        }
+        if non_manifold_edges != 0 {
+            failures.push(format!(
+                "watertight/manifold edges: expected every position-welded undirected edge to have 2 incident triangles, got {non_manifold_edges} bad edges ({boundary_edges} boundary; incidence histogram {incidence:?})"
+            ));
+        }
+        // 26 shared input vertices + 48 × (3 intermediate-ring vertices + 1 apex).
+        if extruded.positions.len() != 26 + 48 * 4 {
+            failures.push(format!(
+                "extruded vertex count: expected {}, got {}",
+                26 + 48 * 4,
+                extruded.positions.len()
+            ));
+        }
+        // 48 × (3 wall quads × 2 triangles + 3 apex-fan triangles).
+        if extruded.face_count() != 48 * 9 {
+            failures.push(format!(
+                "extruded face count: expected {}, got {}",
+                48 * 9,
+                extruded.face_count()
+            ));
+        }
+        if euler_characteristic != 2 {
+            failures.push(format!(
+                "Euler characteristic: expected χ=2 for one closed genus-0 surface, got χ={euler_characteristic} (V={welded_vertex_count}, E={welded_edge_count}, F={})",
+                extruded.face_count()
+            ));
+        }
+        // Measured centre coverage is 61.55% (9.489177 / 15.416608). Keep a
+        // twelve-point margin while still rejecting the previous 69% collapse,
+        // which left only 31% of the surface near the body.
+        if !centre_area_fraction.is_finite() || centre_area_fraction < 0.50 {
+            failures.push(format!(
+                "centre surface area after Subdivide1: expected at least 50.0% of {total_area:.6}, got {centre_area:.6} ({:.1}%)",
+                centre_area_fraction * 100.0
+            ));
+        }
+        if !outside_centre_samples.is_empty() {
+            failures.push(format!(
+                "solid centre: expected odd +Z crossing counts on the central cross-section, outside probes {outside_centre_samples:?}"
+            ));
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Spiky extrusion topology invariants failed:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -826,6 +1137,7 @@ mod tests {
                 num_steps: 2,
                 amount: 0.88,
                 direction: 0,
+                center: [0.0; 3],
                 local_scale: 0.0,
             },
         );
@@ -851,6 +1163,7 @@ mod tests {
                 num_steps: 2,
                 amount: 0.5,
                 direction: 0,
+                center: [0.0; 3],
                 local_scale: 0.0,
             },
         );
@@ -925,6 +1238,8 @@ mod tests {
             })
             .count();
         assert!(tip_triangles > 0);
-        assert_eq!(mesh.face_count(), 48 * 10 * 4 * 4);
+        // Two subdivision passes quadruple the triangle count, so the 48
+        // extruded faces (nine spike triangles each) end at 48 * 9 * 16.
+        assert_eq!(mesh.face_count(), 48 * 9 * 16);
     }
 }

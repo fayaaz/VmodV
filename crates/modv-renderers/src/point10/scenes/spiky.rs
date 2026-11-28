@@ -4,7 +4,7 @@
 //! CC BY-NC-SA 4.0. A subdivided, extruded, randomized cube becomes a ball of
 //! spikes, lit with Plane9's directional/roughness model and the Stormy Days
 //! cubemap, captured to a Format 5 (`Rgba16Float`) target, bloomed and
-//! composited over the layers below.
+//! presented as a finished opaque frame, as in the vendor preset.
 //!
 //! # Scene graph
 //!
@@ -56,7 +56,7 @@
 //! | --- | --- |
 //! | `RenderToTexture` + `MeshObject` | [`wgpu`] ball pass into an `Rgba16Float` target |
 //! | `Bloom1` feeding `Shader2.Texture1` | a standalone [`Plane9BloomPass`] over the capture |
-//! | `PreviousLayer1.Color` | transparent black; the compositor's alpha blend supplies the layer below |
+//! | `PreviousLayer1.Color` | transparent-black placeholder; the final pass writes alpha 1.0 |
 //! | `PerspectiveCamera` | [`cube_mesh::perspective`]/[`cube_mesh::look_at`] |
 //!
 //! # Deviations
@@ -368,8 +368,9 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   );
   let c1 = textureSampleLevel(g_texture1, g_sampler, t, 0.0);
   let c2 = textureSampleLevel(g_texture2, g_sampler, t, 0.0);
-  // `PreviousLayer1.Color` has no texture here: transparent black, and the
-  // compositor's alpha blend supplies the layer below.
+  // `PreviousLayer1.Color` has no texture here: transparent black, so the
+  // in-shader background term is zero. The vendor's final pass writes alpha
+  // 1.0 and ours follows it: this is a finished, opaque full-frame image.
   let bg = vec4<f32>(0.0);
   let linear = vec4<f32>(mix(bg.rgb, p9_tonemap_aces(c2.rgb * 0.5), c2.a) + p9_tonemap_aces(c1.rgb * 0.75), 1.0);
   // `WebGLRenderer` writes to an sRGB canvas, so the shader-side encode is
@@ -1086,6 +1087,7 @@ pub fn build_spiky_mesh() -> IndexedMesh {
             num_steps: 2,
             amount: 0.88,
             direction: 0,
+            center: [0.0; 3],
             local_scale: 0.0,
         },
     );
