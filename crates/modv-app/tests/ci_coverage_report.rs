@@ -268,6 +268,21 @@ fn makefile_merges_lcov_profiles_and_builds_html() {
 }
 
 #[test]
+fn every_coverage_recipe_creates_its_output_directory() {
+    // `cargo llvm-cov report --output-path` fails with ENOENT on a fresh
+    // runner if `coverage/` has not been created first. Local runs hid this
+    // because the directory already existed from an earlier report.
+    let makefile = read_text(&repo_root().join("Makefile"));
+    for target in ["coverage-report", "coverage-lcov", "coverage-merge"] {
+        let recipe = makefile_recipe(&makefile, target);
+        assert!(
+            recipe.contains("mkdir -p") && recipe.contains("coverage"),
+            "`{target}` must create its output directory; got:\n{recipe}"
+        );
+    }
+}
+
+#[test]
 fn dockerfile_provides_lcov_tools_for_the_merge() {
     let dockerfile = read_text(&repo_root().join("Dockerfile"));
     assert!(

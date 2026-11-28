@@ -465,6 +465,7 @@ test-e2e: test-e2e-vmodv
 # plus LCOV/JSON. Run in the same job/target dir as those suites so the object
 # files still carry the coverage mappings that match the profiles.
 coverage-report: docker-cargo-volume
+	@mkdir -p "$(CURDIR)/coverage"
 	@find "$(CURDIR)/crates" -maxdepth 1 -name '*.profraw' -delete
 	$(call run-cargo,llvm-cov report --html --output-dir /app/coverage) > /dev/null
 	$(call run-cargo,llvm-cov report --lcov --output-path /app/coverage/lcov.info) > /dev/null
@@ -474,6 +475,7 @@ coverage-report: docker-cargo-volume
 # profiles in place. Each produces just this LCOV profile; the `coverage` job
 # adds them together afterwards.
 coverage-lcov: docker-cargo-volume
+	@mkdir -p "$(CURDIR)/coverage"
 	@find "$(CURDIR)/crates" -maxdepth 1 -name '*.profraw' -delete
 	$(call run-cargo,llvm-cov report --lcov --output-path /app/coverage/lcov.info) > /dev/null
 
@@ -481,6 +483,7 @@ coverage-lcov: docker-cargo-volume
 # coverage/profiles/{validate,e2e}/ on the runner. lcov sums the per-line
 # counts; genhtml renders the combined tracefile as one browsable report.
 coverage-merge: docker-rust
+	@mkdir -p "$(CURDIR)/coverage"
 	$(DOCKER) run --rm --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \
 		-v "$(CURDIR)":/app -w /app \
 		"$(RUST_IMAGE)" \
