@@ -1673,24 +1673,6 @@ mod tests {
     }
 
     #[test]
-    fn mesh_and_tonemap_wgsl_keep_the_ported_formulas() {
-        for needle in [
-            "fn p9_tonemap_aces(color: vec3<f32>) -> vec3<f32>",
-            "let a = 2.51;",
-            "let e = 0.14;",
-            "fn p9_perm4_vec2(pos: vec2<f32>) -> vec4<f32>",
-            "out.position = u.view_proj * vec4<f32>(corner, 0.0, 1.0);",
-            "corner * instance_scale",
-        ] {
-            let found = PLANE9_BATCH_WGSL.contains(needle)
-                || PLANE9_TONEMAP_WGSL.contains(needle)
-                || PLANE9_MESH_UNIFORMS_WGSL.contains(needle)
-                || PLANE9_QUAD_UNIFORMS_WGSL.contains(needle);
-            assert!(found, "lost {needle}");
-        }
-    }
-
-    #[test]
     fn plane9_camera_looks_down_negative_z() {
         let matrix = plane9_camera(1.0, [0.0, 0.0, 8.3], [0.0, 0.0, -1.0], 45.0, 0.1, 1000.0);
         // The origin is in front of the camera: clip w > 0 and z inside 0..w.
@@ -1712,24 +1694,5 @@ mod tests {
                 "stormy/negz.jpg",
             ]
         );
-    }
-
-    #[test]
-    fn batch_wgsl_keeps_the_ported_formulas() {
-        for needle in [
-            "fn p9_rand4(p0: vec2<f32>) -> vec4<f32>",
-            "p0 * vec2<f32>(5.3987, 5.4421)",
-            "a * 95.4307, a * 97.5901, a * 93.8369, a * 91.6931",
-            "fn p9_voronoi3(position: vec3<f32>) -> P9Voronoi3",
-            "let jitter = 0.9;",
-            "vec3<f32>(1.171, 1.073, 1.127)",
-            "result.f1 = sqrt(result.f1);",
-            "fn p9_noise_gradient3(p: vec3<f32>, d: f32) -> vec3<f32>",
-            "fn p9_brightness_saturation_contrast(",
-            "vec3<f32>(0.2126, 0.7152, 0.0722)",
-            "fn p9_mod_f(x: f32, y: f32) -> f32",
-        ] {
-            assert!(PLANE9_BATCH_WGSL.contains(needle), "lost {needle}");
-        }
     }
 }

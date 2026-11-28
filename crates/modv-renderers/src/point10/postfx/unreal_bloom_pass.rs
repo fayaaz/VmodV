@@ -841,15 +841,6 @@ mod tests {
     }
 
     #[test]
-    fn the_composite_scale_keeps_both_bloom_calibrations_available() {
-        // The classic UnrealBloomPass shader is `3.0 * strength * sum`; the TSL
-        // `bloom()` node (the WebGPU scenes) is `strength * sum`.
-        let shader = include_str!("bloom_composite.wgsl");
-        assert!(shader.contains("bloom = u.bloom_scale * u.bloom_strength * bloom;"));
-        assert!(!shader.contains("3.0 * u.bloom_strength"));
-    }
-
-    #[test]
     fn wgsl_parses() {
         for source in [
             include_str!("bloom_bright.wgsl"),

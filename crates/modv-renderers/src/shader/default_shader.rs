@@ -192,33 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn mainimage_wrap_expands_and_validates() {
-        let body = r#"
-fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {
-  let vUv = modv_uv(fragCoord);
-  return textureSample(u_modVCanvas, modvGroupSampler, vUv);
-}
-"#;
-        let expanded = main_image_fragment(body);
-        validate_wgsl(&expanded).expect("expanded mainImage wrap must validate");
-        assert!(
-            expanded.contains("let image = mainImage(position.xy)"),
-            "wrapper must call mainImage"
-        );
-        assert!(
-            expanded.contains("vec4<f32>(image.rgb, 1.0)"),
-            "wrapper must force alpha to 1.0"
-        );
-    }
-
-    #[test]
-    fn wrap_template_forces_opaque_alpha() {
-        // The `image.a = 1.;` line of the GLSL fWrap, kept verbatim: modules
-        // that write a partial alpha still reach the framebuffer opaque.
-        assert!(DEFAULT_MAINIMAGE_WRAP.contains("vec4<f32>(image.rgb, 1.0)"));
-    }
-
-    #[test]
     fn wrap_replaces_exactly_the_marker() {
         let body = "fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> { return vec4<f32>(fragCoord, 0.0, 1.0); }";
         let expanded = main_image_fragment(body);

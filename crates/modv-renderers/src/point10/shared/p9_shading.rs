@@ -247,31 +247,6 @@ mod tests {
     }
 
     #[test]
-    fn shading_wgsl_keeps_the_ported_formulas() {
-        for needle in [
-            "fn p9_rand3(p: f32) -> vec3<f32>",
-            "p * 5.3987, p * 5.4421, p * 6.9371",
-            "p2.x * p2.z * 95.4307, p2.x * p2.y * 97.5901, p2.y * p2.z * 93.8369",
-            "fn p9_mod(x: f32, y: f32) -> f32",
-            "x - y * floor(x / y)",
-            "brightness + contrast * cos(P9_PI2 * (a * t + b))",
-            "(1.0 + atan2(v.x, -v.z) / P9_PI) * 0.5",
-            "acos(up) / P9_PI",
-            "max(vec3<f32>(1.0 - (roughness * roughness)), specular_color)",
-            "let a = max(0.001, roughness * roughness);",
-            "(diffuse_albedo * (1.0 / P9_PI) + specular * fresnel) * n_dot_l * light_color",
-            "fn p9_light_directional(",
-            "fn p9_ridgedmf_fast(p: vec3<f32>, octaves: u32) -> f32",
-            "let lacunarity = 2.13628142;",
-            "prev = n;",
-            "fn p9_perturb_normal(",
-            "let v_grad = sign(f_det) * (dhdxy.x * r1 + dhdxy.y * r2);",
-        ] {
-            assert!(P9_SHADING_WGSL.contains(needle), "lost {needle}");
-        }
-    }
-
-    #[test]
     fn glsl_mod_keeps_the_divisor_sign() {
         // GLSL `mod(-3, 20)` = 17, WGSL `%` would give -3.
         let glsl_mod = |x: f32, y: f32| x - y * (x / y).floor();

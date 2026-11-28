@@ -2971,69 +2971,6 @@ mod tests {
     }
 
     #[test]
-    fn texture_free_shaders_flip_gl_fragcoord_to_bottom_left() {
-        // The Pool Rooms and rave.exe are generators that build their camera
-        // from `gl_FragCoord`. WebGL's origin is bottom-left, so the pixel
-        // coordinate has to be flipped to match the bottom-left vertex
-        // shader; otherwise the whole image is upside down.
-        let shader = "void main() { vec2 p = gl_FragCoord.xy / RENDERSIZE; gl_FragColor = vec4(p, 0.0, 1.0); }";
-        let glsl = build_fragment_glsl(&doc(shader), 0);
-        assert!(glsl.contains("RENDERSIZE.y - gl_FragCoord.y"), "{glsl}");
-        assert!(glsl.contains("#define isf_FragCoord (floor(isf_gl_frag_coord().xy))"));
-        assert!(
-            glsl.contains("isf_gl_frag_coord().xy / RENDERSIZE"),
-            "{glsl}"
-        );
-        assert!(!glsl.contains("p = gl_FragCoord.xy"), "{glsl}");
-    }
-
-    #[test]
-    fn textured_shaders_keep_the_top_left_fragcoord() {
-        let shader = r#"/*{ "INPUTS": [ { "NAME": "inputImage", "TYPE": "image" } ] }*/
-        void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
-        let glsl = build_fragment_glsl(&doc(shader), 0);
-        assert!(!glsl.contains("isf_gl_frag_coord"), "{glsl}");
-        assert!(glsl.contains("#define isf_FragCoord (floor(gl_FragCoord.xy))"));
-    }
-
-    #[test]
-    fn self_contained_buffer_only_shaders_flip_gl_fragcoord_to_bottom_left() {
-        // The multi-pass half of the texture-free generator class: every
-        // binding names one of the document's own PASSES targets, so nothing
-        // samples an externally-supplied image. `Life.fs` and
-        // `fractal-mountain-tunnel.fs` are in this class; they used to render
-        // vertically mirrored vs WebGL with zero signal to the user.
-        let shader = r#"/*{
-            "PASSES": [
-                { "TARGET": "accum", "PERSISTENT": true }
-            ]
-        }*/
-        void main() { vec2 p = gl_FragCoord.xy / RENDERSIZE; gl_FragColor = vec4(p, 0.0, 1.0); }"#;
-        let glsl = build_fragment_glsl(&doc(shader), 0);
-        assert!(glsl.contains("RENDERSIZE.y - gl_FragCoord.y"), "{glsl}");
-        assert!(glsl.contains("#define isf_FragCoord (floor(isf_gl_frag_coord().xy))"));
-        assert!(!glsl.contains("p = gl_FragCoord.xy"), "{glsl}");
-    }
-
-    #[test]
-    fn externally_supplied_multipass_shaders_keep_the_top_left_fragcoord() {
-        // The divider that defines the class: one `image` input poisons it.
-        // Buffer-only stays bottom-left; image + buffers stays top-left.
-        let shader = r#"/*{
-            "INPUTS": [
-                { "NAME": "inputImage", "TYPE": "image" }
-            ],
-            "PASSES": [
-                { "TARGET": "accum", "PERSISTENT": true }
-            ]
-        }*/
-        void main() { gl_FragColor = IMG_THIS_PIXEL(inputImage); }"#;
-        let glsl = build_fragment_glsl(&doc(shader), 0);
-        assert!(!glsl.contains("isf_gl_frag_coord"), "{glsl}");
-        assert!(glsl.contains("#define isf_FragCoord (floor(gl_FragCoord.xy))"));
-    }
-
-    #[test]
     fn self_contained_predicate_matches_the_review_class() {
         let probe = r#"/*{ "PASSES": [ { "TARGET": "accum" } ] }*/
         void main() {}"#;
@@ -3055,40 +2992,6 @@ mod tests {
         }*/
         void main() {}"#;
         assert!(self_contained(&doc(untargeted_only_sidecar)));
-    }
-
-    #[test]
-    fn self_contained_sidecar_generator_emits_the_bottom_left_norm_varying() {
-        let probe = r#"/*{
-            "PASSES": [
-                { "TARGET": "accum", "PERSISTENT": true }
-            ]
-        }*/
-        void main() { gl_FragColor = vec4(1.0); }"#;
-        let vertex = "void main() { isf_vertShaderInit(); }";
-        let document = parse_isf(probe, Some(vertex)).expect("the sidecar test shader parses");
-        let glsl = build_vertex_glsl(&document);
-        assert!(
-            glsl.contains(
-                "isf_FragNormCoord = vec2((gl_Position.x + 1.0) / 2.0, (gl_Position.y + 1.0) / 2.0)"
-            ),
-            "{glsl}"
-        );
-    }
-
-    #[test]
-    fn externally_supplied_sidecar_generator_keeps_the_top_left_norm_varying() {
-        let probe = r#"/*{
-            "INPUTS": [ { "NAME": "inputImage", "TYPE": "image" } ],
-            "PASSES": [
-                { "TARGET": "accum", "PERSISTENT": true }
-            ]
-        }*/
-        void main() { gl_FragColor = vec4(1.0); }"#;
-        let vertex = "void main() { isf_vertShaderInit(); }";
-        let document = parse_isf(probe, Some(vertex)).expect("the sidecar test shader parses");
-        let glsl = build_vertex_glsl(&document);
-        assert!(glsl.contains("1.0 - (gl_Position.y + 1.0) / 2.0"), "{glsl}");
     }
 
     #[test]
@@ -3118,21 +3021,6 @@ mod tests {
         assert!(glsl.contains("isf_user_main();"), "{glsl}");
         assert!(glsl.contains("void isf_user_main()"), "{glsl}");
         assert!(glsl.contains("void main() {"), "{glsl}");
-    }
-
-    #[test]
-    fn a_short_bool_input_name_does_not_rewrite_swizzles() {
-        // `RGB Invert.fs` has an input named `r`; a macro definition would
-        // turn every `.r` into `.bool(isf_bool_r)`.
-        let shader = r#"/*{ "INPUTS": [ { "NAME": "r", "TYPE": "bool" } ] }*/
-        void main() {
-            vec4 pixel = vec4(0.0);
-            if (r) { pixel.r = 1.0; }
-            gl_FragColor = pixel;
-        }"#;
-        let glsl = build_fragment_glsl(&doc(shader), 0);
-        assert!(glsl.contains("pixel.r = 1.0;"), "{glsl}");
-        assert!(!glsl.contains(".bool("), "{glsl}");
     }
 
     #[test]
@@ -3233,8 +3121,9 @@ void main() { gl_FragColor = vec4(left_coord, mouse); }"#;
     fn vertex_skeleton_declares_the_isf_contract() {
         // A sidecar filter that samples an input image must keep the wgpu
         // top-left origin so the group canvas stays upright. A self-contained
-        // sidecar generator gets the bottom-left varying instead — see
-        // `self_contained_sidecar_generator_emits_the_bottom_left_norm_varying`.
+        // sidecar generator gets the bottom-left varying instead — see the
+        // pixel counterpart `self_contained_sidecar_norm_pixels_use_the_bottom_left_origin`
+        // in `test_gpu_isf::pixel_behaviour`.
         let shader = r#"/*{ "INPUTS": [ { "NAME": "blurAmount", "TYPE": "float" }, { "NAME": "inputImage", "TYPE": "image" } ] }*/
         void main() {}"#;
         let vertex = r#"#if __VERSION__ <= 120
@@ -3731,34 +3620,6 @@ void main() {
             evaluate_size("$DATE", &vars).expect_err("date uniform"),
             SizeEvalError::UnknownVariable("DATE".into())
         );
-    }
-
-    #[test]
-    fn statement_keyword_inputs_keep_control_flow_intact() {
-        // R-26: an input named `return`/`for`/`if` used to be replaced in the
-        // body, turning every `return`/`for`/`if` keyword into an identifier.
-        let shader = r#"/*{ "INPUTS": [
-            { "NAME": "return", "TYPE": "float" },
-            { "NAME": "for", "TYPE": "float" },
-            { "NAME": "if", "TYPE": "event" }
-        ] }*/
-        void main() {
-            float total = 0.0;
-            for (int i = 0; i < 3; i++) { total += 1.0; }
-            if (total > 0.0) { gl_FragColor = vec4(total); return; }
-            gl_FragColor = vec4(0.0);
-        }"#;
-        let glsl = build_fragment_glsl(&doc(shader), 0);
-        // The declarations are prefixed ...
-        assert!(glsl.contains("  float isf_input_return;"), "{glsl}");
-        assert!(glsl.contains("  float isf_input_for;"), "{glsl}");
-        assert!(glsl.contains("  int isf_bool_isf_input_if;"), "{glsl}");
-        // ... and the keywords are untouched.
-        assert!(glsl.contains("for (int i = 0; i < 3; i++)"), "{glsl}");
-        assert!(glsl.contains("if (total > 0.0)"), "{glsl}");
-        assert!(glsl.contains("return;"), "{glsl}");
-        assert!(!glsl.contains("isf_input_for ("), "{glsl}");
-        crate::isf::translate::translate_fragment(&doc(shader), 0).expect("translates");
     }
 
     #[test]

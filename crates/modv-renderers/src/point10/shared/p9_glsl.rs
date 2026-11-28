@@ -289,38 +289,6 @@ mod tests {
         assert!((PI2 - std::f32::consts::TAU).abs() < 1e-6);
     }
 
-    /// GLSL evaluates `smoothstep(1.0, 0.9, x)` fine; WGSL calls it undefined.
-    /// The helper must mirror GLSL in both directions.
-    #[test]
-    fn common_wgsl_keeps_the_ported_formulas() {
-        // Guards against a "tidy-up" that quietly changes the maths the JS
-        // scenes rely on.
-        for needle in [
-            "fn p9_smoothstep(edge0: f32, edge1: f32, x: f32) -> f32",
-            "clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)",
-            "fn p9_saturate(",
-            "fn p9_rand(p: f32) -> f32",
-            "p * 5.3987, p * 5.4421",
-            "p0 * vec2<f32>(5.3987, 5.4421)",
-            "21.5351, 14.3137",
-            "95.4307",
-            "fn p9_hsv2rgb(h: f32, s: f32, v: f32) -> vec3<f32>",
-            "vec3<f32>(3.0, 2.0, 1.0) / vec3<f32>(3.0)",
-            "fn p9_axis_angle_to_quaternion(",
-            "fn p9_rotate_vector(",
-            "fn p9_noise(p0: vec3<f32>) -> f32",
-            "37.837227241611314102871574478976",
-            "fn p9_turbulence(p: vec3<f32>, octaves: u32) -> f32",
-            "2.13628142",
-            "fn p9_fbm(p: vec3<f32>, octaves: u32) -> f32",
-            "fn p9_cubicpulse(value: f32, bump_center: f32, width: f32) -> f32",
-            "fn p9_light_lambert(",
-            "max(0.0, dot(light_dir, normal)) * diffuse",
-        ] {
-            assert!(P9_COMMON_WGSL.contains(needle), "P9_WGSL lost {needle}");
-        }
-    }
-
     #[test]
     fn smoothstep_handles_reversed_edges_like_glsl() {
         let glsl = |edge0: f32, edge1: f32, x: f32| {

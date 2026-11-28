@@ -467,8 +467,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         b: [f32; 4],
     }
 
-    /// `P9_COMMON_WGSL`'s text is pinned by `common_wgsl_keeps_the_ported_formulas`.
-    /// WGSL's built-in `smoothstep` is undefined when `edge0 >= edge1`, which is
+    /// Execute the shipped `p9_smoothstep` from `P9_COMMON_WGSL`. WGSL's
+    /// built-in `smoothstep` is undefined when `edge0 >= edge1`, which is
     /// exactly how the ported Plane9 scenes call it; the shipped helper must
     /// still produce GLSL's values in that order.
     #[test]
@@ -573,9 +573,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
-    /// `PLANE9_TONEMAP_WGSL` is text-pinned by
-    /// `mesh_and_tonemap_wgsl_keep_the_ported_formulas`. Execute the Narkowicz
-    /// ACES fit: clamped to [0, 1], monotone in luminance, channel order kept.
+    /// Execute the Narkowicz ACES fit from the shipped `PLANE9_TONEMAP_WGSL`:
+    /// clamped to [0, 1], monotone in luminance, channel order kept.
     #[test]
     fn compute_shim_executes_p9_tonemap_aces_on_gpu() {
         if crate::test_gpu::gpu().is_none() {
@@ -658,8 +657,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         );
     }
 
-    /// `p9_hsv2rgb` is text-pinned in `common_wgsl_keeps_the_ported_formulas`.
-    /// Check the primaries so a swapped/garbled ramp cannot pass on text alone.
+    /// Execute the shipped `p9_hsv2rgb`. Check the primaries so a
+    /// swapped/garbled ramp cannot pass on text alone.
     #[test]
     fn compute_shim_executes_p9_hsv2rgb_primaries_on_gpu() {
         if crate::test_gpu::gpu().is_none() {
@@ -709,9 +708,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
-    /// `p9_brightness_saturation_contrast` is text-pinned in
-    /// `batch_wgsl_keeps_the_ported_formulas` for its `0.2126/0.7152/0.0722`
-    /// luma weights. With saturation 0 the output is exactly that luma, so the
+    /// Execute the shipped `p9_brightness_saturation_contrast` for its
+    /// `0.2126/0.7152/0.0722` luma weights. With saturation 0 the output is
+    /// exactly that luma, so the
     /// three primary colours reveal each weight directly.
     #[test]
     fn compute_shim_executes_p9_brightness_saturation_contrast_luma_on_gpu() {
@@ -781,10 +780,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
-    /// The noise family (`p9_fbm`, `p9_noise`, `p9_turbulence` from the common
-    /// const and `p9_ridgedmf_fast` from the shading const) is text-pinned but
-    /// never executed. Check bounded, finite, repeatable output; one octave of
-    /// FBM is exactly one `p9_noise` sample, which also proves the two shipped
+    /// Execute the noise family (`p9_fbm`, `p9_noise`, `p9_turbulence` from the
+    /// common const and `p9_ridgedmf_fast` from the shading const). Check
+    /// bounded, finite, repeatable output; one octave of FBM is exactly one
+    /// `p9_noise` sample, which also proves the two shipped
     /// functions really ran rather than a Rust stand-in.
     #[test]
     fn compute_shim_executes_p9_noise_family_range_and_determinism_on_gpu() {

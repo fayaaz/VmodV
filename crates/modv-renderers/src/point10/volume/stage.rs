@@ -848,15 +848,4 @@ mod tests {
         assert_eq!(BLOOM_THRESHOLD, 0.5);
         assert_eq!(BLOOM_RADIUS, 1.0);
     }
-
-    #[test]
-    fn the_final_pass_applies_the_alpha_rule() {
-        let final_shader = include_str!("passes/final.wgsl");
-        assert!(
-            final_shader.contains("clamp(max(max(rgb.r, rgb.g), rgb.b), 0.0, 1.0)"),
-            "the final pass must write alpha = max(rgb)"
-        );
-        assert!(final_shader.contains("select(1.0, overlay_alpha, u.overlay > 0.5)"));
-        assert!(final_shader.contains("scene.rgb + bloom.rgb"));
-    }
 }

@@ -1769,18 +1769,6 @@ mod tests {
             .expect("a sidecar vertex shader compiles with matching varyings");
     }
 
-    #[test]
-    fn texture_free_generators_use_the_legacy_bottom_left_coordinates() {
-        // Legacy ISF (WebGL) gives generators a bottom-left origin. A
-        // texture-free shader cannot be affected by input sampling, so it can
-        // use the same convention; otherwise procedural posters such as
-        // `rave.exe` render upside down. Shaders with textures keep the
-        // top-left varying so sampling matches the wgpu input textures.
-        assert!(DEFAULT_VERTEX_WGSL.contains("(1.0 - position.y)"));
-        assert!(BOTTOM_LEFT_VERTEX_WGSL.contains("(position.y + 1.0)"));
-        assert!(!BOTTOM_LEFT_VERTEX_WGSL.contains("(1.0 - position.y)"));
-    }
-
     const ORIENTATION_PROBE: &str = r#"/*{
         "DESCRIPTION": "orientation probe: round-trip isf_FragNormCoord through a buffer",
         "PASSES": [

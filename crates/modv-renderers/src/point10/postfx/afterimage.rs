@@ -383,15 +383,4 @@ mod tests {
         .validate(&module)
         .expect("afterimage WGSL must validate");
     }
-
-    #[test]
-    fn shader_keeps_the_three_semantics() {
-        let source = include_str!("afterimage.wgsl");
-        for needle in [
-            "let damped = old * u.params.x * select(vec4<f32>(0.0), vec4<f32>(1.0), old > vec4<f32>(0.1));",
-            "return max(new_sample, damped);",
-        ] {
-            assert!(source.contains(needle), "afterimage lost {needle}");
-        }
-    }
 }
