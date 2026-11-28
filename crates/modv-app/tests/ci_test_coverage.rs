@@ -43,6 +43,31 @@ fn active_lines(contents: &str, recipes_only: bool) -> impl Iterator<Item = &str
         .map(|line| line.split('#').next().unwrap_or_default())
 }
 
+/// The tab-indented recipe body of a Makefile rule, including the target name
+/// itself only as the anchor. Target-specific variable assignments such as
+/// `test-e2e-vmodv: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)` also start with the
+/// target name but are not the rule; skipping them keeps the guard on the real
+/// recipe instead of an empty body.
+fn recipe_for(makefile: &str, target: &str) -> String {
+    let rule = format!("{target}:");
+    let lines: Vec<&str> = makefile.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.starts_with(&rule) && !line.contains("+="))
+        .unwrap_or_else(|| panic!("Makefile has no `{target}` rule"));
+    let recipe = lines[start + 1..]
+        .iter()
+        .take_while(|line| line.starts_with('\t'))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !recipe.is_empty(),
+        "Makefile's `{target}` rule has no recipe body"
+    );
+    recipe
+}
+
 /// Every `--test <target>` selected on an active line.
 fn selected_targets(contents: &str, recipes_only: bool) -> BTreeSet<String> {
     active_lines(contents, recipes_only)
@@ -149,13 +174,28 @@ fn job_block(contents: &str, job: &str) -> String {
 fn gpu_shader_tests_run_before_e2e_in_the_same_job() {
     let root = repo_root();
     let makefile = read_text(&root.join("Makefile"));
-    assert!(
-        active_lines(&makefile, true).any(|line| {
+    let shader_recipe = active_lines(&makefile, true)
+        .find(|line| {
             line.contains("run-cargo,test")
                 && line.contains("-p modv-renderers")
                 && line.contains("test_gpu")
-        }),
-        "Makefile must expose a `test-shader-gpu` recipe that runs the GPU shader tests"
+        })
+        .unwrap_or_else(|| {
+            panic!("Makefile must expose a `test-shader-gpu` recipe that runs the GPU shader tests")
+        });
+    assert!(
+        shader_recipe.contains("--test-threads=1"),
+        "Makefile's `test-shader-gpu` recipe must include `--test-threads=1`: GPU shader \
+         tests share one lavapipe device and parallel execution is a known flake source"
+    );
+
+    // `test-e2e-vmodv` owns the cargo invocation rather than delegating, so pin
+    // its recipe directly: the suites share a virtual display and lavapipe GPU.
+    let e2e_recipe = recipe_for(&makefile, "test-e2e-vmodv");
+    assert!(
+        active_lines(&e2e_recipe, true).any(|line| line.contains("--test-threads=1")),
+        "Makefile's `test-e2e-vmodv` recipe must include `--test-threads=1`: e2e tests \
+         share one lavapipe device and virtual displays, so serial execution is required"
     );
 
     for (name, file, job) in [
@@ -176,12 +216,19 @@ fn gpu_shader_tests_run_before_e2e_in_the_same_job() {
             shader < e2e,
             "{name}'s `{job}` job runs the GPU shader tests after e2e; they must gate it"
         );
+        let workspace_sweep = active_lines(&workflow, false)
+            .find(|line| line.contains("engine-test ARGS=\"--workspace"))
+            .unwrap_or_else(|| panic!("{name} must run the workspace tests with `--workspace`"));
         assert!(
-            active_lines(&workflow, false).any(|line| {
-                line.contains("engine-test ARGS=\"--workspace") && line.contains("--skip test_gpu")
-            }),
+            workspace_sweep.contains("--skip test_gpu"),
             "{name}'s workspace test step must `--skip test_gpu` so the dedicated \
              shader step does not run the same suite twice"
+        );
+        assert!(
+            workspace_sweep.contains("--test-threads=1"),
+            "{name}'s workspace test step must include `--test-threads=1` alongside \
+             `--workspace` and `--skip test_gpu`: GPU suites share one lavapipe \
+             device and serial execution is required"
         );
     }
 }
