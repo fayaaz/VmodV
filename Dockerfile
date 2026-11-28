@@ -82,7 +82,8 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path \
-    && rustup component add rustfmt clippy
+    && rustup component add rustfmt clippy llvm-tools-preview \
+    && cargo install cargo-llvm-cov --locked --version 0.6.14
 
 # WebAssembly toolchain for the GitHub Pages module catalogue's live
 # previews. Separate from `rust` so the normal app build/test image stays

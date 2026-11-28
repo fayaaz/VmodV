@@ -67,6 +67,15 @@ CARGO_VOLUME ?= modv-cargo
 HOST_UID ?= $(shell id -u)
 HOST_GID ?= $(shell id -g)
 DOCKER_RUN_ARGS ?=
+# COVERAGE=1 instruments the canonical test suites with cargo-llvm-cov; the
+# resulting profiles are merged by `make coverage-report` at the end of the
+# job. Off locally so ordinary `make engine-test` stays fast.
+COVERAGE ?= 0
+ifeq ($(COVERAGE),1)
+TEST_WRAPPER := llvm-cov --no-report
+else
+TEST_WRAPPER :=
+endif
 XAUTHORITY ?= $(HOME)/.Xauthority
 PULSE_SOCKET ?= $(XDG_RUNTIME_DIR)/pulse/native
 WAYLAND_DISPLAY ?= wayland-0
@@ -114,7 +123,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
+.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv coverage-report engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -295,6 +304,13 @@ define run-cargo
 		cargo $(1)
 endef
 
+# Same container, but routes `test` through the coverage wrapper when
+# COVERAGE=1. Kept separate from run-cargo so lint/build/run are never
+# instrumented.
+define run-cargo-test
+	$(call run-cargo,$(TEST_WRAPPER) $(1))
+endef
+
 # VmodV shell. Release by default so frame pacing matches the packaged app;
 # use `vmodv-debug` for iteration.
 dev: vmodv
@@ -315,13 +331,13 @@ engine-run: docker-cargo-volume
 	$(call run-cargo,run --release -p modv-app -- $(ARGS))
 
 engine-test: docker-cargo-volume
-	$(call run-cargo,test $(ARGS))
+	$(call run-cargo-test,test $(ARGS))
 
 # GPU-executed shader unit tests (compute shim, built-in registry, ISF corpus).
 # CI runs this step immediately before the e2e suites in the same job, and
 # skips these tests in the workspace sweep so they are not run twice.
 test-shader-gpu: docker-cargo-volume
-	$(call run-cargo,test -p modv-renderers --lib test_gpu -- --test-threads=1)
+	$(call run-cargo-test,test -p modv-renderers --lib test_gpu -- --test-threads=1)
 
 engine-lint: docker-cargo-volume
 	$(call run-cargo,clippy --all-targets -- -D warnings)
@@ -402,10 +418,11 @@ format: docker-cargo-volume
 # release validation both call this recipe, so adding a guard test only needs
 # one edit (ci_test_coverage.rs fails if a target is left out).
 test-static-guards: docker-cargo-volume
-	$(call run-cargo,test -p modv-app \
+	$(call run-cargo-test,test -p modv-app \
 		--test appimage_arm64 \
 		--test appimage_bundle \
 		--test branding \
+		--test ci_coverage_report \
 		--test ci_docker_cache \
 		--test ci_test_coverage \
 		--test deb_package \
@@ -429,7 +446,7 @@ test-static-guards: docker-cargo-volume
 # the software GPU is shared.
 test-e2e-vmodv: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
 test-e2e-vmodv: docker-cargo-volume
-	$(call run-cargo,test -p modv-app \
+	$(call run-cargo-test,test -p modv-app \
 		--test e2e_harness \
 		--test e2e_process \
 		--test e2e_scenes \
@@ -443,6 +460,15 @@ test-e2e-vmodv: docker-cargo-volume
 		-- --test-threads=1)
 
 test-e2e: test-e2e-vmodv
+
+# Merge all profiles recorded by the COVERAGE=1 suites into browsable HTML
+# plus LCOV/JSON. Run in the same job/target dir as those suites so the object
+# files still carry the coverage mappings that match the profiles.
+coverage-report: docker-cargo-volume
+	@find "$(CURDIR)/crates" -maxdepth 1 -name '*.profraw' -delete
+	$(call run-cargo,llvm-cov report --html --output-dir /app/coverage) > /dev/null
+	$(call run-cargo,llvm-cov report --lcov --output-path /app/coverage/lcov.info) > /dev/null
+	$(call run-cargo,llvm-cov report --json --output-path /app/coverage/coverage.json) > /dev/null
 
 shell: docker-cargo-volume
 	$(DOCKER) run --rm -it --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \

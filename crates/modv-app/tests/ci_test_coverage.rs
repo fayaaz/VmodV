@@ -176,7 +176,7 @@ fn gpu_shader_tests_run_before_e2e_in_the_same_job() {
     let makefile = read_text(&root.join("Makefile"));
     let shader_recipe = active_lines(&makefile, true)
         .find(|line| {
-            line.contains("run-cargo,test")
+            line.contains("run-cargo-test,test")
                 && line.contains("-p modv-renderers")
                 && line.contains("test_gpu")
         })

@@ -107,6 +107,10 @@ jobs:
     if: ${{ github.ref != 'refs/heads/main' }}
     env:
       DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain
+      # Run the canonical suites under cargo-llvm-cov; `coverage-report` below
+      # merges their profiles into an HTML artifact. All steps share this
+      # runner's target dir, so the object files still match the profiles.
+      COVERAGE: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -165,6 +169,19 @@ jobs:
       # display and the software GPU is shared.
       - name: VmodV e2e harness and parity tests (serial)
         run: make test-e2e-vmodv
+
+      # Built after every suite: merging profiles while the instrumented
+      # binaries are still in the target dir keeps coverage mappings aligned.
+      - name: Generate line coverage report
+        run: make coverage-report
+
+      - name: Upload coverage HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmodv-coverage-html
+          path: coverage/html
+          if-no-files-found: error
+          retention-days: 7
 
   package:
     name: VmodV installers (${{ matrix.arch }})
