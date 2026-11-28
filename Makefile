@@ -11,6 +11,7 @@
 #   make vmodv-appimage-check re-check an existing AppImage's fat bundle
 #   make dev              VmodV shell (release; MODV_UI is gone)
 #   make vmodv-debug     VmodV shell, debug profile
+#   make vmodv-shot      capture the main output for SCENE to OUT (PNG)
 #   make engine           release workspace build
 #   make engine-test      cargo test (pass ARGS="..." to narrow)
 #   make engine-lint      clippy -D warnings + rustfmt --check
@@ -123,7 +124,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv coverage-report coverage-lcov coverage-merge engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
+.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug vmodv-shot lint format test-e2e test-e2e-vmodv coverage-report coverage-lcov coverage-merge engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -322,6 +323,17 @@ vmodv: docker-cargo-volume
 vmodv-debug: DOCKER_RUN_ARGS += $(GUI_RUN_ARGS)
 vmodv-debug: docker-cargo-volume
 	$(call run-cargo,run -p modv-app --bin modv -- $(ARGS))
+
+# Capture the shell's real main output for one named module/Point10 scene:
+#   make vmodv-shot SCENE="Plane9 Waves of Sin" OUT=scratch/shots/waves-of-sin.png
+#   make vmodv-shot SCENE="Plane9 Spiky" OUT=scratch/shots/spiky.png \
+#       VMODV_SHOT_ARGS="1280 720 300"
+# Runs on the host (bash + python3) and drives the `vmodv` target (and therefore
+# Docker) itself; it needs no other Make target.
+vmodv-shot:
+	@test -n "$(SCENE)" || { echo "error: set SCENE=\"<canonical scene name>\"" >&2; exit 2; }
+	@test -n "$(OUT)" || { echo "error: set OUT=scratch/shots/<name>.png" >&2; exit 2; }
+	"$(CURDIR)/tools/vmodv-shot.sh" "$(SCENE)" "$(OUT)" $(VMODV_SHOT_ARGS)
 
 engine: docker-cargo-volume
 	$(call run-cargo,build --release $(ARGS))

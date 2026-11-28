@@ -20,6 +20,10 @@ crates/target
 # Local scratch space (diagnostic builds, logs)
 tmp
 
+# Captures and per-run state from `make vmodv-shot`; keep the analyser tool
+/scratch/*
+!/scratch/analyze_png.py
+
 # Local opencode configuration
 .opencode/
 
