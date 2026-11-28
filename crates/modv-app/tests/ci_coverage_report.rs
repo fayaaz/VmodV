@@ -284,6 +284,57 @@ fn every_coverage_recipe_creates_its_output_directory() {
 }
 
 #[test]
+fn coverage_reports_are_summarised_in_the_actions_job_summary() {
+    // The Docker build steps already write their own job summary. Append a
+    // short coverage table to the same summary so a reviewer can see the line
+    // totals without downloading the HTML artifact.
+    let root = repo_root();
+    let makefile = read_text(&root.join("Makefile"));
+    let recipe = makefile_recipe(&makefile, "coverage-summary");
+    assert!(
+        recipe.contains("coverage-summary.py") && recipe.contains("lcov.info"),
+        "`coverage-summary` must render coverage/lcov.info; got:\n{recipe}"
+    );
+    assert!(
+        root.join("tools/coverage-summary.py").is_file(),
+        "tools/coverage-summary.py must exist so both workflows can share one summary"
+    );
+
+    for (name, file, job, produced_by) in [
+        ("vmodv.yml", "vmodv.yml", "test", "make coverage-report"),
+        (
+            "release.yml",
+            "release.yml",
+            "coverage",
+            "make coverage-merge",
+        ),
+    ] {
+        let workflow = read_text(&root.join(".github/workflows").join(file));
+        let block = job_block(&workflow, job);
+        let produced = block
+            .find(produced_by)
+            .unwrap_or_else(|| panic!("{name}'s `{job}` job must run `{produced_by}`"));
+        let summary_line = block
+            .lines()
+            .find(|line| line.contains("make coverage-summary"))
+            .unwrap_or_else(|| panic!("{name}'s `{job}` job must write a coverage summary"));
+        assert!(
+            summary_line.contains("$GITHUB_STEP_SUMMARY"),
+            "{name}'s `{job}` job must append its coverage summary to \
+             `$GITHUB_STEP_SUMMARY`, got:\n{summary_line}"
+        );
+        let summary = block
+            .find("make coverage-summary")
+            .unwrap_or_else(|| panic!("{name}'s `{job}` job must write a coverage summary"));
+        assert!(
+            produced < summary,
+            "{name}'s `{job}` job summarises coverage before `{produced_by}` has \
+             produced coverage/lcov.info"
+        );
+    }
+}
+
+#[test]
 fn dockerfile_provides_lcov_tools_for_the_merge() {
     let dockerfile = read_text(&repo_root().join("Dockerfile"));
     assert!(

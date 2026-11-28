@@ -124,7 +124,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug vmodv-shot lint format test-e2e test-e2e-vmodv coverage-report coverage-lcov coverage-merge engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
+.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug vmodv-shot lint format test-e2e test-e2e-vmodv coverage-report coverage-lcov coverage-merge coverage-summary engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -511,6 +511,12 @@ coverage-merge: docker-rust
 			-o coverage/lcov.info \
 			&& genhtml coverage/lcov.info --output-directory coverage/html \
 				--title "VmodV line coverage"'
+
+# Print a Markdown coverage table for $GITHUB_STEP_SUMMARY, alongside the
+# Docker build summary the build-push steps already write. Pure host python3
+# (like tools/vmodv-shot.sh): no container or coverage re-run needed.
+coverage-summary:
+	@python3 tools/coverage-summary.py "$(CURDIR)/coverage/lcov.info"
 
 shell: docker-cargo-volume
 	$(DOCKER) run --rm -it --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \

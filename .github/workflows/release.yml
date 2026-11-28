@@ -277,6 +277,11 @@ jobs:
       - name: Merge coverage profiles
         run: make coverage-merge
 
+      # This job already emits the Docker build summary; append the merged
+      # coverage totals to the same summary for release reviewers.
+      - name: Add coverage summary
+        run: make coverage-summary >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload merged coverage HTML report
         uses: actions/upload-artifact@v4
         with:

@@ -178,6 +178,12 @@ jobs:
       - name: Generate line coverage report
         run: make coverage-report
 
+      # The build-push steps already write a Docker build summary here; put
+      # the coverage totals in the same job summary so they are visible
+      # without downloading the HTML artifact.
+      - name: Add coverage summary
+        run: make coverage-summary >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload coverage HTML report
         uses: actions/upload-artifact@v4
         with:
