@@ -29,6 +29,7 @@
 //! | [`evil_box`] | Evil Box | `Cube/Evil Box.xml` (feedback RTT chain) |
 //! | [`music_waves`] | Music Waves | `Music/Music Waves.xml` (instanced wave RTT + bloom) |
 //! | [`hypno_toad`] | Hypno Toad | `Psychedelic/HypnoToad.xml` (single-pass instanced spirograph) |
+//! | [`cell_culture`] | Cell Culture | `Cell/Cell Culture.xml` (reaction-diffusion feedback) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -49,6 +50,8 @@
 #[cfg(test)]
 mod evil_box_red_contract;
 #[cfg(test)]
+mod plane9_cell_culture_fidelity_red_contract;
+#[cfg(test)]
 mod plane9_hypno_toad_fidelity_red_contract;
 #[cfg(test)]
 mod plane9_music_waves_fidelity_red_contract;
@@ -58,6 +61,7 @@ pub mod around_plus;
 pub mod attractor_particles;
 pub mod blob_fade;
 pub mod boxy;
+pub mod cell_culture;
 pub mod chromatic_wave;
 pub mod circle_crossover;
 pub mod cloud_flight;

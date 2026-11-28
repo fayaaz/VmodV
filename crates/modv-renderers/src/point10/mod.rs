@@ -157,7 +157,7 @@ fn fullscreen_uv(position: vec2<f32>, resolution: vec2<f32>) -> vec2<f32> {
 /// frame at 0.1 s ("a tab-suspend catch-up cannot jump the pattern").
 pub const MAX_FRAME_SECONDS: f32 = 0.1;
 
-/// The thirty-three Plane9 (Joakim Dahl) preset ports, under their current
+/// The thirty-four Plane9 (Joakim Dahl) preset ports, under their current
 /// canonical `Plane9 <Name>` registry names.
 ///
 /// Twelve were originally registered as `Point10 <Name>`. Saved Scenes and
@@ -205,6 +205,8 @@ pub const PLANE9_SCENE_NAMES: &[&str] = &[
     "Plane9 Music Waves",
     // The seventh XML batch (single-pass instanced spirograph).
     "Plane9 Hypno Toad",
+    // The eighth XML batch (reaction-diffusion feedback preset).
+    "Plane9 Cell Culture",
 ];
 
 /// The prefix of the scenes that kept their `Point10 ` registry name, and of
@@ -279,7 +281,7 @@ pub const PLANE9_EFFECT_NAMES: &[&str] = &[
     "Plane9 Wave",
 ];
 
-/// Author credit for the thirty-three Plane9 preset ports.
+/// Author credit for the thirty-four Plane9 preset ports.
 pub const PLANE9_AUTHOR: &str = "Plane9 (Joakim Dahl)";
 
 /// Resolve `name` against one canonical roster, rewriting the legacy
@@ -331,7 +333,7 @@ pub fn resolve_effect_name(name: &str) -> &str {
 
 /// The authoritative Gallery renderer kind for a registry module named `name`.
 ///
-/// The thirty-three Plane9 preset ports and the forty-nine renamed Plane9
+/// The thirty-four Plane9 preset ports and the forty-nine renamed Plane9
 /// effects share the Point10 runtime renderer but are surfaced to the Gallery
 /// as their own kind (`plane9`, matched as free text); every other module keeps
 /// `default_kind` (its engine renderer kind). Using this helper in both snapshot
@@ -348,7 +350,7 @@ pub fn gallery_kind(name: &str, default_kind: &str) -> String {
 /// Rewrite every legacy `Point10 <Name>` alias string in a JSON document to its
 /// canonical `Plane9 <Name>` name.
 ///
-/// Covers both the thirty-three Plane9 preset scenes and the forty-nine audited
+/// Covers both the thirty-four Plane9 preset scenes and the forty-nine audited
 /// Plane9 shader effects/ISF transitions. Walks arrays and objects so nested
 /// Scene cells, Groups and module records are migrated; every other value is
 /// left untouched. Idempotent: canonical names never match the legacy prefix.
@@ -591,7 +593,7 @@ pub struct SceneMeta {
     /// Display + registration name, e.g. `"Point10 Particle Field"` or
     /// `"Plane9 Light Tunnel"`.
     pub name: &'static str,
-    /// Module author: `"Point10"`, or [`PLANE9_AUTHOR`] for the thirty-three
+    /// Module author: `"Point10"`, or [`PLANE9_AUTHOR`] for the thirty-four
     /// Plane9 preset ports.
     pub author: &'static str,
     /// Module version (`"1.0.0"`).
@@ -625,7 +627,7 @@ impl SceneMeta {
         }
     }
 
-    /// Meta for one of the thirty-three Plane9 (Joakim Dahl) preset ports.
+    /// Meta for one of the thirty-four Plane9 (Joakim Dahl) preset ports.
     pub const fn for_plane9_scene(name: &'static str, category: &'static str) -> Self {
         Self {
             name,
@@ -854,8 +856,8 @@ impl UnitQuad {
 /// batch-5a scenes `HollowCube, AttractorParticles, DvdRoom`, and the batch-5b
 /// scenes `RollingFire, SmokeRoom, LatentBackrooms`, plus
 /// `BallOfFire` (the frozen RollingFire variant), `Sun`, `Earth` and `TheCave`
-/// (the Plane9 scene batch) plus Music Waves and Hypno Toad — the complete
-/// 51-scene set.
+/// (the Plane9 scene batch) plus Music Waves, Hypno Toad and Cell Culture — the
+/// complete 52-scene set.
 /// Glass Lens is not registered: its upstream CodePen does not state a licence.
 pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
     vec![
@@ -924,6 +926,8 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::music_waves::MusicWaves::new()),
         // The seventh Plane9 XML batch (single-pass instanced spirograph).
         Box::new(scenes::hypno_toad::HypnoToad::new()),
+        // The eighth Plane9 XML batch (reaction-diffusion feedback preset).
+        Box::new(scenes::cell_culture::CellCulture::new()),
     ]
 }
 
@@ -939,7 +943,7 @@ mod tests {
     #[test]
     fn registry_has_the_port_order_scenes() {
         let scenes = all_scenes();
-        assert_eq!(scenes.len(), 51);
+        assert_eq!(scenes.len(), 52);
 
         assert_eq!(scenes[0].name(), "Point10 Chromatic Line");
         assert_eq!(scenes[1].name(), "Point10 Chromatic Wave");
@@ -1002,6 +1006,7 @@ mod tests {
         assert_eq!(scenes[48].name(), "Plane9 Evil Box");
         assert_eq!(scenes[49].name(), "Plane9 Music Waves");
         assert_eq!(scenes[50].name(), "Plane9 Hypno Toad");
+        assert_eq!(scenes[51].name(), "Plane9 Cell Culture");
         assert!(
             scenes
                 .iter()
@@ -1221,8 +1226,8 @@ mod tests {
         let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
         let unique_names: BTreeSet<&str> = names.iter().copied().collect();
         check!(
-            scenes.len() == 51,
-            "roster: expected 51 scenes, got {}",
+            scenes.len() == 52,
+            "roster: expected 52 scenes, got {}",
             scenes.len()
         );
         check!(
@@ -1230,8 +1235,8 @@ mod tests {
             "roster: duplicate names in {names:?}"
         );
         check!(
-            PLANE9_SCENE_NAMES.len() == 33,
-            "Plane9 alias roster: expected 33 names, got {}",
+            PLANE9_SCENE_NAMES.len() == 34,
+            "Plane9 alias roster: expected 34 names, got {}",
             PLANE9_SCENE_NAMES.len()
         );
         let spiky_matches: Vec<_> = scenes
@@ -1287,8 +1292,8 @@ mod tests {
         let repo_root = manifest_dir.join("../..");
         let point10_root = manifest_dir.join("src/point10");
 
-        // D — committed parity and generated catalogue data retain 51 Point10
-        // scenes and total 502 after three shader effects were retired. The
+        // D — committed parity and generated catalogue data retain 52 Point10
+        // scenes and total 503 after three shader effects were retired. The
         // catalogue is checked as data.
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
@@ -1296,13 +1301,13 @@ mod tests {
         )
         .expect("parse module-parity.json");
         check!(
-            manifest["counts"]["point10"].as_u64() == Some(51),
-            "manifest: point10 count is {:?}, expected 51",
+            manifest["counts"]["point10"].as_u64() == Some(52),
+            "manifest: point10 count is {:?}, expected 52",
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(502),
-            "manifest: total is {:?}, expected 502",
+            manifest["counts"]["total"].as_u64() == Some(503),
+            "manifest: total is {:?}, expected 503",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -1312,8 +1317,8 @@ mod tests {
             .map(|name| name.as_str().expect("manifest module name"))
             .collect();
         check!(
-            manifest_names.len() == 51,
-            "manifest: expected 51 Point10 names, got {}",
+            manifest_names.len() == 52,
+            "manifest: expected 52 Point10 names, got {}",
             manifest_names.len()
         );
         check!(
@@ -1331,13 +1336,13 @@ mod tests {
         )
         .expect("parse docs/modules/modules.json");
         check!(
-            catalogue["counts"]["point10"].as_u64() == Some(51),
-            "catalogue: point10 count is {:?}, expected 51",
+            catalogue["counts"]["point10"].as_u64() == Some(52),
+            "catalogue: point10 count is {:?}, expected 52",
             catalogue["counts"]["point10"]
         );
         check!(
-            catalogue["counts"]["total"].as_u64() == Some(502),
-            "catalogue: total is {:?}, expected 502",
+            catalogue["counts"]["total"].as_u64() == Some(503),
+            "catalogue: total is {:?}, expected 503",
             catalogue["counts"]["total"]
         );
         let catalogue_modules = catalogue["modules"].as_array().expect("catalogue modules");
@@ -1391,8 +1396,8 @@ mod tests {
             "UI licence map: Spiky is missing from the exact CC BY-NC-SA 4.0 arm"
         );
         check!(
-            compact(&ui_model).contains("checked.len(), 51,"),
-            "UI licence provenance test: expected count must move from 50 to 51"
+            compact(&ui_model).contains("checked.len(), 52,"),
+            "UI licence provenance test: expected count must move from 51 to 52"
         );
 
         // A/B — the existing box primitive is only the 24-vertex/12-triangle

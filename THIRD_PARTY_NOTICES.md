@@ -121,8 +121,8 @@ multi-pass path without an override.
 
 ## Point10 scenes
 
-The 51 registered Point10-derived scenes do **not** share one provenance. Only
-the thirty-three Plane9 (Joakim Dahl) presets are share-alike; they register as
+The 52 registered Point10-derived scenes do **not** share one provenance. Only
+the thirty-four Plane9 (Joakim Dahl) presets are share-alike; they register as
 `Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases for
 the twelve renamed ports).
 The three Hollow Cuboid/Layers/Blur variants re-parameterise the Plane9
@@ -182,6 +182,7 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 | Evil Box | `crates/modv-renderers/src/point10/scenes/evil_box.rs` | CC BY-NC-SA 4.0 (stated in file; Joakim Dahl, "Light trying to escape an evil box") |
 | Music Waves | `crates/modv-renderers/src/point10/scenes/music_waves.rs` | CC BY-NC-SA 4.0 (stated in file; Joakim Dahl, "Music that creates waves") |
 | Hypno Toad | `crates/modv-renderers/src/point10/scenes/hypno_toad.rs` | CC BY-NC-SA 3.0 (stated in file; Joakim Dahl, "Dark yet, colorfull and hypnotic") |
+| Cell Culture | `crates/modv-renderers/src/point10/scenes/cell_culture.rs` | CC BY-NC-SA 3.0 (stated in file; Joakim Dahl) |
 
 ### Plane9 effects (Joakim Dahl — CC BY-NC-SA)
 

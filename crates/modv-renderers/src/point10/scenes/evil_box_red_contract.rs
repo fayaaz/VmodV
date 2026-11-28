@@ -114,8 +114,8 @@ fn plane9_evil_box_fidelity_red_contract() {
     // A — XML lines 2-6: one new canonical Plane9/Dahl scene, with the
     // historical alias accepted even though this preset never shipped under it.
     check!(
-        scenes.len() == 51,
-        "A: expected 51 Point10 scenes, got {}",
+        scenes.len() == 52,
+        "A: expected 52 Point10 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -123,8 +123,8 @@ fn plane9_evil_box_fidelity_red_contract() {
         "A: duplicate registry names in {names:?}"
     );
     check!(
-        PLANE9_SCENE_NAMES.len() == 33,
-        "A: expected 33 Plane9 scene names, got {}",
+        PLANE9_SCENE_NAMES.len() == 34,
+        "A: expected 34 Plane9 scene names, got {}",
         PLANE9_SCENE_NAMES.len()
     );
     let matches: Vec<_> = scenes
@@ -182,20 +182,20 @@ fn plane9_evil_box_fidelity_red_contract() {
     }
 
     // A/G — the parity fixture and generated catalogue are data contracts, not
-    // implementation details. Both currently pin 51/502.
+    // implementation details. Both currently pin 52/503.
     let manifest: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
             .expect("read module-parity.json"),
     )
     .expect("parse module-parity.json");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(51),
-        "G: manifest point10 count is {:?}, expected 51",
+        manifest["counts"]["point10"].as_u64() == Some(52),
+        "G: manifest point10 count is {:?}, expected 52",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(502),
-        "G: manifest total is {:?}, expected 502",
+        manifest["counts"]["total"].as_u64() == Some(503),
+        "G: manifest total is {:?}, expected 503",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -205,8 +205,8 @@ fn plane9_evil_box_fidelity_red_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 51,
-        "G: manifest point10 array has {} names, expected 51",
+        manifest_names.len() == 52,
+        "G: manifest point10 array has {} names, expected 52",
         manifest_names.len()
     );
     check!(
@@ -224,13 +224,13 @@ fn plane9_evil_box_fidelity_red_contract() {
     )
     .expect("parse docs/modules/modules.json");
     check!(
-        catalogue["counts"]["point10"].as_u64() == Some(51),
-        "G: catalogue point10 count is {:?}, expected 51",
+        catalogue["counts"]["point10"].as_u64() == Some(52),
+        "G: catalogue point10 count is {:?}, expected 52",
         catalogue["counts"]["point10"]
     );
     check!(
-        catalogue["counts"]["total"].as_u64() == Some(502),
-        "G: catalogue total is {:?}, expected 502",
+        catalogue["counts"]["total"].as_u64() == Some(503),
+        "G: catalogue total is {:?}, expected 503",
         catalogue["counts"]["total"]
     );
     let catalogue_matches: Vec<_> = catalogue["modules"]
@@ -285,8 +285,8 @@ fn plane9_evil_box_fidelity_red_contract() {
         "G: module_license exact-4.0 arm is missing Evil Box"
     );
     check!(
-        compact_contains(&ui_model, "checked.len(),51,"),
-        "G: UI licence provenance count must move from 50 to 51"
+        compact_contains(&ui_model, "checked.len(),52,"),
+        "G: UI licence provenance count must move from 51 to 52"
     );
 
     // A — the app wrapper must construct the same canonical/legacy names and

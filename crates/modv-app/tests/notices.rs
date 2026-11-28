@@ -1026,6 +1026,7 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         ("Abstract Clouds", "3.0"),
         ("Blob Fade", "3.0"),
         ("Boxy", "4.0"),
+        ("Cell Culture", "3.0"),
         ("Circle Crossover", "3.0"),
         ("Cloud Flight", "3.0"),
         ("Color Beams", "4.0"),
@@ -1121,10 +1122,10 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         .filter_map(|name| name.strip_prefix("Point10 ").map(str::to_string))
         .collect();
 
-    // A — the thirty-three Plane9 ports use the prefix; the other eighteen stay.
+    // A — the thirty-four Plane9 ports use the prefix; the other eighteen stay.
     check!(
-        scene_names.len() == 51,
-        "A: expected 51 scenes, got {}",
+        scene_names.len() == 52,
+        "A: expected 52 scenes, got {}",
         scene_names.len()
     );
     check!(
@@ -1354,8 +1355,8 @@ fn plane9_rename_preserves_aliases_loading_parity_and_licences() {
         .map(|name| name.as_str().expect("module name").to_string())
         .collect();
     let mut manifest_mismatches = Vec::new();
-    if manifest_names.len() != 51 {
-        manifest_mismatches.push(format!("expected 51 names, got {}", manifest_names.len()));
+    if manifest_names.len() != 52 {
+        manifest_mismatches.push(format!("expected 52 names, got {}", manifest_names.len()));
     }
     for (suffix, _) in RENAMED {
         let old_name = format!("Point10 {suffix}");
@@ -1611,8 +1612,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
     let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
     let unique_names: BTreeSet<&str> = names.iter().copied().collect();
     check!(
-        scenes.len() == 51,
-        "roster: expected 51 scenes, got {}",
+        scenes.len() == 52,
+        "roster: expected 52 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -1620,8 +1621,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         "roster: duplicate names in {names:?}"
     );
     check!(
-        modv_renderers::point10::PLANE9_SCENE_NAMES.len() == 33,
-        "Plane9 alias roster: expected 33 names, got {}",
+        modv_renderers::point10::PLANE9_SCENE_NAMES.len() == 34,
+        "Plane9 alias roster: expected 34 names, got {}",
         modv_renderers::point10::PLANE9_SCENE_NAMES.len()
     );
 
@@ -1694,8 +1695,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
 
     let registry = ModuleRegistry::builtin();
     check!(
-        registry.point10_definitions().len() == 51,
-        "ModuleRegistry: expected 51 Point10 definitions, got {}",
+        registry.point10_definitions().len() == 52,
+        "ModuleRegistry: expected 52 Point10 definitions, got {}",
         registry.point10_definitions().len()
     );
     for (suffix, _) in PRESETS {
@@ -1722,13 +1723,13 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
             .expect("the parity manifest is valid JSON");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(51),
-        "manifest: point10 count is {:?}, expected 51",
+        manifest["counts"]["point10"].as_u64() == Some(52),
+        "manifest: point10 count is {:?}, expected 52",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(502),
-        "manifest: total is {:?}, expected 502",
+        manifest["counts"]["total"].as_u64() == Some(503),
+        "manifest: total is {:?}, expected 503",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -1738,8 +1739,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 51,
-        "manifest: expected 51 Point10 names, got {}",
+        manifest_names.len() == 52,
+        "manifest: expected 52 Point10 names, got {}",
         manifest_names.len()
     );
     for (suffix, _) in PRESETS {
@@ -1771,13 +1772,13 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         "docs/modules/previews.json does not match the preview projection of build_document()"
     );
     check!(
-        generated["counts"]["point10"].as_u64() == Some(51),
-        "catalogue: point10 count is {:?}, expected 51",
+        generated["counts"]["point10"].as_u64() == Some(52),
+        "catalogue: point10 count is {:?}, expected 52",
         generated["counts"]["point10"]
     );
     check!(
-        generated["counts"]["total"].as_u64() == Some(502),
-        "catalogue: total is {:?}, expected 502",
+        generated["counts"]["total"].as_u64() == Some(503),
+        "catalogue: total is {:?}, expected 503",
         generated["counts"]["total"]
     );
     let modules = generated["modules"]
@@ -1879,8 +1880,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
     let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
     let unique_names: BTreeSet<&str> = names.iter().copied().collect();
     check!(
-        scenes.len() == 51,
-        "roster: expected 51 scenes, got {}",
+        scenes.len() == 52,
+        "roster: expected 52 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -1891,8 +1892,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
     let aliases = modv_renderers::point10::PLANE9_SCENE_NAMES;
     let unique_aliases: BTreeSet<&str> = aliases.iter().copied().collect();
     check!(
-        aliases.len() == 33,
-        "Plane9 alias roster: expected 33 names, got {}",
+        aliases.len() == 34,
+        "Plane9 alias roster: expected 34 names, got {}",
         aliases.len()
     );
     check!(
@@ -1980,8 +1981,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
 
     let registry = ModuleRegistry::builtin();
     check!(
-        registry.point10_definitions().len() == 51,
-        "ModuleRegistry: expected 51 Point10 definitions, got {}",
+        registry.point10_definitions().len() == 52,
+        "ModuleRegistry: expected 52 Point10 definitions, got {}",
         registry.point10_definitions().len()
     );
     for (suffix, _) in PRESETS {
@@ -2024,13 +2025,13 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         serde_json::from_str(include_str!("../../../tests/fixtures/module-parity.json"))
             .expect("the parity manifest is valid JSON");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(51),
-        "manifest: point10 count is {:?}, expected 51",
+        manifest["counts"]["point10"].as_u64() == Some(52),
+        "manifest: point10 count is {:?}, expected 52",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(502),
-        "manifest: total is {:?}, expected 502",
+        manifest["counts"]["total"].as_u64() == Some(503),
+        "manifest: total is {:?}, expected 503",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -2040,8 +2041,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 51,
-        "manifest: expected 51 Point10 names, got {}",
+        manifest_names.len() == 52,
+        "manifest: expected 52 Point10 names, got {}",
         manifest_names.len()
     );
     let unique_manifest_names: BTreeSet<&str> = manifest_names.iter().copied().collect();
@@ -2078,13 +2079,13 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         "docs/modules/previews.json does not match the preview projection of build_document()"
     );
     check!(
-        generated["counts"]["point10"].as_u64() == Some(51),
-        "catalogue: point10 count is {:?}, expected 51",
+        generated["counts"]["point10"].as_u64() == Some(52),
+        "catalogue: point10 count is {:?}, expected 52",
         generated["counts"]["point10"]
     );
     check!(
-        generated["counts"]["total"].as_u64() == Some(502),
-        "catalogue: total is {:?}, expected 502",
+        generated["counts"]["total"].as_u64() == Some(503),
+        "catalogue: total is {:?}, expected 503",
         generated["counts"]["total"]
     );
     let modules = generated["modules"]
@@ -2754,7 +2755,7 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
     check!(
         generated["counts"]["shader"].as_u64() == Some(33)
             && generated["counts"]["isf"].as_u64() == Some(402)
-            && generated["counts"]["total"].as_u64() == Some(502),
+            && generated["counts"]["total"].as_u64() == Some(503),
         "G: generated catalogue shader/ISF/total counts changed"
     );
 

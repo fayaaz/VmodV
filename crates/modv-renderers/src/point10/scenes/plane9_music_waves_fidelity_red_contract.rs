@@ -147,8 +147,8 @@ fn plane9_music_waves_fidelity_red_contract() {
 
     // A — XML lines 2-6 and 255-270: one new canonical Plane9/Dahl scene.
     check!(
-        scenes.len() == 51,
-        "A: expected 51 Point10 scenes, got {}",
+        scenes.len() == 52,
+        "A: expected 52 Point10 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -160,21 +160,25 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: all_scenes roster order is not deterministic"
     );
     check!(
-        names.last() == Some(&"Plane9 Hypno Toad"),
-        "A: Hypno Toad must be the deterministic roster tail, got {:?}",
+        names.last() == Some(&"Plane9 Cell Culture"),
+        "A: Cell Culture must be the deterministic roster tail, got {:?}",
         names.last()
     );
     check!(
-        names.get(names.len().saturating_sub(2)) == Some(&SCENE_NAME),
-        "A: Music Waves must be penultimate, after Evil Box without reordering the existing roster"
+        names.get(names.len().saturating_sub(2)) == Some(&"Plane9 Hypno Toad"),
+        "A: Hypno Toad must be penultimate, after Plane9 Music Waves"
     );
     check!(
-        names.get(names.len().saturating_sub(3)) == Some(&"Plane9 Evil Box"),
+        names.get(names.len().saturating_sub(3)) == Some(&SCENE_NAME),
+        "A: Music Waves must still follow Evil Box without reordering the existing roster"
+    );
+    check!(
+        names.get(names.len().saturating_sub(4)) == Some(&"Plane9 Evil Box"),
         "A: Music Waves must still follow Evil Box"
     );
     check!(
-        PLANE9_SCENE_NAMES.len() == 33,
-        "A: expected 33 Plane9 scene names, got {}",
+        PLANE9_SCENE_NAMES.len() == 34,
+        "A: expected 34 Plane9 scene names, got {}",
         PLANE9_SCENE_NAMES.len()
     );
     let mut unique_plane9_names = PLANE9_SCENE_NAMES.to_vec();
@@ -185,12 +189,17 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: duplicate names in PLANE9_SCENE_NAMES"
     );
     check!(
-        PLANE9_SCENE_NAMES.last() == Some(&"Plane9 Hypno Toad"),
-        "A: PLANE9_SCENE_NAMES must end with Plane9 Hypno Toad"
+        PLANE9_SCENE_NAMES.last() == Some(&"Plane9 Cell Culture"),
+        "A: PLANE9_SCENE_NAMES must end with Plane9 Cell Culture"
     );
     check!(
-        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(2)) == Some(&SCENE_NAME),
-        "A: PLANE9_SCENE_NAMES must place {SCENE_NAME} penultimate"
+        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(2))
+            == Some(&"Plane9 Hypno Toad"),
+        "A: PLANE9_SCENE_NAMES must place Plane9 Hypno Toad penultimate"
+    );
+    check!(
+        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(3)) == Some(&SCENE_NAME),
+        "A: PLANE9_SCENE_NAMES must place {SCENE_NAME} third from the end"
     );
     let matches: Vec<_> = scenes
         .iter()
@@ -242,7 +251,7 @@ fn plane9_music_waves_fidelity_red_contract() {
         );
     }
 
-    // A — the parity fixture and generated catalogue currently pin 51/502.
+    // A — the parity fixture and generated catalogue currently pin 52/503.
     // XML line 6 is the 4.0 licence arm, not the 3.0 arm.
     let manifest: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
@@ -250,13 +259,13 @@ fn plane9_music_waves_fidelity_red_contract() {
     )
     .expect("parse module-parity.json");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(51),
-        "A: manifest point10 count is {:?}, expected 51",
+        manifest["counts"]["point10"].as_u64() == Some(52),
+        "A: manifest point10 count is {:?}, expected 52",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(502),
-        "A: manifest total is {:?}, expected 502",
+        manifest["counts"]["total"].as_u64() == Some(503),
+        "A: manifest total is {:?}, expected 503",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -266,8 +275,8 @@ fn plane9_music_waves_fidelity_red_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 51,
-        "A: manifest point10 array has {} names, expected 51",
+        manifest_names.len() == 52,
+        "A: manifest point10 array has {} names, expected 52",
         manifest_names.len()
     );
     check!(
@@ -279,9 +288,11 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: manifest must contain {SCENE_NAME} exactly once"
     );
     check!(
-        manifest_names.last() == Some(&"Plane9 Hypno Toad")
-            && manifest_names.get(manifest_names.len().saturating_sub(2)) == Some(&SCENE_NAME),
-        "A: manifest must append Plane9 Hypno Toad after {SCENE_NAME}"
+        manifest_names.last() == Some(&"Plane9 Cell Culture")
+            && manifest_names.get(manifest_names.len().saturating_sub(2))
+                == Some(&"Plane9 Hypno Toad")
+            && manifest_names.get(manifest_names.len().saturating_sub(3)) == Some(&SCENE_NAME),
+        "A: manifest must append Plane9 Cell Culture after Plane9 Hypno Toad"
     );
 
     let catalogue: serde_json::Value = serde_json::from_str(
@@ -290,18 +301,18 @@ fn plane9_music_waves_fidelity_red_contract() {
     )
     .expect("parse docs/modules/modules.json");
     check!(
-        catalogue["counts"]["point10"].as_u64() == Some(51),
-        "A: catalogue point10 count is {:?}, expected 51",
+        catalogue["counts"]["point10"].as_u64() == Some(52),
+        "A: catalogue point10 count is {:?}, expected 52",
         catalogue["counts"]["point10"]
     );
     check!(
-        catalogue["counts"]["total"].as_u64() == Some(502),
-        "A: catalogue total is {:?}, expected 502",
+        catalogue["counts"]["total"].as_u64() == Some(503),
+        "A: catalogue total is {:?}, expected 503",
         catalogue["counts"]["total"]
     );
     check!(
-        catalogue["modules"].as_array().map(Vec::len) == Some(502),
-        "A: catalogue modules array must contain 502 entries"
+        catalogue["modules"].as_array().map(Vec::len) == Some(503),
+        "A: catalogue modules array must contain 503 entries"
     );
     let catalogue_matches: Vec<_> = catalogue["modules"]
         .as_array()
@@ -374,8 +385,8 @@ fn plane9_music_waves_fidelity_red_contract() {
         "A: module_license exact-4.0 arm is missing Music Waves"
     );
     check!(
-        compact_contains(&ui_model, "checked.len(),51,"),
-        "A: UI licence provenance count must move from 50 to 51"
+        compact_contains(&ui_model, "checked.len(),52,"),
+        "A: UI licence provenance count must move from 51 to 52"
     );
 
     // A — the app wrapper must construct the canonical name and delegate every
