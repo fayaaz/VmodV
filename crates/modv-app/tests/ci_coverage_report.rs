@@ -70,16 +70,21 @@ fn job_block(contents: &str, job: &str) -> String {
     lines[start + 1..end].join("\n")
 }
 
-#[test]
-fn rust_toolchain_image_includes_coverage_tools() {
-    let dockerfile = read_text(&repo_root().join("Dockerfile"));
-    let rust_stage = dockerfile
+/// The `rust` stage of the Dockerfile, bounded by the next stage.
+fn rust_stage(dockerfile: &str) -> &str {
+    dockerfile
         .split("FROM base AS rust")
         .nth(1)
         .expect("Dockerfile has no `rust` stage")
         .split("\nFROM ")
         .next()
-        .expect("cannot bound the `rust` stage");
+        .expect("cannot bound the `rust` stage")
+}
+
+#[test]
+fn rust_toolchain_image_includes_coverage_tools() {
+    let dockerfile = read_text(&repo_root().join("Dockerfile"));
+    let rust_stage = rust_stage(&dockerfile);
     assert!(
         rust_stage.contains("llvm-tools-preview"),
         "the `rust` image must install the llvm-tools-preview component; \
@@ -169,5 +174,105 @@ fn pr_ci_measures_coverage_and_publishes_the_html_artifact() {
     assert!(
         upload_block.contains("if-no-files-found: error"),
         "a missing coverage report must fail the job, not silently upload nothing"
+    );
+}
+
+#[test]
+fn release_validation_jobs_publish_their_coverage_profiles() {
+    // On main pushes vmodv.yml's test job stands down, so the two release
+    // validation jobs are the only source of coverage. Each must instrument
+    // its existing suites in place (no second test run) and publish its LCOV
+    // for the merge job below.
+    let release = read_text(&repo_root().join(".github/workflows/release.yml"));
+    for job in ["validate", "validate-e2e"] {
+        let block = job_block(&release, job);
+        assert!(
+            block.contains("COVERAGE: \"1\""),
+            "`{job}` must instrument its suites with COVERAGE=1"
+        );
+        assert!(
+            block.contains("make coverage-lcov"),
+            "`{job}` must produce an LCOV profile from its instrumented suites"
+        );
+        let upload = block
+            .find("actions/upload-artifact@v4")
+            .unwrap_or_else(|| panic!("`{job}` must upload its coverage profile"));
+        let upload_block = &block[upload..];
+        assert!(
+            upload_block.contains("coverage/lcov.info"),
+            "`{job}` must upload coverage/lcov.info, got:\n{upload_block}"
+        );
+        assert!(
+            upload_block.contains("if-no-files-found: error"),
+            "`{job}` must fail when its coverage profile is missing"
+        );
+    }
+}
+
+#[test]
+fn release_merges_both_profiles_into_one_coverage_report() {
+    let release = read_text(&repo_root().join(".github/workflows/release.yml"));
+    let coverage = job_block(&release, "coverage");
+    assert!(
+        coverage.contains("needs:"),
+        "the coverage job must wait for both validation legs"
+    );
+    assert!(
+        coverage.contains("validate"),
+        "coverage job must depend on `validate`"
+    );
+    assert!(
+        coverage.contains("validate-e2e"),
+        "coverage job must depend on `validate-e2e`"
+    );
+    assert!(
+        coverage.contains("actions/download-artifact@v4"),
+        "the coverage job must download both uploaded profiles"
+    );
+    for artifact in ["vmodv-coverage-validate", "vmodv-coverage-e2e"] {
+        assert!(
+            coverage.contains(artifact),
+            "the coverage job must download `{artifact}`"
+        );
+    }
+    assert!(
+        coverage.contains("make coverage-merge"),
+        "the coverage job must merge the downloaded profiles with `make coverage-merge`"
+    );
+    assert!(
+        coverage.contains("vmodv-coverage-html-main"),
+        "the merged HTML report must be uploaded as `vmodv-coverage-html-main`"
+    );
+}
+
+#[test]
+fn makefile_merges_lcov_profiles_and_builds_html() {
+    let makefile = read_text(&repo_root().join("Makefile"));
+    let recipe = makefile_recipe(&makefile, "coverage-merge");
+    assert!(
+        recipe.contains("lcov") && recipe.contains("-a"),
+        "`coverage-merge` must add multiple LCOV profiles; got:\n{recipe}"
+    );
+    assert!(
+        recipe.contains("genhtml"),
+        "`coverage-merge` must render the summed LCOV into browsable HTML; got:\n{recipe}"
+    );
+    assert!(
+        recipe.contains("coverage/lcov.info") && recipe.contains("coverage/html"),
+        "`coverage-merge` must read coverage/lcov.info and write coverage/html; got:\n{recipe}"
+    );
+    assert!(
+        makefile_recipe(&makefile, "coverage-lcov").contains("--lcov"),
+        "release validation jobs need a cheap LCOV-only target"
+    );
+}
+
+#[test]
+fn dockerfile_provides_lcov_tools_for_the_merge() {
+    let dockerfile = read_text(&repo_root().join("Dockerfile"));
+    assert!(
+        rust_stage(&dockerfile).contains(" lcov"),
+        "the `rust` image must install lcov/genhtml so the merged HTML report \
+         can be built in CI"
     );
 }

@@ -123,7 +123,7 @@ GUI_RUN_ARGS := --net=host --shm-size=1g --ulimit core=0 $(DRI_ARGS) $(GUI_ENV) 
 MIN_FREE_GB ?= 20
 
 .DEFAULT_GOAL := build
-.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv coverage-report engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
+.PHONY: build appimage vmodv-appimage-check vmodv-deb vmodv-deb-check clean dev vmodv vmodv-debug lint format test-e2e test-e2e-vmodv coverage-report coverage-lcov coverage-merge engine engine-test engine-lint engine-run rave-reencode shell docker-rust docker-wasm docker-cargo-volume docker-package docker-reset disk-guard disk-clean disk-clean-targets version web-check web-build web-serve
 
 disk-guard:
 	@free=$$(df -Pk "$(CURDIR)" | awk 'NR==2 {print int($$4/1048576)}'); \
@@ -469,6 +469,26 @@ coverage-report: docker-cargo-volume
 	$(call run-cargo,llvm-cov report --html --output-dir /app/coverage) > /dev/null
 	$(call run-cargo,llvm-cov report --lcov --output-path /app/coverage/lcov.info) > /dev/null
 	$(call run-cargo,llvm-cov report --json --output-path /app/coverage/coverage.json) > /dev/null
+
+# Release validation jobs run on separate runners, so they cannot merge their
+# profiles in place. Each produces just this LCOV profile; the `coverage` job
+# adds them together afterwards.
+coverage-lcov: docker-cargo-volume
+	@find "$(CURDIR)/crates" -maxdepth 1 -name '*.profraw' -delete
+	$(call run-cargo,llvm-cov report --lcov --output-path /app/coverage/lcov.info) > /dev/null
+
+# `actions/download-artifact` places the two profiles under
+# coverage/profiles/{validate,e2e}/ on the runner. lcov sums the per-line
+# counts; genhtml renders the combined tracefile as one browsable report.
+coverage-merge: docker-rust
+	$(DOCKER) run --rm --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \
+		-v "$(CURDIR)":/app -w /app \
+		"$(RUST_IMAGE)" \
+		bash -c 'lcov -a coverage/profiles/validate/lcov.info \
+			-a coverage/profiles/e2e/lcov.info \
+			-o coverage/lcov.info \
+			&& genhtml coverage/lcov.info --output-directory coverage/html \
+				--title "VmodV line coverage"'
 
 shell: docker-cargo-volume
 	$(DOCKER) run --rm -it --user "$(HOST_UID):$(HOST_GID)" -e HOME=/tmp \

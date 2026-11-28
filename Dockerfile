@@ -76,6 +76,7 @@ RUN apt-get update \
       libxcb-xkb1 \
       xvfb \
       xauth \
+      lcov \
     && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
