@@ -44,7 +44,9 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
 - The full **bundled ISF corpus**: 33 shader modules, the 16 2D canvas
   modules, the 54 Point10 scenes and the 402 `resources/isf` shaders (505
   modules). The corpus is embedded in the wasm binary, so there is no asset
-  fetch or CORS dependency. Shader/ISF props are editable and feed the
+  fetch or CORS dependency. The `resources/point10/textures` corpus is embedded
+  too, so Point10 scenes resolve their real textures in the browser instead of
+  a procedural stand-in. Shader/ISF props are editable and feed the
   compositor exactly like the native path.
 - The live compositor output is registered as an egui native texture; there is
   no browser readback in the preview path.

@@ -12,8 +12,9 @@ name: Release
 # workflow computes the next version, tags the pushed commit `vX.Y.Z` (no
 # version-bump commit is made — the tree keeps no version literal, the tags
 # are the source of truth) and creates the GitHub release as a draft
-# immediately. `validate` then runs lint and the test suite, and `publish`
-# flips the draft visible only if both succeed. Each artifact is built once by
+# immediately. `validate` and `validate-e2e` then run lint and the test suite
+# on separate runners, and `publish` flips the draft visible only if both
+# succeed. Each artifact is built once by
 # its own job and attached by a separate `attach-*` job once that build has
 # produced it, so a failed/slow platform build can cost an asset but can never
 # stop the release going out. Versions are tagged `vX.Y.Z`; the `v2.0.0` tag
@@ -93,8 +94,9 @@ jobs:
   # checked exactly once. This job gates `publish` only — the draft is created
   # first, so a failure here leaves an unpublished draft instead of exposing a
   # stable release. It runs on every main push, including those that do not cut
-  # a release, so those commits are still validated once. No build job is
-  # involved, so publication never waits for an artifact.
+  # a release, so those commits are still validated once. The real-binary e2e
+  # suites run in `validate-e2e` on their own runner. No build job is involved,
+  # so publication never waits for an artifact.
   validate:
     name: Lint and test before publishing
     runs-on: ubuntu-latest
@@ -143,12 +145,53 @@ jobs:
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
 
-      # The remaining coverage vmodv.yml runs on PRs. Kept in the same job so
-      # main pushes run the full suite once and `publish` waits for all of it,
-      # not just the unit tests. Both workflows call the same Makefile recipes
-      # for the static guards and e2e suites so their lists cannot drift.
+      # The remaining coverage vmodv.yml runs on PRs. Both workflows call the
+      # same Makefile recipe so their static-guard list cannot drift.
       - name: modv-app static and packaging guard tests (serial)
         run: make test-static-guards
+
+  # Real-binary e2e suites run on their own runner: each process owns an Xvfb
+  # display and the software GPU, so they cannot overlap the GPU/kittest suites
+  # above. Splitting them out lets the two validation legs run concurrently;
+  # `publish` waits for both. No `should_release` guard — like `validate`, this
+  # runs on every main push so docs-adjacent code changes are still validated.
+  validate-e2e:
+    name: VmodV e2e harness and parity tests (serial)
+    runs-on: ubuntu-latest
+    needs: version
+    timeout-minutes: 60
+    env:
+      DOCKER_BUILD_ARGS: --cache-from type=gha,scope=rust-toolchain
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-cache
+            crates/target
+          key: ${{ runner.os }}-release-e2e-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-e2e-cargo-
+            ${{ runner.os }}-release-cargo-
+
+      - name: Prepare Linux runner
+        uses: ./.github/actions/prepare-linux-runner
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Rust toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: rust
+          tags: modv-rust:local
+          load: true
+          cache-from: type=gha,scope=rust-toolchain
+          cache-to: type=gha,mode=max,scope=rust-toolchain
 
       - name: VmodV e2e harness and parity tests (serial)
         run: make test-e2e-vmodv
@@ -498,7 +541,8 @@ jobs:
   # Tags the commit and creates the GitHub release as a *draft* as soon as the
   # version is known. No build job is in `needs`: a slow, flaky or
   # capacity-starved platform leg must never stop the draft from being tagged.
-  # The draft stays invisible until `validate` passes and `publish` flips it;
+  # The draft stays invisible until both validation jobs pass and `publish`
+  # flips it;
   # build artifacts are uploaded by the `attach-*` jobs only when their own
   # build succeeded (see the comment on each attach job).
   release:
@@ -563,7 +607,7 @@ jobs:
   publish:
     name: Publish the validated GitHub release
     runs-on: ubuntu-latest
-    needs: [version, release, validate]
+    needs: [version, release, validate, validate-e2e]
     if: ${{ needs.version.outputs.should_release == 'true' }}
     timeout-minutes: 10
     env:

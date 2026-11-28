@@ -21,8 +21,17 @@
 //!
 //! `shared/assets.js` is not ported: no vendored scene imports it (UltraHDR
 //! uses its own `UltraHDRLoader`).
+//!
+//! [`assets`] resolves a texture from its ordered directories first; when no
+//! directory holds it, the wasm build and unit tests fall back to the
+//! compiled-in `bundled` copy of `resources/point10/textures`.
 
 pub mod assets;
+// The compiled-in texture bundle backs the wasm build (no filesystem) and the
+// unit tests. Desktop release binaries get it from disk instead, so the bundle
+// is not linked into them.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) mod bundled;
 pub mod p9_glsl;
 pub mod p9_shading;
 pub mod particle_alpha;

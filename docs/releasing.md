@@ -55,7 +55,9 @@ Merge commits are ignored.
    existing release in place, so re-runs after a build failure do not die on
    the tag or release already existing.
 5. The release is created as a **draft**; `publish` makes it visible only after
-   `validate` passes. A failed or cancelled run can therefore strand an
+   both `validate` (lint, unit and static guard tests) and `validate-e2e`
+   (real-binary suites, on a separate runner) pass. A failed or cancelled run
+   can therefore strand an
    invisible draft. `.github/workflows/nightly-cleanup.yml` runs at 03:00 UTC
    and calls `tools/prune-draft-releases.sh` to delete drafts older than a day
    that automation cut from `main`. It matches only `vX.Y.Z`-tagged releases

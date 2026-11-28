@@ -317,6 +317,56 @@ fn release_is_drafted_then_published_only_after_validation() {
 }
 
 #[test]
+fn e2e_validation_runs_in_its_own_job() {
+    // The real-binary suites need a private Xvfb display and the shared
+    // lavapipe device, so they cannot safely overlap with the GPU/kittest
+    // suites in `validate`. They still gate publication, but as a separate
+    // job on its own runner so the two legs run concurrently and a failure
+    // in either one stops the release.
+    let text = release_workflow();
+    let validate = job_block(&text, "validate").expect("release.yml has no `validate` job");
+    let e2e = job_block(&text, "validate-e2e")
+        .expect("release.yml has no `validate-e2e` job for the real-binary suites");
+
+    assert!(
+        !validate.contains("make test-e2e-vmodv"),
+        "`validate` still runs `make test-e2e-vmodv`; move the real-binary suites \
+         into `validate-e2e` so they do not hold up lint/unit tests on one runner"
+    );
+    assert!(
+        e2e.contains("make test-e2e-vmodv"),
+        "`validate-e2e` must run `make test-e2e-vmodv` so the real-binary suites \
+         still gate main pushes"
+    );
+    assert_eq!(
+        needs_of(&e2e),
+        vec!["version".to_string()],
+        "`validate-e2e` must depend on `version` only, like `validate`, so it \
+         runs on every main push including those that do not cut a release"
+    );
+    let condition = e2e
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("if:"))
+        .map(str::trim);
+    assert!(
+        condition.is_none_or(|condition| !condition.contains("should_release")),
+        "`validate-e2e` is gated on `should_release`; main pushes without a \
+         version bump must still be validated (got if: {condition:?})"
+    );
+
+    let publish = job_block(&text, "publish").expect("release.yml has no `publish` job");
+    let needs = needs_of(&publish);
+    for required in ["validate", "validate-e2e"] {
+        assert!(
+            needs.iter().any(|item| item == required),
+            "`publish` must depend on `{required}` so publication waits for both \
+             validation legs; got needs {needs:?}"
+        );
+    }
+}
+
+#[test]
 fn every_build_job_has_an_independent_attach_job() {
     let text = release_workflow();
     let names = job_names(&text);
@@ -427,10 +477,10 @@ fn main_pushes_do_not_rebuild_release_artifacts_in_ci_workflows() {
 
 #[test]
 fn main_push_lints_and_tests_once_before_publishing() {
-    // Both workflows trigger on pushes to main. release.yml's `validate` gates
-    // `publish`, so it must be the single place that lints and runs the full
-    // suite on that ref; vmodv.yml stands down for main pushes (it still owns
-    // the same coverage on PRs and manual runs).
+    // Both workflows trigger on pushes to main. release.yml's `validate` and
+    // `validate-e2e` gate `publish`, so they must be the single place that
+    // lints and runs the full suite on that ref; vmodv.yml stands down for
+    // main pushes (it still owns the same coverage on PRs and manual runs).
     let ci = fs::read_to_string(repo_root().join(".github/workflows/vmodv.yml"))
         .expect("read vmodv.yml");
     let release = release_workflow();
@@ -473,7 +523,6 @@ fn main_push_lints_and_tests_once_before_publishing() {
         "make engine-test ARGS=\"--workspace --exclude modv-app",
         "make engine-test ARGS=\"-p modv-app --lib",
         "make test-static-guards",
-        "make test-e2e-vmodv",
     ] {
         assert!(
             validate.contains(command),

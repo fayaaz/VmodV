@@ -10,3 +10,5 @@ pub mod user_module;
 
 #[cfg(test)]
 mod test_gpu;
+#[cfg(test)]
+mod test_gpu_compute;

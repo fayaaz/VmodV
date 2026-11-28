@@ -83,9 +83,9 @@ fn trigger_block(contents: &str, trigger: &str) -> String {
 
 #[test]
 fn main_push_validation_skips_docs_only_commits() {
-    // release.yml's `validate` runs lint, all guards and the e2e suites on
-    // every main push. Without a path filter a docs-only commit pays for that
-    // full run, which the old path-filtered vmodv.yml job avoided.
+    // release.yml's `validate` and `validate-e2e` run lint, all guards and the
+    // e2e suites on every main push. Without a path filter a docs-only commit
+    // pays for that full run, which the old path-filtered vmodv.yml job avoided.
     let root = repo_root();
     let release = read_text(&root.join(".github/workflows/release.yml"));
     let push = trigger_block(&release, "push");
