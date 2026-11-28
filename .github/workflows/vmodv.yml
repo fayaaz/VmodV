@@ -143,7 +143,7 @@ jobs:
       # Serial: the GPU/kittest suites share one lavapipe device and a
       # virtual display, just like modv-app below.
       - name: Workspace tests (modv-app excluded, serial)
-        run: make engine-test ARGS="--workspace --exclude modv-app -- --test-threads=1"
+        run: make engine-test ARGS="--workspace --exclude modv-app -- --test-threads=1 --skip test_gpu"
 
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
@@ -154,6 +154,11 @@ jobs:
       # release.yml's validation runs exactly the same set.
       - name: modv-app static and packaging guard tests (serial)
         run: make test-static-guards
+
+      # GPU shader units use the same lavapipe device as the e2e processes, so
+      # they run in this job immediately before e2e, never in parallel.
+      - name: GPU shader unit tests (serial)
+        run: make test-shader-gpu
 
       # Launches the real `modv` binary under Xvfb; lavapipe provides the
       # Vulkan adapter. One worker only because a process owns a virtual

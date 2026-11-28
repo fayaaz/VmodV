@@ -127,6 +127,65 @@ fn workflow_only_changes_trigger_ci_validation() {
     );
 }
 
+/// The body of a named job in a workflow, bounded by the next job key.
+fn job_block(contents: &str, job: &str) -> String {
+    let key = format!("  {job}:");
+    let lines: Vec<&str> = contents.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| *line == key)
+        .unwrap_or_else(|| panic!("no `{job}` job in workflow"));
+    let mut end = lines.len();
+    for (offset, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.starts_with("  ") && !line.starts_with("   ") && line.contains(':') {
+            end = offset;
+            break;
+        }
+    }
+    lines[start + 1..end].join("\n")
+}
+
+#[test]
+fn gpu_shader_tests_run_before_e2e_in_the_same_job() {
+    let root = repo_root();
+    let makefile = read_text(&root.join("Makefile"));
+    assert!(
+        active_lines(&makefile, true).any(|line| {
+            line.contains("run-cargo,test")
+                && line.contains("-p modv-renderers")
+                && line.contains("test_gpu")
+        }),
+        "Makefile must expose a `test-shader-gpu` recipe that runs the GPU shader tests"
+    );
+
+    for (name, file, job) in [
+        ("vmodv.yml", "vmodv.yml", "test"),
+        ("release.yml", "release.yml", "validate-e2e"),
+    ] {
+        let workflow = read_text(&root.join(".github/workflows").join(file));
+        let block = job_block(&workflow, job);
+        let shader = block
+            .lines()
+            .position(|line| line.contains("make test-shader-gpu"))
+            .unwrap_or_else(|| panic!("{name}'s `{job}` job must run `make test-shader-gpu`"));
+        let e2e = block
+            .lines()
+            .position(|line| line.contains("make test-e2e-vmodv"))
+            .unwrap_or_else(|| panic!("{name}'s `{job}` job must run `make test-e2e-vmodv`"));
+        assert!(
+            shader < e2e,
+            "{name}'s `{job}` job runs the GPU shader tests after e2e; they must gate it"
+        );
+        assert!(
+            active_lines(&workflow, false).any(|line| {
+                line.contains("engine-test ARGS=\"--workspace") && line.contains("--skip test_gpu")
+            }),
+            "{name}'s workspace test step must `--skip test_gpu` so the dedicated \
+             shader step does not run the same suite twice"
+        );
+    }
+}
+
 #[test]
 fn every_top_level_integration_target_runs_in_ci() {
     let root = repo_root();

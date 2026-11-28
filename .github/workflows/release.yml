@@ -139,8 +139,10 @@ jobs:
 
       # Same split as vmodv.yml: the GPU/kittest suites share one lavapipe
       # device, so the workspace runs serial and modv-app is run separately.
+      # The GPU shader units run in validate-e2e immediately before the real
+      # binary suites; `--skip test_gpu` keeps them from running twice.
       - name: Workspace tests (modv-app excluded, serial)
-        run: make engine-test ARGS="--workspace --exclude modv-app -- --test-threads=1"
+        run: make engine-test ARGS="--workspace --exclude modv-app -- --test-threads=1 --skip test_gpu"
 
       - name: modv-app unit tests (serial)
         run: make engine-test ARGS="-p modv-app --lib -- --test-threads=1"
@@ -192,6 +194,9 @@ jobs:
           load: true
           cache-from: type=gha,scope=rust-toolchain
           cache-to: type=gha,mode=max,scope=rust-toolchain
+
+      - name: GPU shader unit tests (serial)
+        run: make test-shader-gpu
 
       - name: VmodV e2e harness and parity tests (serial)
         run: make test-e2e-vmodv

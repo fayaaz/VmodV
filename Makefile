@@ -317,6 +317,12 @@ engine-run: docker-cargo-volume
 engine-test: docker-cargo-volume
 	$(call run-cargo,test $(ARGS))
 
+# GPU-executed shader unit tests (compute shim, built-in registry, ISF corpus).
+# CI runs this step immediately before the e2e suites in the same job, and
+# skips these tests in the workspace sweep so they are not run twice.
+test-shader-gpu: docker-cargo-volume
+	$(call run-cargo,test -p modv-renderers --lib test_gpu -- --test-threads=1)
+
 engine-lint: docker-cargo-volume
 	$(call run-cargo,clippy --all-targets -- -D warnings)
 	$(call run-cargo,fmt --check)
