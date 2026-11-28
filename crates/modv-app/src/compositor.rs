@@ -7307,6 +7307,110 @@ void main() {
     }
 
     #[test]
+    fn plane9_waves_of_sin_is_visible_through_the_normal_composite() {
+        let Some(engine) = try_engine() else {
+            return;
+        };
+        let mut compositor = Compositor::new(&engine.device, &engine.queue);
+        compositor.resize(POINT10_SIZE, POINT10_SIZE);
+
+        // Keep the default operation that exposed the bug: the module's final
+        // screen pass used to write RGB with alpha 0, which the premultiplied
+        // normal composite discarded before it could reach `main`.
+        let state = point10_state("Plane9 Waves of Sin", json!({}));
+        assert_eq!(
+            state.modules["module-a"].meta["compositeOperation"].as_str(),
+            Some("normal"),
+            "the regression must exercise the default normal composite"
+        );
+
+        // Fixed analyser data, matching the renderer contract's deterministic
+        // bass/flash injection. The first frame has dt=0; later frames are a
+        // fixed 30 Hz sequence, warming the 50-row sound trail past 110 ticks.
+        let mut audio = AudioFrame::default();
+        audio.lanes[0] = 0.2;
+        audio.lanes[4] = 0.8;
+        audio.raw_lanes = audio.lanes;
+        audio.byte_frequency_data = [180; 1024];
+        audio.freq_mag = [0.5; 1024];
+        for index in 0..=111_u64 {
+            let frame = FrameInfo {
+                time_seconds: index as f32 / 30.0,
+                frame_index: index,
+                audio: audio.clone(),
+                ..frame_info()
+            };
+            compositor
+                .render_frame(&state, &frame)
+                .expect("Plane9 Waves of Sin frame renders");
+        }
+
+        // Read the scene target as well as the composited output: a visible
+        // scene target proves a black `main` is the blend discarding it, not an
+        // empty scene or a cold audio trail.
+        let scene_texture = compositor
+            .point10
+            .get("module-a")
+            .and_then(|instance| instance.target.as_ref())
+            .expect("the scene rendered into a module target")
+            .texture
+            .clone();
+        let scene_pixels = read_back_texture(
+            &compositor.device,
+            &compositor.queue,
+            &scene_texture,
+            POINT10_SIZE,
+            POINT10_SIZE,
+        )
+        .expect("scene target reads back");
+        let pixels = compositor.read_main_rgba8().expect("main reads back");
+
+        let total_pixels = (POINT10_SIZE * POINT10_SIZE) as usize;
+        assert_eq!(scene_pixels.len(), total_pixels * 4);
+        assert_eq!(pixels.len(), total_pixels * 4);
+        let rgb_lit = |pixels: &[u8]| {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0)
+                .count()
+        };
+        let visible = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] != 0 && (pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0))
+            .count();
+        let nonzero_alpha = lit_pixels(&pixels);
+        let opaque = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] == 255)
+            .count();
+        let scene_rgb_lit = rgb_lit(&scene_pixels);
+        let minimum_visible = (total_pixels / 100).max(1);
+        eprintln!(
+            "Plane9 Waves of Sin normal composite: scene_rgb={scene_rgb_lit}, \
+             main_rgb={}, nonzero_alpha={nonzero_alpha}, visible={visible}, \
+             opaque={opaque}, total={total_pixels}",
+            rgb_lit(&pixels)
+        );
+
+        assert!(
+            scene_rgb_lit > 0,
+            "non-vacuous check: the warmed scene target itself must contain RGB"
+        );
+        assert!(
+            visible >= minimum_visible,
+            "Plane9 Waves of Sin is invisible through the default normal composite: \
+             {visible}/{total_pixels} pixels have nonzero RGB and alpha \
+             (minimum {minimum_visible}); the scene target has {scene_rgb_lit} RGB-lit pixels"
+        );
+    }
+
+    #[test]
     fn point10_waveform_renders_through_the_scene_path() {
         let Some(engine) = try_engine() else {
             return;

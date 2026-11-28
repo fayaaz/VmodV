@@ -46,7 +46,13 @@
 //! * `Shader2` (XML 162-193): `c1 = bloom * 0.25`, `c2 = rtt`, `bg =
 //!   PreviousLayer1`; `c = c1 + c2`; lift/gamma/gain
 //!   `(0,0,0) / (1.5,1.5,1.0) / (1.2,1.2,1.5)`; ACES; screen-blend over the
-//!   background; final alpha **0.0**.
+//!   background; final alpha **1.0**.
+//!
+//!   The vendor writes alpha 0 here because its final screen pass draws straight
+//!   to the presentation surface, which ignores alpha. Our compositor instead
+//!   consumes a module's output as a **premultiplied RGBA layer**, so a
+//!   finished full-frame image at alpha 0 contributes nothing and the scene is
+//!   invisible. Writing 1.0 is what reproduces the vendor's *presented* frame.
 //! * `SoundTexture1`: `SoundType 0`, `Width 2`, `History 50`, `Damping 0.1`,
 //!   `IncreaseRate 10`, `DecreaseRate 0.5`, `SpectrumAmplification 5`, through
 //!   the reusable [`SoundTexture`] helper. `makeDataTexture` uses
@@ -1131,7 +1137,9 @@ fn fs_main(in: CompositeOut) -> @location(0) vec4<f32> {
   // WGSL has no swizzle assignment, so the port rebuilds the vec4 instead.
   c = vec4<f32>(p9_saturate3(p9_lift_gamma_gain(c.rgb, vec3<f32>(0.0), vec3<f32>(1.5, 1.5, 1.0), vec3<f32>(1.2, 1.2, 1.5))), c.a);
   c = vec4<f32>(p9_tonemap_aces(c.rgb), 1.0);
-  return vec4<f32>(p9_blend_screen(bg.rgb, c.rgb), 0.0);
+  // Vendor: returns alpha 0 because its presentation surface ignores alpha.
+  // Our compositor reads this as a premultiplied layer, so present opaque.
+  return vec4<f32>(p9_blend_screen(bg.rgb, c.rgb), 1.0);
 }
 "#;
 

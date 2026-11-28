@@ -112,17 +112,22 @@ fn validates_with_plane9_preludes(shader: &str) -> bool {
     false
 }
 
-fn rgb_lit_pixels(pixels: &[u8]) -> usize {
+fn opaque_rgb_lit_pixels(pixels: &[u8]) -> usize {
     pixels
         .as_chunks::<4>()
         .0
         .iter()
-        .filter(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0)
+        .filter(|pixel| pixel[3] == 255 && (pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0))
         .count()
 }
 
-fn all_alpha_zero(pixels: &[u8]) -> bool {
-    pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0)
+fn all_pixels_opaque(pixels: &[u8]) -> bool {
+    !pixels.is_empty()
+        && pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 255)
 }
 
 #[test]
@@ -937,7 +942,10 @@ fn plane9_waves_of_sin_fidelity_red_contract() {
         }
 
         // E — Shader2 (XML 32-79): quarter-gain bloom + raw RTT, lift/gamma/gain,
-        // ACES, then screen blend over PreviousLayer. The final alpha is 0.0.
+        // ACES, then the vendor screen blend over PreviousLayer. Plane9's final
+        // screen pass ignores alpha because it renders to the presentation
+        // surface; our compositor instead treats module output as a premultiplied
+        // layer, so this finished full-frame image must present opaque to survive.
         let composite = raw_const(source, "WAVES_OF_SIN_COMPOSITE_WGSL");
         check!(
             composite.is_some(),
@@ -951,7 +959,7 @@ fn plane9_waves_of_sin_fidelity_red_contract() {
                 "let c = c1 + c2;",
                 "c.rgb = p9_saturate3(p9_lift_gamma_gain(c.rgb, vec3<f32>(0.0), vec3<f32>(1.5, 1.5, 1.0), vec3<f32>(1.2, 1.2, 1.5)));",
                 "c = vec4<f32>(p9_tonemap_aces(c.rgb), 1.0);",
-                "return vec4<f32>(p9_blend_screen(bg.rgb, c.rgb), 0.0);",
+                "return vec4<f32>(p9_blend_screen(bg.rgb, c.rgb), 1.0);",
             ] {
                 check!(
                     compact_contains(composite, needle),
@@ -962,13 +970,20 @@ fn plane9_waves_of_sin_fidelity_red_contract() {
                 "* 2.0",
                 "p9_brightness_saturation_contrast(",
                 "max(c1.a, c2.a)",
-                "return vec4<f32>(p9_blend_screen(bg.rgb, c.rgb), 1.0);",
             ] {
                 check!(
                     !compact_contains(composite, forbidden),
                     "E: composite retained Music Waves/non-vendor term {forbidden}"
                 );
             }
+            check!(
+                !compact_contains(
+                    composite,
+                    "return vec4<f32>(p9_blend_screen(bg.rgb, c.rgb), 0.0);"
+                ),
+                "E: the final present pass must not return alpha 0.0: our premultiplied \
+                 compositor discards a fully transparent finished image"
+            );
             check!(
                 compact_match_count(composite, "textureSampleLevel(") == 3
                     && compact_match_count(composite, "textureSample(") == 0
@@ -1131,8 +1146,8 @@ fn fs_main() -> @location(0) vec4<f32> {
     }
 
     // G — 320x180 fallback-adapter smoke. 50,000 additive quads are expensive,
-    // so use three frames and report init/render/readback timings. The composite
-    // writes alpha 0.0: lit means nonzero RGB, never any_lit's alpha gate.
+    // so use three frames and report init/render/readback timings. The finished
+    // image must be opaque and have nonzero RGB to be visible as a module layer.
     if let Some(index) = waves_of_sin_index {
         check!(
             source.is_some(),
@@ -1207,17 +1222,23 @@ fn fs_main() -> @location(0) vec4<f32> {
                 1.0 / 60.0,
                 "frame 2 (dt=1/60)",
             );
-            let first_lit = rgb_lit_pixels(&first);
-            let repeated_lit = rgb_lit_pixels(&repeated);
-            let second_lit = rgb_lit_pixels(&second);
+            let first_lit = opaque_rgb_lit_pixels(&first);
+            let repeated_lit = opaque_rgb_lit_pixels(&repeated);
+            let second_lit = opaque_rgb_lit_pixels(&second);
             eprintln!(
-                "Plane9 Waves of Sin RGB-lit pixels: first={first_lit} repeat={repeated_lit} second={second_lit}; alpha_zero={}/{}/{}",
-                all_alpha_zero(&first),
-                all_alpha_zero(&repeated),
-                all_alpha_zero(&second)
+                "Plane9 Waves of Sin opaque RGB-lit pixels: first={first_lit} repeat={repeated_lit} second={second_lit}; opaque={}/{}/{}",
+                all_pixels_opaque(&first),
+                all_pixels_opaque(&repeated),
+                all_pixels_opaque(&second)
             );
-            check!(first_lit > 0, "G: Waves of Sin frame 1 has no nonzero RGB");
-            check!(second_lit > 0, "G: Waves of Sin frame 2 has no nonzero RGB");
+            check!(
+                first_lit > 0,
+                "G: Waves of Sin frame 1 has no opaque nonzero RGB"
+            );
+            check!(
+                second_lit > 0,
+                "G: Waves of Sin frame 2 has no opaque nonzero RGB"
+            );
             check!(
                 first == repeated,
                 "G: Waves of Sin frame 1 is not byte-for-byte deterministic across fresh instances"
@@ -1227,8 +1248,10 @@ fn fs_main() -> @location(0) vec4<f32> {
                 "G: Waves of Sin later frame did not evolve"
             );
             check!(
-                all_alpha_zero(&first) && all_alpha_zero(&repeated) && all_alpha_zero(&second),
-                "G: Shader2's final alpha-0.0 composite must keep every presented pixel alpha zero"
+                all_pixels_opaque(&first)
+                    && all_pixels_opaque(&repeated)
+                    && all_pixels_opaque(&second),
+                "G: the final present pass must make every presented pixel opaque"
             );
         }
     } else {
