@@ -31,6 +31,7 @@
 //! | [`hypno_toad`] | Hypno Toad | `Psychedelic/HypnoToad.xml` (single-pass instanced spirograph) |
 //! | [`cell_culture`] | Cell Culture | `Cell/Cell Culture.xml` (reaction-diffusion feedback) |
 //! | [`waves_of_sin`] | Waves of Sin | `Line/Waves of sin.xml` (50 000 instanced point sprites) |
+//! | [`gravity_spectrum`] | Gravity Spectrum | `Music/Gravity Spectrum.xml` (ribbon histories + bloom) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -52,6 +53,8 @@
 mod evil_box_red_contract;
 #[cfg(test)]
 mod plane9_cell_culture_fidelity_red_contract;
+#[cfg(test)]
+mod plane9_gravity_spectrum_fidelity_red_contract;
 #[cfg(test)]
 mod plane9_hypno_toad_fidelity_red_contract;
 #[cfg(test)]
@@ -79,6 +82,7 @@ pub mod earth;
 pub mod evil_box;
 pub mod fire_common;
 pub mod gradient;
+pub mod gravity_spectrum;
 pub mod hollow_cube;
 pub mod hypno_toad;
 pub mod it_is_coming_for_you;

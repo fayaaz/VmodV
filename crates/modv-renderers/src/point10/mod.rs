@@ -157,7 +157,7 @@ fn fullscreen_uv(position: vec2<f32>, resolution: vec2<f32>) -> vec2<f32> {
 /// frame at 0.1 s ("a tab-suspend catch-up cannot jump the pattern").
 pub const MAX_FRAME_SECONDS: f32 = 0.1;
 
-/// The thirty-five Plane9 (Joakim Dahl) preset ports, under their current
+/// The thirty-six Plane9 (Joakim Dahl) preset ports, under their current
 /// canonical `Plane9 <Name>` registry names.
 ///
 /// Twelve were originally registered as `Point10 <Name>`. Saved Scenes and
@@ -209,6 +209,8 @@ pub const PLANE9_SCENE_NAMES: &[&str] = &[
     "Plane9 Cell Culture",
     // The ninth XML batch (50 000-point instanced preset).
     "Plane9 Waves of Sin",
+    // The tenth XML batch (recorded ribbon-history preset).
+    "Plane9 Gravity Spectrum",
 ];
 
 /// The prefix of the scenes that kept their `Point10 ` registry name, and of
@@ -858,8 +860,8 @@ impl UnitQuad {
 /// batch-5a scenes `HollowCube, AttractorParticles, DvdRoom`, and the batch-5b
 /// scenes `RollingFire, SmokeRoom, LatentBackrooms`, plus
 /// `BallOfFire` (the frozen RollingFire variant), `Sun`, `Earth` and `TheCave`
-/// (the Plane9 scene batch) plus Music Waves, Hypno Toad, Cell Culture and
-/// Waves of Sin — the complete 53-scene set.
+/// (the Plane9 scene batch) plus Music Waves, Hypno Toad, Cell Culture, Waves
+/// of Sin and Gravity Spectrum — the complete 54-scene set.
 /// Glass Lens is not registered: its upstream CodePen does not state a licence.
 pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
     vec![
@@ -932,6 +934,8 @@ pub fn all_scenes() -> Vec<Box<dyn Point10Scene>> {
         Box::new(scenes::cell_culture::CellCulture::new()),
         // The ninth Plane9 XML batch (50 000-point instanced preset).
         Box::new(scenes::waves_of_sin::WavesOfSin::new()),
+        // The tenth Plane9 XML batch (recorded ribbon-history preset).
+        Box::new(scenes::gravity_spectrum::GravitySpectrum::new()),
     ]
 }
 
@@ -947,7 +951,7 @@ mod tests {
     #[test]
     fn registry_has_the_port_order_scenes() {
         let scenes = all_scenes();
-        assert_eq!(scenes.len(), 53);
+        assert_eq!(scenes.len(), 54);
 
         assert_eq!(scenes[0].name(), "Point10 Chromatic Line");
         assert_eq!(scenes[1].name(), "Point10 Chromatic Wave");
@@ -1012,6 +1016,7 @@ mod tests {
         assert_eq!(scenes[50].name(), "Plane9 Hypno Toad");
         assert_eq!(scenes[51].name(), "Plane9 Cell Culture");
         assert_eq!(scenes[52].name(), "Plane9 Waves of Sin");
+        assert_eq!(scenes[53].name(), "Plane9 Gravity Spectrum");
         assert!(
             scenes
                 .iter()
@@ -1231,8 +1236,8 @@ mod tests {
         let names: Vec<&str> = scenes.iter().map(|scene| scene.name()).collect();
         let unique_names: BTreeSet<&str> = names.iter().copied().collect();
         check!(
-            scenes.len() == 53,
-            "roster: expected 53 scenes, got {}",
+            scenes.len() == 54,
+            "roster: expected 54 scenes, got {}",
             scenes.len()
         );
         check!(
@@ -1240,8 +1245,8 @@ mod tests {
             "roster: duplicate names in {names:?}"
         );
         check!(
-            PLANE9_SCENE_NAMES.len() == 35,
-            "Plane9 alias roster: expected 35 names, got {}",
+            PLANE9_SCENE_NAMES.len() == 36,
+            "Plane9 alias roster: expected 36 names, got {}",
             PLANE9_SCENE_NAMES.len()
         );
         let spiky_matches: Vec<_> = scenes
@@ -1297,8 +1302,8 @@ mod tests {
         let repo_root = manifest_dir.join("../..");
         let point10_root = manifest_dir.join("src/point10");
 
-        // D — committed parity and generated catalogue data retain 53 Point10
-        // scenes and total 504 after three shader effects were retired. The
+        // D — committed parity and generated catalogue data retain 54 Point10
+        // scenes and total 505 after three shader effects were retired. The
         // catalogue is checked as data.
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
@@ -1306,13 +1311,13 @@ mod tests {
         )
         .expect("parse module-parity.json");
         check!(
-            manifest["counts"]["point10"].as_u64() == Some(53),
-            "manifest: point10 count is {:?}, expected 53",
+            manifest["counts"]["point10"].as_u64() == Some(54),
+            "manifest: point10 count is {:?}, expected 54",
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(504),
-            "manifest: total is {:?}, expected 504",
+            manifest["counts"]["total"].as_u64() == Some(505),
+            "manifest: total is {:?}, expected 505",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -1322,8 +1327,8 @@ mod tests {
             .map(|name| name.as_str().expect("manifest module name"))
             .collect();
         check!(
-            manifest_names.len() == 53,
-            "manifest: expected 53 Point10 names, got {}",
+            manifest_names.len() == 54,
+            "manifest: expected 54 Point10 names, got {}",
             manifest_names.len()
         );
         check!(
@@ -1341,13 +1346,13 @@ mod tests {
         )
         .expect("parse docs/modules/modules.json");
         check!(
-            catalogue["counts"]["point10"].as_u64() == Some(53),
-            "catalogue: point10 count is {:?}, expected 53",
+            catalogue["counts"]["point10"].as_u64() == Some(54),
+            "catalogue: point10 count is {:?}, expected 54",
             catalogue["counts"]["point10"]
         );
         check!(
-            catalogue["counts"]["total"].as_u64() == Some(504),
-            "catalogue: total is {:?}, expected 504",
+            catalogue["counts"]["total"].as_u64() == Some(505),
+            "catalogue: total is {:?}, expected 505",
             catalogue["counts"]["total"]
         );
         let catalogue_modules = catalogue["modules"].as_array().expect("catalogue modules");
@@ -1401,8 +1406,8 @@ mod tests {
             "UI licence map: Spiky is missing from the exact CC BY-NC-SA 4.0 arm"
         );
         check!(
-            compact(&ui_model).contains("checked.len(), 53,"),
-            "UI licence provenance test: expected count must move from 52 to 53"
+            compact(&ui_model).contains("checked.len(), 54,"),
+            "UI licence provenance test: expected count must move from 53 to 54"
         );
 
         // A/B — the existing box primitive is only the 24-vertex/12-triangle

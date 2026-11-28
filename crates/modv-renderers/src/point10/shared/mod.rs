@@ -11,6 +11,7 @@
 //! | `shared/phraseColor.js` | [`phrase_color`] | WaterRipple, Mycelium, AroundPlus |
 //! | `shared/waterWave.js` | [`water_wave`] | WaterRipple, AroundPlus |
 //! | `plane9/P9Nodes.js` `SoundTexture` | [`sound_texture`] | MusicWaves (and the future spectrum presets) |
+//! | `plane9/P9Nodes.js` `Ribbons` | [`ribbons`] | Gravity Spectrum |
 //! | `shared/textures.js` (the loader half) | [`assets`] | AroundPlus, Boxy, UltraHDR |
 //!
 //! `plane9/P9Audio.js` is deliberately **not** here: it is subsumed by
@@ -27,5 +28,6 @@ pub mod p9_shading;
 pub mod particle_alpha;
 pub mod phrase_color;
 pub mod random;
+pub mod ribbons;
 pub mod sound_texture;
 pub mod water_wave;

@@ -55,8 +55,8 @@ uses a split runtime:
   draws it with dummy input/FFT textures. Browsers without WebGPU get a
   metadata card instead of a canvas.
 
-The catalogue's preview shim only draws a single fragment pass, so 435 of 504
-modules get a live preview. The 16 2D canvas modules and 53 Point10 scenes are
+The catalogue's preview shim only draws a single fragment pass, so 435 of 505
+modules get a live preview. The 16 2D canvas modules and 54 Point10 scenes are
 catalogued with full metadata but are not drawn by this shim; they render in
 the browser shell at the site root, which runs the real compositor and registry
 (shader, 2D and Point10 modules).

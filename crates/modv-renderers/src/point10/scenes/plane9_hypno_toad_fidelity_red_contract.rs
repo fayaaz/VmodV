@@ -140,8 +140,8 @@ fn plane9_hypno_toad_fidelity_red_contract() {
     // A — XML 2-6 and the registry contract: the seventh XML batch appends one
     // canonical Plane9/Dahl scene after Music Waves.
     check!(
-        scenes.len() == 53,
-        "A: expected 53 Point10 scenes, got {}",
+        scenes.len() == 54,
+        "A: expected 54 Point10 scenes, got {}",
         scenes.len()
     );
     check!(
@@ -153,25 +153,29 @@ fn plane9_hypno_toad_fidelity_red_contract() {
         "A: all_scenes roster order is not deterministic"
     );
     check!(
-        names.last() == Some(&"Plane9 Waves of Sin"),
-        "A: Waves of Sin must be the deterministic roster tail, got {:?}",
+        names.last() == Some(&"Plane9 Gravity Spectrum"),
+        "A: Gravity Spectrum must be the deterministic roster tail, got {:?}",
         names.last()
     );
     check!(
-        names.get(names.len().saturating_sub(2)) == Some(&"Plane9 Cell Culture"),
-        "A: Cell Culture must be penultimate, after Hypno Toad"
+        names.get(names.len().saturating_sub(2)) == Some(&"Plane9 Waves of Sin"),
+        "A: Waves of Sin must be penultimate, after Cell Culture"
     );
     check!(
-        names.get(names.len().saturating_sub(3)) == Some(&SCENE_NAME),
+        names.get(names.len().saturating_sub(3)) == Some(&"Plane9 Cell Culture"),
+        "A: Cell Culture must follow Hypno Toad"
+    );
+    check!(
+        names.get(names.len().saturating_sub(4)) == Some(&SCENE_NAME),
         "A: Hypno Toad must follow Plane9 Music Waves without reordering the roster"
     );
     check!(
-        names.get(names.len().saturating_sub(4)) == Some(&"Plane9 Music Waves"),
+        names.get(names.len().saturating_sub(5)) == Some(&"Plane9 Music Waves"),
         "A: Hypno Toad must follow Plane9 Music Waves without reordering the roster"
     );
     check!(
-        PLANE9_SCENE_NAMES.len() == 35,
-        "A: expected 35 Plane9 scene names, got {}",
+        PLANE9_SCENE_NAMES.len() == 36,
+        "A: expected 36 Plane9 scene names, got {}",
         PLANE9_SCENE_NAMES.len()
     );
     let mut unique_plane9_names = PLANE9_SCENE_NAMES.to_vec();
@@ -182,20 +186,25 @@ fn plane9_hypno_toad_fidelity_red_contract() {
         "A: duplicate names in PLANE9_SCENE_NAMES"
     );
     check!(
-        PLANE9_SCENE_NAMES.last() == Some(&"Plane9 Waves of Sin"),
-        "A: PLANE9_SCENE_NAMES must end with Plane9 Waves of Sin"
+        PLANE9_SCENE_NAMES.last() == Some(&"Plane9 Gravity Spectrum"),
+        "A: PLANE9_SCENE_NAMES must end with Plane9 Gravity Spectrum"
     );
     check!(
         PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(2))
+            == Some(&"Plane9 Waves of Sin"),
+        "A: PLANE9_SCENE_NAMES must place Waves of Sin penultimate"
+    );
+    check!(
+        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(3))
             == Some(&"Plane9 Cell Culture"),
-        "A: PLANE9_SCENE_NAMES must place Cell Culture penultimate"
+        "A: PLANE9_SCENE_NAMES must place Cell Culture third from the end"
     );
     check!(
-        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(3)) == Some(&SCENE_NAME),
-        "A: PLANE9_SCENE_NAMES must place {SCENE_NAME} third from the end"
+        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(4)) == Some(&SCENE_NAME),
+        "A: PLANE9_SCENE_NAMES must place {SCENE_NAME} fourth from the end"
     );
     check!(
-        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(4))
+        PLANE9_SCENE_NAMES.get(PLANE9_SCENE_NAMES.len().saturating_sub(5))
             == Some(&"Plane9 Music Waves"),
         "A: PLANE9_SCENE_NAMES must append Hypno Toad after Music Waves"
     );
@@ -250,20 +259,20 @@ fn plane9_hypno_toad_fidelity_red_contract() {
     }
 
     // A — the parity fixture and generated catalogue move from 51/502 to
-    // 53/504. XML line 6 is the 3.0 licence arm, not the 4.0 arm.
+    // 54/505. XML line 6 is the 3.0 licence arm, not the 4.0 arm.
     let manifest: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
             .expect("read module-parity.json"),
     )
     .expect("parse module-parity.json");
     check!(
-        manifest["counts"]["point10"].as_u64() == Some(53),
-        "A: manifest point10 count is {:?}, expected 53",
+        manifest["counts"]["point10"].as_u64() == Some(54),
+        "A: manifest point10 count is {:?}, expected 54",
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(504),
-        "A: manifest total is {:?}, expected 504",
+        manifest["counts"]["total"].as_u64() == Some(505),
+        "A: manifest total is {:?}, expected 505",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -273,8 +282,8 @@ fn plane9_hypno_toad_fidelity_red_contract() {
         .map(|name| name.as_str().expect("manifest module name"))
         .collect();
     check!(
-        manifest_names.len() == 53,
-        "A: manifest point10 array has {} names, expected 53",
+        manifest_names.len() == 54,
+        "A: manifest point10 array has {} names, expected 54",
         manifest_names.len()
     );
     check!(
@@ -286,11 +295,13 @@ fn plane9_hypno_toad_fidelity_red_contract() {
         "A: manifest must contain {SCENE_NAME} exactly once"
     );
     check!(
-        manifest_names.last() == Some(&"Plane9 Waves of Sin")
+        manifest_names.last() == Some(&"Plane9 Gravity Spectrum")
             && manifest_names.get(manifest_names.len().saturating_sub(2))
+                == Some(&"Plane9 Waves of Sin")
+            && manifest_names.get(manifest_names.len().saturating_sub(3))
                 == Some(&"Plane9 Cell Culture")
-            && manifest_names.get(manifest_names.len().saturating_sub(3)) == Some(&SCENE_NAME)
-            && manifest_names.get(manifest_names.len().saturating_sub(4))
+            && manifest_names.get(manifest_names.len().saturating_sub(4)) == Some(&SCENE_NAME)
+            && manifest_names.get(manifest_names.len().saturating_sub(5))
                 == Some(&"Plane9 Music Waves"),
         "A: manifest must append Plane9 Waves of Sin after Plane9 Cell Culture"
     );
@@ -301,18 +312,18 @@ fn plane9_hypno_toad_fidelity_red_contract() {
     )
     .expect("parse docs/modules/modules.json");
     check!(
-        catalogue["counts"]["point10"].as_u64() == Some(53),
-        "A: catalogue point10 count is {:?}, expected 53",
+        catalogue["counts"]["point10"].as_u64() == Some(54),
+        "A: catalogue point10 count is {:?}, expected 54",
         catalogue["counts"]["point10"]
     );
     check!(
-        catalogue["counts"]["total"].as_u64() == Some(504),
-        "A: catalogue total is {:?}, expected 504",
+        catalogue["counts"]["total"].as_u64() == Some(505),
+        "A: catalogue total is {:?}, expected 505",
         catalogue["counts"]["total"]
     );
     check!(
-        catalogue["modules"].as_array().map(Vec::len) == Some(504),
-        "A: catalogue modules array must contain 504 entries"
+        catalogue["modules"].as_array().map(Vec::len) == Some(505),
+        "A: catalogue modules array must contain 505 entries"
     );
     let catalogue_matches: Vec<_> = catalogue["modules"]
         .as_array()
@@ -394,8 +405,8 @@ fn plane9_hypno_toad_fidelity_red_contract() {
         "A: Hypno Toad must not be classified in the 4.0 licence arm"
     );
     check!(
-        compact_contains(&ui_model, "checked.len(),53,"),
-        "A: UI licence provenance count must move from 52 to 53"
+        compact_contains(&ui_model, "checked.len(),54,"),
+        "A: UI licence provenance count must move from 53 to 54"
     );
 
     // A — the app wrapper must construct the canonical name and delegate every
@@ -435,6 +446,7 @@ fn plane9_hypno_toad_fidelity_red_contract() {
     let hypno_position = wrapper_order.find("\"Plane9 Hypno Toad\"");
     let cell_position = wrapper_order.find("\"Plane9 Cell Culture\"");
     let waves_position = wrapper_order.find("\"Plane9 Waves of Sin\"");
+    let gravity_position = wrapper_order.find("\"Plane9 Gravity Spectrum\"");
     check!(
         music_position.is_some_and(|music| { hypno_position.is_some_and(|hypno| music < hypno) }),
         "A: wrapper-order list must append Plane9 Hypno Toad after Plane9 Music Waves"
@@ -444,16 +456,20 @@ fn plane9_hypno_toad_fidelity_red_contract() {
         "A: wrapper-order list must append Plane9 Cell Culture after Plane9 Hypno Toad"
     );
     check!(
-        cell_position.is_some_and(|cell| { waves_position.is_some_and(|waves| cell < waves) }),
-        "A: wrapper-order list must append Plane9 Waves of Sin after Plane9 Cell Culture"
+        cell_position.is_some_and(|cell| {
+            waves_position.is_some_and(|waves| {
+                gravity_position.is_some_and(|gravity| cell < waves && waves < gravity)
+            })
+        }),
+        "A: wrapper-order list must append Plane9 Gravity Spectrum after Plane9 Waves of Sin"
     );
-    if let Some(waves) = waves_position {
-        let tail = &wrapper_order[waves + "\"Plane9 Waves of Sin\"".len()..];
+    if let Some(gravity) = gravity_position {
+        let tail = &wrapper_order[gravity + "\"Plane9 Gravity Spectrum\"".len()..];
         let tail = tail.trim_start();
         let tail = tail.strip_prefix(',').unwrap_or(tail).trim_start();
         check!(
             tail.starts_with(']'),
-            "A: Plane9 Waves of Sin must be the wrapper-order list tail"
+            "A: Plane9 Gravity Spectrum must be the wrapper-order list tail"
         );
     }
 

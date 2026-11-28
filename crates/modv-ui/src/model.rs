@@ -2483,6 +2483,7 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             | "Xor"
             | "Hypno Toad"
             | "Cell Culture"
+            | "Gravity Spectrum"
             | "Abstract Clouds"
             | "Cloud Flight"
             | "Color Blob"
@@ -4270,6 +4271,7 @@ mod tests {
             "Point10 Gradient",
             "Point10 Hypno Toad",
             "Point10 Cell Culture",
+            "Point10 Gravity Spectrum",
             "Point10 It Is Coming For You",
             "Point10 Light Tunnel",
             "Point10 Sun",
@@ -4318,7 +4320,7 @@ mod tests {
 
         assert_eq!(
             checked.len(),
-            53,
+            54,
             "every registered Point10 scene must have a provenance label"
         );
     }
