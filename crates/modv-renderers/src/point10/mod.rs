@@ -1303,7 +1303,7 @@ mod tests {
         let point10_root = manifest_dir.join("src/point10");
 
         // D — committed parity and generated catalogue data retain 54 Point10
-        // scenes and total 505 after three shader effects were retired. The
+        // scenes and total 506 after three shader effects were retired. The
         // catalogue is checked as data.
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
@@ -1316,8 +1316,8 @@ mod tests {
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(505),
-            "manifest: total is {:?}, expected 505",
+            manifest["counts"]["total"].as_u64() == Some(506),
+            "manifest: total is {:?}, expected 506",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -1351,8 +1351,8 @@ mod tests {
             catalogue["counts"]["point10"]
         );
         check!(
-            catalogue["counts"]["total"].as_u64() == Some(505),
-            "catalogue: total is {:?}, expected 505",
+            catalogue["counts"]["total"].as_u64() == Some(506),
+            "catalogue: total is {:?}, expected 506",
             catalogue["counts"]["total"]
         );
         let catalogue_modules = catalogue["modules"].as_array().expect("catalogue modules");

@@ -182,7 +182,7 @@ fn plane9_evil_box_fidelity_red_contract() {
     }
 
     // A/G — the parity fixture and generated catalogue are data contracts, not
-    // implementation details. Both currently pin 54/505.
+    // implementation details. Both currently pin 54/506.
     let manifest: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
             .expect("read module-parity.json"),
@@ -194,8 +194,8 @@ fn plane9_evil_box_fidelity_red_contract() {
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(505),
-        "G: manifest total is {:?}, expected 505",
+        manifest["counts"]["total"].as_u64() == Some(506),
+        "G: manifest total is {:?}, expected 506",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -229,8 +229,8 @@ fn plane9_evil_box_fidelity_red_contract() {
         catalogue["counts"]["point10"]
     );
     check!(
-        catalogue["counts"]["total"].as_u64() == Some(505),
-        "G: catalogue total is {:?}, expected 505",
+        catalogue["counts"]["total"].as_u64() == Some(506),
+        "G: catalogue total is {:?}, expected 506",
         catalogue["counts"]["total"]
     );
     let catalogue_matches: Vec<_> = catalogue["modules"]

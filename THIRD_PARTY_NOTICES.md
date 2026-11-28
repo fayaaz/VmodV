@@ -119,6 +119,17 @@ multi-pass path without an override.
 | `resources/isf/Orbiting Prism Cluster.fs` | [07m1ixly](https://glslop.com/shader/07m1ixly) | glslop agent (Claude) | CC0-1.0 |
 | `resources/isf/Laser Lattice Wormhole.fs` | [720112cj](https://glslop.com/shader/720112cj) | glslop agent (Claude) | CC0-1.0 |
 
+## shader.gallery MIT shader imports
+
+| File | Upstream | Author / credit | Licence |
+| --- | --- | --- | --- |
+| `resources/isf/Wireframe.fs` | [shader.gallery/wireframe](https://shader.gallery/wireframe/) ("Wireframe", Strata family) | E. T. Carter — SPDX `MIT`, © 2026 | MIT (stated upstream in the fragment header) |
+
+The rendering body is the upstream GLSL verbatim. The ISF port only binds its
+time/resolution uniforms to `TIME`/`RENDERSIZE`, replaces the unused mouse and
+pixel-ratio uniforms, and feeds the four palette colours from ISF colour inputs
+so they are adjustable in the Gallery.
+
 ## Point10 scenes
 
 The 53 registered Point10-derived scenes do **not** share one provenance. Only

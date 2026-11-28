@@ -1968,6 +1968,44 @@ void main(void) {
         }
     }
 
+    /// The MIT `shader.gallery/wireframe` fragment shader must survive the
+    /// ISF import unchanged apart from its runtime-uniform bindings.
+    #[test]
+    fn shader_gallery_wireframe_import_translates() {
+        let path = default_corpus_dir().join("Wireframe.fs");
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("missing shader.gallery import {}: {error}", path.display())
+        });
+        let document = parse_isf(&source, None)
+            .unwrap_or_else(|error| panic!("Wireframe header does not parse: {error}"));
+        assert_eq!(document.filter_type(), "generator");
+        for name in [
+            "u_speed",
+            "u_relief",
+            "u_density",
+            "u_glow",
+            "u_valley",
+            "u_palette0",
+            "u_palette1",
+            "u_palette2",
+            "u_palette3",
+        ] {
+            assert!(
+                document.inputs.iter().any(|input| input.name == name),
+                "Wireframe is missing the ISF input {name}"
+            );
+        }
+        for pass in 0..document.passes.len() {
+            let translated = translate_fragment(&document, pass).unwrap_or_else(|error| {
+                panic!("Wireframe pass {pass} does not translate: {error}")
+            });
+            assert!(translated.is_usable(), "Wireframe pass {pass} is unusable");
+            if let Some(wgsl) = translated.wgsl {
+                assert_valid_wgsl(&wgsl);
+            }
+        }
+    }
+
     #[test]
     fn corpus_matches_the_checked_in_baseline() {
         let directory = default_corpus_dir();

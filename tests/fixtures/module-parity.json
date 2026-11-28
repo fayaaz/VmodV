@@ -4,9 +4,9 @@
     "twoD": 16,
     "point10": 54,
     "shader": 33,
-    "isf": 402,
+    "isf": 403,
     "milkdrop": 0,
-    "total": 505
+    "total": 506
   },
   "milkdrop": [],
   "twoD": [
@@ -447,6 +447,7 @@
     "Wipe Left",
     "Wipe Right",
     "Wipe Up",
+    "Wireframe",
     "XYZoom",
     "Y-C Time Blur",
     "Zebre",

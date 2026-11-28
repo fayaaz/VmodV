@@ -2507,8 +2507,8 @@ mod tests {
             manifest["counts"]["point10"]
         );
         check!(
-            manifest["counts"]["total"].as_u64() == Some(505),
-            "G: module-parity total must be 505, got {:?}",
+            manifest["counts"]["total"].as_u64() == Some(506),
+            "G: module-parity total must be 506, got {:?}",
             manifest["counts"]["total"]
         );
         let manifest_names: Vec<&str> = manifest["point10"]
@@ -2542,8 +2542,8 @@ mod tests {
             docs["counts"]["point10"]
         );
         check!(
-            docs["counts"]["total"].as_u64() == Some(505),
-            "G: generated catalogue total must be 505, got {:?}",
+            docs["counts"]["total"].as_u64() == Some(506),
+            "G: generated catalogue total must be 506, got {:?}",
             docs["counts"]["total"]
         );
         let doc_point10: Vec<&str> = docs["modules"]

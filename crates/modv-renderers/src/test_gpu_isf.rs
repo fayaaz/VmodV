@@ -210,6 +210,26 @@ mod tests {
     }
 
     /// The finiteness check itself must not silently become a no-op.
+    /// The shader.gallery import must not bind its four palette inputs or the
+    /// `gl_FragCoord`/`RENDERSIZE` pair in a way that leaves the frame black.
+    #[test]
+    fn shader_gallery_wireframe_draws_a_visible_frame() {
+        if crate::test_gpu::gpu().is_none() {
+            eprintln!("skipping Wireframe render test: no GPU adapter in this environment");
+            return;
+        }
+        let frame = render_corpus_shader("Wireframe").expect("Wireframe renders");
+        assert_eq!(frame.len(), FRAME_SIZE as usize * FRAME_SIZE as usize * 4);
+        assert!(
+            frame
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[..3].iter().any(|c| *c > 0.02)),
+            "Wireframe rendered a black frame"
+        );
+    }
+
     #[test]
     fn finiteness_check_catches_nan_and_infinity() {
         assert_eq!(first_non_finite(&[0.0, 1.0, -1.0, 0.5]), None);
@@ -225,7 +245,7 @@ mod tests {
             return;
         }
         let stems = translated_stems();
-        assert_eq!(stems.len(), 402, "corpus size changed");
+        assert_eq!(stems.len(), 403, "corpus size changed");
 
         // Keep the exception list honest: small, and only naming shaders that
         // actually exist in the baseline. A stale/typo'd entry or an attempt

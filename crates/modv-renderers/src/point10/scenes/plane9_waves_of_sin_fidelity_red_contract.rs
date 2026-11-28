@@ -247,7 +247,7 @@ fn plane9_waves_of_sin_fidelity_red_contract() {
         );
     }
 
-    // A — fixture/catalogue counts move from 52/503 to 54/505. XML line 6 is
+    // A — fixture/catalogue counts move from 52/503 to 54/506. XML line 6 is
     // the exact 4.0 licence arm, not the 3.0 arm.
     let manifest: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(repo_root.join("tests/fixtures/module-parity.json"))
@@ -260,8 +260,8 @@ fn plane9_waves_of_sin_fidelity_red_contract() {
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(505),
-        "A: manifest total is {:?}, expected 505",
+        manifest["counts"]["total"].as_u64() == Some(506),
+        "A: manifest total is {:?}, expected 506",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -302,13 +302,13 @@ fn plane9_waves_of_sin_fidelity_red_contract() {
         catalogue["counts"]["point10"]
     );
     check!(
-        catalogue["counts"]["total"].as_u64() == Some(505),
-        "A: catalogue total is {:?}, expected 505",
+        catalogue["counts"]["total"].as_u64() == Some(506),
+        "A: catalogue total is {:?}, expected 506",
         catalogue["counts"]["total"]
     );
     check!(
-        catalogue["modules"].as_array().map(Vec::len) == Some(505),
-        "A: catalogue modules array must contain 505 entries"
+        catalogue["modules"].as_array().map(Vec::len) == Some(506),
+        "A: catalogue modules array must contain 506 entries"
     );
     let catalogue_matches: Vec<_> = catalogue["modules"]
         .as_array()
