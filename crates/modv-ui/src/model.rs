@@ -2551,7 +2551,9 @@ pub fn module_license(meta: &ModuleMetaView) -> &'static str {
             "Chromatic Line" | "Chromatic Wave" => {
                 "MIT (CodePen GLSL Sample027 / Web_yuki1027; see THIRD_PARTY_NOTICES.md)"
             }
-            "Mycelium" => "MIT (E. T. Carter / shader.gallery; see THIRD_PARTY_NOTICES.md)",
+            "Mycelium" | "Wireframe" => {
+                "MIT (E. T. Carter / shader.gallery; see THIRD_PARTY_NOTICES.md)"
+            }
             "Water Ripple" => {
                 "MIT (CodePen Water Ripple Effect with Audio / Filip Zrnzevic; see THIRD_PARTY_NOTICES.md)"
             }

@@ -1,7 +1,7 @@
 {
   "failed": [],
   "overridden": [],
-  "total": 402,
+  "total": 403,
   "translated": [
     "ASCII Art",
     "Angular",
@@ -331,6 +331,7 @@
     "Wipe Left",
     "Wipe Right",
     "Wipe Up",
+    "Wireframe",
     "XYZoom",
     "Y-C Time Blur",
     "Zebre",

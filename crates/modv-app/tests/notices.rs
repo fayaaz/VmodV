@@ -1730,8 +1730,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(505),
-        "manifest: total is {:?}, expected 505",
+        manifest["counts"]["total"].as_u64() == Some(506),
+        "manifest: total is {:?}, expected 506",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -1779,8 +1779,8 @@ fn plane9_batch_ten_registry_provenance_catalogue_and_gpu_contract() {
         generated["counts"]["point10"]
     );
     check!(
-        generated["counts"]["total"].as_u64() == Some(505),
-        "catalogue: total is {:?}, expected 505",
+        generated["counts"]["total"].as_u64() == Some(506),
+        "catalogue: total is {:?}, expected 506",
         generated["counts"]["total"]
     );
     let modules = generated["modules"]
@@ -2032,8 +2032,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         manifest["counts"]["point10"]
     );
     check!(
-        manifest["counts"]["total"].as_u64() == Some(505),
-        "manifest: total is {:?}, expected 505",
+        manifest["counts"]["total"].as_u64() == Some(506),
+        "manifest: total is {:?}, expected 506",
         manifest["counts"]["total"]
     );
     let manifest_names: Vec<&str> = manifest["point10"]
@@ -2086,8 +2086,8 @@ fn plane9_batch_two_seven_registry_provenance_catalogue_and_gpu_contract() {
         generated["counts"]["point10"]
     );
     check!(
-        generated["counts"]["total"].as_u64() == Some(505),
-        "catalogue: total is {:?}, expected 505",
+        generated["counts"]["total"].as_u64() == Some(506),
+        "catalogue: total is {:?}, expected 506",
         generated["counts"]["total"]
     );
     let modules = generated["modules"]
@@ -2298,8 +2298,8 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
         registry.shader_modules().len()
     );
     check!(
-        registry.isf_definitions().len() == 402,
-        "A: ISF bucket has {} modules, expected 402",
+        registry.isf_definitions().len() == 403,
+        "A: ISF bucket has {} modules, expected 403",
         registry.isf_definitions().len()
     );
     check!(
@@ -2696,8 +2696,8 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
     )
     .expect("the checked-in ISF corpus baseline parses");
     check!(
-        baseline.total == 402,
-        "F: baseline total is {}, expected 402",
+        baseline.total == 403,
+        "F: baseline total is {}, expected 403",
         baseline.total
     );
     let baseline_names: BTreeSet<&str> = baseline
@@ -2756,8 +2756,8 @@ fn plane9_effect_rename_preserves_registry_aliases_metadata_licences_and_catalog
     );
     check!(
         generated["counts"]["shader"].as_u64() == Some(33)
-            && generated["counts"]["isf"].as_u64() == Some(402)
-            && generated["counts"]["total"].as_u64() == Some(505),
+            && generated["counts"]["isf"].as_u64() == Some(403)
+            && generated["counts"]["total"].as_u64() == Some(506),
         "G: generated catalogue shader/ISF/total counts changed"
     );
 

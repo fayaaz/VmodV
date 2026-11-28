@@ -2,11 +2,11 @@
   "schema": 1,
   "source": "ModuleRegistry + modv_renderers::isf (see tools/gen-module-docs.sh)",
   "counts": {
-    "total": 505,
+    "total": 506,
     "2d": 16,
     "point10": 54,
     "shader": 33,
-    "isf": 402
+    "isf": 403
   },
   "modules": [
     {
@@ -36988,6 +36988,126 @@
         }
       ],
       "source": "resources/isf/Wipe Up.fs",
+      "preview": {
+        "kind": "isf",
+        "simplified": false,
+        "passes": 1
+      },
+      "passes": 1
+    },
+    {
+      "id": "wireframe",
+      "name": "Wireframe",
+      "kind": "isf",
+      "category": "3d-scenes",
+      "author": "E. T. Carter / shader.gallery (MIT)",
+      "version": null,
+      "description": "A glowing wireframe mesh draped over a real mountain height field, seen from a low camera gliding along a valley toward a lit horizon under a dark sky. The grid follows every fold of the terrain, pinching on steep faces and vanishing behind the ridges it climbs, while a scan pulse rolls away down the lines and a few stars turn overhead. Synthwave register, held back: no banded sun, just lines and haze.",
+      "audioFeatures": [],
+      "props": [
+        {
+          "name": "u_speed",
+          "label": "Glide",
+          "type": "float",
+          "default": 0.6,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "u_relief",
+          "label": "Relief",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 2.5,
+          "step": 0.01
+        },
+        {
+          "name": "u_density",
+          "label": "Grid density",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0,
+          "step": 0.01
+        },
+        {
+          "name": "u_glow",
+          "label": "Glow",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.01
+        },
+        {
+          "name": "u_valley",
+          "label": "Valley width",
+          "type": "float",
+          "default": 4.0,
+          "min": 0.0,
+          "max": 16.0,
+          "step": 0.01
+        },
+        {
+          "name": "u_palette0",
+          "label": "Palette 1",
+          "type": "vec4",
+          "default": [
+            0.231,
+            0.51,
+            0.965,
+            1.0
+          ],
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "u_palette1",
+          "label": "Palette 2",
+          "type": "vec4",
+          "default": [
+            0.659,
+            0.333,
+            0.969,
+            1.0
+          ],
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "u_palette2",
+          "label": "Palette 3",
+          "type": "vec4",
+          "default": [
+            0.133,
+            0.827,
+            0.933,
+            1.0
+          ],
+          "min": null,
+          "max": null,
+          "step": null
+        },
+        {
+          "name": "u_palette3",
+          "label": "Palette 4",
+          "type": "vec4",
+          "default": [
+            0.957,
+            0.247,
+            0.369,
+            1.0
+          ],
+          "min": null,
+          "max": null,
+          "step": null
+        }
+      ],
+      "source": "resources/isf/Wireframe.fs",
       "preview": {
         "kind": "isf",
         "simplified": false,
