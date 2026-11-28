@@ -2,9 +2,9 @@
   "schema": 1,
   "source": "ModuleRegistry + modv_renderers::isf (see tools/gen-module-docs.sh)",
   "counts": {
-    "total": 499,
+    "total": 505,
     "2d": 16,
-    "point10": 48,
+    "point10": 54,
     "shader": 33,
     "isf": 402
   },
@@ -19081,6 +19081,80 @@
       "preview": null
     },
     {
+      "id": "plane9-cell-culture",
+      "name": "Plane9 Cell Culture",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
       "id": "plane9-circle-crossover",
       "name": "Plane9 Circle Crossover",
       "kind": "point10",
@@ -20181,6 +20255,80 @@
       "passes": 1
     },
     {
+      "id": "plane9-evil-box",
+      "name": "Plane9 Evil Box",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
       "id": "plane9-film-grain",
       "name": "Plane9 Film Grain",
       "kind": "shader",
@@ -20289,6 +20437,80 @@
           "default": 1.0,
           "min": 0.0,
           "max": 1.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-gravity-spectrum",
+      "name": "Plane9 Gravity Spectrum",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -20435,6 +20657,80 @@
           "default": 1.0,
           "min": 0.0,
           "max": 3.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-hypno-toad",
+      "name": "Plane9 Hypno Toad",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
         }
       ],
       "source": null,
@@ -20927,6 +21223,80 @@
     {
       "id": "plane9-mirror-tunnel",
       "name": "Plane9 Mirror Tunnel",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        }
+      ],
+      "source": null,
+      "preview": null
+    },
+    {
+      "id": "plane9-music-waves",
+      "name": "Plane9 Music Waves",
       "kind": "point10",
       "category": "3d-scenes",
       "author": "Plane9 (Joakim Dahl)",
@@ -22489,6 +22859,80 @@
         "passes": 1
       },
       "passes": 1
+    },
+    {
+      "id": "plane9-waves-of-sin",
+      "name": "Plane9 Waves of Sin",
+      "kind": "point10",
+      "category": "3d-scenes",
+      "author": "Plane9 (Joakim Dahl)",
+      "version": "1.0.0",
+      "description": null,
+      "audioFeatures": [
+        "bass",
+        "mid",
+        "treble"
+      ],
+      "props": [
+        {
+          "name": "gain",
+          "label": "Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "smoothing",
+          "label": "Smoothing",
+          "type": "float",
+          "default": 0.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "bassGain",
+          "label": "Bass Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "midGain",
+          "label": "Mid Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "trebleGain",
+          "label": "Treble Gain",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 4.0
+        },
+        {
+          "name": "useAgc",
+          "label": "Auto Gain (AGC)",
+          "type": "bool",
+          "default": 1.0,
+          "min": 0.0,
+          "max": 1.0
+        },
+        {
+          "name": "lens",
+          "label": "Lens",
+          "type": "float",
+          "default": 1.0,
+          "min": 0.25,
+          "max": 4.0
+        }
+      ],
+      "source": null,
+      "preview": null
     },
     {
       "id": "plane9-wormhole",

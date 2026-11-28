@@ -62,8 +62,8 @@
 //! ## Registry parity
 //!
 //! The built-in registry covers the legacy Gallery set: 15 ported 2D modules,
-//! 48 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
-//! module and the 402 `.fs` shaders of the ISF corpus (499 total). Names match
+//! 54 Point10 scenes and 33 shader modules, plus the VmodV-only `Video` 2D
+//! module and the 402 `.fs` shaders of the ISF corpus (505 total). Names match
 //! the JS registrations
 //! (`X Drips`, `Texture 2D`, `Grid Stretch`, …) so presets cross over
 //! unchanged. `module_registry_matches_the_legacy_manifest` compares this
@@ -138,6 +138,7 @@ use modv_renderers::point10::scenes::around_plus::AroundPlus;
 use modv_renderers::point10::scenes::attractor_particles::AttractorParticles;
 use modv_renderers::point10::scenes::blob_fade::BlobFade;
 use modv_renderers::point10::scenes::boxy::Boxy;
+use modv_renderers::point10::scenes::cell_culture::CellCulture;
 use modv_renderers::point10::scenes::circle_crossover::CircleCrossover;
 use modv_renderers::point10::scenes::cloud_flight::CloudFlight;
 use modv_renderers::point10::scenes::color_beams::ColorBeams;
@@ -146,14 +147,18 @@ use modv_renderers::point10::scenes::color_cube::ColorCube;
 use modv_renderers::point10::scenes::colors::Colors;
 use modv_renderers::point10::scenes::dvd_room::DvdRoom;
 use modv_renderers::point10::scenes::earth::Earth;
+use modv_renderers::point10::scenes::evil_box::EvilBox;
 use modv_renderers::point10::scenes::gradient::Gradient;
+use modv_renderers::point10::scenes::gravity_spectrum::GravitySpectrum;
 use modv_renderers::point10::scenes::hollow_cube::HollowCube;
+use modv_renderers::point10::scenes::hypno_toad::HypnoToad;
 use modv_renderers::point10::scenes::it_is_coming_for_you::ItIsComingForYou;
 use modv_renderers::point10::scenes::latent_backrooms::LatentBackrooms;
 use modv_renderers::point10::scenes::light_tunnel::LightTunnel;
 use modv_renderers::point10::scenes::magic_smoke_box::MagicSmokeBox;
 use modv_renderers::point10::scenes::mirror_cube::MirrorCube;
 use modv_renderers::point10::scenes::mirror_tunnel::MirrorTunnel;
+use modv_renderers::point10::scenes::music_waves::MusicWaves;
 use modv_renderers::point10::scenes::mycelium::Mycelium;
 use modv_renderers::point10::scenes::noise_warp::NoiseWarp;
 use modv_renderers::point10::scenes::particle_field::ParticleField;
@@ -173,6 +178,7 @@ use modv_renderers::point10::scenes::tv_noise::TvNoise;
 use modv_renderers::point10::scenes::ultra_hdr::UltraHdr;
 use modv_renderers::point10::scenes::water_ripple::WaterRipple;
 use modv_renderers::point10::scenes::waveform::Waveform;
+use modv_renderers::point10::scenes::waves_of_sin::WavesOfSin;
 use modv_renderers::point10::scenes::wormhole::Wormhole;
 use modv_renderers::point10::scenes::xor::Xor;
 use modv_renderers::point10::{
@@ -421,6 +427,18 @@ pub enum Point10SceneKind {
     CloudFlight(CloudFlight),
     /// `Plane9 Spiky` (`scenes/spiky.rs`).
     Spiky(Spiky),
+    /// `Plane9 Evil Box` (`scenes/evil_box.rs`).
+    EvilBox(EvilBox),
+    /// `Plane9 Music Waves` (`scenes/music_waves.rs`).
+    MusicWaves(MusicWaves),
+    /// `Plane9 Hypno Toad` (`scenes/hypno_toad.rs`).
+    HypnoToad(HypnoToad),
+    /// `Plane9 Cell Culture` (`scenes/cell_culture.rs`).
+    CellCulture(CellCulture),
+    /// `Plane9 Waves of Sin` (`scenes/waves_of_sin.rs`).
+    WavesOfSin(WavesOfSin),
+    /// `Plane9 Gravity Spectrum` (`scenes/gravity_spectrum.rs`).
+    GravitySpectrum(GravitySpectrum),
 }
 
 impl Point10SceneKind {
@@ -504,6 +522,12 @@ impl Point10SceneKind {
             "Plane9 Mirror Tunnel" => Self::MirrorTunnel(MirrorTunnel::new()),
             "Plane9 Cloud Flight" => Self::CloudFlight(CloudFlight::new()),
             "Plane9 Spiky" => Self::Spiky(Spiky::new()),
+            "Plane9 Evil Box" => Self::EvilBox(EvilBox::new()),
+            "Plane9 Music Waves" => Self::MusicWaves(MusicWaves::new()),
+            "Plane9 Hypno Toad" => Self::HypnoToad(HypnoToad::new()),
+            "Plane9 Cell Culture" => Self::CellCulture(CellCulture::new()),
+            "Plane9 Waves of Sin" => Self::WavesOfSin(WavesOfSin::new()),
+            "Plane9 Gravity Spectrum" => Self::GravitySpectrum(GravitySpectrum::new()),
             _ => return None,
         })
     }
@@ -564,6 +588,12 @@ impl Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.apply_props(|key| get(key)),
             Self::CloudFlight(scene) => scene.apply_props(|key| get(key)),
             Self::Spiky(scene) => scene.apply_props(|key| get(key)),
+            Self::EvilBox(scene) => scene.apply_props(|key| get(key)),
+            Self::MusicWaves(scene) => scene.apply_props(|key| get(key)),
+            Self::HypnoToad(scene) => scene.apply_props(|key| get(key)),
+            Self::CellCulture(scene) => scene.apply_props(|key| get(key)),
+            Self::WavesOfSin(scene) => scene.apply_props(|key| get(key)),
+            Self::GravitySpectrum(scene) => scene.apply_props(|key| get(key)),
         }
     }
 }
@@ -620,6 +650,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.name(),
             Self::CloudFlight(scene) => scene.name(),
             Self::Spiky(scene) => scene.name(),
+            Self::EvilBox(scene) => scene.name(),
+            Self::MusicWaves(scene) => scene.name(),
+            Self::HypnoToad(scene) => scene.name(),
+            Self::CellCulture(scene) => scene.name(),
+            Self::WavesOfSin(scene) => scene.name(),
+            Self::GravitySpectrum(scene) => scene.name(),
         }
     }
 
@@ -673,6 +709,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.init(ctx),
             Self::CloudFlight(scene) => scene.init(ctx),
             Self::Spiky(scene) => scene.init(ctx),
+            Self::EvilBox(scene) => scene.init(ctx),
+            Self::MusicWaves(scene) => scene.init(ctx),
+            Self::HypnoToad(scene) => scene.init(ctx),
+            Self::CellCulture(scene) => scene.init(ctx),
+            Self::WavesOfSin(scene) => scene.init(ctx),
+            Self::GravitySpectrum(scene) => scene.init(ctx),
         }
     }
 
@@ -726,6 +768,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.resize(width, height),
             Self::CloudFlight(scene) => scene.resize(width, height),
             Self::Spiky(scene) => scene.resize(width, height),
+            Self::EvilBox(scene) => scene.resize(width, height),
+            Self::MusicWaves(scene) => scene.resize(width, height),
+            Self::HypnoToad(scene) => scene.resize(width, height),
+            Self::CellCulture(scene) => scene.resize(width, height),
+            Self::WavesOfSin(scene) => scene.resize(width, height),
+            Self::GravitySpectrum(scene) => scene.resize(width, height),
         }
     }
 
@@ -779,6 +827,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.update(dt, audio),
             Self::CloudFlight(scene) => scene.update(dt, audio),
             Self::Spiky(scene) => scene.update(dt, audio),
+            Self::EvilBox(scene) => scene.update(dt, audio),
+            Self::MusicWaves(scene) => scene.update(dt, audio),
+            Self::HypnoToad(scene) => scene.update(dt, audio),
+            Self::CellCulture(scene) => scene.update(dt, audio),
+            Self::WavesOfSin(scene) => scene.update(dt, audio),
+            Self::GravitySpectrum(scene) => scene.update(dt, audio),
         }
     }
 
@@ -836,6 +890,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.render(encoder, target),
             Self::CloudFlight(scene) => scene.render(encoder, target),
             Self::Spiky(scene) => scene.render(encoder, target),
+            Self::EvilBox(scene) => scene.render(encoder, target),
+            Self::MusicWaves(scene) => scene.render(encoder, target),
+            Self::HypnoToad(scene) => scene.render(encoder, target),
+            Self::CellCulture(scene) => scene.render(encoder, target),
+            Self::WavesOfSin(scene) => scene.render(encoder, target),
+            Self::GravitySpectrum(scene) => scene.render(encoder, target),
         }
     }
 
@@ -889,6 +949,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.dispose(),
             Self::CloudFlight(scene) => scene.dispose(),
             Self::Spiky(scene) => scene.dispose(),
+            Self::EvilBox(scene) => scene.dispose(),
+            Self::MusicWaves(scene) => scene.dispose(),
+            Self::HypnoToad(scene) => scene.dispose(),
+            Self::CellCulture(scene) => scene.dispose(),
+            Self::WavesOfSin(scene) => scene.dispose(),
+            Self::GravitySpectrum(scene) => scene.dispose(),
         }
     }
 
@@ -942,6 +1008,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.props(),
             Self::CloudFlight(scene) => scene.props(),
             Self::Spiky(scene) => scene.props(),
+            Self::EvilBox(scene) => scene.props(),
+            Self::MusicWaves(scene) => scene.props(),
+            Self::HypnoToad(scene) => scene.props(),
+            Self::CellCulture(scene) => scene.props(),
+            Self::WavesOfSin(scene) => scene.props(),
+            Self::GravitySpectrum(scene) => scene.props(),
         }
     }
 
@@ -995,6 +1067,12 @@ impl Point10Scene for Point10SceneKind {
             Self::MirrorTunnel(scene) => scene.meta(),
             Self::CloudFlight(scene) => scene.meta(),
             Self::Spiky(scene) => scene.meta(),
+            Self::EvilBox(scene) => scene.meta(),
+            Self::MusicWaves(scene) => scene.meta(),
+            Self::HypnoToad(scene) => scene.meta(),
+            Self::CellCulture(scene) => scene.meta(),
+            Self::WavesOfSin(scene) => scene.meta(),
+            Self::GravitySpectrum(scene) => scene.meta(),
         }
     }
 }
@@ -2647,7 +2725,7 @@ mod tests {
         }
 
         // Built-in shader + 2D + Point10 definitions, all unique.
-        assert_eq!(map.len(), 33 + 16 + 48, "built-in shader + 2D + Point10");
+        assert_eq!(map.len(), 33 + 16 + 54, "built-in shader + 2D + Point10");
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["type"], json!("float"));
         assert_eq!(map["Bands"]["props"]["u_ringWidth"]["min"], json!(0.01));
     }
@@ -2667,7 +2745,11 @@ mod tests {
         // Point10 names are their own kind, not 2D modules.
         assert_eq!(registry.kind("Ball"), Some(ModuleKind::TwoD));
         assert_eq!(registry.kind("Point10 Not A Scene"), None);
-        assert_eq!(registry.point10_definitions().len(), 48);
+        assert_eq!(
+            registry.point10_definitions().len(),
+            54,
+            "Point10 scene definitions"
+        );
     }
 
     #[test]
@@ -2729,6 +2811,12 @@ mod tests {
                 "Plane9 Mirror Tunnel",
                 "Plane9 Cloud Flight",
                 "Plane9 Spiky",
+                "Plane9 Evil Box",
+                "Plane9 Music Waves",
+                "Plane9 Hypno Toad",
+                "Plane9 Cell Culture",
+                "Plane9 Waves of Sin",
+                "Plane9 Gravity Spectrum",
             ]
         );
 
@@ -3806,7 +3894,7 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 48 + 402 + milkdrop_count,
+            33 + 16 + 54 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
     }
@@ -3882,12 +3970,12 @@ void main() { gl_FragColor = vec4(1.0); }
                 .registered_modules()
                 .as_object()
                 .map_or(0, serde_json::Map::len),
-            33 + 16 + 48 + 402 + milkdrop_count,
+            33 + 16 + 54 + 402 + milkdrop_count,
             "registered module total (module-parity guard)"
         );
         assert_eq!(
             manifest["counts"]["total"].as_u64(),
-            Some(499),
+            Some(505),
             "manifest total"
         );
     }

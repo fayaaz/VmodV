@@ -23,6 +23,8 @@
 //! | `_turbulencefast`, `_fbmfast` | `p9_turbulence`, `p9_fbm` | LightTunnel |
 //! | `_cubicpulse` | `p9_cubicpulse` | ItIsComingForYou |
 //! | `_lightLambert` | `p9_light_lambert` | ItIsComingForYou |
+//! | `_bump` | `p9_bump` | Waves of Sin |
+//! | `_liftGammaGain` | `p9_lift_gamma_gain` | Waves of Sin |
 //!
 //! Not ported: the 2D simplex noise, the derivative forms, `_voronoi`,
 //! `_blackBody`, the tone-map helpers and `_textureBicubic`/`_texturePanoramic`
@@ -101,6 +103,11 @@ fn p9_hsv2rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
       - vec3<f32>(3.0)
   ) - vec3<f32>(1.0);
   return mix(vec3<f32>(1.0), p9_saturate3(ramp), vec3<f32>(p9_saturate(s))) * vec3<f32>(v);
+}
+
+// vec3 _tolinear(vec3 srgb) — `P9Glsl.js:29-30`, a linearisation polynomial.
+fn p9_tolinear(srgb: vec3<f32>) -> vec3<f32> {
+  return srgb * (srgb * (srgb * vec3<f32>(0.305306011) + vec3<f32>(0.682171111)) + vec3<f32>(0.012522878));
 }
 
 // vec4 _axisAngleToQuaternion(vec3 axis, float angle)
@@ -222,6 +229,21 @@ fn p9_cubicpulse(value: f32, bump_center: f32, width: f32) -> f32 {
 fn p9_light_lambert(normal: vec3<f32>, light_dir: vec3<f32>, diffuse: vec3<f32>) -> vec3<f32> {
   return max(0.0, dot(light_dir, normal)) * diffuse;
 }
+
+// float _bump(float value, float start, float end, float width) — `P9Glsl.js:412-415`.
+fn p9_bump(value: f32, start: f32, end: f32, width: f32) -> f32 {
+  return p9_smoothstep(start - width, start, value) - p9_smoothstep(end, end + width, value);
+}
+
+// vec3 _liftGammaGain(vec3 col, vec3 lift, vec3 gamma, vec3 gain) — `P9Glsl.js:486-489`.
+fn p9_lift_gamma_gain(
+  col: vec3<f32>,
+  lift: vec3<f32>,
+  gamma: vec3<f32>,
+  gain: vec3<f32>,
+) -> vec3<f32> {
+  return pow(gain * (col + lift * (vec3<f32>(1.0) - col)), gamma);
+}
 "#;
 
 #[cfg(test)]
@@ -311,6 +333,59 @@ mod tests {
         assert!((glsl(1.0, 0.9, 0.9) - 1.0).abs() < 1e-6);
         assert!((glsl(1.0, 0.9, 1.0) - 0.0).abs() < 1e-6);
         assert!((glsl(1.0, 0.9, 0.95) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tolinear_matches_the_glsl_polynomial_endpoints() {
+        // f64 intermediate so the literal precision is not linted as excessive
+        // for f32; the endpoints are what the WGSL polynomial must preserve.
+        let tolinear = |srgb: f32| {
+            let srgb = f64::from(srgb);
+            let value = srgb * (srgb * (srgb * 0.305_306_011 + 0.682_171_111) + 0.012_522_878);
+            value as f32
+        };
+        assert!(tolinear(0.0).abs() < 1.0e-7);
+        assert!((tolinear(1.0) - 1.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn bump_peaks_inside_its_window_and_is_zero_outside() {
+        // GLSL `_bump`: one smoothstep rises into `start`, one falls out of
+        // `end`, so the window is `[start, end]` with `width`-wide shoulders.
+        let bump = |value: f32, start: f32, end: f32, width: f32| {
+            let smoothstep = |edge0: f32, edge1: f32, x: f32| {
+                let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            smoothstep(start - width, start, value) - smoothstep(end, end + width, value)
+        };
+        assert!(bump(0.5, 0.1, 0.9, 0.1) > 0.99);
+        assert_eq!(bump(0.0, 0.1, 0.9, 0.1), 0.0);
+        assert_eq!(bump(1.0, 0.1, 0.9, 0.1), 0.0);
+        // Symmetric: the midpoint reaches the same height from both sides.
+        assert!((bump(0.1, 0.1, 0.9, 0.1) - bump(0.9, 0.1, 0.9, 0.1)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lift_gamma_gain_identity_params_return_the_input() {
+        let lift_gamma_gain = |col: [f32; 3], lift: [f32; 3], gamma: [f32; 3], gain: [f32; 3]| {
+            [0, 1, 2].map(|channel| {
+                (gain[channel] * (col[channel] + lift[channel] * (1.0 - col[channel])))
+                    .powf(gamma[channel])
+            })
+        };
+        let col = [0.2, 0.4, 0.6];
+        let stored = lift_gamma_gain(col, [0.0; 3], [1.0; 3], [1.0; 3]);
+        for (actual, expected) in stored.iter().zip(col) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+        // The vendor's Shader2 constants: zero lift, gamma (1.5, 1.5, 1.0),
+        // gain (1.2, 1.2, 1.5).
+        let tuned = lift_gamma_gain(col, [0.0; 3], [1.5, 1.5, 1.0], [1.2, 1.2, 1.5]);
+        // The vendor Shader2 constants: pow(1.2*col, 1.5) on R/G, 1.5*col on B.
+        assert!((tuned[0] - (1.2_f32 * 0.2).powf(1.5)).abs() < 1e-6);
+        assert!((tuned[1] - (1.2_f32 * 0.4).powf(1.5)).abs() < 1e-6);
+        assert!((tuned[2] - 1.5 * 0.6).abs() < 1e-6);
     }
 
     #[test]

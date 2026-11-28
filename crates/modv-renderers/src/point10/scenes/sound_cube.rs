@@ -18,8 +18,8 @@
 //! * `Rotator1` (`:101-115`): 1.5/1/0.5 deg/s accumulated in radians, scaled by
 //!   `spinScale`, with the 0.1 s frame cap;
 //! * the shaders (`:117-216`): the cube's `smoothstep(1, 0.5, |p|)` ring times
-//!   `smoothstep(0.4, 0.6, |p|)`, the gaussian trail blur
-//!   (`sigma = max(0.5, width * 0.5)`, both axes), the trail's
+//!   `smoothstep(0.4, 0.6, |p|)`, the 9-tap gaussian trail blur (`width 4`,
+//!   `sigma = max(0.5, width * 0.5)`, one texel per tap, both axes), the trail's
 //!   `rgb * 0.8 * trailScale` at zoom 0.95, and the composite
 //!   `mix(bg, c, c.a) + c` with the `alpha = max(rgb)` transparency rule;
 //! * the feedback materials' blend states (`:295-312`): the trail adds RGB
@@ -62,12 +62,12 @@
 //!   sharp cube and the soft trail together. The vendor default is the same —
 //!   `Width 0 / Height 0` is a full-size capture, and `WidthCustom 256` is only
 //!   the `-1` mode override.
-//! * **The trail chain is tuned for diffuseness.** The vendor's 9-tap,
-//!   `width 4` blur at full resolution produced hard concentric rings. The port
-//!   keeps the gaussian shape but widens the effective kernel (more taps,
-//!   `BLUR_SPREAD` texels apart) and dims the trail (`TRAIL_BRIGHTNESS`), so
-//!   successive wavefronts overlap into a soft halo. The blur still runs only on
-//!   the 256² trail buffer, never at scene resolution.
+//! * **The trail keeps the vendor constants.** The blur runs only on the 256²
+//!   trail buffer, never at scene resolution: the vendor's 9-tap gaussian
+//!   (`width 4`, sigma 2) one texel per tap, and the previous frame is added
+//!   back at `rgb * 0.8 * trailScale` through the `0.95` zoom. The sharp cube
+//!   is captured separately at scene resolution, so the trail stays small
+//!   without softening the cube.
 //! * **The depth test.** `cubeMaterial` sets `depthTest: false`, `depthWrite:
 //!   false`. With `FrontSide` culling that only ever shows the three
 //!   front-facing faces, so the port draws double-sided with a depth test: the
@@ -119,19 +119,13 @@ pub const RTT_SIZE: u32 = 256;
 
 /// `TRAIL_ZOOM`.
 pub const TRAIL_ZOOM: f32 = 0.95;
-/// `TRAIL_BRIGHTNESS`. Lowered from the vendor 0.8 so the outward waves read
-/// as diffuse light rather than harsh rings.
-pub const TRAIL_BRIGHTNESS: f32 = 0.55;
+/// `TRAIL_BRIGHTNESS`.
+pub const TRAIL_BRIGHTNESS: f32 = 0.8;
 
 /// `BLUR.width`.
-pub const BLUR_WIDTH: f32 = 24.0;
+pub const BLUR_WIDTH: f32 = 4.0;
 /// The kernel radius, in taps.
-pub const BLUR_RADIUS: i32 = 24;
-/// The blur's tap spacing, in trail texels. `BLUR_WIDTH` fixes the gaussian's
-/// shape in tap units; spreading the taps widens the effective gaussian so
-/// successive wavefronts overlap and read as diffuse light instead of hard
-/// rings. The extra work stays on the 256² trail buffer.
-pub const BLUR_SPREAD: f32 = 6.0;
+pub const BLUR_RADIUS: i32 = 4;
 
 /// `ROTATOR`, degrees per second.
 pub const ROTATOR: [f32; 3] = [1.5, 1.0, 0.5];
@@ -552,7 +546,7 @@ impl SoundCube {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
-        let texel = BLUR_SPREAD / RTT_SIZE as f32;
+        let texel = 1.0 / RTT_SIZE as f32;
         for (buffer, step) in [
             (&gpu.blur_uniforms_h, [texel, 0.0]),
             (&gpu.blur_uniforms_v, [0.0, texel]),
@@ -1131,16 +1125,15 @@ struct PassUniforms {
 // their single source to this binding too and ignore it.
 @group(0) @binding(3) var trail_source: texture_2d<f32>;
 
-// `buildSoundCubeBlurFragment`: a gaussian widened for the diffuse trail, one
-// axis per pass. The taps are `BLUR_SPREAD` texels apart so the effective
-// kernel is broad while the maths stays a plain gaussian.
+// `buildSoundCubeBlurFragment`: the vendor's gaussian, one axis per pass, one
+// texel per tap at the 256² trail size.
 @fragment
 fn fs_blur(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let uv = position.xy / u.resolution;
   let sigma = max(0.5, u.value * 0.5);
   var sum = vec3<f32>(0.0);
   var total = 0.0;
-  for (var i = -24; i <= 24; i = i + 1) {
+  for (var i = -4; i <= 4; i = i + 1) {
     let fi = f32(i);
     let weight = exp(-0.5 * fi * fi / (sigma * sigma));
     sum = sum + textureSample(source, source_sampler, uv + u.step * fi).rgb * weight;
@@ -1269,10 +1262,9 @@ mod tests {
         assert_eq!(CAMERA_DISTANCE, 5.0);
         assert_eq!(RTT_SIZE, 256);
         assert_eq!(TRAIL_ZOOM, 0.95);
-        assert_eq!(TRAIL_BRIGHTNESS, 0.55);
-        assert_eq!(BLUR_WIDTH, 24.0);
-        assert_eq!(BLUR_RADIUS, 24);
-        assert_eq!(BLUR_SPREAD, 6.0);
+        assert_eq!(TRAIL_BRIGHTNESS, 0.8);
+        assert_eq!(BLUR_WIDTH, 4.0);
+        assert_eq!(BLUR_RADIUS, 4);
         assert_eq!(ROTATOR, [1.5, 1.0, 0.5]);
         assert_eq!(SCALE_BASE, 0.3);
         assert_eq!(SCALE_AUDIO, 8.0);
@@ -1360,7 +1352,7 @@ mod tests {
         for needle in [
             "let sigma = max(0.5, u.value * 0.5);",
             "exp(-0.5 * fi * fi / (sigma * sigma))",
-            "for (var i = -24; i <= 24; i = i + 1)",
+            "for (var i = -4; i <= 4; i = i + 1)",
             "(p * 0.95) * 0.5 + 0.5",
             "c.rgb * 0.8 * u.value",
             "mix(bg, c, c.a) + c",

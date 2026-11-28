@@ -26,6 +26,12 @@
 //! | [`latent_backrooms`] | Latent Backrooms | `scenes/LatentBackrooms.js` |
 //! | [`the_cave`] | The Cave | `../Point10/public/plane9/xml/Nature/The Cave.xml` |
 //! | [`spiky`] | Spiky | `Things/Spiky.xml` (mesh-modifier chain) |
+//! | [`evil_box`] | Evil Box | `Cube/Evil Box.xml` (feedback RTT chain) |
+//! | [`music_waves`] | Music Waves | `Music/Music Waves.xml` (instanced wave RTT + bloom) |
+//! | [`hypno_toad`] | Hypno Toad | `Psychedelic/HypnoToad.xml` (single-pass instanced spirograph) |
+//! | [`cell_culture`] | Cell Culture | `Cell/Cell Culture.xml` (reaction-diffusion feedback) |
+//! | [`waves_of_sin`] | Waves of Sin | `Line/Waves of sin.xml` (50 000 instanced point sprites) |
+//! | [`gravity_spectrum`] | Gravity Spectrum | `Music/Gravity Spectrum.xml` (ribbon histories + bloom) |
 //!
 //! ChromaticLine lives with its shared simulation in
 //! [`crate::point10::chromatic`] ([`crate::point10::chromatic::line`]) and is
@@ -43,11 +49,25 @@
 //! the CPU mesh-modifier chain (subdivide/select/extrude/randomize) that Spiky
 //! is the first preset to need.
 
+#[cfg(test)]
+mod evil_box_red_contract;
+#[cfg(test)]
+mod plane9_cell_culture_fidelity_red_contract;
+#[cfg(test)]
+mod plane9_gravity_spectrum_fidelity_red_contract;
+#[cfg(test)]
+mod plane9_hypno_toad_fidelity_red_contract;
+#[cfg(test)]
+mod plane9_music_waves_fidelity_red_contract;
+#[cfg(test)]
+mod plane9_waves_of_sin_fidelity_red_contract;
+
 pub mod abstract_clouds;
 pub mod around_plus;
 pub mod attractor_particles;
 pub mod blob_fade;
 pub mod boxy;
+pub mod cell_culture;
 pub mod chromatic_wave;
 pub mod circle_crossover;
 pub mod cloud_flight;
@@ -59,9 +79,12 @@ pub mod cube_mesh;
 pub mod dvd_logo;
 pub mod dvd_room;
 pub mod earth;
+pub mod evil_box;
 pub mod fire_common;
 pub mod gradient;
+pub mod gravity_spectrum;
 pub mod hollow_cube;
+pub mod hypno_toad;
 pub mod it_is_coming_for_you;
 pub mod latent_backrooms;
 pub mod light_tunnel;
@@ -69,6 +92,7 @@ pub mod magic_smoke_box;
 pub mod mesh_ops;
 pub mod mirror_cube;
 pub mod mirror_tunnel;
+pub mod music_waves;
 pub mod mycelium;
 pub mod noise_warp;
 pub mod particle_field;
@@ -90,5 +114,6 @@ pub mod tv_noise;
 pub mod ultra_hdr;
 pub mod water_ripple;
 pub mod waveform;
+pub mod waves_of_sin;
 pub mod wormhole;
 pub mod xor;

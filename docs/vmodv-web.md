@@ -42,7 +42,7 @@ compute passes (Smoke Room, Rolling Fire, DVD Room, …) need WebGPU.
   or a Tween. Links evaluate once per 60 Hz output frame; Draw/Tween curves
   animate even while the microphone is silent.
 - The full **bundled ISF corpus**: 33 shader modules, the 16 2D canvas
-  modules, the 48 Point10 scenes and the 402 `resources/isf` shaders (499
+  modules, the 54 Point10 scenes and the 402 `resources/isf` shaders (505
   modules). The corpus is embedded in the wasm binary, so there is no asset
   fetch or CORS dependency. The `resources/point10/textures` corpus is embedded
   too, so Point10 scenes resolve their real textures in the browser instead of

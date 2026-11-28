@@ -121,8 +121,8 @@ multi-pass path without an override.
 
 ## Point10 scenes
 
-The 48 registered Point10-derived scenes do **not** share one provenance. Only
-the thirty Plane9 (Joakim Dahl) presets are share-alike; they register as
+The 53 registered Point10-derived scenes do **not** share one provenance. Only
+the thirty-five Plane9 (Joakim Dahl) presets are share-alike; they register as
 `Plane9 <Name>` (the historical `Point10 <Name>` names remain load aliases for
 the twelve renamed ports).
 The three Hollow Cuboid/Layers/Blur variants re-parameterise the Plane9
@@ -179,6 +179,12 @@ from BoyC's Shadertoy "The Cave" (https://www.shadertoy.com/view/MsX3RH).
 | Mirror Tunnel | `crates/modv-renderers/src/point10/scenes/mirror_tunnel.rs` | CC BY-NC-SA 4.0 (stated in file) |
 | Cloud Flight | `crates/modv-renderers/src/point10/scenes/cloud_flight.rs` | CC BY-NC-SA 3.0 (stated in file; after Inigo Quilez's Shadertoy "XslGRr") |
 | Spiky | `crates/modv-renderers/src/point10/scenes/spiky.rs` | CC BY-NC-SA 4.0 (stated in file) |
+| Evil Box | `crates/modv-renderers/src/point10/scenes/evil_box.rs` | CC BY-NC-SA 4.0 (stated in file; Joakim Dahl, "Light trying to escape an evil box") |
+| Music Waves | `crates/modv-renderers/src/point10/scenes/music_waves.rs` | CC BY-NC-SA 4.0 (stated in file; Joakim Dahl, "Music that creates waves") |
+| Hypno Toad | `crates/modv-renderers/src/point10/scenes/hypno_toad.rs` | CC BY-NC-SA 3.0 (stated in file; Joakim Dahl, "Dark yet, colorfull and hypnotic") |
+| Cell Culture | `crates/modv-renderers/src/point10/scenes/cell_culture.rs` | CC BY-NC-SA 3.0 (stated in file; Joakim Dahl) |
+| Waves of Sin | `crates/modv-renderers/src/point10/scenes/waves_of_sin.rs` | CC BY-NC-SA 4.0 (stated in file; Joakim Dahl) |
+| Gravity Spectrum | `crates/modv-renderers/src/point10/scenes/gravity_spectrum.rs` | CC BY-NC-SA 3.0 (stated in file; Joakim Dahl) |
 
 ### Plane9 effects (Joakim Dahl — CC BY-NC-SA)
 
@@ -302,6 +308,14 @@ MilkDrop format; it is not shipped as a preset.
 Real users' MilkDrop presets stay under their own licenses; the attribution and
 share-alike duties of any preset you load or share remain yours — see
 [docs/milkdrop-presets.md](docs/milkdrop-presets.md).
+
+## Point10 fidelity test contracts
+
+The `*_fidelity_red_contract.rs` renderer tests quote each preset's licence
+string so they can assert the port's provenance. They are test-only files, not
+ported sources. `crates/modv-renderers/src/point10/scenes/plane9_gravity_spectrum_fidelity_red_contract.rs`
+quotes the Gravity Spectrum (`Music/Gravity Spectrum.xml`, Joakim Dahl) header,
+CC BY-NC-SA 3.0.
 
 ## Fonts
 

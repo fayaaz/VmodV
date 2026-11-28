@@ -249,6 +249,11 @@ fn p9_brightness_saturation_contrast(
 fn p9_mod_f(x: f32, y: f32) -> f32 {
   return x - y * floor(x / y);
 }
+
+// vec3 _blendScreen(vec3 src, vec3 dest) — `P9Glsl.js:408-411`.
+fn p9_blend_screen(src: vec3<f32>, dest: vec3<f32>) -> vec3<f32> {
+  return vec3<f32>(1.0) - ((vec3<f32>(1.0) - src) * (vec3<f32>(1.0) - dest));
+}
 "#;
 
 /// `P9Glsl.js`'s ACES tone map, verbatim.
@@ -639,7 +644,7 @@ pub struct Plane9QuadPass {
 }
 
 impl Plane9QuadPass {
-    /// Build the pipeline with room for `capacity` instances.
+    /// Build the pipeline with room for `capacity` instances and no blending.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -647,6 +652,39 @@ impl Plane9QuadPass {
         label: &str,
         fragment: &str,
         capacity: u32,
+    ) -> Self {
+        Self::new_with_blend(device, queue, format, label, fragment, capacity, None)
+    }
+
+    /// Build the pipeline with One/One additive blending (`Shader2`'s `1/1`
+    /// ports in `Music/Gravity Spectrum.xml`).
+    pub fn new_additive(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        label: &str,
+        fragment: &str,
+        capacity: u32,
+    ) -> Self {
+        Self::new_with_blend(
+            device,
+            queue,
+            format,
+            label,
+            fragment,
+            capacity,
+            Some(wgpu::BlendState::ADDITIVE),
+        )
+    }
+
+    fn new_with_blend(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        label: &str,
+        fragment: &str,
+        capacity: u32,
+        blend: Option<wgpu::BlendState>,
     ) -> Self {
         let source = format!("{P9_COMMON_WGSL}\n{PLANE9_QUAD_UNIFORMS_WGSL}\n{fragment}",);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -718,7 +756,7 @@ impl Plane9QuadPass {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: None,
+                    blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -759,6 +797,32 @@ impl Plane9QuadPass {
         count: u32,
         label: &str,
     ) {
+        self.draw_with_load(encoder, target, wgpu::LoadOp::Clear(clear), count, label);
+    }
+
+    /// Draw every instance into `target` on top of its current contents.
+    ///
+    /// Plane9's `RenderObject` children draw into the same `RenderToTexture`
+    /// capture after `Clear1`, so a scene that already cleared the target for
+    /// another child (Gravity Spectrum's ribbons) draws its clones with a load.
+    pub fn draw_load(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        count: u32,
+        label: &str,
+    ) {
+        self.draw_with_load(encoder, target, wgpu::LoadOp::Load, count, label);
+    }
+
+    fn draw_with_load(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+        count: u32,
+        label: &str,
+    ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -766,7 +830,7 @@ impl Plane9QuadPass {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
